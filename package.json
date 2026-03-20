@@ -1,6 +1,7 @@
 {
   "name": "sandstorm-desktop",
   "version": "0.1.0",
+  "type": "module",
   "description": "Desktop control plane for Sandstorm agent orchestration",
   "main": "dist/main/index.js",
   "scripts": {

@@ -173,7 +173,7 @@ export class Registry {
 
   setPorts(stackId: string, ports: Omit<PortMapping, 'stack_id'>[]): void {
     const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO ports (stack_id, service, host_port, container_port)
+      INSERT INTO ports (stack_id, service, host_port, container_port)
       VALUES (?, ?, ?, ?)
     `);
     const insertMany = this.db.transaction(
@@ -188,7 +188,7 @@ export class Registry {
 
   getPorts(stackId: string): PortMapping[] {
     return this.db
-      .prepare('SELECT * FROM ports WHERE stack_id = ?')
+      .prepare('SELECT * FROM ports WHERE stack_id = ? ORDER BY host_port ASC')
       .all(stackId) as PortMapping[];
   }
 

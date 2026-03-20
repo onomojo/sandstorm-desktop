@@ -89,16 +89,22 @@ export class DockerRuntime implements ContainerRuntime {
 
   async *logs(containerId: string, opts?: LogOpts): AsyncIterable<string> {
     const container = this.docker.getContainer(containerId);
-    const stream = await container.logs({
+    const baseOpts: Dockerode.ContainerLogsOptions = {
       stdout: true,
       stderr: true,
-      follow: opts?.follow ?? false,
       tail: opts?.tail ?? 100,
       since: opts?.since ? Math.floor(new Date(opts.since).getTime() / 1000) : undefined,
-    });
+    };
 
-    if (typeof stream === 'string') {
-      yield stream;
+    let stream: Buffer | NodeJS.ReadableStream;
+    if (opts?.follow) {
+      stream = await container.logs({ ...baseOpts, follow: true });
+    } else {
+      stream = await container.logs({ ...baseOpts, follow: false });
+    }
+
+    if (typeof stream === 'string' || Buffer.isBuffer(stream)) {
+      yield Buffer.isBuffer(stream) ? stream.toString('utf-8') : stream;
       return;
     }
 
