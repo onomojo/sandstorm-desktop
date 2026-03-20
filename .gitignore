@@ -1,8 +1,11 @@
 node_modules/
 dist/
+out/
 release/
 *.db
 *.db-wal
 *.db-shm
 .env
+.mcp.json
+.sandstorm-ready
 .sandstorm/
