@@ -1,0 +1,33 @@
+#!/bin/bash
+#
+# Sandstorm — Claude Code orchestration harness
+#
+# Launches Claude Code with the Sandstorm outer CLAUDE.md,
+# or delegates to stack management commands.
+#
+# Usage:
+#   sandstorm                          # Start outer Claude (interactive)
+#   sandstorm up 1                     # Start a stack
+#   sandstorm task 1 "fix the bug"     # Dispatch task to inner Claude
+#   sandstorm push 1 "commit message"  # Push changes from stack
+#
+set -e
+
+SANDSTORM_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+
+# Init command — delegate to lib/init.sh (before stack.sh, which requires config)
+if [[ "${1:-}" == "init" ]]; then
+  source "$SANDSTORM_DIR/lib/init.sh"
+  exit $?
+fi
+
+# Stack management commands — delegate to lib/stack.sh
+STACK_COMMANDS="up|down|task|task-status|task-output|diff|push|publish|status|exec|claude|register|logs"
+
+if [[ "${1:-}" =~ ^($STACK_COMMANDS)$ ]]; then
+  source "$SANDSTORM_DIR/lib/stack.sh"
+  exit $?
+fi
+
+# Default: launch Claude Code with the Sandstorm outer CLAUDE.md and settings
+exec claude --system-prompt-file "$SANDSTORM_DIR/CLAUDE.md" --settings "$SANDSTORM_DIR/.claude/settings.local.json" "$@"

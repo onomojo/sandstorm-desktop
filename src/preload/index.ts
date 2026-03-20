@@ -1,6 +1,14 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
 export interface SandstormAPI {
+  projects: {
+    list: () => Promise<unknown[]>;
+    add: (directory: string) => Promise<unknown>;
+    remove: (id: number) => Promise<void>;
+    browse: () => Promise<string | null>;
+    checkInit: (directory: string) => Promise<boolean>;
+    initialize: (directory: string) => Promise<boolean>;
+  };
   stacks: {
     list: () => Promise<unknown[]>;
     get: (id: string) => Promise<unknown>;
@@ -30,6 +38,14 @@ export interface SandstormAPI {
 }
 
 const api: SandstormAPI = {
+  projects: {
+    list: () => ipcRenderer.invoke('projects:list'),
+    add: (directory) => ipcRenderer.invoke('projects:add', directory),
+    remove: (id) => ipcRenderer.invoke('projects:remove', id),
+    browse: () => ipcRenderer.invoke('projects:browse'),
+    checkInit: (directory) => ipcRenderer.invoke('projects:checkInit', directory),
+    initialize: (directory) => ipcRenderer.invoke('projects:initialize', directory),
+  },
   stacks: {
     list: () => ipcRenderer.invoke('stacks:list'),
     get: (id) => ipcRenderer.invoke('stacks:get', id),

@@ -1,5 +1,12 @@
 import { create } from 'zustand';
 
+export interface Project {
+  id: number;
+  name: string;
+  directory: string;
+  added_at: string;
+}
+
 export interface Stack {
   id: string;
   project: string;
@@ -8,6 +15,7 @@ export interface Stack {
   branch: string | null;
   description: string | null;
   status: string;
+  error: string | null;
   runtime: 'docker' | 'podman';
   created_at: string;
   updated_at: string;
@@ -41,24 +49,50 @@ export interface PortMapping {
 }
 
 interface AppState {
+  // Projects
+  projects: Project[];
+  activeProjectId: number | null; // null means "All"
+  showOpenProjectDialog: boolean;
+
+  // Stacks
   stacks: Stack[];
   selectedStackId: string | null;
   showNewStackDialog: boolean;
   loading: boolean;
   error: string | null;
 
-  // Actions
+  // Project actions
+  setProjects: (projects: Project[]) => void;
+  setActiveProjectId: (id: number | null) => void;
+  setShowOpenProjectDialog: (show: boolean) => void;
+  refreshProjects: () => Promise<void>;
+  addProject: (directory: string) => Promise<Project>;
+  removeProject: (id: number) => Promise<void>;
+
+  // Stack actions
   setStacks: (stacks: Stack[]) => void;
   selectStack: (id: string | null) => void;
   setShowNewStackDialog: (show: boolean) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   refreshStacks: () => Promise<void>;
+
+  // Derived
+  filteredStacks: () => Stack[];
+  activeProject: () => Project | undefined;
 }
 
 declare global {
   interface Window {
     sandstorm: {
+      projects: {
+        list: () => Promise<Project[]>;
+        add: (directory: string) => Promise<Project>;
+        remove: (id: number) => Promise<void>;
+        browse: () => Promise<string | null>;
+        checkInit: (directory: string) => Promise<boolean>;
+        initialize: (directory: string) => Promise<boolean>;
+      };
       stacks: {
         list: () => Promise<Stack[]>;
         get: (id: string) => Promise<Stack>;
@@ -89,13 +123,49 @@ declare global {
   }
 }
 
-export const useAppStore = create<AppState>((set) => ({
+export const useAppStore = create<AppState>((set, get) => ({
+  // Projects
+  projects: [],
+  activeProjectId: null,
+  showOpenProjectDialog: false,
+
+  // Stacks
   stacks: [],
   selectedStackId: null,
   showNewStackDialog: false,
   loading: false,
   error: null,
 
+  // Project actions
+  setProjects: (projects) => set({ projects }),
+  setActiveProjectId: (id) => set({ activeProjectId: id }),
+  setShowOpenProjectDialog: (show) => set({ showOpenProjectDialog: show }),
+
+  refreshProjects: async () => {
+    try {
+      const projects = await window.sandstorm.projects.list();
+      set({ projects });
+    } catch (err) {
+      set({ error: `Failed to refresh projects: ${err}` });
+    }
+  },
+
+  addProject: async (directory: string) => {
+    const project = await window.sandstorm.projects.add(directory);
+    await get().refreshProjects();
+    return project;
+  },
+
+  removeProject: async (id: number) => {
+    await window.sandstorm.projects.remove(id);
+    const state = get();
+    if (state.activeProjectId === id) {
+      set({ activeProjectId: null });
+    }
+    await state.refreshProjects();
+  },
+
+  // Stack actions
   setStacks: (stacks) => set({ stacks }),
   selectStack: (id) => set({ selectedStackId: id }),
   setShowNewStackDialog: (show) => set({ showNewStackDialog: show }),
@@ -109,5 +179,20 @@ export const useAppStore = create<AppState>((set) => ({
     } catch (err) {
       set({ error: `Failed to refresh stacks: ${err}` });
     }
+  },
+
+  // Derived
+  filteredStacks: () => {
+    const { stacks, activeProjectId, projects } = get();
+    if (activeProjectId === null) return stacks;
+    const project = projects.find((p) => p.id === activeProjectId);
+    if (!project) return stacks;
+    return stacks.filter((s) => s.project_dir === project.directory);
+  },
+
+  activeProject: () => {
+    const { activeProjectId, projects } = get();
+    if (activeProjectId === null) return undefined;
+    return projects.find((p) => p.id === activeProjectId);
   },
 }));

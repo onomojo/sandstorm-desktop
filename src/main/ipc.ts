@@ -1,13 +1,76 @@
-import { ipcMain } from 'electron';
+import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import {
   registry,
   stackManager,
   dockerRuntime,
   podmanRuntime,
+  cliDir,
 } from './index';
 import { CreateStackOpts } from './control-plane/stack-manager';
 
-export function registerIpcHandlers(): void {
+export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
+  // Wire up stack update notifications to the renderer
+  stackManager.setOnStackUpdate(() => {
+    mainWindow?.webContents.send('stacks:updated');
+  });
+  // --- Projects ---
+
+  ipcMain.handle('projects:list', async () => {
+    return registry.listProjects();
+  });
+
+  ipcMain.handle('projects:add', async (_event, directory: string) => {
+    return registry.addProject(directory);
+  });
+
+  ipcMain.handle('projects:remove', async (_event, id: number) => {
+    registry.removeProject(id);
+  });
+
+  ipcMain.handle('projects:browse', async (event) => {
+    const win = BrowserWindow.fromWebContents(event.sender);
+    const result = await dialog.showOpenDialog(win!, {
+      properties: ['openDirectory'],
+      title: 'Open Project Directory',
+    });
+    if (result.canceled || result.filePaths.length === 0) return null;
+    return result.filePaths[0];
+  });
+
+  ipcMain.handle('projects:checkInit', async (_event, directory: string) => {
+    const configPath = path.join(directory, '.sandstorm', 'config');
+    return fs.existsSync(configPath);
+  });
+
+  ipcMain.handle('projects:initialize', async (_event, directory: string) => {
+    // Try CLI init first (full scaffolding with compose parsing)
+    const cliBin = path.join(cliDir, 'bin', 'sandstorm');
+    try {
+      const exitCode = await new Promise<number>((resolve, reject) => {
+        const child = spawn('bash', [cliBin, 'init', '-y'], {
+          cwd: directory,
+          env: process.env,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        child.on('close', (code) => resolve(code ?? 1));
+        child.on('error', reject);
+      });
+      if (exitCode === 0) return true;
+    } catch {
+      // CLI init failed — fall back to minimal scaffolding
+    }
+
+    // Fallback: create minimal .sandstorm/config if CLI isn't available
+    const sandstormDir = path.join(directory, '.sandstorm');
+    fs.mkdirSync(sandstormDir, { recursive: true });
+    const configPath = path.join(sandstormDir, 'config');
+    fs.writeFileSync(configPath, `# Sandstorm config for ${path.basename(directory)}\n`);
+    return true;
+  });
+
   // --- Stacks ---
 
   ipcMain.handle('stacks:list', async () => {
@@ -18,12 +81,12 @@ export function registerIpcHandlers(): void {
     return stackManager.getStackWithServices(stackId);
   });
 
-  ipcMain.handle('stacks:create', async (_event, opts: CreateStackOpts) => {
+  ipcMain.handle('stacks:create', (_event, opts: CreateStackOpts) => {
     return stackManager.createStack(opts);
   });
 
-  ipcMain.handle('stacks:teardown', async (_event, stackId: string) => {
-    await stackManager.teardownStack(stackId);
+  ipcMain.handle('stacks:teardown', (_event, stackId: string) => {
+    stackManager.teardownStack(stackId);
   });
 
   // --- Tasks ---

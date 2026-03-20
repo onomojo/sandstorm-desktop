@@ -35,9 +35,9 @@ describe('TaskWatcher', () => {
   let registry: Registry;
   let dbPath: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dbPath = path.join(os.tmpdir(), `sandstorm-watcher-test-${Date.now()}.db`);
-    registry = new Registry(dbPath);
+    registry = await Registry.create(dbPath);
 
     registry.createStack({
       id: 'watch-stack',

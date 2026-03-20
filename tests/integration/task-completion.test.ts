@@ -10,9 +10,9 @@ describe('Task Completion (Integration)', () => {
   let registry: Registry;
   let dbPath: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dbPath = path.join(os.tmpdir(), `sandstorm-task-int-${Date.now()}.db`);
-    registry = new Registry(dbPath);
+    registry = await Registry.create(dbPath);
 
     registry.createStack({
       id: 'int-task-stack',

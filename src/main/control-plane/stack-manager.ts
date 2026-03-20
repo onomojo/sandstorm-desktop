@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import { Registry, Stack, StackStatus, Task } from './registry';
+import { Registry, Stack, Task } from './registry';
 import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container } from '../runtime/types';
@@ -29,25 +29,90 @@ export interface ServiceInfo {
   containerId: string;
 }
 
+/**
+ * Sanitize a string for use in Docker Compose project names.
+ * Compose project names must consist only of lowercase alphanumeric characters,
+ * hyphens, and underscores, and must start with a letter or underscore.
+ */
+export function sanitizeComposeName(input: string): string {
+  let name = input
+    .toLowerCase()
+    .replace(/\s+/g, '-')       // spaces → hyphens
+    .replace(/[^a-z0-9_-]/g, '') // strip invalid chars
+    .replace(/-{2,}/g, '-')      // collapse repeated hyphens
+    .replace(/^[-]+/, '')         // strip leading hyphens
+    .replace(/[-]+$/, '');        // strip trailing hyphens
+
+  // Must start with a letter or underscore
+  if (name && !/^[a-z_]/.test(name)) {
+    name = `s${name}`;
+  }
+
+  return name || 'stack';
+}
+
+interface CliResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
 export class StackManager {
+  private onStackUpdate?: () => void;
+
   constructor(
     private registry: Registry,
     private portAllocator: PortAllocator,
     private taskWatcher: TaskWatcher,
-    private runtime: ContainerRuntime
+    private runtime: ContainerRuntime,
+    private cliDir: string = ''
   ) {}
 
-  async createStack(opts: CreateStackOpts): Promise<Stack> {
+  setOnStackUpdate(callback: () => void): void {
+    this.onStackUpdate = callback;
+  }
+
+  private notifyUpdate(): void {
+    this.onStackUpdate?.();
+  }
+
+  /**
+   * Resolve path to the sandstorm CLI entry point.
+   */
+  private getCliBin(): string {
+    return path.join(this.cliDir, 'bin', 'sandstorm');
+  }
+
+  /**
+   * Run a sandstorm CLI command in the given project directory.
+   */
+  runCli(
+    projectDir: string,
+    args: string[],
+    env?: Record<string, string>
+  ): Promise<CliResult> {
+    return new Promise((resolve, reject) => {
+      const child = spawn('bash', [this.getCliBin(), ...args], {
+        cwd: projectDir,
+        env: { ...process.env, ...env },
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+      child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+      child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+      child.on('close', (code) =>
+        resolve({ stdout, stderr, exitCode: code ?? 1 })
+      );
+      child.on('error', reject);
+    });
+  }
+
+  createStack(opts: CreateStackOpts): Stack {
     const projectName = path.basename(opts.projectDir);
-    const composeProjectName = `sandstorm-${projectName}-${opts.name}`;
 
-    // Parse compose file to discover services and ports
-    const servicePorts = await this.discoverServicePorts(opts.projectDir);
-
-    // Allocate ports
-    const portMap = await this.portAllocator.allocate(opts.name, servicePorts);
-
-    // Create registry entry
+    // Create registry entry first (ports table has FK to stacks)
     const stack = this.registry.createStack({
       id: opts.name,
       project: projectName,
@@ -59,76 +124,74 @@ export class StackManager {
       runtime: opts.runtime,
     });
 
-    // Build port env vars for compose
-    const portEnv: Record<string, string> = {};
-    for (const [service, hostPort] of portMap) {
-      portEnv[`SANDSTORM_PORT_${service.toUpperCase()}`] = String(hostPort);
-    }
+    // Launch the heavy work in the background
+    this.buildStackInBackground(opts, projectName).catch(() => {
+      // Error already stored in registry by buildStackInBackground
+    });
 
-    // Clone workspace
-    const workspaceDir = path.join(opts.projectDir, '.sandstorm', 'workspaces', opts.name);
-    await this.cloneWorkspace(opts.projectDir, workspaceDir, opts.branch);
+    return stack;
+  }
 
-    // Compose up
+  private async buildStackInBackground(opts: CreateStackOpts, _projectName: string): Promise<void> {
     try {
-      const composeFiles = this.findComposeFiles(opts.projectDir);
-      await this.runtime.composeUp(workspaceDir, {
-        projectName: composeProjectName,
-        composeFiles,
-        env: {
-          ...portEnv,
-          GIT_USER_NAME: await this.getGitConfig('user.name'),
-          GIT_USER_EMAIL: await this.getGitConfig('user.email'),
-        },
-        build: true,
-      });
+      // Allocate ports via PortAllocator (tracks in SQLite, finds free ports)
+      const servicePorts = await this.discoverServicePorts(opts.projectDir);
+      const portMap = await this.portAllocator.allocate(opts.name, servicePorts);
+
+      // Build port env vars in the format the CLI/compose expects: SANDSTORM_PORT_<service>_<index>
+      const portEnv: Record<string, string> = {};
+      for (const [serviceKey, hostPort] of portMap) {
+        portEnv[`SANDSTORM_PORT_${serviceKey}`] = String(hostPort);
+      }
+
+      // Build CLI args
+      const args = ['up', opts.name];
+      if (opts.ticket) args.push('--ticket', opts.ticket);
+      if (opts.branch) args.push('--branch', opts.branch);
+
+      const result = await this.runCli(opts.projectDir, args, portEnv);
+
+      if (result.exitCode !== 0) {
+        throw new Error(result.stderr.trim() || result.stdout.trim() || 'Stack creation failed');
+      }
 
       this.registry.updateStackStatus(opts.name, 'up');
+      this.notifyUpdate();
 
       // If a task was provided, dispatch it immediately
       if (opts.task) {
         await this.dispatchTask(opts.name, opts.task);
       }
     } catch (err) {
-      this.registry.updateStackStatus(opts.name, 'failed');
-      throw err;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      this.registry.updateStackStatus(opts.name, 'failed', errorMessage);
+      this.notifyUpdate();
     }
-
-    return this.registry.getStack(opts.name)!;
   }
 
-  async teardownStack(stackId: string): Promise<void> {
+  teardownStack(stackId: string): void {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
 
     this.taskWatcher.unwatch(stackId);
 
-    const composeProjectName = `sandstorm-${stack.project}-${stackId}`;
-    const composeFiles = this.findComposeFiles(stack.project_dir);
-
-    try {
-      await this.runtime.composeDown(stack.project_dir, {
-        projectName: composeProjectName,
-        composeFiles,
-      });
-    } catch {
-      // Best effort teardown
-    }
-
+    // Delete from registry and release ports immediately so the UI updates
     this.portAllocator.release(stackId);
-
-    // Clean workspace
-    const workspaceDir = path.join(
-      stack.project_dir,
-      '.sandstorm',
-      'workspaces',
-      stackId
-    );
-    if (fs.existsSync(workspaceDir)) {
-      fs.rmSync(workspaceDir, { recursive: true, force: true });
-    }
-
     this.registry.deleteStack(stackId);
+    this.notifyUpdate();
+
+    // Run Docker teardown in background (best effort)
+    this.teardownInBackground(stack, stackId).catch(() => {
+      // Best effort
+    });
+  }
+
+  private async teardownInBackground(stack: Stack, stackId: string): Promise<void> {
+    try {
+      await this.runCli(stack.project_dir, ['down', stackId]);
+    } catch {
+      // Best effort — if CLI fails, containers may need manual cleanup
+    }
   }
 
   async dispatchTask(stackId: string, prompt: string): Promise<Task> {
@@ -142,26 +205,17 @@ export class StackManager {
       throw new Error(`Claude container not found for stack "${stackId}"`);
     }
 
-    // Write prompt to container
-    await this.runtime.exec(claudeContainer.id, [
-      'bash',
-      '-c',
-      `echo ${this.shellEscape(prompt)} > /tmp/claude-task-prompt.txt`,
-    ]);
+    // Use the sandstorm CLI to dispatch the task. The CLI's `task` command
+    // handles credential sync (OAuth), writes files as the correct user
+    // (`-u claude`), and creates the trigger file with proper ownership —
+    // preventing the infinite-loop and not-logged-in bugs.
+    const result = await this.runCli(stack.project_dir, ['task', stackId, prompt]);
 
-    // Write task label
-    const label = prompt.substring(0, 80);
-    await this.runtime.exec(claudeContainer.id, [
-      'bash',
-      '-c',
-      `echo ${this.shellEscape(label)} > /tmp/claude-task-label.txt`,
-    ]);
-
-    // Trigger the task
-    await this.runtime.exec(claudeContainer.id, [
-      'touch',
-      '/tmp/claude-task-trigger',
-    ]);
+    if (result.exitCode !== 0) {
+      throw new Error(
+        result.stderr.trim() || result.stdout.trim() || 'Task dispatch failed'
+      );
+    }
 
     // Start watching for completion
     this.taskWatcher.watch(stackId, claudeContainer.id);
@@ -193,14 +247,7 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
 
-    const claudeContainer = await this.findClaudeContainer(stack);
-    if (!claudeContainer) return '';
-
-    const result = await this.runtime.exec(claudeContainer.id, [
-      'git',
-      'diff',
-      'HEAD',
-    ]);
+    const result = await this.runCli(stack.project_dir, ['diff', stackId]);
     return result.stdout;
   }
 
@@ -208,15 +255,13 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
 
-    const claudeContainer = await this.findClaudeContainer(stack);
-    if (!claudeContainer) throw new Error('Claude container not found');
+    const args = ['push', stackId];
+    if (message) args.push(message);
 
-    const commitMsg = message ?? `sandstorm: ${stack.description ?? stackId}`;
-    await this.runtime.exec(claudeContainer.id, [
-      'bash',
-      '-c',
-      `cd /app && git add -A && git commit -m ${this.shellEscape(commitMsg)} && git push`,
-    ]);
+    const result = await this.runCli(stack.project_dir, args);
+    if (result.exitCode !== 0) {
+      throw new Error(result.stderr.trim() || result.stdout.trim() || 'Push failed');
+    }
   }
 
   getTasksForStack(stackId: string): Task[] {
@@ -226,7 +271,7 @@ export class StackManager {
   // --- Private helpers ---
 
   private async getServices(stack: Stack): Promise<ServiceInfo[]> {
-    const composeProjectName = `sandstorm-${stack.project}-${stack.id}`;
+    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
     const containers = await this.runtime.listContainers({
       name: composeProjectName,
     });
@@ -250,7 +295,7 @@ export class StackManager {
   }
 
   private async findClaudeContainer(stack: Stack): Promise<Container | undefined> {
-    const composeProjectName = `sandstorm-${stack.project}-${stack.id}`;
+    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
     const containers = await this.runtime.listContainers({
       name: `${composeProjectName}-claude`,
     });
@@ -263,93 +308,30 @@ export class StackManager {
     return withoutProject.replace(/-\d+$/, '');
   }
 
-  private async discoverServicePorts(projectDir: string): Promise<ServicePort[]> {
+  private discoverServicePorts(projectDir: string): Promise<ServicePort[]> {
     // Read .sandstorm/config for PORT_MAP
     const configPath = path.join(projectDir, '.sandstorm', 'config');
-    if (!fs.existsSync(configPath)) return [];
+    if (!fs.existsSync(configPath)) return Promise.resolve([]);
 
     const config = fs.readFileSync(configPath, 'utf-8');
     const portMapLine = config
       .split('\n')
       .find((l) => l.startsWith('PORT_MAP='));
-    if (!portMapLine) return [];
+    if (!portMapLine) return Promise.resolve([]);
 
     const portMapValue = portMapLine.split('=')[1]?.replace(/"/g, '');
-    if (!portMapValue) return [];
+    if (!portMapValue) return Promise.resolve([]);
 
     // Format: service:host_port:container_port:index,...
-    return portMapValue.split(',').map((entry) => {
-      const [service, , containerPort] = entry.split(':');
-      return {
-        service,
-        containerPort: parseInt(containerPort, 10),
-      };
-    });
-  }
-
-  private findComposeFiles(projectDir: string): string[] {
-    const files: string[] = [];
-    const mainCompose = path.join(projectDir, 'docker-compose.yml');
-    if (fs.existsSync(mainCompose)) files.push(mainCompose);
-
-    const sandstormCompose = path.join(
-      projectDir,
-      '.sandstorm',
-      'docker-compose.yml'
+    // Use service_index as the key to match compose env var format: SANDSTORM_PORT_<service>_<index>
+    return Promise.resolve(
+      portMapValue.split(',').map((entry) => {
+        const [service, , containerPort, index] = entry.split(':');
+        return {
+          service: `${service}_${index || '0'}`,
+          containerPort: parseInt(containerPort, 10),
+        };
+      })
     );
-    if (fs.existsSync(sandstormCompose)) files.push(sandstormCompose);
-
-    return files;
-  }
-
-  private async cloneWorkspace(
-    projectDir: string,
-    workspaceDir: string,
-    branch?: string
-  ): Promise<void> {
-    fs.mkdirSync(path.dirname(workspaceDir), { recursive: true });
-
-    if (fs.existsSync(workspaceDir)) {
-      fs.rmSync(workspaceDir, { recursive: true, force: true });
-    }
-
-    // Get remote URL
-    const remoteUrl = await this.gitCommand(projectDir, [
-      'remote',
-      'get-url',
-      'origin',
-    ]);
-
-    // Clone
-    const cloneArgs = ['clone', remoteUrl.trim(), workspaceDir];
-    if (branch) cloneArgs.push('-b', branch);
-    await this.gitCommand(projectDir, cloneArgs);
-  }
-
-  private gitCommand(cwd: string, args: string[]): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const child = spawn('git', args, { cwd, stdio: ['ignore', 'pipe', 'pipe'] });
-      let stdout = '';
-      let stderr = '';
-      child.stdout?.on('data', (d: Buffer) => (stdout += d.toString()));
-      child.stderr?.on('data', (d: Buffer) => (stderr += d.toString()));
-      child.on('close', (code) => {
-        if (code === 0) resolve(stdout);
-        else reject(new Error(`git ${args[0]} failed: ${stderr}`));
-      });
-      child.on('error', reject);
-    });
-  }
-
-  private async getGitConfig(key: string): Promise<string> {
-    try {
-      return (await this.gitCommand('.', ['config', '--global', key])).trim();
-    } catch {
-      return '';
-    }
-  }
-
-  private shellEscape(s: string): string {
-    return `'${s.replace(/'/g, "'\\''")}'`;
   }
 }

@@ -5,17 +5,26 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
+function makeTempDb(): string {
+  return path.join(os.tmpdir(), `sandstorm-port-test-${Date.now()}-${Math.random().toString(36).slice(2)}.db`);
+}
+
+function cleanupDb(dbPath: string): void {
+  for (const suffix of ['', '-wal', '-shm']) {
+    try { fs.unlinkSync(dbPath + suffix); } catch { /* ignore */ }
+  }
+}
+
 describe('PortAllocator', () => {
   let registry: Registry;
   let allocator: PortAllocator;
   let dbPath: string;
 
-  beforeEach(() => {
-    dbPath = path.join(os.tmpdir(), `sandstorm-port-test-${Date.now()}.db`);
-    registry = new Registry(dbPath);
+  beforeEach(async () => {
+    dbPath = makeTempDb();
+    registry = await Registry.create(dbPath);
     allocator = new PortAllocator(registry, [30000, 30099]);
 
-    // Create test stacks
     registry.createStack({
       id: 'alloc-test-1',
       project: 'proj',
@@ -40,13 +49,7 @@ describe('PortAllocator', () => {
 
   afterEach(() => {
     registry.close();
-    try {
-      fs.unlinkSync(dbPath);
-      fs.unlinkSync(`${dbPath}-wal`);
-      fs.unlinkSync(`${dbPath}-shm`);
-    } catch {
-      // ignore
-    }
+    cleanupDb(dbPath);
   });
 
   it('allocates unique ports for services', async () => {
@@ -95,5 +98,40 @@ describe('PortAllocator', () => {
 
     allocator.release('alloc-test-1');
     expect(registry.getPorts('alloc-test-1')).toHaveLength(0);
+  });
+
+  it('allocates no ports when given empty service list', async () => {
+    const ports = await allocator.allocate('alloc-test-1', []);
+    expect(ports.size).toBe(0);
+    expect(registry.getPorts('alloc-test-1')).toHaveLength(0);
+  });
+
+  it('throws FK error when allocating for non-existent stack', async () => {
+    await expect(
+      allocator.allocate('ghost-stack', [
+        { service: 'app', containerPort: 3000 },
+      ])
+    ).rejects.toThrow();
+  });
+
+  it('release on non-existent stack is a no-op', () => {
+    expect(() => allocator.release('ghost')).not.toThrow();
+  });
+
+  it('released ports can be re-allocated', async () => {
+    const ports1 = await allocator.allocate('alloc-test-1', [
+      { service: 'app', containerPort: 3000 },
+    ]);
+    const firstPort = ports1.get('app')!;
+
+    allocator.release('alloc-test-1');
+
+    // Now the same port should be available for another stack
+    const ports2 = await allocator.allocate('alloc-test-2', [
+      { service: 'app', containerPort: 3000 },
+    ]);
+    // It might or might not be the same port (depends on OS port availability),
+    // but it should successfully allocate
+    expect(ports2.size).toBe(1);
   });
 });

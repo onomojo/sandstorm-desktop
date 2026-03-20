@@ -19,24 +19,37 @@ export let portAllocator: PortAllocator;
 export let taskWatcher: TaskWatcher;
 export let dockerRuntime: ContainerRuntime;
 export let podmanRuntime: ContainerRuntime;
+export let cliDir: string;
 
 function createWindow(): BrowserWindow {
   nativeTheme.themeSource = 'dark';
+
+  const isMac = process.platform === 'darwin';
+  const isWin = process.platform === 'win32';
 
   const win = new BrowserWindow({
     width: 1200,
     height: 800,
     minWidth: 800,
     minHeight: 600,
+    show: false,
     title: 'Sandstorm Desktop',
-    backgroundColor: '#0f1117',
-    titleBarStyle: 'hiddenInset',
+    backgroundColor: '#0d1017',
+    ...(isMac
+      ? { titleBarStyle: 'hiddenInset' }
+      : isWin
+        ? { titleBarStyle: 'hidden', titleBarOverlay: { color: '#151921', symbolColor: '#6b7394', height: 36 } }
+        : {}),
     webPreferences: {
-      preload: path.join(__dirname, '../preload/index.js'),
+      preload: path.join(__dirname, '../preload/index.cjs'),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
     },
+  });
+
+  win.once('ready-to-show', () => {
+    win.show();
   });
 
   if (process.env.NODE_ENV === 'development') {
@@ -53,6 +66,13 @@ function createWindow(): BrowserWindow {
   return win;
 }
 
+function resolveCliDir(): string {
+  if (app.isPackaged) {
+    return path.join(process.resourcesPath, 'app.asar.unpacked', 'sandstorm-cli');
+  }
+  return path.join(app.getAppPath(), 'sandstorm-cli');
+}
+
 async function initializeApp(): Promise<void> {
   // Initialize runtimes
   dockerRuntime = new DockerRuntime();
@@ -64,14 +84,16 @@ async function initializeApp(): Promise<void> {
     : podmanRuntime;
 
   // Initialize control plane
-  registry = new Registry();
+  cliDir = resolveCliDir();
+  registry = await Registry.create();
   portAllocator = new PortAllocator(registry);
   taskWatcher = new TaskWatcher(registry, defaultRuntime);
   stackManager = new StackManager(
     registry,
     portAllocator,
     taskWatcher,
-    defaultRuntime
+    defaultRuntime,
+    cliDir
   );
 
   // Listen for task events to send to renderer
@@ -90,9 +112,9 @@ async function initializeApp(): Promise<void> {
 
 app.whenReady().then(async () => {
   await initializeApp();
-  registerIpcHandlers();
 
   mainWindow = createWindow();
+  registerIpcHandlers(mainWindow);
   createTray(mainWindow);
 
   app.on('activate', () => {

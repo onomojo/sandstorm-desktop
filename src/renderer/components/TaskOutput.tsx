@@ -36,13 +36,11 @@ export function TaskOutput({
   }, [services, runtime]);
 
   useEffect(() => {
-    // Auto-scroll to bottom
     if (outputRef.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
   }, [output]);
 
-  // Listen for live output updates
   useEffect(() => {
     const unsub = window.sandstorm.on('task:output', (data: unknown) => {
       const { data: chunk } = data as { stackId: string; data: string };
@@ -52,13 +50,19 @@ export function TaskOutput({
   }, []);
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col bg-sandstorm-bg">
       <pre
         ref={outputRef}
-        className="flex-1 overflow-auto p-4 text-sm font-mono text-sandstorm-text/90 bg-sandstorm-bg whitespace-pre-wrap break-words"
+        className="flex-1 overflow-auto p-4 text-xs font-mono leading-relaxed text-sandstorm-text-secondary whitespace-pre-wrap break-words selection:bg-sandstorm-accent/20"
       >
         {loading ? (
-          <span className="text-sandstorm-muted">Loading output...</span>
+          <span className="text-sandstorm-muted flex items-center gap-2">
+            <svg className="animate-spin w-3.5 h-3.5" viewBox="0 0 24 24" fill="none">
+              <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" className="opacity-25"/>
+              <path d="M4 12a8 8 0 018-8" stroke="currentColor" strokeWidth="3" strokeLinecap="round" className="opacity-75"/>
+            </svg>
+            Loading output...
+          </span>
         ) : (
           output
         )}

@@ -1,11 +1,16 @@
 appId: com.sandstorm.desktop
 productName: Sandstorm Desktop
+npmRebuild: false
 directories:
   output: release
   buildResources: resources
 files:
   - dist/**/*
   - package.json
+  - sandstorm-cli/**
+asarUnpack:
+  - "**/*.node"
+  - "sandstorm-cli/**"
 mac:
   target: [dmg, zip]
   icon: resources/icon.icns
@@ -14,7 +19,7 @@ win:
   target: [nsis]
   icon: resources/icon.ico
 linux:
-  target: [AppImage, deb]
+  target: [AppImage]
   icon: resources/icon.png
   category: Development
 nsis:

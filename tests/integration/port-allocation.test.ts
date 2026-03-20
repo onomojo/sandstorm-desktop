@@ -10,9 +10,9 @@ describe('Port Allocation (Integration)', () => {
   let allocator: PortAllocator;
   let dbPath: string;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     dbPath = path.join(os.tmpdir(), `sandstorm-port-int-${Date.now()}.db`);
-    registry = new Registry(dbPath);
+    registry = await Registry.create(dbPath);
     // Use a high range to avoid conflicts with real services
     allocator = new PortAllocator(registry, [49000, 49099]);
   });

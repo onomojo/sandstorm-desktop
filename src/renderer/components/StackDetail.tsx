@@ -1,11 +1,18 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAppStore, Stack, Task } from '../store';
+import { useAppStore, Task } from '../store';
 import { ServiceList } from './ServiceList';
 import { TaskOutput } from './TaskOutput';
 import { DiffViewer } from './DiffViewer';
 import { LogViewer } from './LogViewer';
 
 type Tab = 'output' | 'diff' | 'logs' | 'history';
+
+const TAB_CONFIG: { key: Tab; label: string; icon: string }[] = [
+  { key: 'output', label: 'Claude Output', icon: 'M8 9h8M8 13h6' },
+  { key: 'diff', label: 'Diff', icon: 'M12 3v18M3 12h18' },
+  { key: 'logs', label: 'Logs', icon: 'M4 6h16M4 10h16M4 14h16M4 18h10' },
+  { key: 'history', label: 'History', icon: 'M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z' },
+];
 
 export function StackDetail({
   stackId,
@@ -39,7 +46,6 @@ export function StackDetail({
     loadDiff();
   }, [loadTasks, loadDiff]);
 
-  // Refresh tasks when tab changes
   useEffect(() => {
     if (activeTab === 'history') loadTasks();
     if (activeTab === 'diff') loadDiff();
@@ -47,11 +53,12 @@ export function StackDetail({
 
   if (!stack) {
     return (
-      <div className="p-6">
-        <button onClick={onBack} className="text-sandstorm-muted hover:text-sandstorm-text">
-          &larr; Back
+      <div className="p-6 animate-fade-in">
+        <button onClick={onBack} className="text-sandstorm-muted hover:text-sandstorm-text transition-colors text-sm flex items-center gap-1">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 18l-6-6 6-6"/></svg>
+          Back
         </button>
-        <p className="mt-4 text-sandstorm-muted">Stack not found</p>
+        <p className="mt-4 text-sandstorm-muted text-sm">Stack not found</p>
       </div>
     );
   }
@@ -84,9 +91,11 @@ export function StackDetail({
   const handleTeardown = async () => {
     if (!confirm(`Tear down stack "${stackId}"?`)) return;
     try {
-      await window.sandstorm.stacks.teardown(stackId);
-      await refreshStacks();
+      // Navigate back immediately — teardown deletes the stack from the
+      // registry synchronously so the UI won't find it after refresh.
       onBack();
+      await window.sandstorm.stacks.teardown(stackId);
+      refreshStacks();
     } catch (err) {
       alert(`Teardown failed: ${err}`);
     }
@@ -94,42 +103,50 @@ export function StackDetail({
 
   const statusLabel =
     stack.status === 'completed'
-      ? 'NEEDS REVIEW'
-      : stack.status.toUpperCase();
+      ? 'Needs Review'
+      : stack.status.charAt(0).toUpperCase() + stack.status.slice(1);
+
+  const statusStyle =
+    stack.status === 'completed'
+      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400'
+      : stack.status === 'failed'
+        ? 'bg-red-500/10 border-red-500/20 text-red-400'
+        : stack.status === 'running'
+          ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
+          : 'bg-gray-500/10 border-gray-500/20 text-gray-400';
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col animate-fade-in">
       {/* Header */}
-      <div className="px-6 py-4 border-b border-sandstorm-border">
-        <div className="flex items-center gap-4">
+      <div className="px-5 py-4 border-b border-sandstorm-border shrink-0">
+        <div className="flex items-center gap-3">
           <button
             onClick={onBack}
-            className="text-sandstorm-muted hover:text-sandstorm-text text-lg"
+            className="text-sandstorm-muted hover:text-sandstorm-text transition-colors p-1 rounded-md hover:bg-sandstorm-surface-hover"
           >
-            &larr;
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round"><path d="M15 18l-6-6 6-6"/></svg>
           </button>
-          <div className="flex-1">
-            <div className="flex items-center gap-3">
-              <h1 className="text-xl font-semibold">{stack.id}</h1>
-              <span
-                className={`text-xs font-medium px-2 py-0.5 rounded ${
-                  stack.status === 'completed'
-                    ? 'bg-green-900/40 text-green-400'
-                    : stack.status === 'failed'
-                      ? 'bg-red-900/40 text-red-400'
-                      : stack.status === 'running'
-                        ? 'bg-blue-900/40 text-blue-400'
-                        : 'bg-gray-800 text-gray-400'
-                }`}
-              >
+          <div className="flex-1 min-w-0">
+            <div className="flex items-center gap-2.5">
+              <h1 className="text-base font-semibold text-sandstorm-text truncate">{stack.id}</h1>
+              <span className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${statusStyle}`}>
                 {statusLabel}
               </span>
             </div>
-            <div className="text-sm text-sandstorm-muted mt-0.5">
-              {stack.ticket && <span>{stack.ticket} &middot; </span>}
-              {stack.branch && <span>{stack.branch} &middot; </span>}
-              <span>created {new Date(stack.created_at).toLocaleString()}</span>
+            <div className="text-[11px] text-sandstorm-muted mt-0.5 flex items-center gap-1.5">
+              {stack.ticket && (
+                <span className="bg-sandstorm-bg px-1.5 py-0.5 rounded font-mono border border-sandstorm-border">{stack.ticket}</span>
+              )}
+              {stack.branch && (
+                <span className="bg-sandstorm-bg px-1.5 py-0.5 rounded font-mono border border-sandstorm-border">{stack.branch}</span>
+              )}
+              <span>{new Date(stack.created_at).toLocaleDateString()}</span>
             </div>
+            {stack.status === 'failed' && stack.error && (
+              <div className="mt-2 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+                {stack.error}
+              </div>
+            )}
           </div>
         </div>
       </div>
@@ -145,25 +162,22 @@ export function StackDetail({
       />
 
       {/* Tabs */}
-      <div className="border-b border-sandstorm-border px-6">
-        <div className="flex gap-1">
-          {(['output', 'diff', 'logs', 'history'] as Tab[]).map((tab) => (
+      <div className="border-b border-sandstorm-border px-5 shrink-0">
+        <div className="flex gap-0.5">
+          {TAB_CONFIG.map(({ key, label, icon }) => (
             <button
-              key={tab}
-              onClick={() => setActiveTab(tab)}
-              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-                activeTab === tab
+              key={key}
+              onClick={() => setActiveTab(key)}
+              className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+                activeTab === key
                   ? 'border-sandstorm-accent text-sandstorm-text'
-                  : 'border-transparent text-sandstorm-muted hover:text-sandstorm-text'
+                  : 'border-transparent text-sandstorm-muted hover:text-sandstorm-text-secondary'
               }`}
             >
-              {tab === 'output'
-                ? 'Claude Output'
-                : tab === 'diff'
-                  ? 'Diff'
-                  : tab === 'logs'
-                    ? 'Logs'
-                    : 'Task History'}
+              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-70">
+                <path d={icon}/>
+              </svg>
+              {label}
             </button>
           ))}
         </div>
@@ -183,38 +197,46 @@ export function StackDetail({
           />
         )}
         {activeTab === 'history' && (
-          <div className="p-4 overflow-y-auto h-full">
+          <div className="p-5 overflow-y-auto h-full">
             {tasks.length === 0 ? (
-              <p className="text-sandstorm-muted text-sm">No tasks dispatched yet</p>
+              <div className="flex flex-col items-center justify-center h-32 text-sandstorm-muted">
+                <p className="text-sm">No tasks dispatched yet</p>
+              </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {tasks.map((task) => (
                   <div
                     key={task.id}
-                    className="bg-sandstorm-bg border border-sandstorm-border rounded p-3"
+                    className="bg-sandstorm-surface border border-sandstorm-border rounded-lg p-3 animate-fade-in"
                   >
-                    <div className="flex items-center gap-2 text-sm">
+                    <div className="flex items-center gap-2 text-xs">
                       <span
-                        className={`w-2 h-2 rounded-full ${
+                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                           task.status === 'completed'
-                            ? 'bg-green-500'
+                            ? 'bg-emerald-400'
                             : task.status === 'failed'
-                              ? 'bg-red-500'
-                              : 'bg-blue-500 animate-pulse'
+                              ? 'bg-red-400'
+                              : 'bg-blue-400 animate-pulse'
                         }`}
                       />
-                      <span className="text-sandstorm-muted">
+                      <span className={
+                        task.status === 'completed'
+                          ? 'text-emerald-400'
+                          : task.status === 'failed'
+                            ? 'text-red-400'
+                            : 'text-blue-400'
+                      }>
                         {task.status === 'completed'
                           ? `Completed (exit ${task.exit_code})`
                           : task.status === 'failed'
                             ? `Failed (exit ${task.exit_code})`
                             : 'Running...'}
                       </span>
-                      <span className="text-sandstorm-muted text-xs">
+                      <span className="text-sandstorm-muted text-[10px] ml-auto tabular-nums">
                         {new Date(task.started_at).toLocaleString()}
                       </span>
                     </div>
-                    <p className="mt-1 text-sm text-sandstorm-text/80">
+                    <p className="mt-1.5 text-xs text-sandstorm-text-secondary leading-relaxed">
                       {task.prompt}
                     </p>
                   </div>
@@ -226,13 +248,13 @@ export function StackDetail({
       </div>
 
       {/* New task input + action buttons */}
-      <div className="border-t border-sandstorm-border px-6 py-3">
+      <div className="border-t border-sandstorm-border px-5 py-3 shrink-0 bg-sandstorm-surface/50 backdrop-blur-sm">
         <div className="flex gap-2 items-end">
           <textarea
             value={taskPrompt}
             onChange={(e) => setTaskPrompt(e.target.value)}
             placeholder="Describe a task for inner Claude..."
-            className="flex-1 bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 text-sm text-sandstorm-text placeholder-sandstorm-muted/50 resize-none focus:outline-none focus:border-sandstorm-accent"
+            className="flex-1 bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 text-sm text-sandstorm-text placeholder-sandstorm-muted/50 resize-none focus:outline-none focus:border-sandstorm-accent/50 focus:ring-1 focus:ring-sandstorm-accent/20 transition-all"
             rows={2}
             onKeyDown={(e) => {
               if (e.key === 'Enter' && (e.metaKey || e.ctrlKey)) {
@@ -240,40 +262,55 @@ export function StackDetail({
               }
             }}
           />
-          <div className="flex flex-col gap-1">
-            <button
-              onClick={handleDispatch}
-              disabled={!taskPrompt.trim() || dispatching}
-              className="px-4 py-2 bg-sandstorm-accent text-white text-sm rounded-lg hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-            >
-              {dispatching ? 'Dispatching...' : 'Dispatch'}
-            </button>
-          </div>
+          <button
+            onClick={handleDispatch}
+            disabled={!taskPrompt.trim() || dispatching}
+            className="px-4 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white text-sm font-medium rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.98] shadow-glow"
+          >
+            {dispatching ? 'Sending...' : 'Dispatch'}
+          </button>
         </div>
-        <div className="flex gap-2 mt-2">
-          <button
-            onClick={() => {
-              loadDiff();
-              setActiveTab('diff');
-            }}
-            className="text-xs px-3 py-1 rounded border border-sandstorm-border text-sandstorm-muted hover:text-sandstorm-text hover:bg-sandstorm-border/50 transition-colors"
-          >
-            View Full Diff
-          </button>
-          <button
-            onClick={handlePush}
-            className="text-xs px-3 py-1 rounded border border-sandstorm-border text-sandstorm-muted hover:text-sandstorm-text hover:bg-sandstorm-border/50 transition-colors"
-          >
-            Push to Remote
-          </button>
-          <button
-            onClick={handleTeardown}
-            className="text-xs px-3 py-1 rounded border border-red-800 text-red-400 hover:bg-red-900/30 transition-colors"
-          >
+        <div className="flex items-center gap-1.5 mt-2">
+          <span className="text-[10px] text-sandstorm-muted mr-1">
+            <kbd className="px-1 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-[9px]">Ctrl</kbd>
+            +
+            <kbd className="px-1 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-[9px]">Enter</kbd>
+          </span>
+          <div className="w-px h-3 bg-sandstorm-border mx-1" />
+          <FooterButton onClick={() => { loadDiff(); setActiveTab('diff'); }}>
+            View Diff
+          </FooterButton>
+          <FooterButton onClick={handlePush}>
+            Push
+          </FooterButton>
+          <FooterButton onClick={handleTeardown} danger>
             Tear Down
-          </button>
+          </FooterButton>
         </div>
       </div>
     </div>
+  );
+}
+
+function FooterButton({
+  onClick,
+  danger,
+  children,
+}: {
+  onClick: () => void;
+  danger?: boolean;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`text-[11px] font-medium px-2.5 py-1 rounded-md transition-all ${
+        danger
+          ? 'text-red-400 hover:bg-red-500/10'
+          : 'text-sandstorm-muted hover:bg-sandstorm-bg hover:text-sandstorm-text-secondary'
+      }`}
+    >
+      {children}
+    </button>
   );
 }

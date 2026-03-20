@@ -12,36 +12,38 @@ export function ServiceList({
 }) {
   if (services.length === 0) {
     return (
-      <div className="px-6 py-3 text-sm text-sandstorm-muted border-b border-sandstorm-border">
+      <div className="px-5 py-3 text-xs text-sandstorm-muted border-b border-sandstorm-border">
         No services found
       </div>
     );
   }
 
   return (
-    <div className="px-6 py-3 border-b border-sandstorm-border">
-      <div className="text-xs font-medium text-sandstorm-muted uppercase tracking-wider mb-2">
+    <div className="px-5 py-3 border-b border-sandstorm-border shrink-0">
+      <div className="text-[10px] font-semibold text-sandstorm-muted uppercase tracking-widest mb-2">
         Services
       </div>
-      <div className="bg-sandstorm-bg rounded-lg border border-sandstorm-border divide-y divide-sandstorm-border">
-        {services.map((svc) => (
+      <div className="bg-sandstorm-bg rounded-lg border border-sandstorm-border overflow-hidden">
+        {services.map((svc, i) => (
           <div
             key={svc.containerId}
-            className="flex items-center justify-between px-3 py-2 text-sm"
+            className={`flex items-center justify-between px-3 py-2 text-xs hover:bg-sandstorm-surface/50 transition-colors ${
+              i > 0 ? 'border-t border-sandstorm-border' : ''
+            }`}
           >
             <div className="flex items-center gap-2">
               <span
-                className={`w-2 h-2 rounded-full ${
+                className={`w-1.5 h-1.5 rounded-full shrink-0 ${
                   svc.status === 'running'
-                    ? 'bg-green-500'
+                    ? 'bg-emerald-400'
                     : svc.status === 'exited'
-                      ? 'bg-red-500'
+                      ? 'bg-red-400'
                       : svc.status === 'restarting'
-                        ? 'bg-yellow-500 animate-pulse'
+                        ? 'bg-amber-400 animate-pulse'
                         : 'bg-gray-500'
                 }`}
               />
-              <span className="font-medium">{svc.name}</span>
+              <span className="font-medium text-sandstorm-text">{svc.name}</span>
               <span className="text-sandstorm-muted capitalize">
                 {svc.status}
                 {svc.status === 'exited' && svc.exitCode !== undefined && (
@@ -55,14 +57,14 @@ export function ServiceList({
                   onClick={() =>
                     window.open(`http://localhost:${svc.hostPort}`, '_blank')
                   }
-                  className="text-xs text-sandstorm-accent hover:text-indigo-400 transition-colors"
+                  className="text-[11px] text-sandstorm-accent hover:text-sandstorm-accent-hover transition-colors font-mono"
                 >
-                  localhost:{svc.hostPort}
+                  :{svc.hostPort}
                 </button>
               )}
               <button
                 onClick={() => onViewLogs(svc.containerId)}
-                className="text-xs px-2 py-0.5 rounded border border-sandstorm-border text-sandstorm-muted hover:text-sandstorm-text hover:bg-sandstorm-border/50 transition-colors"
+                className="text-[11px] px-2 py-0.5 rounded-md text-sandstorm-muted hover:text-sandstorm-text-secondary hover:bg-sandstorm-surface-hover transition-colors"
               >
                 Logs
               </button>

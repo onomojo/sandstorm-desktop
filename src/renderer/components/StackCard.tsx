@@ -2,23 +2,33 @@ import React from 'react';
 import { Stack, useAppStore } from '../store';
 
 const STATUS_COLORS: Record<string, string> = {
-  building: 'bg-yellow-500',
-  up: 'bg-blue-500',
-  running: 'bg-blue-500 animate-pulse',
-  completed: 'bg-green-500',
-  failed: 'bg-red-500',
-  idle: 'bg-yellow-500',
+  building: 'bg-amber-400',
+  up: 'bg-emerald-400',
+  running: 'bg-blue-400 animate-pulse',
+  completed: 'bg-emerald-400',
+  failed: 'bg-red-400',
+  idle: 'bg-amber-400',
   stopped: 'bg-gray-500',
 };
 
+const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
+  building: { bg: 'bg-amber-500/10 border-amber-500/20', text: 'text-amber-400' },
+  up: { bg: 'bg-emerald-500/10 border-emerald-500/20', text: 'text-emerald-400' },
+  running: { bg: 'bg-blue-500/10 border-blue-500/20', text: 'text-blue-400' },
+  completed: { bg: 'bg-emerald-500/10 border-emerald-500/20', text: 'text-emerald-400' },
+  failed: { bg: 'bg-red-500/10 border-red-500/20', text: 'text-red-400' },
+  idle: { bg: 'bg-amber-500/10 border-amber-500/20', text: 'text-amber-400' },
+  stopped: { bg: 'bg-gray-500/10 border-gray-500/20', text: 'text-gray-400' },
+};
+
 const STATUS_LABELS: Record<string, string> = {
-  building: 'BUILDING',
-  up: 'UP',
-  running: 'RUNNING',
-  completed: 'NEEDS REVIEW',
-  failed: 'FAILED',
-  idle: 'IDLE',
-  stopped: 'STOPPED',
+  building: 'Building',
+  up: 'Up',
+  running: 'Running',
+  completed: 'Needs Review',
+  failed: 'Failed',
+  idle: 'Idle',
+  stopped: 'Stopped',
 };
 
 function timeAgo(dateStr: string): string {
@@ -35,7 +45,7 @@ function timeAgo(dateStr: string): string {
   return `${diffDays}d ago`;
 }
 
-export function StackCard({ stack }: { stack: Stack }) {
+export function StackCard({ stack, showProject }: { stack: Stack; showProject?: boolean }) {
   const { selectStack, refreshStacks } = useAppStore();
 
   const runningCount = stack.services.filter(
@@ -49,18 +59,19 @@ export function StackCard({ stack }: { stack: Stack }) {
     if (!confirm(`Tear down stack "${stack.id}"?`)) return;
     try {
       await window.sandstorm.stacks.teardown(stack.id);
-      await refreshStacks();
+      refreshStacks();
     } catch (err) {
       alert(`Failed to tear down: ${err}`);
     }
   };
 
   const statusColor = STATUS_COLORS[stack.status] ?? 'bg-gray-500';
-  const statusLabel = STATUS_LABELS[stack.status] ?? stack.status.toUpperCase();
+  const badge = STATUS_BADGE[stack.status] ?? { bg: 'bg-gray-500/10 border-gray-500/20', text: 'text-gray-400' };
+  const statusLabel = STATUS_LABELS[stack.status] ?? stack.status;
 
   return (
     <div
-      className="bg-sandstorm-surface border border-sandstorm-border rounded-lg p-4 hover:border-sandstorm-accent/50 transition-colors cursor-pointer"
+      className="group bg-sandstorm-surface border border-sandstorm-border rounded-xl p-4 hover:border-sandstorm-border-light hover:bg-sandstorm-surface-hover transition-all duration-150 cursor-pointer shadow-card hover:shadow-card-hover"
       onClick={() => selectStack(stack.id)}
       data-testid={`stack-card-${stack.id}`}
     >
@@ -68,67 +79,79 @@ export function StackCard({ stack }: { stack: Stack }) {
         <div className="flex-1 min-w-0">
           {/* Stack name and status */}
           <div className="flex items-center gap-3">
-            <div className={`w-2.5 h-2.5 rounded-full ${statusColor}`} />
-            <span className="font-semibold text-lg truncate">{stack.id}</span>
+            <div className={`w-2 h-2 rounded-full ${statusColor} shrink-0`} />
+            {showProject && (
+              <span className="text-[13px] text-sandstorm-muted truncate">{stack.project} /</span>
+            )}
+            <span className="font-semibold text-[15px] text-sandstorm-text truncate">{stack.id}</span>
             <span
-              className={`text-xs font-medium px-2 py-0.5 rounded ${
-                stack.status === 'completed'
-                  ? 'bg-green-900/40 text-green-400'
-                  : stack.status === 'failed'
-                    ? 'bg-red-900/40 text-red-400'
-                    : stack.status === 'running'
-                      ? 'bg-blue-900/40 text-blue-400'
-                      : 'bg-gray-800 text-gray-400'
-              }`}
+              className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full border ${badge.bg} ${badge.text}`}
               data-testid={`stack-status-${stack.id}`}
             >
               {statusLabel}
             </span>
-            <span className="text-xs text-sandstorm-muted">
+            <span className="text-[11px] text-sandstorm-muted ml-auto shrink-0">
               {timeAgo(stack.updated_at)}
             </span>
           </div>
 
           {/* Ticket and branch */}
-          <div className="mt-1 ml-5 text-sm text-sandstorm-muted">
-            {stack.ticket && <span>{stack.ticket}</span>}
-            {stack.ticket && stack.branch && <span> &middot; </span>}
-            {stack.branch && <span>{stack.branch}</span>}
-          </div>
+          {(stack.ticket || stack.branch) && (
+            <div className="mt-2 ml-5 flex items-center gap-1.5 text-xs text-sandstorm-muted">
+              {stack.ticket && (
+                <span className="bg-sandstorm-bg px-2 py-0.5 rounded-md font-mono text-[11px] border border-sandstorm-border">
+                  {stack.ticket}
+                </span>
+              )}
+              {stack.branch && (
+                <span className="bg-sandstorm-bg px-2 py-0.5 rounded-md font-mono text-[11px] border border-sandstorm-border flex items-center gap-1">
+                  <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" className="opacity-60">
+                    <path d="M6 3v12M18 9a3 3 0 01-3 3H9M18 9a3 3 0 10-3-3"/>
+                  </svg>
+                  {stack.branch}
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Description */}
           {stack.description && (
-            <div className="mt-1 ml-5 text-sm text-sandstorm-text/70 truncate">
-              "{stack.description}"
+            <div className="mt-1.5 ml-5 text-xs text-sandstorm-text-secondary truncate">
+              {stack.description}
+            </div>
+          )}
+
+          {/* Error message for failed stacks */}
+          {stack.status === 'failed' && stack.error && (
+            <div className="mt-2 ml-5 text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2.5 py-1.5 truncate" title={stack.error}>
+              {stack.error}
             </div>
           )}
 
           {/* Service health summary */}
           {totalCount > 0 && (
-            <div className="mt-2 ml-5 flex items-center gap-2 text-xs">
-              <span className="text-sandstorm-muted">Services:</span>
+            <div className="mt-3 ml-5 flex items-center gap-2.5 text-[11px]">
+              <span className="text-sandstorm-muted font-medium">Services</span>
               <span className="flex gap-0.5">
                 {stack.services.map((svc, i) => (
                   <span
                     key={i}
-                    className={`w-2 h-2 rounded-full ${
+                    className={`w-1.5 h-1.5 rounded-full ${
                       svc.status === 'running'
-                        ? 'bg-green-500'
+                        ? 'bg-emerald-400'
                         : svc.status === 'exited'
-                          ? 'bg-red-500'
-                          : 'bg-yellow-500'
+                          ? 'bg-red-400'
+                          : 'bg-amber-400'
                     }`}
                     title={`${svc.name}: ${svc.status}`}
                   />
                 ))}
               </span>
-              <span className="text-sandstorm-muted">
+              <span className="text-sandstorm-muted tabular-nums">
                 {runningCount}/{totalCount} up
                 {failedServices.length > 0 && (
-                  <span className="text-red-400">
-                    {' '}
-                    &mdash; {failedServices.map((s) => s.name).join(', ')}{' '}
-                    exited
+                  <span className="text-red-400 ml-1.5">
+                    {failedServices.map((s) => s.name).join(', ')} exited
                   </span>
                 )}
               </span>
@@ -136,16 +159,20 @@ export function StackCard({ stack }: { stack: Stack }) {
           )}
         </div>
 
-        {/* Arrow to detail */}
-        <div className="text-sandstorm-muted ml-4 mt-1 text-lg">&rsaquo;</div>
+        {/* Arrow */}
+        <div className="text-sandstorm-muted ml-4 mt-0.5 opacity-0 group-hover:opacity-100 transition-opacity">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M9 18l6-6-6-6"/>
+          </svg>
+        </div>
       </div>
 
       {/* Action buttons */}
-      <div className="mt-3 ml-5 flex gap-2">
+      <div className="mt-3 ml-5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         {stack.status === 'completed' && (
           <>
             <ActionButton label="View Diff" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
-            <ActionButton label="Push" onClick={(e) => { e.stopPropagation(); window.sandstorm.push.execute(stack.id); }} />
+            <ActionButton label="Push" onClick={(e) => { e.stopPropagation(); window.sandstorm.push.execute(stack.id); }} primary />
           </>
         )}
         {stack.status === 'running' && (
@@ -167,20 +194,22 @@ function ActionButton({
   label,
   onClick,
   danger,
+  primary,
 }: {
   label: string;
   onClick: (e: React.MouseEvent) => void;
   danger?: boolean;
+  primary?: boolean;
 }) {
+  const base = 'titlebar-no-drag text-[11px] font-medium px-2.5 py-1 rounded-md transition-all active:scale-[0.97]';
+  const variant = danger
+    ? 'text-red-400 hover:bg-red-500/10 hover:text-red-300'
+    : primary
+      ? 'bg-sandstorm-accent/10 text-sandstorm-accent hover:bg-sandstorm-accent/20'
+      : 'text-sandstorm-muted hover:bg-sandstorm-surface hover:text-sandstorm-text-secondary';
+
   return (
-    <button
-      onClick={onClick}
-      className={`titlebar-no-drag text-xs px-3 py-1 rounded border transition-colors ${
-        danger
-          ? 'border-red-800 text-red-400 hover:bg-red-900/30'
-          : 'border-sandstorm-border text-sandstorm-muted hover:bg-sandstorm-border/50 hover:text-sandstorm-text'
-      }`}
-    >
+    <button onClick={onClick} className={`${base} ${variant}`}>
       {label}
     </button>
   );
