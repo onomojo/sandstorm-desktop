@@ -26,10 +26,11 @@ Must complete without errors. If it fails, fix and rebuild.
 
 ### Step 4: Package
 ```bash
-npx electron-rebuild --only better-sqlite3
-npm run package -- --config.npmRebuild=false
+npm run package
 ```
 Must produce files in `release/`. If it fails, fix and repackage.
+
+**CRITICAL: Native modules like better-sqlite3 must be compiled against Electron's Node ABI, NOT the system Node.** electron-builder's `npmRebuild` handles this automatically — do NOT pass `--config.npmRebuild=false`. If the native rebuild fails due to compiler issues (e.g., g++ too old for `-std=gnu++20`), fix the root cause (upgrade compiler, exclude the problematic optional dep) rather than skipping the rebuild.
 
 ### Step 5: Run
 ```bash
