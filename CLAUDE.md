@@ -45,6 +45,16 @@ If you changed any UI code, use the Chrome DevTools MCP to take a screenshot of 
 
 If ANY step fails, fix the issue and restart from Step 1. Do not skip steps. Do not report success without completing all 6 steps.
 
+## Product vision
+
+Sandstorm Desktop is a cross-platform control plane for managing isolated agent stacks. Think Docker Desktop but oriented towards AI agent orchestration.
+
+**Multi-project:** The app has project tabs. User opens a project directory, it reads `.sandstorm/config`. An "All" tab shows stacks across all projects. New Stack dialog inherits the project context — no typing project directories.
+
+**Self-contained:** The sandstorm CLI scripts are bundled into the Electron app. User installs Sandstorm Desktop, opens it, points at a project. If not initialized, they click "Initialize Sandstorm" and it runs init. No separate CLI install.
+
+**Pluggable agent backend:** Currently uses Claude Code as the inner agent. The agent layer should be behind an interface so it can be swapped for other LLMs/tools in the future (Codex, Gemini, raw API, etc.). Don't over-engineer this now, but don't scatter Claude-specific assumptions throughout the codebase either.
+
 ## Tech stack
 
 - Electron + electron-vite (builds to `out/`)
