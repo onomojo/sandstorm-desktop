@@ -83,15 +83,12 @@ chown -R claude:claude /app
 chown -R claude:claude /home/claude
 chown -R claude:claude /usr/local/bundle 2>/dev/null || true
 
-# Copy sandstorm inner instructions into the workspace
+# Write sandstorm instructions to user-level CLAUDE.md
+# (Claude Code reads ~/.claude/CLAUDE.md alongside project-level CLAUDE.md)
 if [ -f /usr/bin/SANDSTORM_INNER.md ]; then
-  # Append to existing CLAUDE.md or create one
-  if [ -f /app/CLAUDE.md ]; then
-    echo "" >> /app/CLAUDE.md
-    cat /usr/bin/SANDSTORM_INNER.md >> /app/CLAUDE.md
-  else
-    cp /usr/bin/SANDSTORM_INNER.md /app/CLAUDE.md
-  fi
+  mkdir -p /home/claude/.claude
+  cp /usr/bin/SANDSTORM_INNER.md /home/claude/.claude/CLAUDE.md
+  chown -R claude:claude /home/claude/.claude
 fi
 
 # Fix docker socket permissions so claude user can access it
