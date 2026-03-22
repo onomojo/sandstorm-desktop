@@ -91,4 +91,4 @@ export const TaskOutput = React.memo(function TaskOutput({
       </pre>
     </div>
   );
-}
+});
