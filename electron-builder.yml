@@ -5,7 +5,7 @@ directories:
   output: release
   buildResources: resources
 files:
-  - dist/**/*
+  - out/**/*
   - package.json
   - sandstorm-cli/**
 asarUnpack:

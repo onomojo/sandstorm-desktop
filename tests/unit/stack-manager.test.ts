@@ -36,7 +36,7 @@ function createMockRuntime(): ContainerRuntime {
       },
     ]),
     inspect: vi.fn(),
-    logs: vi.fn(),
+    logs: vi.fn().mockReturnValue((async function* () {})()),
     exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
     isAvailable: vi.fn().mockResolvedValue(true),
     version: vi.fn().mockResolvedValue('Mock 1.0'),

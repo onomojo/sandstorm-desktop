@@ -220,6 +220,9 @@ export class StackManager {
     // Start watching for completion
     this.taskWatcher.watch(stackId, claudeContainer.id);
 
+    // Stream live output to renderer (fire-and-forget)
+    this.taskWatcher.streamOutput(stackId, claudeContainer.id, () => {}).catch(() => {});
+
     return task;
   }
 

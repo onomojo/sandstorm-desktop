@@ -30,4 +30,4 @@ if [[ "${1:-}" =~ ^($STACK_COMMANDS)$ ]]; then
 fi
 
 # Default: launch Claude Code with the Sandstorm outer CLAUDE.md and settings
-exec claude --system-prompt-file "$SANDSTORM_DIR/CLAUDE.md" --settings "$SANDSTORM_DIR/.claude/settings.local.json" "$@"
+exec claude --system-prompt-file "$SANDSTORM_DIR/SANDSTORM_OUTER.md" "$@"

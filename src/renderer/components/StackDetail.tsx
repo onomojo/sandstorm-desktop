@@ -186,7 +186,13 @@ export function StackDetail({
       {/* Tab content */}
       <div className="flex-1 overflow-hidden">
         {activeTab === 'output' && (
-          <TaskOutput stackId={stackId} runtime={stack.runtime} services={stack.services} />
+          <TaskOutput
+            stackId={stackId}
+            runtime={stack.runtime}
+            claudeContainerId={
+              stack.services.find((s) => s.name === 'claude')?.containerId ?? null
+            }
+          />
         )}
         {activeTab === 'diff' && <DiffViewer diff={diff} />}
         {activeTab === 'logs' && (

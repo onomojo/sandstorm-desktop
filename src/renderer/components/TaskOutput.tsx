@@ -1,30 +1,37 @@
-import React, { useEffect, useState, useRef } from 'react';
-import { ServiceInfo } from '../store';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 
-export function TaskOutput({
-  stackId: _stackId,
+export const TaskOutput = React.memo(function TaskOutput({
+  stackId,
   runtime,
-  services,
+  claudeContainerId,
 }: {
   stackId: string;
   runtime: string;
-  services: ServiceInfo[];
+  claudeContainerId: string | null;
 }) {
   const [output, setOutput] = useState('');
   const [loading, setLoading] = useState(true);
   const outputRef = useRef<HTMLPreElement>(null);
+  const userScrolledUp = useRef(false);
+  const fetchedContainerId = useRef<string | null>(null);
 
   useEffect(() => {
-    const claudeService = services.find((s) => s.name === 'claude');
-    if (!claudeService) {
-      setOutput('Claude container not found');
-      setLoading(false);
+    if (!claudeContainerId) {
+      if (!fetchedContainerId.current) {
+        setOutput('Claude container not found');
+        setLoading(false);
+      }
       return;
     }
 
+    // Skip re-fetch if we already loaded logs for this container
+    if (fetchedContainerId.current === claudeContainerId) return;
+
     setLoading(true);
+    fetchedContainerId.current = claudeContainerId;
+
     window.sandstorm.logs
-      .stream(claudeService.containerId, runtime)
+      .stream(claudeContainerId, runtime)
       .then((logs) => {
         setOutput(logs || 'No output yet');
         setLoading(false);
@@ -33,26 +40,41 @@ export function TaskOutput({
         setOutput(`Error loading output: ${err}`);
         setLoading(false);
       });
-  }, [services, runtime]);
+  }, [claudeContainerId, runtime]);
 
+  // Auto-scroll to bottom only if user hasn't scrolled up
   useEffect(() => {
-    if (outputRef.current) {
+    if (outputRef.current && !userScrolledUp.current) {
       outputRef.current.scrollTop = outputRef.current.scrollHeight;
     }
   }, [output]);
 
+  const handleScroll = useCallback(() => {
+    const el = outputRef.current;
+    if (!el) return;
+    const distanceFromBottom = el.scrollHeight - el.scrollTop - el.clientHeight;
+    userScrolledUp.current = distanceFromBottom > 50;
+  }, []);
+
+  // Listen for live output updates, filtered by stackId
   useEffect(() => {
     const unsub = window.sandstorm.on('task:output', (data: unknown) => {
-      const { data: chunk } = data as { stackId: string; data: string };
-      setOutput((prev) => prev + chunk);
+      const { stackId: eventStackId, data: chunk } = data as {
+        stackId: string;
+        data: string;
+      };
+      if (eventStackId === stackId) {
+        setOutput((prev) => prev + chunk);
+      }
     });
     return unsub;
-  }, []);
+  }, [stackId]);
 
   return (
     <div className="h-full flex flex-col bg-sandstorm-bg">
       <pre
         ref={outputRef}
+        onScroll={handleScroll}
         className="flex-1 overflow-auto p-4 text-xs font-mono leading-relaxed text-sandstorm-text-secondary whitespace-pre-wrap break-words selection:bg-sandstorm-accent/20"
       >
         {loading ? (
