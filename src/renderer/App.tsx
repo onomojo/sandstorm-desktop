@@ -5,6 +5,7 @@ import { StackDetail } from './components/StackDetail';
 import { NewStackDialog } from './components/NewStackDialog';
 import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
+import trayIcon from './tray-icon.png';
 
 export default function App() {
   const {
@@ -49,10 +50,10 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col bg-sandstorm-bg text-sandstorm-text">
-      {/* Title bar — pl-20 on macOS to clear traffic light buttons */}
-      <div className="titlebar-drag h-10 bg-sandstorm-surface border-b border-sandstorm-border flex items-center px-4 shrink-0" style={{ paddingLeft: navigator.platform.includes('Mac') ? '80px' : undefined }}>
+      {/* Title bar — centered on macOS to avoid traffic lights, left-aligned elsewhere */}
+      <div className={`titlebar-drag h-10 bg-sandstorm-surface border-b border-sandstorm-border flex items-center px-4 shrink-0 ${navigator.platform.includes('Mac') ? 'justify-center' : ''}`}>
         <div className="titlebar-no-drag flex items-center gap-2.5">
-          <img src="./tray-icon.png" alt="Sandstorm" className="w-6 h-6" />
+          <img src={trayIcon} alt="Sandstorm" className="w-6 h-6" />
           <span className="text-xs font-semibold text-sandstorm-muted tracking-wide uppercase">
             Sandstorm
           </span>
