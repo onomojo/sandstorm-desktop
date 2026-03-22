@@ -1,3 +1,5 @@
+![Sandstorm Desktop](resources/logo.png)
+
 # Sandstorm Desktop
 
 **Deploy a fleet of AI agents. Ship 10x faster.**
