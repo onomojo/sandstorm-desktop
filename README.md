@@ -1,4 +1,4 @@
-![Sandstorm Desktop](resources/logo.png)
+![Sandstorm Desktop](resources/icon.png)
 
 # Sandstorm Desktop
 
