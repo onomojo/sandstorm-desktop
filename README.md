@@ -45,16 +45,16 @@ You  --->  Outer Claude (orchestrator)
 
 ### Linux
 
-Download the `.AppImage` from the [latest release](https://github.com/onomojo/sandstorm-desktop/releases/latest).
+Download `sandstorm-desktop-0.1.0-linux.AppImage` from the [latest release](https://github.com/onomojo/sandstorm-desktop/releases/latest).
 
 ```bash
-chmod +x "Sandstorm Desktop-0.1.0.AppImage"
-./"Sandstorm Desktop-0.1.0.AppImage"
+chmod +x sandstorm-desktop-0.1.0-linux.AppImage
+./sandstorm-desktop-0.1.0-linux.AppImage
 ```
 
 ### macOS
 
-Download the `.dmg` from the [latest release](https://github.com/onomojo/sandstorm-desktop/releases/latest). Open it and drag Sandstorm Desktop to Applications.
+Download `sandstorm-desktop-0.1.0-mac.dmg` from the [latest release](https://github.com/onomojo/sandstorm-desktop/releases/latest). Open it and drag Sandstorm Desktop to Applications.
 
 ---
 

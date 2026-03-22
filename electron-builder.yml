@@ -1,6 +1,7 @@
 appId: com.sandstorm.desktop
 productName: Sandstorm Desktop
 npmRebuild: false
+artifactName: "sandstorm-desktop-${version}.${ext}"
 directories:
   output: release
   buildResources: resources
@@ -12,16 +13,19 @@ asarUnpack:
   - "**/*.node"
   - "sandstorm-cli/**"
 mac:
-  target: [dmg, zip]
+  target: [dmg]
   icon: resources/icon.icns
   category: public.app-category.developer-tools
+  artifactName: "sandstorm-desktop-${version}-mac.${ext}"
 win:
   target: [nsis]
   icon: resources/icon.ico
+  artifactName: "sandstorm-desktop-${version}-win.${ext}"
 linux:
   target: [AppImage]
   icon: resources/icon.png
   category: Development
+  artifactName: "sandstorm-desktop-${version}-linux.${ext}"
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
