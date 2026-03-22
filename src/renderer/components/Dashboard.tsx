@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../store';
 import { StackCard } from './StackCard';
 import { UninitializedProject } from './UninitializedProject';
+import { ClaudeSession } from './ClaudeSession';
 
 export function Dashboard() {
   const { setShowNewStackDialog, filteredStacks, activeProject } = useAppStore();
@@ -21,6 +22,9 @@ export function Dashboard() {
     });
     return () => { cancelled = true; };
   }, [project]);
+
+  // Derive a stable tab ID for the Claude session
+  const claudeTabId = project ? `project-${project.id}` : 'all';
 
   // If we have a selected project that isn't initialized, show that state
   if (project && projectInitialized === false) {
@@ -90,7 +94,7 @@ export function Dashboard() {
       </div>
 
       {/* Stack list */}
-      <div className="flex-1 overflow-y-auto p-6">
+      <div className="flex-1 overflow-y-auto p-6 min-h-0">
         {stacks.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-full text-sandstorm-muted">
             <div className="relative mb-6">
@@ -125,6 +129,11 @@ export function Dashboard() {
             ))}
           </div>
         )}
+      </div>
+
+      {/* Embedded Claude session */}
+      <div className="h-[280px] shrink-0 border-t border-sandstorm-border">
+        <ClaudeSession key={claudeTabId} tabId={claudeTabId} projectDir={project?.directory} />
       </div>
     </div>
   );

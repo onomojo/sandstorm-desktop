@@ -8,6 +8,7 @@ import {
   dockerRuntime,
   podmanRuntime,
   cliDir,
+  claudeSessionManager,
 } from './index';
 import { CreateStackOpts } from './control-plane/stack-manager';
 
@@ -15,6 +16,27 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   // Wire up stack update notifications to the renderer
   stackManager.setOnStackUpdate(() => {
     mainWindow?.webContents.send('stacks:updated');
+  });
+
+  // --- Claude Sessions ---
+
+  ipcMain.handle(
+    'claude:send',
+    (_event, tabId: string, message: string, projectDir?: string) => {
+      claudeSessionManager.sendMessage(tabId, message, projectDir);
+    }
+  );
+
+  ipcMain.handle('claude:cancel', (_event, tabId: string) => {
+    claudeSessionManager.cancelSession(tabId);
+  });
+
+  ipcMain.handle('claude:reset', (_event, tabId: string) => {
+    claudeSessionManager.resetSession(tabId);
+  });
+
+  ipcMain.handle('claude:history', (_event, tabId: string) => {
+    return claudeSessionManager.getHistory(tabId);
   });
   // --- Projects ---
 

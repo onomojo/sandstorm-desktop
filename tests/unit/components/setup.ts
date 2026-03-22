@@ -42,6 +42,12 @@ export function mockSandstormApi() {
     runtime: {
       available: vi.fn().mockResolvedValue({ docker: true, podman: false }),
     },
+    claude: {
+      send: vi.fn().mockResolvedValue(undefined),
+      cancel: vi.fn().mockResolvedValue(undefined),
+      reset: vi.fn().mockResolvedValue(undefined),
+      history: vi.fn().mockResolvedValue({ messages: [], processing: false }),
+    },
     on: vi.fn().mockReturnValue(() => {}),
   };
 

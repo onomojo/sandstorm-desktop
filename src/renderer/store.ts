@@ -118,6 +118,12 @@ declare global {
       runtime: {
         available: () => Promise<{ docker: boolean; podman: boolean }>;
       };
+      claude: {
+        send: (tabId: string, message: string, projectDir?: string) => Promise<void>;
+        cancel: (tabId: string) => Promise<void>;
+        reset: (tabId: string) => Promise<void>;
+        history: (tabId: string) => Promise<{ messages: Array<{ role: string; content: string }>; processing: boolean }>;
+      };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
   }
