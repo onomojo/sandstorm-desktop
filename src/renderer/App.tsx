@@ -49,14 +49,10 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col bg-sandstorm-bg text-sandstorm-text">
-      {/* Title bar */}
-      <div className="titlebar-drag h-10 bg-sandstorm-surface border-b border-sandstorm-border flex items-center px-4 shrink-0">
+      {/* Title bar — pl-20 on macOS to clear traffic light buttons */}
+      <div className="titlebar-drag h-10 bg-sandstorm-surface border-b border-sandstorm-border flex items-center px-4 shrink-0" style={{ paddingLeft: navigator.platform.includes('Mac') ? '80px' : undefined }}>
         <div className="titlebar-no-drag flex items-center gap-2.5">
-          <div className="w-6 h-6 rounded-md bg-gradient-to-br from-sandstorm-accent to-indigo-400 flex items-center justify-center shadow-sm">
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="text-white">
-              <path d="M13 3L4 14h7l-2 7 9-11h-7l2-7z" fill="currentColor"/>
-            </svg>
-          </div>
+          <img src="./tray-icon.png" alt="Sandstorm" className="w-6 h-6" />
           <span className="text-xs font-semibold text-sandstorm-muted tracking-wide uppercase">
             Sandstorm
           </span>

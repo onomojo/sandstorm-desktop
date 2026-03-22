@@ -205,7 +205,17 @@ export class DockerRuntime implements ContainerRuntime {
     return new Promise((resolve, reject) => {
       const child = spawn(cmd, args, {
         cwd,
-        env: { ...process.env, ...env },
+        env: {
+          ...process.env,
+          ...env,
+          PATH: [
+            `${process.env.HOME}/.local/bin`,
+            '/opt/homebrew/bin',
+            '/usr/local/bin',
+            '/usr/local/sbin',
+            process.env.PATH,
+          ].join(':'),
+        },
         stdio: 'pipe',
       });
       let stderr = '';

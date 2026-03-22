@@ -273,7 +273,16 @@ rl.on('line', async (line) => {
     const claudeBin = process.env.HOME ? path.join(process.env.HOME, '.local', 'bin', 'claude') : 'claude';
     const child = spawn(claudeBin, args, {
       cwd,
-      env: { ...process.env, PATH: `${process.env.HOME}/.local/bin:${process.env.PATH}` },
+      env: {
+        ...process.env,
+        PATH: [
+          `${process.env.HOME}/.local/bin`,
+          '/opt/homebrew/bin',
+          '/usr/local/bin',
+          '/usr/local/sbin',
+          process.env.PATH,
+        ].join(':'),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
