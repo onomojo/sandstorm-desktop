@@ -122,7 +122,7 @@ export class ClaudeSessionManager {
   }
 
   private writeMcpConfig(): void {
-    const tmpDir = path.join(os.tmpdir(), 'sandstorm-mcp');
+    const tmpDir = path.join(os.tmpdir(), `sandstorm-mcp-${process.pid}`);
     fs.mkdirSync(tmpDir, { recursive: true });
 
     // MCP server script — standalone Node.js process that bridges to our HTTP server
