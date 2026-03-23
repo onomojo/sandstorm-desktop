@@ -136,7 +136,7 @@ declare global {
         remove: (id: number) => Promise<void>;
         browse: () => Promise<string | null>;
         checkInit: (directory: string) => Promise<boolean>;
-        initialize: (directory: string) => Promise<boolean>;
+        initialize: (directory: string) => Promise<{ success: boolean; error?: string }>;
       };
       stacks: {
         list: () => Promise<Stack[]>;
