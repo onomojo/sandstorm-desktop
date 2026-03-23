@@ -4,54 +4,7 @@ This is an Electron desktop app (React + Tailwind + TypeScript). It packages int
 
 ## Mandatory verification loop
 
-Every task MUST end with a successful verification loop. Do not report a task as complete unless ALL steps pass:
-
-### Step 1: Tests
-```bash
-npm test
-```
-ALL tests must pass. If any fail, fix the code and rerun.
-
-### Step 2: TypeScript
-```bash
-npx tsc --noEmit
-```
-Zero type errors. If any exist, fix and rerun.
-
-### Step 3: Build
-```bash
-npm run build
-```
-Must complete without errors. If it fails, fix and rebuild.
-
-### Step 4: Rebuild native modules for Electron
-```bash
-npx electron-rebuild
-```
-This recompiles native addons (better-sqlite3) against Electron's Node ABI. If `cpu-features` fails to build (g++ too old for `-std=gnu++20`), that's OK — it's optional. But better-sqlite3 MUST succeed.
-
-**WHY THIS MATTERS:** The container runs Node 22 (NODE_MODULE_VERSION 127). Electron uses its own Node (MODULE_VERSION 130). If you skip this step or let `npm run package` do it wrong, the packaged app will crash with `NODE_MODULE_VERSION` mismatch on the user's machine.
-
-### Step 5: Package
-```bash
-npm run package -- --config.npmRebuild=false
-```
-We pass `--config.npmRebuild=false` here because we already rebuilt in Step 4. If electron-builder tries to rebuild again, it may undo our work or fail on optional deps.
-
-Must produce files in `release/`.
-
-### Step 6: Run
-```bash
-./release/"Sandstorm Desktop-0.1.0.AppImage" --no-sandbox 2>&1 | head -30
-```
-The app MUST launch without crashing. If it crashes with NODE_MODULE_VERSION errors, go back to Step 4 — the native module rebuild failed or was skipped. If it crashes for other reasons, read the error, fix, and go back to Step 3.
-
-### Step 7: Visual verification
-If you changed any UI code, use the Chrome DevTools MCP to take a screenshot of the running app and verify it looks correct. No black text on dark backgrounds. No broken layouts.
-
-## The loop
-
-If ANY step fails, fix the issue and restart from Step 1. Do not skip steps. Do not report success without completing all 6 steps.
+Every task MUST end with a successful /verify. This runs all build verification steps (tests, types, build, electron-rebuild, package, run). Do not report a task as complete unless /verify passes.
 
 ## Product vision
 
