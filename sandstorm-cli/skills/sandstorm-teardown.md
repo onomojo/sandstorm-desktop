@@ -36,9 +36,8 @@ sandstorm diff <stack_id>
 If there are changes worth keeping:
 ```bash
 sandstorm push <stack_id> "Save work before teardown"
-# or
-sandstorm publish <stack_id> feature/my-branch "Save work"
 ```
+This will commit, push the branch, and create a PR back to main.
 
 ## Usage
 

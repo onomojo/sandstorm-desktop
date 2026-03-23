@@ -6,7 +6,7 @@ trigger: when the user wants to send a task to a stack, dispatch work, run a tas
 
 # Sandstorm Dispatch Task
 
-Send a task prompt to the inner Claude agent in a stack.
+Send a task prompt to the inner Claude agent in a stack. Inner Claude makes code changes but does NOT commit — the outer orchestrator reviews via `sandstorm diff` and pushes via `sandstorm push`.
 
 ## Command
 
@@ -36,6 +36,7 @@ sandstorm task <stack_id> --sync "prompt text"
 1. **Always use async mode** (no `--sync`). Never block the conversation waiting for a task.
 2. **Never write sleep/poll loops.** Check status with `sandstorm task-status <id>` only when needed.
 3. **Write clear, goal-oriented prompts.** Describe WHAT, not HOW. The inner Claude has the full repo.
+4. **Inner Claude should NOT commit.** It only makes file changes. The outer orchestrator handles git operations.
 
 ## Writing good task prompts
 
@@ -68,7 +69,6 @@ sandstorm diff <stack_id>            # See what changed
 3. Inner Claude works autonomously with `--dangerously-skip-permissions`
 4. Output streams to `/tmp/claude-task.log`
 5. Status file updated to "completed" or "failed"
-6. Registry updated with final branch info
 
 ## Common patterns
 

@@ -18,14 +18,14 @@ sandstorm up <stack_id> [--ticket TICKET] [--branch BRANCH]
 
 | Argument | Required | Description |
 |----------|----------|-------------|
-| `<stack_id>` | Yes | Alphanumeric identifier (e.g., `1`, `2`, `fix-auth-bug`) |
+| `<stack_id>` | Yes | Descriptive identifier — becomes the branch name (e.g., `fix-auth-bug`, `add-search`) |
 | `--ticket TICKET` | No | Associated ticket ID (e.g., `PROJ-123`) |
-| `--branch BRANCH` | No | Git branch to checkout (creates if doesn't exist) |
+| `--branch BRANCH` | No | Override the default branch (defaults to stack ID) |
 
 ## What it does
 
 1. Clones the project repo to `.sandstorm/workspaces/<stack_id>/`
-2. Checks out the specified branch (if provided)
+2. Creates/checks out a branch named after the stack ID (or `--branch` if specified)
 3. Copies `.env*` files from host to workspace
 4. Remaps ports: `new_port = original_port + (stack_id_num * PORT_OFFSET)`
 5. Runs `docker compose up -d --build`
@@ -33,20 +33,23 @@ sandstorm up <stack_id> [--ticket TICKET] [--branch BRANCH]
 
 ## Usage patterns
 
-**Simple numbered stack:**
+**Stack with descriptive name (recommended):**
 ```bash
-sandstorm up 1
+sandstorm up fix-auth-bug --ticket PROJ-123
+```
+This creates the stack on branch `fix-auth-bug`.
+
+**Stack with explicit branch override:**
+```bash
+sandstorm up fix-auth --ticket PROJ-123 --branch feature/auth-fix
 ```
 
-**Stack with ticket and branch:**
-```bash
-sandstorm up 1 --ticket PROJ-123 --branch feature/auth-fix
-```
+## Critical: Branching behavior
 
-**Named stack:**
-```bash
-sandstorm up fix-auth --ticket PROJ-123 --branch fix/auth-bug
-```
+- **Stack ID = branch name** by default. Choose descriptive stack IDs since they become the branch name.
+- Stacks **never** default to `main`. Every stack works on its own branch.
+- Inner Claude makes changes but does **not** commit. The outer orchestrator reviews via `sandstorm diff` and pushes via `sandstorm push`.
+- Use `--branch` only when you need a specific branch name different from the stack ID.
 
 ## Important notes
 
