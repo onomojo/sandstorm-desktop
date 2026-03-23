@@ -111,6 +111,18 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     stackManager.teardownStack(stackId);
   });
 
+  ipcMain.handle('stacks:stop', (_event, stackId: string) => {
+    stackManager.stopStack(stackId);
+  });
+
+  ipcMain.handle('stacks:start', (_event, stackId: string) => {
+    stackManager.startStack(stackId);
+  });
+
+  ipcMain.handle('stacks:history', async () => {
+    return stackManager.listStackHistory();
+  });
+
   // --- Tasks ---
 
   ipcMain.handle(

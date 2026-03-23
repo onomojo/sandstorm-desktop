@@ -16,6 +16,7 @@ describe('Dashboard', () => {
     // Reset store
     useAppStore.setState({
       stacks: [],
+      stackHistory: [],
       projects: [],
       activeProjectId: null,
       selectedStackId: null,
@@ -25,8 +26,8 @@ describe('Dashboard', () => {
 
   it('renders empty state when no stacks', () => {
     render(<Dashboard />);
-    expect(screen.getByText('No stacks yet')).toBeDefined();
-    expect(screen.getByText('Create your first stack to get started')).toBeDefined();
+    expect(screen.getByText('No active stacks')).toBeDefined();
+    expect(screen.getByText('Create a new stack to get started')).toBeDefined();
   });
 
   it('shows "All Stacks" title when no project is selected', () => {
@@ -109,6 +110,81 @@ describe('Dashboard', () => {
     const btn = screen.getByTestId('new-stack-btn');
     fireEvent.click(btn);
     expect(useAppStore.getState().showNewStackDialog).toBe(true);
+  });
+
+  it('shows Active and History tabs', () => {
+    render(<Dashboard />);
+    expect(screen.getByTestId('tab-active')).toBeDefined();
+    expect(screen.getByTestId('tab-history')).toBeDefined();
+  });
+
+  it('shows history records when History tab is clicked', () => {
+    useAppStore.setState({
+      stackHistory: [
+        {
+          id: 1,
+          stack_id: 'old-stack',
+          project: 'proj',
+          project_dir: '/proj',
+          ticket: null,
+          branch: 'feat/old',
+          description: 'Old work',
+          final_status: 'completed' as const,
+          error: null,
+          runtime: 'docker' as const,
+          task_prompt: 'Fix the bug',
+          created_at: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
+          duration_seconds: 300,
+        },
+      ],
+    });
+
+    render(<Dashboard />);
+    fireEvent.click(screen.getByTestId('tab-history'));
+    expect(screen.getByText('old-stack')).toBeDefined();
+    expect(screen.getByText('Old work')).toBeDefined();
+  });
+
+  it('shows empty history state', () => {
+    render(<Dashboard />);
+    fireEvent.click(screen.getByTestId('tab-history'));
+    expect(screen.getByText('No history yet')).toBeDefined();
+  });
+
+  it('shows stopped count when stacks are stopped', () => {
+    useAppStore.setState({
+      stacks: [
+        {
+          id: 's1',
+          project: 'p',
+          project_dir: '/p',
+          ticket: null, branch: null, description: null,
+          status: 'stopped',
+          error: null,
+          runtime: 'docker' as const,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          services: [],
+        },
+        {
+          id: 's2',
+          project: 'p',
+          project_dir: '/p',
+          ticket: null, branch: null, description: null,
+          status: 'up',
+          error: null,
+          runtime: 'docker' as const,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+          services: [],
+        },
+      ],
+    });
+
+    render(<Dashboard />);
+    expect(screen.getByText('1 stopped')).toBeDefined();
+    expect(screen.getByText('1 active')).toBeDefined();
   });
 
   it('filters stacks by active project', () => {

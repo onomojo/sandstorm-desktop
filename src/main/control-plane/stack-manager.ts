@@ -1,7 +1,7 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import { Registry, Stack, Task } from './registry';
+import { Registry, Stack, StackHistoryRecord, Task } from './registry';
 import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container } from '../runtime/types';
@@ -179,11 +179,64 @@ export class StackManager {
     }
   }
 
+  stopStack(stackId: string): void {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+
+    this.taskWatcher.unwatch(stackId);
+    this.registry.updateStackStatus(stackId, 'stopped');
+    this.notifyUpdate();
+
+    // Stop containers in background (keeps containers/volumes/images intact)
+    this.stopInBackground(stack, stackId).catch(() => {});
+  }
+
+  private async stopInBackground(stack: Stack, stackId: string): Promise<void> {
+    try {
+      await this.runCli(stack.project_dir, ['stop', stackId]);
+    } catch {
+      // Best effort
+    }
+  }
+
+  startStack(stackId: string): void {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+
+    this.registry.updateStackStatus(stackId, 'building');
+    this.notifyUpdate();
+
+    // Start containers in background
+    this.startInBackground(stack, stackId).catch(() => {});
+  }
+
+  private async startInBackground(stack: Stack, stackId: string): Promise<void> {
+    try {
+      const result = await this.runCli(stack.project_dir, ['start', stackId]);
+      if (result.exitCode !== 0) {
+        throw new Error(result.stderr.trim() || result.stdout.trim() || 'Stack start failed');
+      }
+      this.registry.updateStackStatus(stackId, 'up');
+      this.notifyUpdate();
+    } catch (err) {
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      this.registry.updateStackStatus(stackId, 'failed', errorMessage);
+      this.notifyUpdate();
+    }
+  }
+
   teardownStack(stackId: string): void {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
 
     this.taskWatcher.unwatch(stackId);
+
+    // Archive to history before deleting
+    const finalStatus =
+      stack.status === 'completed' ? 'completed' :
+      stack.status === 'failed' ? 'failed' :
+      'torn_down' as const;
+    this.registry.archiveStack(stackId, finalStatus);
 
     // Delete from registry and release ports immediately so the UI updates
     this.portAllocator.release(stackId);
@@ -279,6 +332,10 @@ export class StackManager {
 
   getTasksForStack(stackId: string): Task[] {
     return this.registry.getTasksForStack(stackId);
+  }
+
+  listStackHistory(): StackHistoryRecord[] {
+    return this.registry.listStackHistory();
   }
 
   // --- Private helpers ---

@@ -56,12 +56,32 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
 
   const handleTeardown = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!confirm(`Tear down stack "${stack.id}"?`)) return;
+    if (!confirm(`Tear down stack "${stack.id}"? This will destroy all containers, volumes, and workspace files.`)) return;
     try {
       await window.sandstorm.stacks.teardown(stack.id);
       refreshStacks();
     } catch (err) {
       alert(`Failed to tear down: ${err}`);
+    }
+  };
+
+  const handleStop = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await window.sandstorm.stacks.stop(stack.id);
+      refreshStacks();
+    } catch (err) {
+      alert(`Failed to stop: ${err}`);
+    }
+  };
+
+  const handleStart = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await window.sandstorm.stacks.start(stack.id);
+      refreshStacks();
+    } catch (err) {
+      alert(`Failed to start: ${err}`);
     }
   };
 
@@ -181,8 +201,16 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
         {(stack.status === 'up' || stack.status === 'idle') && (
           <ActionButton label="New Task" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
         )}
-        <ActionButton label="Shell" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
-        {stack.status !== 'running' && (
+        {stack.status === 'stopped' && (
+          <ActionButton label="Start" onClick={handleStart} primary />
+        )}
+        {(stack.status === 'up' || stack.status === 'idle' || stack.status === 'running' || stack.status === 'completed') && (
+          <ActionButton label="Stop" onClick={handleStop} />
+        )}
+        {stack.status !== 'stopped' && (
+          <ActionButton label="Shell" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
+        )}
+        {stack.status !== 'running' && stack.status !== 'building' && (
           <ActionButton label="Tear Down" onClick={handleTeardown} danger />
         )}
       </div>
