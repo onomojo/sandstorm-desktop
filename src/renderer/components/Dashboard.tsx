@@ -4,6 +4,7 @@ import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
 import { UninitializedProject } from './UninitializedProject';
 import { ClaudeSession } from './ClaudeSession';
+import { AuthIndicator } from './AuthIndicator';
 import { ProjectContext } from './ProjectContext';
 
 type DashboardTab = 'active' | 'history';

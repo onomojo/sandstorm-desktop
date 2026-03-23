@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow, app } from 'electron';
+import { ipcMain, dialog, shell, BrowserWindow, app } from 'electron';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -60,6 +60,166 @@ function syncSkillsToProject(projectDir: string, sandstormCliDir: string): void 
   }
   } catch {
     // Skill sync is non-critical — dont crash or trigger permission prompts
+  }
+}
+
+
+interface AuthStatus {
+  loggedIn: boolean;
+  email?: string;
+  expired: boolean;
+  expiresAt?: number;
+}
+
+function getClaudeBin(): string {
+  return process.env.HOME
+    ? path.join(process.env.HOME, '.local', 'bin', 'claude')
+    : 'claude';
+}
+
+function getClaudeEnv(): Record<string, string | undefined> {
+  return {
+    ...process.env,
+    PATH: [
+      `${process.env.HOME}/.local/bin`,
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/usr/local/sbin',
+      process.env.PATH,
+    ].join(':'),
+  };
+}
+
+async function getAuthStatus(): Promise<AuthStatus> {
+  const credsPath = path.join(process.env.HOME || '', '.claude', '.credentials.json');
+  let expired = false;
+  let expiresAt: number | undefined;
+
+  try {
+    const raw = fs.readFileSync(credsPath, 'utf-8');
+    const creds = JSON.parse(raw);
+    const oauthData = creds.claudeAiOauth;
+    if (oauthData?.expiresAt) {
+      expiresAt = oauthData.expiresAt;
+      expired = Date.now() > oauthData.expiresAt;
+    }
+  } catch {
+    return { loggedIn: false, expired: false };
+  }
+
+  try {
+    const result = await new Promise<{ stdout: string; exitCode: number }>((resolve) => {
+      const child = spawn(getClaudeBin(), ['auth', 'status', '--output', 'json'], {
+        env: getClaudeEnv(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      let stdout = '';
+      child.stdout.on('data', (d) => { stdout += d.toString(); });
+      child.on('close', (code) => resolve({ stdout, exitCode: code ?? 1 }));
+      child.on('error', () => resolve({ stdout: '', exitCode: 1 }));
+    });
+
+    if (result.exitCode === 0 && result.stdout.trim()) {
+      const status = JSON.parse(result.stdout.trim());
+      return {
+        loggedIn: status.loggedIn ?? false,
+        email: status.email,
+        expired,
+        expiresAt,
+      };
+    }
+  } catch {
+    // Fall through
+  }
+
+  return { loggedIn: true, expired, expiresAt };
+}
+
+async function runAuthLogin(
+  mainWindow?: BrowserWindow
+): Promise<{ success: boolean; error?: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(getClaudeBin(), ['auth', 'login'], {
+      env: getClaudeEnv(),
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let stdout = '';
+    let stderr = '';
+    let urlOpened = false;
+
+    child.stdout.on('data', (data) => {
+      stdout += data.toString();
+      const urlMatch = stdout.match(/(https:\/\/[^\s]+)/);
+      if (urlMatch && !urlOpened) {
+        urlOpened = true;
+        shell.openExternal(urlMatch[1]);
+        mainWindow?.webContents.send('auth:url-opened', urlMatch[1]);
+      }
+    });
+
+    child.stderr.on('data', (data) => {
+      stderr += data.toString();
+    });
+
+    setTimeout(() => {
+      try { child.stdin.write('\n'); } catch { /* Process may have exited */ }
+    }, 1000);
+
+    child.on('close', async (code) => {
+      if (code === 0) {
+        await syncCredsToRunningStacks();
+        mainWindow?.webContents.send('auth:completed', true);
+        resolve({ success: true });
+      } else {
+        mainWindow?.webContents.send('auth:completed', false);
+        resolve({ success: false, error: stderr.trim() || 'Auth login failed' });
+      }
+    });
+
+    child.on('error', (err) => {
+      resolve({ success: false, error: err.message });
+    });
+
+    setTimeout(() => {
+      try { child.kill(); } catch { /* ignore */ }
+      resolve({ success: false, error: 'Auth login timed out' });
+    }, 5 * 60 * 1000);
+  });
+}
+
+async function syncCredsToRunningStacks(): Promise<void> {
+  const credsPath = path.join(process.env.HOME || '', '.claude', '.credentials.json');
+  let creds: string;
+  try {
+    creds = fs.readFileSync(credsPath, 'utf-8');
+  } catch {
+    return;
+  }
+
+  try {
+    const stacks = await stackManager.listStacksWithServices();
+    for (const stack of stacks) {
+      if (stack.status !== 'running' && stack.status !== 'up') continue;
+      const claudeService = stack.services?.find(
+        (s: { name: string }) => s.name === 'claude'
+      );
+      if (!claudeService?.containerId) continue;
+
+      try {
+        const child = spawn('docker', [
+          'exec', '-i', '-u', 'claude', claudeService.containerId,
+          'bash', '-c', 'mkdir -p ~/.claude && cat > ~/.claude/.credentials.json',
+        ], { stdio: ['pipe', 'ignore', 'ignore'] });
+        child.stdin.write(creds);
+        child.stdin.end();
+        await new Promise<void>((resolve) => child.on('close', () => resolve()));
+      } catch {
+        // Best effort per container
+      }
+    }
+  } catch {
+    // Best effort
   }
 }
 
@@ -407,4 +567,14 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     ]);
     return { docker: dockerAvail, podman: podmanAvail };
   });
+  // --- Auth ---
+
+  ipcMain.handle('auth:status', async () => {
+    return getAuthStatus();
+  });
+
+  ipcMain.handle('auth:login', async () => {
+    return runAuthLogin(mainWindow);
+  });
+
 }
