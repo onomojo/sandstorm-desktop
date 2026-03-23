@@ -4,6 +4,7 @@ import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
 import { UninitializedProject } from './UninitializedProject';
 import { ClaudeSession } from './ClaudeSession';
+import { ProjectContext } from './ProjectContext';
 
 type DashboardTab = 'active' | 'history';
 
@@ -116,6 +117,7 @@ export function Dashboard() {
 
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>('active');
   const [projectInitialized, setProjectInitialized] = useState<boolean | null>(null);
+  const [showContext, setShowContext] = useState(false);
   const [viewMode, _setViewMode] = useState<'cards' | 'table'>(() => {
     const saved = localStorage.getItem('sandstorm-view-mode');
     return saved === 'table' ? 'table' : 'cards';
@@ -208,16 +210,32 @@ export function Dashboard() {
           <h1 className="text-lg font-semibold text-sandstorm-text tracking-tight">{title}</h1>
           <p className="text-xs text-sandstorm-muted mt-0.5">{subtitle}</p>
         </div>
-        <button
-          onClick={() => setShowNewStackDialog(true)}
-          className="flex items-center gap-1.5 px-4 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white rounded-lg transition-all text-sm font-medium shadow-glow hover:shadow-lg active:scale-[0.98]"
-          data-testid="new-stack-btn"
-        >
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-            <path d="M12 5v14M5 12h14"/>
-          </svg>
-          New Stack
-        </button>
+        <div className="flex items-center gap-2">
+          {project && (
+            <button
+              onClick={() => setShowContext(true)}
+              className="flex items-center gap-1.5 px-3 py-2 bg-sandstorm-surface-hover hover:bg-sandstorm-border text-sandstorm-text-secondary rounded-lg transition-all text-sm font-medium active:scale-[0.98]"
+              data-testid="context-btn"
+              title="Custom context for this project"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M12 20h9" />
+                <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+              </svg>
+              Context
+            </button>
+          )}
+          <button
+            onClick={() => setShowNewStackDialog(true)}
+            className="flex items-center gap-1.5 px-4 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white rounded-lg transition-all text-sm font-medium shadow-glow hover:shadow-lg active:scale-[0.98]"
+            data-testid="new-stack-btn"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            New Stack
+          </button>
+        </div>
       </div>
 
       {/* Two-column layout: Claude chat (left) + Stacks (right) */}
@@ -391,6 +409,14 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Custom context dialog */}
+      {showContext && project && (
+        <ProjectContext
+          projectDir={project.directory}
+          onClose={() => setShowContext(false)}
+        />
+      )}
     </div>
   );
 }

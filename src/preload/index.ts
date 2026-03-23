@@ -48,6 +48,16 @@ export interface SandstormAPI {
     reset: (tabId: string) => Promise<void>;
     history: (tabId: string) => Promise<{ messages: Array<{ role: string; content: string }>; processing: boolean }>;
   };
+  context: {
+    get: (projectDir: string) => Promise<{ instructions: string; skills: string[]; settings: string }>;
+    saveInstructions: (projectDir: string, content: string) => Promise<void>;
+    listSkills: (projectDir: string) => Promise<string[]>;
+    getSkill: (projectDir: string, name: string) => Promise<string>;
+    saveSkill: (projectDir: string, name: string, content: string) => Promise<void>;
+    deleteSkill: (projectDir: string, name: string) => Promise<void>;
+    getSettings: (projectDir: string) => Promise<string>;
+    saveSettings: (projectDir: string, content: string) => Promise<void>;
+  };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
@@ -102,6 +112,23 @@ const api: SandstormAPI = {
     cancel: (tabId) => ipcRenderer.invoke('claude:cancel', tabId),
     reset: (tabId) => ipcRenderer.invoke('claude:reset', tabId),
     history: (tabId) => ipcRenderer.invoke('claude:history', tabId),
+  },
+  context: {
+    get: (projectDir) => ipcRenderer.invoke('context:get', projectDir),
+    saveInstructions: (projectDir, content) =>
+      ipcRenderer.invoke('context:saveInstructions', projectDir, content),
+    listSkills: (projectDir) =>
+      ipcRenderer.invoke('context:listSkills', projectDir),
+    getSkill: (projectDir, name) =>
+      ipcRenderer.invoke('context:getSkill', projectDir, name),
+    saveSkill: (projectDir, name, content) =>
+      ipcRenderer.invoke('context:saveSkill', projectDir, name, content),
+    deleteSkill: (projectDir, name) =>
+      ipcRenderer.invoke('context:deleteSkill', projectDir, name),
+    getSettings: (projectDir) =>
+      ipcRenderer.invoke('context:getSettings', projectDir),
+    saveSettings: (projectDir, content) =>
+      ipcRenderer.invoke('context:saveSettings', projectDir, content),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>
