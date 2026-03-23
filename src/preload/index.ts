@@ -58,6 +58,10 @@ export interface SandstormAPI {
     getSettings: (projectDir: string) => Promise<string>;
     saveSettings: (projectDir: string, content: string) => Promise<void>;
   };
+  auth: {
+    status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
+    login: () => Promise<{ success: boolean; error?: string }>;
+  };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
@@ -129,6 +133,10 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('context:getSettings', projectDir),
     saveSettings: (projectDir, content) =>
       ipcRenderer.invoke('context:saveSettings', projectDir, content),
+  },
+  auth: {
+    status: () => ipcRenderer.invoke('auth:status'),
+    login: () => ipcRenderer.invoke('auth:login'),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

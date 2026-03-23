@@ -187,6 +187,10 @@ declare global {
         getSettings: (projectDir: string) => Promise<string>;
         saveSettings: (projectDir: string, content: string) => Promise<void>;
       };
+      auth: {
+        status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
+        login: () => Promise<{ success: boolean; error?: string }>;
+      };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
   }
