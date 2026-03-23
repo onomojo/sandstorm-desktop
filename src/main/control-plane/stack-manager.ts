@@ -4,7 +4,7 @@ import fs from 'fs';
 import { Registry, Stack, StackHistoryRecord, Task } from './registry';
 import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
-import { ContainerRuntime, Container } from '../runtime/types';
+import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 
 export interface CreateStackOpts {
   name: string;
@@ -27,6 +27,29 @@ export interface ServiceInfo {
   hostPort?: number;
   containerPort?: number;
   containerId: string;
+}
+
+export interface ContainerStatsEntry {
+  name: string;
+  containerId: string;
+  memoryUsage: number;
+  memoryLimit: number;
+  cpuPercent: number;
+}
+
+export interface DetailedStackStats {
+  stackId: string;
+  totalMemory: number;
+  containers: ContainerStatsEntry[];
+}
+
+export interface TaskMetrics {
+  stackId: string;
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  runningTasks: number;
+  avgTaskDurationMs: number;
 }
 
 /**
@@ -336,6 +359,74 @@ export class StackManager {
 
   listStackHistory(): StackHistoryRecord[] {
     return this.registry.listStackHistory();
+  }
+
+  async getStackMemoryUsage(stackId: string): Promise<number> {
+    const stats = await this.getStackDetailedStats(stackId);
+    return stats.totalMemory;
+  }
+
+  async getStackDetailedStats(stackId: string): Promise<DetailedStackStats> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) return { stackId, totalMemory: 0, containers: [] };
+
+    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
+    const containers = await this.runtime.listContainers({ name: composeProjectName });
+
+    const entries: ContainerStatsEntry[] = [];
+    let totalMemory = 0;
+
+    for (const c of containers) {
+      if (c.status !== 'running') continue;
+      try {
+        const stats = await this.runtime.containerStats(c.id);
+        const serviceName = this.extractServiceName(c.name, composeProjectName);
+        entries.push({
+          name: serviceName,
+          containerId: c.id,
+          memoryUsage: stats.memoryUsage,
+          memoryLimit: stats.memoryLimit,
+          cpuPercent: stats.cpuPercent,
+        });
+        totalMemory += stats.memoryUsage;
+      } catch {
+        // Container may have stopped between list and stats call
+      }
+    }
+
+    return { stackId, totalMemory, containers: entries };
+  }
+
+  getStackTaskMetrics(stackId: string): TaskMetrics {
+    const tasks = this.registry.getTasksForStack(stackId);
+    let completedTasks = 0;
+    let failedTasks = 0;
+    let runningTasks = 0;
+    let totalDurationMs = 0;
+    let durationCount = 0;
+
+    for (const task of tasks) {
+      if (task.status === 'completed') {
+        completedTasks++;
+        if (task.finished_at && task.started_at) {
+          const dur = new Date(task.finished_at).getTime() - new Date(task.started_at).getTime();
+          if (dur > 0) { totalDurationMs += dur; durationCount++; }
+        }
+      } else if (task.status === 'failed') {
+        failedTasks++;
+      } else {
+        runningTasks++;
+      }
+    }
+
+    return {
+      stackId,
+      totalTasks: tasks.length,
+      completedTasks,
+      failedTasks,
+      runningTasks,
+      avgTaskDurationMs: durationCount > 0 ? totalDurationMs / durationCount : 0,
+    };
   }
 
   // --- Private helpers ---

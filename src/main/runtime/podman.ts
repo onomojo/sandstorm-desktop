@@ -5,6 +5,7 @@ import {
   ContainerFilter,
   Container,
   ContainerInfo,
+  ContainerStats,
   ContainerStatus,
   LogOpts,
   ExecOpts,
@@ -127,6 +128,46 @@ export class PodmanRuntime implements ContainerRuntime {
       );
       child.on('error', reject);
     });
+  }
+
+  async containerStats(containerId: string): Promise<ContainerStats> {
+    const result = await this.runCapture('podman', [
+      'stats',
+      '--no-stream',
+      '--format',
+      'json',
+      containerId,
+    ]);
+    const data = JSON.parse(result);
+    const entry = Array.isArray(data) ? data[0] : data;
+
+    // Parse memory (e.g. "100.5MB / 8.0GB")
+    let memoryUsage = 0;
+    let memoryLimit = 0;
+    const memStr: string = entry?.MemUsage ?? entry?.mem_usage ?? '';
+    const memParts = memStr.split('/').map((s: string) => s.trim());
+    if (memParts.length === 2) {
+      memoryUsage = this.parseMemoryStr(memParts[0]);
+      memoryLimit = this.parseMemoryStr(memParts[1]);
+    }
+
+    // Parse CPU (e.g. "5.23%")
+    const cpuStr: string = entry?.CPU ?? entry?.cpu ?? '0';
+    const cpuPercent = parseFloat(cpuStr.replace('%', '')) || 0;
+
+    return { memoryUsage, memoryLimit, cpuPercent };
+  }
+
+  private parseMemoryStr(s: string): number {
+    const match = s.match(/([\d.]+)\s*(B|KB|KiB|MB|MiB|GB|GiB|TB|TiB)?/i);
+    if (!match) return 0;
+    const val = parseFloat(match[1]);
+    const unit = (match[2] ?? 'B').toUpperCase();
+    const multipliers: Record<string, number> = {
+      B: 1, KB: 1024, KIB: 1024, MB: 1048576, MIB: 1048576,
+      GB: 1073741824, GIB: 1073741824, TB: 1099511627776, TIB: 1099511627776,
+    };
+    return val * (multipliers[unit] ?? 1);
   }
 
   async isAvailable(): Promise<boolean> {

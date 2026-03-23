@@ -6,6 +6,7 @@ import {
   ContainerFilter,
   Container,
   ContainerInfo,
+  ContainerStats,
   ContainerStatus,
   LogOpts,
   ExecOpts,
@@ -165,6 +166,30 @@ export class DockerRuntime implements ContainerRuntime {
       });
       stream.on('error', reject);
     });
+  }
+
+  async containerStats(containerId: string): Promise<ContainerStats> {
+    const container = this.docker.getContainer(containerId);
+    const stats = await container.stats({ stream: false });
+    const data = typeof stats === 'string' ? JSON.parse(stats) : stats;
+
+    const memoryUsage = data.memory_stats?.usage ?? 0;
+    const memoryLimit = data.memory_stats?.limit ?? 0;
+
+    // CPU calculation
+    let cpuPercent = 0;
+    const cpuDelta =
+      (data.cpu_stats?.cpu_usage?.total_usage ?? 0) -
+      (data.precpu_stats?.cpu_usage?.total_usage ?? 0);
+    const systemDelta =
+      (data.cpu_stats?.system_cpu_usage ?? 0) -
+      (data.precpu_stats?.system_cpu_usage ?? 0);
+    const numCpus = data.cpu_stats?.online_cpus ?? 1;
+    if (systemDelta > 0 && cpuDelta >= 0) {
+      cpuPercent = (cpuDelta / systemDelta) * numCpus * 100;
+    }
+
+    return { memoryUsage, memoryLimit, cpuPercent };
   }
 
   async isAvailable(): Promise<boolean> {

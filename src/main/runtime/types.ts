@@ -64,6 +64,12 @@ export interface ExecResult {
   stderr: string;
 }
 
+export interface ContainerStats {
+  memoryUsage: number;  // bytes
+  memoryLimit: number;  // bytes
+  cpuPercent: number;   // 0-100
+}
+
 export interface ContainerRuntime {
   // Lifecycle
   composeUp(projectDir: string, opts: ComposeOpts): Promise<void>;
@@ -73,6 +79,7 @@ export interface ContainerRuntime {
   listContainers(filter?: ContainerFilter): Promise<Container[]>;
   inspect(containerId: string): Promise<ContainerInfo>;
   logs(containerId: string, opts?: LogOpts): AsyncIterable<string>;
+  containerStats(containerId: string): Promise<ContainerStats>;
 
   // Execution
   exec(

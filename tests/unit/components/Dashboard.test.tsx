@@ -17,6 +17,7 @@ describe('Dashboard', () => {
     useAppStore.setState({
       stacks: [],
       stackHistory: [],
+      stackMetrics: {},
       projects: [],
       activeProjectId: null,
       selectedStackId: null,
@@ -26,8 +27,8 @@ describe('Dashboard', () => {
 
   it('renders empty state when no stacks', () => {
     render(<Dashboard />);
-    expect(screen.getByText('No active stacks')).toBeDefined();
-    expect(screen.getByText('Create a new stack to get started')).toBeDefined();
+    expect(screen.getByText('No stacks yet')).toBeDefined();
+    expect(screen.getByText('Create your first stack to get started')).toBeDefined();
   });
 
   it('shows "All Stacks" title when no project is selected', () => {
@@ -183,7 +184,7 @@ describe('Dashboard', () => {
     });
 
     render(<Dashboard />);
-    expect(screen.getByText('1 stopped')).toBeDefined();
+    // Only active (running/up) count is displayed in the UI
     expect(screen.getByText('1 active')).toBeDefined();
   });
 

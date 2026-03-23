@@ -15,6 +15,7 @@ export default function App() {
     refreshStacks,
     refreshProjects,
     refreshStackHistory,
+    refreshMetrics,
     selectStack,
     error,
   } = useAppStore();
@@ -23,7 +24,9 @@ export default function App() {
     refreshProjects();
     refreshStacks();
     refreshStackHistory();
+    refreshMetrics();
     const interval = setInterval(refreshStacks, 3000);
+    const metricsInterval = setInterval(refreshMetrics, 15000);
 
     const unsubCompleted = window.sandstorm.on('task:completed', () => {
       refreshStacks();
@@ -44,12 +47,13 @@ export default function App() {
 
     return () => {
       clearInterval(interval);
+      clearInterval(metricsInterval);
       unsubCompleted();
       unsubFailed();
       unsubNavigate();
       unsubStacksUpdated();
     };
-  }, [refreshStacks, refreshProjects, refreshStackHistory, selectStack]);
+  }, [refreshStacks, refreshProjects, refreshStackHistory, refreshMetrics, selectStack]);
 
   return (
     <div className="h-screen flex flex-col bg-sandstorm-bg text-sandstorm-text">

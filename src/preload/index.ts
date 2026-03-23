@@ -34,6 +34,11 @@ export interface SandstormAPI {
   logs: {
     stream: (containerId: string, runtime: string) => Promise<string>;
   };
+  stats: {
+    stackMemory: (stackId: string) => Promise<number>;
+    stackDetailed: (stackId: string) => Promise<unknown>;
+    taskMetrics: (stackId: string) => Promise<unknown>;
+  };
   runtime: {
     available: () => Promise<{ docker: boolean; podman: boolean }>;
   };
@@ -82,6 +87,11 @@ const api: SandstormAPI = {
   logs: {
     stream: (containerId, runtime) =>
       ipcRenderer.invoke('logs:stream', containerId, runtime),
+  },
+  stats: {
+    stackMemory: (stackId) => ipcRenderer.invoke('stats:stack-memory', stackId),
+    stackDetailed: (stackId) => ipcRenderer.invoke('stats:stack-detailed', stackId),
+    taskMetrics: (stackId) => ipcRenderer.invoke('stats:task-metrics', stackId),
   },
   runtime: {
     available: () => ipcRenderer.invoke('runtime:available'),

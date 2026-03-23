@@ -1,5 +1,13 @@
 import React from 'react';
-import { Stack, useAppStore } from '../store';
+import { Stack, StackMetrics, useAppStore } from '../store';
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(0)} MB`;
+  return `${(bytes / 1073741824).toFixed(1)} GB`;
+}
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -36,7 +44,8 @@ function timeAgo(dateStr: string): string {
 }
 
 export function StackTableRow({ stack, showProject }: { stack: Stack; showProject?: boolean }) {
-  const { selectStack, refreshStacks } = useAppStore();
+  const { selectStack, refreshStacks, stackMetrics } = useAppStore();
+  const metrics: StackMetrics | undefined = stackMetrics[stack.id];
 
   const runningCount = stack.services.filter((s) => s.status === 'running').length;
   const totalCount = stack.services.length;
@@ -97,6 +106,16 @@ export function StackTableRow({ stack, showProject }: { stack: Stack; showProjec
               ))}
             </span>
             <span className="text-sandstorm-muted tabular-nums">{runningCount}/{totalCount}</span>
+          </div>
+        ) : (
+          <span className="text-sandstorm-muted">—</span>
+        )}
+      </td>
+      <td className="px-3 py-2 whitespace-nowrap">
+        {metrics && metrics.totalMemory > 0 ? (
+          <div className="flex items-center gap-2 text-sandstorm-muted tabular-nums">
+            <span title="Memory">{formatBytes(metrics.totalMemory)}</span>
+            <span title="CPU">{metrics.containers.reduce((s, c) => s + c.cpuPercent, 0).toFixed(1)}%</span>
           </div>
         ) : (
           <span className="text-sandstorm-muted">—</span>

@@ -48,6 +48,29 @@ export interface PortMapping {
   container_port: number;
 }
 
+export interface ContainerStatsEntry {
+  name: string;
+  containerId: string;
+  memoryUsage: number;
+  memoryLimit: number;
+  cpuPercent: number;
+}
+
+export interface TaskMetrics {
+  stackId: string;
+  totalTasks: number;
+  completedTasks: number;
+  failedTasks: number;
+  runningTasks: number;
+  avgTaskDurationMs: number;
+}
+
+export interface StackMetrics {
+  totalMemory: number;
+  containers: ContainerStatsEntry[];
+  taskMetrics: TaskMetrics;
+}
+
 export interface StackHistoryRecord {
   id: number;
   stack_id: string;
@@ -76,6 +99,7 @@ interface AppState {
   stackHistory: StackHistoryRecord[];
   selectedStackId: string | null;
   showNewStackDialog: boolean;
+  stackMetrics: Record<string, StackMetrics>;
   loading: boolean;
   error: string | null;
 
@@ -95,6 +119,7 @@ interface AppState {
   setError: (error: string | null) => void;
   refreshStacks: () => Promise<void>;
   refreshStackHistory: () => Promise<void>;
+  refreshMetrics: () => Promise<void>;
 
   // Derived
   filteredStacks: () => Stack[];
@@ -138,6 +163,11 @@ declare global {
       logs: {
         stream: (containerId: string, runtime: string) => Promise<string>;
       };
+      stats: {
+        stackMemory: (stackId: string) => Promise<number>;
+        stackDetailed: (stackId: string) => Promise<{ stackId: string; totalMemory: number; containers: ContainerStatsEntry[] }>;
+        taskMetrics: (stackId: string) => Promise<TaskMetrics>;
+      };
       runtime: {
         available: () => Promise<{ docker: boolean; podman: boolean }>;
       };
@@ -161,6 +191,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Stacks
   stacks: [],
   stackHistory: [],
+  stackMetrics: {},
   selectedStackId: null,
   showNewStackDialog: false,
   loading: false,
@@ -217,6 +248,37 @@ export const useAppStore = create<AppState>((set, get) => ({
       set({ stackHistory });
     } catch (err) {
       set({ error: `Failed to refresh stack history: ${err}` });
+    }
+  },
+
+  refreshMetrics: async () => {
+    try {
+      const { stacks } = get();
+      const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed']);
+      const activeStacks = stacks.filter((s) => activeStatuses.has(s.status));
+      const metrics: Record<string, StackMetrics> = {};
+
+      await Promise.all(
+        activeStacks.map(async (stack) => {
+          try {
+            const [detailed, taskMetrics] = await Promise.all([
+              window.sandstorm.stats.stackDetailed(stack.id),
+              window.sandstorm.stats.taskMetrics(stack.id),
+            ]);
+            metrics[stack.id] = {
+              totalMemory: detailed.totalMemory,
+              containers: detailed.containers,
+              taskMetrics,
+            };
+          } catch {
+            // Individual stack metrics failure is non-fatal
+          }
+        })
+      );
+
+      set({ stackMetrics: metrics });
+    } catch {
+      // Metrics refresh failure is non-fatal
     }
   },
 

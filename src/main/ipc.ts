@@ -215,6 +215,20 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   );
 
+  // --- Stats ---
+
+  ipcMain.handle('stats:stack-memory', async (_event, stackId: string) => {
+    return stackManager.getStackMemoryUsage(stackId);
+  });
+
+  ipcMain.handle('stats:stack-detailed', async (_event, stackId: string) => {
+    return stackManager.getStackDetailedStats(stackId);
+  });
+
+  ipcMain.handle('stats:task-metrics', async (_event, stackId: string) => {
+    return stackManager.getStackTaskMetrics(stackId);
+  });
+
   // --- Runtime ---
 
   ipcMain.handle('runtime:available', async () => {

@@ -42,6 +42,11 @@ export function mockSandstormApi() {
     logs: {
       stream: vi.fn().mockResolvedValue(''),
     },
+    stats: {
+      stackMemory: vi.fn().mockResolvedValue(0),
+      stackDetailed: vi.fn().mockResolvedValue({ stackId: '', totalMemory: 0, containers: [] }),
+      taskMetrics: vi.fn().mockResolvedValue({ stackId: '', totalTasks: 0, completedTasks: 0, failedTasks: 0, runningTasks: 0, avgTaskDurationMs: 0 }),
+    },
     runtime: {
       available: vi.fn().mockResolvedValue({ docker: true, podman: false }),
     },

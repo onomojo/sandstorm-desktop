@@ -1,15 +1,28 @@
 import React from 'react';
-import { ServiceInfo } from '../store';
+import { ServiceInfo, ContainerStatsEntry, useAppStore } from '../store';
+
+function formatBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(0)} MB`;
+  return `${(bytes / 1073741824).toFixed(1)} GB`;
+}
 
 export function ServiceList({
   services,
   runtime: _runtime,
   onViewLogs,
+  stackId,
 }: {
   services: ServiceInfo[];
   runtime: string;
   onViewLogs: (containerId: string) => void;
+  stackId?: string;
 }) {
+  const stackMetrics = useAppStore((s) => s.stackMetrics);
+  const containerStats: ContainerStatsEntry[] = stackId ? stackMetrics[stackId]?.containers ?? [] : [];
+  const statsMap = new Map(containerStats.map((c) => [c.containerId, c]));
   if (services.length === 0) {
     return (
       <div className="px-5 py-3 text-xs text-sandstorm-muted border-b border-sandstorm-border">
@@ -52,6 +65,17 @@ export function ServiceList({
               </span>
             </div>
             <div className="flex items-center gap-2">
+              {(() => {
+                const stat = statsMap.get(svc.containerId);
+                if (stat) {
+                  return (
+                    <span className="text-[10px] text-sandstorm-muted tabular-nums">
+                      {formatBytes(stat.memoryUsage)} / {stat.cpuPercent.toFixed(1)}%
+                    </span>
+                  );
+                }
+                return null;
+              })()}
               {svc.hostPort && (
                 <button
                   onClick={() =>

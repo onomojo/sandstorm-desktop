@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAppStore, Task } from '../store';
+import { useAppStore, Task, StackMetrics } from '../store';
 import { ServiceList } from './ServiceList';
 import { TaskOutput } from './TaskOutput';
 import { DiffViewer } from './DiffViewer';
@@ -21,8 +21,9 @@ export function StackDetail({
   stackId: string;
   onBack: () => void;
 }) {
-  const { stacks, refreshStacks } = useAppStore();
+  const { stacks, refreshStacks, stackMetrics } = useAppStore();
   const stack = stacks.find((s) => s.id === stackId);
+  const metrics: StackMetrics | undefined = stackMetrics[stackId];
 
   const [activeTab, setActiveTab] = useState<Tab>('output');
   const [taskPrompt, setTaskPrompt] = useState('');
@@ -151,10 +152,46 @@ export function StackDetail({
         </div>
       </div>
 
+      {/* Metrics bar */}
+      {metrics && (
+        <div className="px-5 py-2 border-b border-sandstorm-border shrink-0 flex items-center gap-4 text-[11px]">
+          {metrics.totalMemory > 0 && (
+            <MetricBadge label="Memory" value={formatDetailBytes(metrics.totalMemory)} />
+          )}
+          {metrics.containers.length > 0 && (
+            <MetricBadge
+              label="CPU"
+              value={`${metrics.containers.reduce((s, c) => s + c.cpuPercent, 0).toFixed(1)}%`}
+            />
+          )}
+          {metrics.taskMetrics.totalTasks > 0 && (
+            <>
+              <MetricBadge
+                label="Tasks"
+                value={`${metrics.taskMetrics.completedTasks}/${metrics.taskMetrics.totalTasks}`}
+              />
+              {metrics.taskMetrics.avgTaskDurationMs > 0 && (
+                <MetricBadge
+                  label="Avg Task"
+                  value={formatDetailMs(metrics.taskMetrics.avgTaskDurationMs)}
+                />
+              )}
+            </>
+          )}
+          {stack.services.filter((s) => s.status === 'running').length > 0 && (
+            <MetricBadge
+              label="Running"
+              value={`${stack.services.filter((s) => s.status === 'running').length}/${stack.services.length}`}
+            />
+          )}
+        </div>
+      )}
+
       {/* Services panel */}
       <ServiceList
         services={stack.services}
         runtime={stack.runtime}
+        stackId={stackId}
         onViewLogs={(containerId) => {
           setSelectedLogContainer(containerId);
           setActiveTab('logs');
@@ -294,6 +331,29 @@ export function StackDetail({
           </FooterButton>
         </div>
       </div>
+    </div>
+  );
+}
+
+function formatDetailBytes(bytes: number): string {
+  if (bytes === 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
+  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(0)} MB`;
+  return `${(bytes / 1073741824).toFixed(1)} GB`;
+}
+
+function formatDetailMs(ms: number): string {
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  if (ms < 60000) return `${(ms / 1000).toFixed(0)}s`;
+  return `${(ms / 60000).toFixed(1)}m`;
+}
+
+function MetricBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="flex items-center gap-1.5 bg-sandstorm-bg px-2 py-1 rounded-md border border-sandstorm-border">
+      <span className="text-sandstorm-muted">{label}</span>
+      <span className="text-sandstorm-text font-medium tabular-nums">{value}</span>
     </div>
   );
 }
