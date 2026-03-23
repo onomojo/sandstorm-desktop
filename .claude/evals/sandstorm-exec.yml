@@ -1,0 +1,16 @@
+name: sandstorm-exec
+description: Test that Claude uses the sandstorm-exec skill correctly
+test_cases:
+  - name: shell_into_stack
+    prompt: "I need to manually check something inside stack 1"
+    expected:
+      - skill: sandstorm-exec
+      - command_contains: "sandstorm exec 1"
+    tags: [sandstorm, exec]
+
+  - name: interactive_claude
+    prompt: "Start an interactive Claude session in stack 2"
+    expected:
+      - skill: sandstorm-exec
+      - command_contains: "sandstorm claude 2"
+    tags: [sandstorm, exec, claude]

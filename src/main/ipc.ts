@@ -12,6 +12,43 @@ import {
 } from './index';
 import { CreateStackOpts } from './control-plane/stack-manager';
 
+/**
+ * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
+ * Skips if skills are already present and up to date.
+ */
+function syncSkillsToProject(projectDir: string, sandstormCliDir: string): void {
+  const skillsSrc = path.join(sandstormCliDir, 'skills');
+  const skillsDest = path.join(projectDir, '.claude', 'skills');
+
+  if (!fs.existsSync(skillsSrc)) return;
+
+  const srcFiles = fs.readdirSync(skillsSrc).filter((f) => f.startsWith('sandstorm-') && f.endsWith('.md'));
+  if (srcFiles.length === 0) return;
+
+  // Check if any skills are missing or outdated
+  let needsSync = false;
+  for (const file of srcFiles) {
+    const destFile = path.join(skillsDest, file);
+    if (!fs.existsSync(destFile)) {
+      needsSync = true;
+      break;
+    }
+    const srcStat = fs.statSync(path.join(skillsSrc, file));
+    const destStat = fs.statSync(destFile);
+    if (srcStat.mtimeMs > destStat.mtimeMs) {
+      needsSync = true;
+      break;
+    }
+  }
+
+  if (!needsSync) return;
+
+  fs.mkdirSync(skillsDest, { recursive: true });
+  for (const file of srcFiles) {
+    fs.copyFileSync(path.join(skillsSrc, file), path.join(skillsDest, file));
+  }
+}
+
 export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   // Wire up stack update notifications to the renderer
   stackManager.setOnStackUpdate(() => {
@@ -64,7 +101,14 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('projects:checkInit', async (_event, directory: string) => {
     const configPath = path.join(directory, '.sandstorm', 'config');
-    return fs.existsSync(configPath);
+    const isInitialized = fs.existsSync(configPath);
+
+    // Auto-sync skills if project is initialized but skills are missing
+    if (isInitialized) {
+      syncSkillsToProject(directory, cliDir);
+    }
+
+    return isInitialized;
   });
 
   ipcMain.handle('projects:initialize', async (_event, directory: string) => {

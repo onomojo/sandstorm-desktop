@@ -1,0 +1,25 @@
+name: sandstorm-teardown
+description: Test that Claude uses the sandstorm-teardown skill correctly
+test_cases:
+  - name: basic_teardown
+    prompt: "Tear down stack 1"
+    expected:
+      - skill: sandstorm-teardown
+      - command_contains: "sandstorm down 1"
+    tags: [sandstorm, stack, teardown]
+
+  - name: cleanup_stacks
+    prompt: "Clean up all the old stacks we're not using anymore"
+    expected:
+      - skill: sandstorm-teardown
+      - command_contains: "sandstorm status"
+      - command_contains: "sandstorm down"
+    tags: [sandstorm, stack, teardown]
+
+  - name: teardown_check_diff
+    prompt: "Remove stack 2, but make sure we don't lose any work"
+    expected:
+      - skill: sandstorm-teardown
+      - command_contains: "sandstorm diff 2"
+      - command_contains: "sandstorm down 2"
+    tags: [sandstorm, stack, teardown]

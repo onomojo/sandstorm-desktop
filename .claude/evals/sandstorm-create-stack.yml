@@ -1,0 +1,32 @@
+name: sandstorm-create-stack
+description: Test that Claude uses the sandstorm-create-stack skill correctly
+test_cases:
+  - name: basic_create
+    prompt: "Create a new sandstorm stack"
+    expected:
+      - skill: sandstorm-create-stack
+      - command_contains: "sandstorm up"
+    tags: [sandstorm, stack, create]
+
+  - name: create_with_ticket
+    prompt: "Spin up a stack for ticket PROJ-456 on branch fix/login-bug"
+    expected:
+      - skill: sandstorm-create-stack
+      - command_contains: "sandstorm up"
+      - command_contains: "--ticket PROJ-456"
+      - command_contains: "--branch fix/login-bug"
+    tags: [sandstorm, stack, create]
+
+  - name: create_numbered
+    prompt: "Start stack 3 for working on the auth feature"
+    expected:
+      - skill: sandstorm-create-stack
+      - command_contains: "sandstorm up 3"
+    tags: [sandstorm, stack, create]
+
+  - name: create_named
+    prompt: "I need an isolated environment to fix the search bug"
+    expected:
+      - skill: sandstorm-create-stack
+      - command_contains: "sandstorm up"
+    tags: [sandstorm, stack, create]

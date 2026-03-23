@@ -21,6 +21,20 @@ if [[ "${1:-}" == "init" ]]; then
   exit $?
 fi
 
+# Sync skills — install/update Claude skills in an already-initialized project
+if [[ "${1:-}" == "sync-skills" ]]; then
+  SKILLS_SRC="$SANDSTORM_DIR/skills"
+  SKILLS_DEST="$(pwd)/.claude/skills"
+  if [ ! -d "$SKILLS_SRC" ]; then
+    echo "No skills to install." >&2
+    exit 1
+  fi
+  mkdir -p "$SKILLS_DEST"
+  cp "$SKILLS_SRC"/sandstorm-*.md "$SKILLS_DEST/"
+  echo "Synced Claude skills to .claude/skills/"
+  exit 0
+fi
+
 # Stack management commands — delegate to lib/stack.sh
 STACK_COMMANDS="up|down|task|task-status|task-output|diff|push|publish|status|exec|claude|register|logs"
 

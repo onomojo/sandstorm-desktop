@@ -1,0 +1,32 @@
+name: sandstorm-push
+description: Test that Claude uses the sandstorm-push skill correctly
+test_cases:
+  - name: basic_push
+    prompt: "Push the changes from stack 1"
+    expected:
+      - skill: sandstorm-push
+      - command_contains: "sandstorm push 1"
+    tags: [sandstorm, push, git]
+
+  - name: push_with_message
+    prompt: "Commit and push stack 1's work with message 'Fix auth bug'"
+    expected:
+      - skill: sandstorm-push
+      - command_contains: "sandstorm push 1"
+      - command_contains: "Fix auth bug"
+    tags: [sandstorm, push, git]
+
+  - name: publish_new_branch
+    prompt: "Create a branch feature/search and push stack 2's changes there"
+    expected:
+      - skill: sandstorm-push
+      - command_contains: "sandstorm publish 2 feature/search"
+    tags: [sandstorm, push, publish, git]
+
+  - name: review_before_push
+    prompt: "Review and push the changes from stack 1"
+    expected:
+      - skill: sandstorm-push
+      - command_contains: "sandstorm diff 1"
+      - command_contains: "sandstorm push 1"
+    tags: [sandstorm, push, git]

@@ -1,0 +1,24 @@
+name: sandstorm-init
+description: Test that Claude uses the sandstorm-init skill correctly
+test_cases:
+  - name: basic_init
+    prompt: "Initialize sandstorm in this project"
+    expected:
+      - skill: sandstorm-init
+      - command_contains: "sandstorm init"
+    tags: [sandstorm, init]
+
+  - name: init_with_compose
+    prompt: "Set up sandstorm for this project, the compose file is at infra/docker-compose.yml"
+    expected:
+      - skill: sandstorm-init
+      - command_contains: "sandstorm init"
+      - command_contains: "--compose"
+    tags: [sandstorm, init]
+
+  - name: init_noninteractive
+    prompt: "Initialize sandstorm without asking me any questions"
+    expected:
+      - skill: sandstorm-init
+      - command_contains: "sandstorm init -y"
+    tags: [sandstorm, init]

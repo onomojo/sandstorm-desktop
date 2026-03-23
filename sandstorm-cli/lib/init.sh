@@ -304,6 +304,18 @@ CLAUDE
 echo "  Created .sandstorm/docker-compose.yml"
 
 # ---------------------------------------------------------------------------
+# Install Claude skills into the project
+# ---------------------------------------------------------------------------
+SKILLS_SRC="$SANDSTORM_DIR/skills"
+SKILLS_DEST="$PROJECT_ROOT/.claude/skills"
+
+if [ -d "$SKILLS_SRC" ]; then
+  mkdir -p "$SKILLS_DEST"
+  cp "$SKILLS_SRC"/sandstorm-*.md "$SKILLS_DEST/"
+  echo "  Installed Claude skills to .claude/skills/"
+fi
+
+# ---------------------------------------------------------------------------
 # Update .gitignore
 # ---------------------------------------------------------------------------
 GITIGNORE="$PROJECT_ROOT/.gitignore"

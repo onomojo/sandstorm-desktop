@@ -1,0 +1,39 @@
+name: sandstorm-dispatch-task
+description: Test that Claude uses the sandstorm-dispatch-task skill correctly
+test_cases:
+  - name: basic_dispatch
+    prompt: "Send a task to stack 1 to fix the login page CSS"
+    expected:
+      - skill: sandstorm-dispatch-task
+      - command_contains: "sandstorm task 1"
+    tags: [sandstorm, task, dispatch]
+
+  - name: dispatch_async
+    prompt: "Have the inner Claude in stack 2 implement the search feature"
+    expected:
+      - skill: sandstorm-dispatch-task
+      - command_contains: "sandstorm task 2"
+      - command_not_contains: "--sync"
+    tags: [sandstorm, task, dispatch]
+
+  - name: dispatch_with_ticket
+    prompt: "Dispatch a task to stack 1 for ticket PROJ-789 to add pagination"
+    expected:
+      - skill: sandstorm-dispatch-task
+      - command_contains: "sandstorm task 1"
+      - command_contains: "--ticket PROJ-789"
+    tags: [sandstorm, task, dispatch]
+
+  - name: check_task_progress
+    prompt: "How's the task going in stack 1?"
+    expected:
+      - skill: sandstorm-status
+      - command_contains: "sandstorm task-status 1"
+    tags: [sandstorm, task, status]
+
+  - name: view_task_output
+    prompt: "Show me what the inner Claude has been doing in stack 2"
+    expected:
+      - skill: sandstorm-status
+      - command_contains: "sandstorm task-output 2"
+    tags: [sandstorm, task, output]

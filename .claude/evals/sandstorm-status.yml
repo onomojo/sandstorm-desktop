@@ -1,0 +1,37 @@
+name: sandstorm-status
+description: Test that Claude uses the sandstorm-status skill correctly
+test_cases:
+  - name: check_all_stacks
+    prompt: "What stacks do I have running?"
+    expected:
+      - skill: sandstorm-status
+      - command_contains: "sandstorm status"
+    tags: [sandstorm, status]
+
+  - name: check_specific_task
+    prompt: "Is the task in stack 3 done yet?"
+    expected:
+      - skill: sandstorm-status
+      - command_contains: "sandstorm task-status 3"
+    tags: [sandstorm, status, task]
+
+  - name: view_diff
+    prompt: "What changes has inner Claude made in stack 1?"
+    expected:
+      - skill: sandstorm-status
+      - command_contains: "sandstorm diff 1"
+    tags: [sandstorm, status, diff]
+
+  - name: debug_failure
+    prompt: "Stack 2's task failed, what happened?"
+    expected:
+      - skill: sandstorm-status
+      - command_contains: "sandstorm task-output 2"
+    tags: [sandstorm, status, debug]
+
+  - name: view_logs
+    prompt: "Show me the logs for the API service in stack 1"
+    expected:
+      - skill: sandstorm-status
+      - command_contains: "sandstorm logs 1 api"
+    tags: [sandstorm, status, logs]
