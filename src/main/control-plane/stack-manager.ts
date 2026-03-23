@@ -89,7 +89,10 @@ export class StackManager {
     private taskWatcher: TaskWatcher,
     private runtime: ContainerRuntime,
     private cliDir: string = ''
-  ) {}
+  ) {
+    // When the task watcher detects a status change, push a UI update
+    this.taskWatcher.setOnStatusChange(() => this.notifyUpdate());
+  }
 
   setOnStackUpdate(callback: () => void): void {
     this.onStackUpdate = callback;
@@ -286,30 +289,38 @@ export class StackManager {
 
     const task = this.registry.createTask(stackId, prompt);
 
-    const claudeContainer = await this.findClaudeContainer(stack);
-    if (!claudeContainer) {
-      throw new Error(`Claude container not found for stack "${stackId}"`);
+    try {
+      const claudeContainer = await this.findClaudeContainer(stack);
+      if (!claudeContainer) {
+        throw new Error(`Claude container not found for stack "${stackId}"`);
+      }
+
+      // Use the sandstorm CLI to dispatch the task. The CLI's `task` command
+      // handles credential sync (OAuth), writes files as the correct user
+      // (`-u claude`), and creates the trigger file with proper ownership —
+      // preventing the infinite-loop and not-logged-in bugs.
+      const result = await this.runCli(stack.project_dir, ['task', stackId, prompt]);
+
+      if (result.exitCode !== 0) {
+        throw new Error(
+          result.stderr.trim() || result.stdout.trim() || 'Task dispatch failed'
+        );
+      }
+
+      // Start watching for completion
+      this.taskWatcher.watch(stackId, claudeContainer.id);
+
+      // Stream live output to renderer (fire-and-forget)
+      this.taskWatcher.streamOutput(stackId, claudeContainer.id, () => {}).catch(() => {});
+
+      return task;
+    } catch (err) {
+      // Task was created but dispatch failed — mark it as failed so the
+      // stack doesn't stay stuck in 'running' status forever.
+      this.registry.completeTask(task.id, 1);
+      this.notifyUpdate();
+      throw err;
     }
-
-    // Use the sandstorm CLI to dispatch the task. The CLI's `task` command
-    // handles credential sync (OAuth), writes files as the correct user
-    // (`-u claude`), and creates the trigger file with proper ownership —
-    // preventing the infinite-loop and not-logged-in bugs.
-    const result = await this.runCli(stack.project_dir, ['task', stackId, prompt]);
-
-    if (result.exitCode !== 0) {
-      throw new Error(
-        result.stderr.trim() || result.stdout.trim() || 'Task dispatch failed'
-      );
-    }
-
-    // Start watching for completion
-    this.taskWatcher.watch(stackId, claudeContainer.id);
-
-    // Stream live output to renderer (fire-and-forget)
-    this.taskWatcher.streamOutput(stackId, claudeContainer.id, () => {}).catch(() => {});
-
-    return task;
   }
 
   async getStackWithServices(stackId: string): Promise<StackWithServices | undefined> {

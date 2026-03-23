@@ -105,10 +105,12 @@ async function initializeApp(): Promise<void> {
   // Listen for task events to send to renderer
   taskWatcher.on('task:completed', ({ stackId, task }) => {
     mainWindow?.webContents.send('task:completed', { stackId, task });
+    mainWindow?.webContents.send('stacks:updated');
   });
 
   taskWatcher.on('task:failed', ({ stackId, task }) => {
     mainWindow?.webContents.send('task:failed', { stackId, task });
+    mainWindow?.webContents.send('stacks:updated');
   });
 
   taskWatcher.on('task:output', ({ stackId, data }) => {

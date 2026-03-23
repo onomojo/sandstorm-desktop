@@ -9,9 +9,14 @@ export interface TaskEvents {
   'task:output': { stackId: string; taskId: number; data: string };
 }
 
+/** Max consecutive exec failures before marking a task as failed */
+const MAX_CONSECUTIVE_ERRORS = 30;
+
 export class TaskWatcher extends EventEmitter {
   private watchers = new Map<string, NodeJS.Timeout>();
+  private errorCounts = new Map<string, number>();
   private pollInterval: number;
+  private onStatusChange?: () => void;
 
   constructor(
     private registry: Registry,
@@ -22,8 +27,19 @@ export class TaskWatcher extends EventEmitter {
     this.pollInterval = options?.pollInterval ?? 2000;
   }
 
+  /** Register a callback invoked whenever a task status changes (for UI notifications) */
+  setOnStatusChange(callback: () => void): void {
+    this.onStatusChange = callback;
+  }
+
   watch(stackId: string, containerId: string): void {
-    if (this.watchers.has(stackId)) return;
+    // If already watching this stack, stop the old watcher first so
+    // we pick up the (possibly new) containerId.
+    if (this.watchers.has(stackId)) {
+      this.unwatch(stackId);
+    }
+
+    this.errorCounts.set(stackId, 0);
 
     const interval = setInterval(async () => {
       await this.checkTaskStatus(stackId, containerId);
@@ -38,12 +54,34 @@ export class TaskWatcher extends EventEmitter {
       clearInterval(interval);
       this.watchers.delete(stackId);
     }
+    this.errorCounts.delete(stackId);
   }
 
   unwatchAll(): void {
     for (const [id] of this.watchers) {
       this.unwatch(id);
     }
+  }
+
+  private completeTaskAndNotify(
+    task: Task,
+    stackId: string,
+    status: 'completed' | 'failed',
+    exitCode: number
+  ): void {
+    this.registry.completeTask(task.id, exitCode);
+
+    const updatedTask = {
+      ...task,
+      status,
+      exit_code: exitCode,
+      finished_at: new Date().toISOString(),
+    };
+
+    const event = status === 'completed' ? 'task:completed' : 'task:failed';
+    this.emit(event, { stackId, task: updatedTask });
+    this.onStatusChange?.();
+    this.unwatch(stackId);
   }
 
   private async checkTaskStatus(
@@ -64,26 +102,38 @@ export class TaskWatcher extends EventEmitter {
       const status = result.stdout.trim();
 
       if (status === 'completed' || status === 'failed') {
-        const exitResult = await this.runtime.exec(containerId, [
-          'cat',
-          '/tmp/claude-task.exit',
-        ]);
-        const exitCode = parseInt(exitResult.stdout.trim(), 10) || (status === 'completed' ? 0 : 1);
+        let exitCode: number;
+        try {
+          const exitResult = await this.runtime.exec(containerId, [
+            'cat',
+            '/tmp/claude-task.exit',
+          ]);
+          exitCode = parseInt(exitResult.stdout.trim(), 10);
+          if (isNaN(exitCode)) exitCode = status === 'completed' ? 0 : 1;
+        } catch {
+          exitCode = status === 'completed' ? 0 : 1;
+        }
 
-        this.registry.completeTask(task.id, exitCode);
-        const updatedTask = {
-          ...task,
-          status: status as 'completed' | 'failed',
-          exit_code: exitCode,
-          finished_at: new Date().toISOString(),
-        };
-
-        const event = status === 'completed' ? 'task:completed' : 'task:failed';
-        this.emit(event, { stackId, task: updatedTask });
-        this.unwatch(stackId);
+        this.completeTaskAndNotify(task, stackId, status, exitCode);
+        return;
       }
+
+      // Successful poll — reset error counter
+      this.errorCounts.set(stackId, 0);
     } catch {
-      // Container might not be ready yet or file doesn't exist — keep polling
+      // Exec failed — container might not be ready, or ID became stale.
+      // Track consecutive failures so we don't poll forever.
+      const count = (this.errorCounts.get(stackId) ?? 0) + 1;
+      this.errorCounts.set(stackId, count);
+
+      if (count >= MAX_CONSECUTIVE_ERRORS) {
+        this.completeTaskAndNotify(
+          task,
+          stackId,
+          'failed',
+          1
+        );
+      }
     }
   }
 

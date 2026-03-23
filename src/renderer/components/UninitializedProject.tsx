@@ -10,8 +10,12 @@ export function UninitializedProject({ project }: { project: Project }) {
     setInitializing(true);
     setError(null);
     try {
-      await window.sandstorm.projects.initialize(project.directory);
-      setInitialized(true);
+      const result = await window.sandstorm.projects.initialize(project.directory);
+      if (result.success) {
+        setInitialized(true);
+      } else {
+        setError(result.error || 'Initialization failed');
+      }
     } catch (err) {
       setError(String(err));
     } finally {
