@@ -47,5 +47,6 @@ Use Docker service hostnames to reach services in this stack:
 ## What you should NOT do
 
 - Do not push to GitHub (you only have read-only access)
+- Do not switch git branches — stay on whatever branch was checked out when the stack started. Your branch was set by the orchestrator; switching to another branch will cause your work to land in the wrong place.
 - Do not modify Docker infrastructure (don't stop/start containers)
 - Do not install languages or runtimes in this container — use the service containers instead

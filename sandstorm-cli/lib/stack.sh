@@ -315,15 +315,20 @@ case "$COMMAND" in
       esac
     done
 
-    [ -n "$BRANCH" ] && export GIT_BRANCH="$BRANCH"
+    # Default to main if no branch specified
+    if [ -n "$BRANCH" ]; then
+      export GIT_BRANCH="$BRANCH"
+    else
+      export GIT_BRANCH="main"
+    fi
 
     echo "Starting Sandstorm stack ${STACK_ID} (${COMPOSE_PROJECT})..."
     [ -n "$TICKET" ] && echo "  Ticket: ${TICKET}"
-    [ -n "$BRANCH" ] && echo "  Branch: ${BRANCH}"
+    echo "  Branch: ${GIT_BRANCH}"
     print_port_map
 
     trap 'echo ""; echo "Cancelled."; registry_write "$STACK_ID" "" "" "" "cancelled" ""; exit 1' INT TERM
-    registry_write "$STACK_ID" "$TICKET" "$BRANCH" "" "building" ""
+    registry_write "$STACK_ID" "$TICKET" "$GIT_BRANCH" "" "building" ""
 
     # Clone workspace if it doesn't exist
     if [ ! -d "$WORKSPACE/.git" ]; then
@@ -568,6 +573,20 @@ case "$COMMAND" in
 
     CURRENT_BRANCH=$(docker exec -u claude -w /app "$CONTAINER_NAME" git branch --show-current)
     check_ticket_match "$CURRENT_BRANCH" "$FORCE"
+
+    # Safety check: warn if the inner agent switched branches
+    EXPECTED_BRANCH=$(registry_read "$STACK_ID" "branch")
+    if [ -n "$EXPECTED_BRANCH" ] && [ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]; then
+      echo "WARNING: Branch drift detected!"
+      echo "  Expected: ${EXPECTED_BRANCH}"
+      echo "  Actual:   ${CURRENT_BRANCH}"
+      echo "  The inner agent appears to have switched branches."
+      if [ "$FORCE" != "true" ]; then
+        echo "  Use --force to push anyway, or fix the branch first."
+        exit 1
+      fi
+      echo "  --force specified, pushing anyway..."
+    fi
 
     REG_TICKET=$(registry_read "$STACK_ID" "ticket")
 
