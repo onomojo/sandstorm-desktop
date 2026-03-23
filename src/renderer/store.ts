@@ -48,6 +48,23 @@ export interface PortMapping {
   container_port: number;
 }
 
+export interface StackHistoryRecord {
+  id: number;
+  stack_id: string;
+  project: string;
+  project_dir: string;
+  ticket: string | null;
+  branch: string | null;
+  description: string | null;
+  final_status: 'completed' | 'failed' | 'torn_down';
+  error: string | null;
+  runtime: 'docker' | 'podman';
+  task_prompt: string | null;
+  created_at: string;
+  finished_at: string;
+  duration_seconds: number;
+}
+
 interface AppState {
   // Projects
   projects: Project[];
@@ -56,6 +73,7 @@ interface AppState {
 
   // Stacks
   stacks: Stack[];
+  stackHistory: StackHistoryRecord[];
   selectedStackId: string | null;
   showNewStackDialog: boolean;
   loading: boolean;
@@ -76,9 +94,11 @@ interface AppState {
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   refreshStacks: () => Promise<void>;
+  refreshStackHistory: () => Promise<void>;
 
   // Derived
   filteredStacks: () => Stack[];
+  filteredStackHistory: () => StackHistoryRecord[];
   activeProject: () => Project | undefined;
 }
 
@@ -98,6 +118,9 @@ declare global {
         get: (id: string) => Promise<Stack>;
         create: (opts: unknown) => Promise<Stack>;
         teardown: (id: string) => Promise<void>;
+        stop: (id: string) => Promise<void>;
+        start: (id: string) => Promise<void>;
+        history: () => Promise<StackHistoryRecord[]>;
       };
       tasks: {
         dispatch: (stackId: string, prompt: string) => Promise<Task>;
@@ -137,6 +160,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Stacks
   stacks: [],
+  stackHistory: [],
   selectedStackId: null,
   showNewStackDialog: false,
   loading: false,
@@ -187,6 +211,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+  refreshStackHistory: async () => {
+    try {
+      const stackHistory = await window.sandstorm.stacks.history();
+      set({ stackHistory });
+    } catch (err) {
+      set({ error: `Failed to refresh stack history: ${err}` });
+    }
+  },
+
   // Derived
   filteredStacks: () => {
     const { stacks, activeProjectId, projects } = get();
@@ -194,6 +227,14 @@ export const useAppStore = create<AppState>((set, get) => ({
     const project = projects.find((p) => p.id === activeProjectId);
     if (!project) return stacks;
     return stacks.filter((s) => s.project_dir === project.directory);
+  },
+
+  filteredStackHistory: () => {
+    const { stackHistory, activeProjectId, projects } = get();
+    if (activeProjectId === null) return stackHistory;
+    const project = projects.find((p) => p.id === activeProjectId);
+    if (!project) return stackHistory;
+    return stackHistory.filter((s) => s.project_dir === project.directory);
   },
 
   activeProject: () => {

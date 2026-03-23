@@ -14,6 +14,7 @@ export default function App() {
     showOpenProjectDialog,
     refreshStacks,
     refreshProjects,
+    refreshStackHistory,
     selectStack,
     error,
   } = useAppStore();
@@ -21,6 +22,7 @@ export default function App() {
   useEffect(() => {
     refreshProjects();
     refreshStacks();
+    refreshStackHistory();
     const interval = setInterval(refreshStacks, 3000);
 
     const unsubCompleted = window.sandstorm.on('task:completed', () => {
@@ -37,6 +39,7 @@ export default function App() {
     );
     const unsubStacksUpdated = window.sandstorm.on('stacks:updated', () => {
       refreshStacks();
+      refreshStackHistory();
     });
 
     return () => {
@@ -46,7 +49,7 @@ export default function App() {
       unsubNavigate();
       unsubStacksUpdated();
     };
-  }, [refreshStacks, refreshProjects, selectStack]);
+  }, [refreshStacks, refreshProjects, refreshStackHistory, selectStack]);
 
   return (
     <div className="h-screen flex flex-col bg-sandstorm-bg text-sandstorm-text">

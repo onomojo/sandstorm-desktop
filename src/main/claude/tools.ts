@@ -74,17 +74,9 @@ export const tools: ToolDefinition[] = [
       required: ['stackId'],
     },
   },
-  {
-    name: 'teardown_stack',
-    description: 'Tear down a stack and clean up all resources',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        stackId: { type: 'string', description: 'Stack ID to tear down' },
-      },
-      required: ['stackId'],
-    },
-  },
+  // NOTE: teardown_stack intentionally removed from Claude tools.
+  // Stacks should only be torn down by explicit user action in the UI,
+  // never automatically by the outer Claude agent.
 ];
 
 export async function handleToolCall(
@@ -123,8 +115,9 @@ export async function handleToolCall(
       return { success: true };
 
     case 'teardown_stack':
-      await stackManager.teardownStack(input.stackId as string);
-      return { success: true };
+      throw new Error(
+        'Automated stack teardown is disabled. Stacks can only be torn down by the user through the UI.'
+      );
 
     default:
       throw new Error(`Unknown tool: ${name}`);

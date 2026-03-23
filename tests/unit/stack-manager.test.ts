@@ -328,6 +328,104 @@ describe('StackManager', () => {
     });
   });
 
+  describe('stopStack', () => {
+    it('sets stack status to stopped', () => {
+      registry.createStack(makeStack('stop-test'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      manager.stopStack('stop-test');
+      const stack = registry.getStack('stop-test');
+      expect(stack).toBeDefined();
+      expect(stack!.status).toBe('stopped');
+    });
+
+    it('calls CLI stop in background', async () => {
+      registry.createStack(makeStack('stop-bg'));
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: '', exitCode: 0,
+      });
+
+      manager.stopStack('stop-bg');
+
+      await vi.waitFor(() => {
+        expect(runCliSpy).toHaveBeenCalledWith('/proj', ['stop', 'stop-bg']);
+      }, { timeout: 5000 });
+    });
+
+    it('keeps stack in registry (not deleted)', () => {
+      registry.createStack(makeStack('stop-keep'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      manager.stopStack('stop-keep');
+      expect(registry.getStack('stop-keep')).toBeDefined();
+    });
+
+    it('throws when stopping non-existent stack', () => {
+      expect(() => manager.stopStack('ghost')).toThrow('not found');
+    });
+
+    it('calls onStackUpdate callback', () => {
+      const updateCallback = vi.fn();
+      manager.setOnStackUpdate(updateCallback);
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      registry.createStack(makeStack('stop-cb'));
+      manager.stopStack('stop-cb');
+      expect(updateCallback).toHaveBeenCalled();
+    });
+  });
+
+  describe('startStack', () => {
+    it('sets stack status to building then up after CLI succeeds', async () => {
+      registry.createStack(makeStack('start-test'));
+      registry.updateStackStatus('start-test', 'stopped');
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      manager.startStack('start-test');
+      // Immediately should be 'building'
+      expect(registry.getStack('start-test')!.status).toBe('building');
+
+      // After background completes, should be 'up'
+      await vi.waitFor(() => {
+        expect(registry.getStack('start-test')!.status).toBe('up');
+      }, { timeout: 5000 });
+    });
+
+    it('calls CLI start in background', async () => {
+      registry.createStack(makeStack('start-bg'));
+      registry.updateStackStatus('start-bg', 'stopped');
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: '', exitCode: 0,
+      });
+
+      manager.startStack('start-bg');
+
+      await vi.waitFor(() => {
+        expect(runCliSpy).toHaveBeenCalledWith('/proj', ['start', 'start-bg']);
+      }, { timeout: 5000 });
+    });
+
+    it('marks stack as failed when CLI returns non-zero', async () => {
+      registry.createStack(makeStack('start-fail'));
+      registry.updateStackStatus('start-fail', 'stopped');
+      vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: 'containers not found', exitCode: 1,
+      });
+
+      manager.startStack('start-fail');
+
+      await vi.waitFor(() => {
+        const stack = registry.getStack('start-fail');
+        expect(stack!.status).toBe('failed');
+        expect(stack!.error).toBe('containers not found');
+      }, { timeout: 5000 });
+    });
+
+    it('throws when starting non-existent stack', () => {
+      expect(() => manager.startStack('ghost')).toThrow('not found');
+    });
+  });
+
   describe('teardownStack', () => {
     it('deletes stack from registry immediately', () => {
       registry.createStack(makeStack('teardown-test'));
@@ -367,6 +465,45 @@ describe('StackManager', () => {
       // Should not throw — best effort
       manager.teardownStack('compose-fail');
       expect(registry.getStack('compose-fail')).toBeUndefined();
+    });
+
+    it('archives stack to history before deleting', () => {
+      registry.createStack(makeStack('archive-test'));
+      registry.updateStackStatus('archive-test', 'completed');
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      manager.teardownStack('archive-test');
+      expect(registry.getStack('archive-test')).toBeUndefined();
+
+      const history = registry.listStackHistory();
+      expect(history).toHaveLength(1);
+      expect(history[0].stack_id).toBe('archive-test');
+      expect(history[0].final_status).toBe('completed');
+    });
+
+    it('archives failed stack with failed status', () => {
+      registry.createStack(makeStack('fail-archive'));
+      registry.updateStackStatus('fail-archive', 'failed', 'build error');
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      manager.teardownStack('fail-archive');
+
+      const history = registry.listStackHistory();
+      expect(history).toHaveLength(1);
+      expect(history[0].final_status).toBe('failed');
+      expect(history[0].error).toBe('build error');
+    });
+
+    it('archives running stack as torn_down', () => {
+      registry.createStack(makeStack('running-archive'));
+      registry.updateStackStatus('running-archive', 'running');
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      manager.teardownStack('running-archive');
+
+      const history = registry.listStackHistory();
+      expect(history).toHaveLength(1);
+      expect(history[0].final_status).toBe('torn_down');
     });
 
     it('calls onStackUpdate callback during teardown', () => {
@@ -446,6 +583,21 @@ describe('StackManager', () => {
     it('returns empty array when no stacks', async () => {
       const results = await manager.listStacksWithServices();
       expect(results).toEqual([]);
+    });
+  });
+
+  describe('listStackHistory', () => {
+    it('returns history records', () => {
+      registry.createStack(makeStack('hist-test'));
+      registry.archiveStack('hist-test', 'completed');
+
+      const history = manager.listStackHistory();
+      expect(history).toHaveLength(1);
+      expect(history[0].stack_id).toBe('hist-test');
+    });
+
+    it('returns empty array when no history', () => {
+      expect(manager.listStackHistory()).toEqual([]);
     });
   });
 

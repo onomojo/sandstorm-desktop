@@ -481,6 +481,96 @@ describe('Registry', () => {
   });
 
   // ===========================================
+  // Stack History
+  // ===========================================
+  describe('stack history', () => {
+    it('archives a stack and retrieves from history', () => {
+      registry.createStack(makeStack({ id: 'hist-1', branch: 'feat/test', description: 'Test work' }));
+      registry.createTask('hist-1', 'Fix the bug');
+      registry.archiveStack('hist-1', 'torn_down');
+
+      const history = registry.listStackHistory();
+      expect(history).toHaveLength(1);
+      expect(history[0].stack_id).toBe('hist-1');
+      expect(history[0].final_status).toBe('torn_down');
+      expect(history[0].branch).toBe('feat/test');
+      expect(history[0].description).toBe('Test work');
+      expect(history[0].task_prompt).toBe('Fix the bug');
+      expect(history[0].finished_at).toBeTruthy();
+      expect(history[0].duration_seconds).toBeGreaterThanOrEqual(0);
+    });
+
+    it('archives with completed status', () => {
+      registry.createStack(makeStack({ id: 'hist-comp' }));
+      registry.archiveStack('hist-comp', 'completed');
+
+      const history = registry.listStackHistory();
+      expect(history[0].final_status).toBe('completed');
+    });
+
+    it('archives with failed status and preserves error', () => {
+      registry.createStack(makeStack({ id: 'hist-fail' }));
+      registry.updateStackStatus('hist-fail', 'failed', 'OOM killed');
+      registry.archiveStack('hist-fail', 'failed');
+
+      const history = registry.listStackHistory();
+      expect(history[0].final_status).toBe('failed');
+      expect(history[0].error).toBe('OOM killed');
+    });
+
+    it('stores null task_prompt when no tasks exist', () => {
+      registry.createStack(makeStack({ id: 'hist-no-task' }));
+      registry.archiveStack('hist-no-task', 'torn_down');
+
+      const history = registry.listStackHistory();
+      expect(history[0].task_prompt).toBeNull();
+    });
+
+    it('captures a task prompt when tasks exist', () => {
+      registry.createStack(makeStack({ id: 'hist-multi-task' }));
+      registry.createTask('hist-multi-task', 'First task');
+      registry.createTask('hist-multi-task', 'Second task');
+      registry.archiveStack('hist-multi-task', 'completed');
+
+      const history = registry.listStackHistory();
+      // Should capture one of the task prompts (most recent by started_at)
+      expect(['First task', 'Second task']).toContain(history[0].task_prompt);
+    });
+
+    it('lists multiple history records', () => {
+      registry.createStack(makeStack({ id: 'hist-a' }));
+      registry.archiveStack('hist-a', 'torn_down');
+      registry.createStack(makeStack({ id: 'hist-b' }));
+      registry.archiveStack('hist-b', 'completed');
+
+      const history = registry.listStackHistory();
+      expect(history).toHaveLength(2);
+      const ids = history.map(h => h.stack_id);
+      expect(ids).toContain('hist-a');
+      expect(ids).toContain('hist-b');
+    });
+
+    it('does not archive non-existent stack', () => {
+      registry.archiveStack('nonexistent', 'torn_down');
+      expect(registry.listStackHistory()).toHaveLength(0);
+    });
+
+    it('preserves history after original stack is deleted', () => {
+      registry.createStack(makeStack({ id: 'hist-del' }));
+      registry.archiveStack('hist-del', 'torn_down');
+      registry.deleteStack('hist-del');
+
+      const history = registry.listStackHistory();
+      expect(history).toHaveLength(1);
+      expect(history[0].stack_id).toBe('hist-del');
+    });
+
+    it('returns empty history when none exists', () => {
+      expect(registry.listStackHistory()).toEqual([]);
+    });
+  });
+
+  // ===========================================
   // Database lifecycle
   // ===========================================
   describe('database lifecycle', () => {

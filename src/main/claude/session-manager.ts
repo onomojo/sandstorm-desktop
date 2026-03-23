@@ -13,8 +13,11 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { BrowserWindow } from 'electron';
+import { app } from 'electron';
 import { handleToolCall, tools } from './tools';
 import { cliDir } from '../index';
+
+const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 interface ChatMessage {
   role: 'user' | 'assistant';
@@ -39,9 +42,33 @@ export class ClaudeSessionManager {
   private bridgeToken: string;
   private mcpConfigPath: string | null = null;
   private mainWindow: BrowserWindow | null = null;
+  private logStream: fs.WriteStream | null = null;
+  private timeoutMs: number;
 
-  constructor() {
+  constructor(timeoutMs: number = DEFAULT_TIMEOUT_MS) {
     this.bridgeToken = randomUUID();
+    this.timeoutMs = timeoutMs;
+    this.initLogger();
+  }
+
+  private initLogger(): void {
+    try {
+      const logDir = typeof app !== 'undefined' && app.getPath
+        ? app.getPath('userData')
+        : os.tmpdir();
+      const logPath = path.join(logDir, 'sandstorm-desktop-claude.log');
+      this.logStream = fs.createWriteStream(logPath, { flags: 'a' });
+    } catch {
+      // Fall back to /tmp if userData not available (e.g., in tests)
+      const logPath = path.join(os.tmpdir(), 'sandstorm-desktop-claude.log');
+      this.logStream = fs.createWriteStream(logPath, { flags: 'a' });
+    }
+  }
+
+  private log(message: string): void {
+    const timestamp = new Date().toISOString();
+    const line = `[${timestamp}] ${message}\n`;
+    this.logStream?.write(line);
   }
 
   setMainWindow(win: BrowserWindow | null): void {
@@ -221,10 +248,13 @@ rl.on('line', async (line) => {
     session.messages.push({ role: 'user', content: message });
     session.processing = true;
     this.mainWindow?.webContents.send(`claude:user-message:${tabId}`, message);
+    this.log(`Message received for tab=${tabId}`);
 
     // If a process is already running, queue the message
     if (session.process) {
       session.pendingMessages.push(message);
+      this.log(`Message queued for tab=${tabId} (queue size: ${session.pendingMessages.length})`);
+      this.mainWindow?.webContents.send(`claude:queued:${tabId}`);
       return;
     }
 
@@ -289,12 +319,24 @@ rl.on('line', async (line) => {
     session.process = child;
     session.messageCount++;
 
+    this.log(`Claude CLI spawned for tab=${tabId} pid=${child.pid} args=[${args.join(', ')}]`);
+
     const send = (channel: string, ...data: unknown[]): void => {
       this.mainWindow?.webContents.send(channel, ...data);
     };
 
     let outputBuffer = '';
     let fullResponse = '';
+    let stderrBuffer = '';
+
+    // Timeout: kill process if it runs too long
+    const timeout = setTimeout(() => {
+      if (child.exitCode === null) {
+        this.log(`Timeout reached for tab=${tabId} pid=${child.pid} after ${this.timeoutMs}ms`);
+        child.kill();
+        send(`claude:error:${tabId}`, `Claude process timed out after ${Math.round(this.timeoutMs / 1000)} seconds`);
+      }
+    }, this.timeoutMs);
 
     child.stdout?.on('data', (data: Buffer) => {
       const text = data.toString();
@@ -323,12 +365,17 @@ rl.on('line', async (line) => {
       }
     });
 
-    child.stderr?.on('data', (_data: Buffer) => {
-      // stderr contains debug/progress info — ignore
+    child.stderr?.on('data', (data: Buffer) => {
+      const text = data.toString();
+      stderrBuffer += text;
+      this.log(`stderr [tab=${tabId}]: ${text.trimEnd()}`);
     });
 
-    child.on('close', (_code) => {
+    child.on('close', (code) => {
+      clearTimeout(timeout);
       if (session) session.process = null;
+      this.log(`Claude CLI exited for tab=${tabId} code=${code}`);
+
       // Flush remaining buffer
       if (outputBuffer.trim()) {
         try {
@@ -344,16 +391,24 @@ rl.on('line', async (line) => {
         }
       }
 
-      // Store assistant message
-      if (session && fullResponse) {
-        session.messages.push({ role: 'assistant', content: fullResponse });
+      // If non-zero exit and no output, send error from stderr
+      if (code !== 0 && !fullResponse.trim()) {
+        const errorMsg = stderrBuffer.trim()
+          || `Claude exited with code ${code}`;
+        this.log(`Sending error for tab=${tabId}: ${errorMsg}`);
+        send(`claude:error:${tabId}`, errorMsg);
+      } else {
+        // Store assistant message
+        if (session && fullResponse) {
+          session.messages.push({ role: 'assistant', content: fullResponse });
+        }
+        send(`claude:done:${tabId}`);
       }
-
-      send(`claude:done:${tabId}`);
 
       // Drain pending messages queue
       if (session && session.pendingMessages.length > 0) {
         const next = session.pendingMessages.shift()!;
+        this.log(`Dequeuing message for tab=${tabId} (remaining: ${session.pendingMessages.length})`);
         this.spawnClaude(tabId, next, session.projectDir);
       } else if (session) {
         session.processing = false;
@@ -361,7 +416,9 @@ rl.on('line', async (line) => {
     });
 
     child.on('error', (err) => {
+      clearTimeout(timeout);
       if (session) session.process = null;
+      this.log(`Spawn error for tab=${tabId}: ${err.message}`);
       send(`claude:error:${tabId}`, err.message);
     });
   }
@@ -410,6 +467,8 @@ rl.on('line', async (line) => {
     }
     this.sessions.clear();
     this.bridgeServer?.close();
+    this.logStream?.end();
+    this.logStream = null;
     if (this.mcpConfigPath) {
       const tmpDir = path.dirname(this.mcpConfigPath);
       try {

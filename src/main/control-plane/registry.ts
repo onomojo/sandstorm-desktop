@@ -43,6 +43,25 @@ export interface PortMapping {
   container_port: number;
 }
 
+export type HistoryStatus = 'completed' | 'failed' | 'torn_down';
+
+export interface StackHistoryRecord {
+  id: number;
+  stack_id: string;
+  project: string;
+  project_dir: string;
+  ticket: string | null;
+  branch: string | null;
+  description: string | null;
+  final_status: HistoryStatus;
+  error: string | null;
+  runtime: 'docker' | 'podman';
+  task_prompt: string | null;
+  created_at: string;
+  finished_at: string;
+  duration_seconds: number;
+}
+
 export interface Project {
   id: number;
   name: string;
@@ -138,6 +157,24 @@ export class Registry {
         host_port      INTEGER NOT NULL UNIQUE,
         container_port INTEGER NOT NULL,
         PRIMARY KEY (stack_id, service)
+      );
+    `);
+    this.db.run(`
+      CREATE TABLE IF NOT EXISTS stack_history (
+        id               INTEGER PRIMARY KEY AUTOINCREMENT,
+        stack_id         TEXT NOT NULL,
+        project          TEXT NOT NULL,
+        project_dir      TEXT NOT NULL,
+        ticket           TEXT,
+        branch           TEXT,
+        description      TEXT,
+        final_status     TEXT NOT NULL,
+        error            TEXT,
+        runtime          TEXT NOT NULL DEFAULT 'docker',
+        task_prompt      TEXT,
+        created_at       TEXT NOT NULL,
+        finished_at      TEXT NOT NULL DEFAULT (datetime('now')),
+        duration_seconds INTEGER NOT NULL DEFAULT 0
       );
     `);
     this.save();
@@ -313,6 +350,50 @@ export class Registry {
 
   releasePorts(stackId: string): void {
     this.execute('DELETE FROM ports WHERE stack_id = ?', [stackId]);
+  }
+
+  // --- Stack History ---
+
+  archiveStack(id: string, finalStatus: HistoryStatus): void {
+    const stack = this.getStack(id);
+    if (!stack) return;
+
+    // Get the most recent task prompt for this stack
+    const latestTask = this.queryOne<{ prompt: string }>(
+      'SELECT prompt FROM tasks WHERE stack_id = ? ORDER BY started_at DESC LIMIT 1',
+      [id]
+    );
+
+    // Calculate duration in seconds
+    const createdMs = new Date(stack.created_at + 'Z').getTime();
+    const nowMs = Date.now();
+    const durationSeconds = Math.max(0, Math.floor((nowMs - createdMs) / 1000));
+
+    this.execute(
+      `INSERT INTO stack_history
+        (stack_id, project, project_dir, ticket, branch, description, final_status, error, runtime, task_prompt, created_at, duration_seconds)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        stack.id,
+        stack.project,
+        stack.project_dir,
+        stack.ticket,
+        stack.branch,
+        stack.description,
+        finalStatus,
+        stack.error,
+        stack.runtime,
+        latestTask?.prompt ?? null,
+        stack.created_at,
+        durationSeconds,
+      ]
+    );
+  }
+
+  listStackHistory(): StackHistoryRecord[] {
+    return this.queryAll<StackHistoryRecord>(
+      'SELECT * FROM stack_history ORDER BY finished_at DESC'
+    );
   }
 
   // --- Cleanup ---

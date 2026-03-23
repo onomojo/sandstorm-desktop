@@ -14,6 +14,7 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isQueued, setIsQueued] = useState(false);
   const [streamingContent, setStreamingContent] = useState('');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -40,14 +41,23 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
 
   // Listen for claude output/done/error/user-message events scoped to this tab
   useEffect(() => {
+    const unsubQueued = window.sandstorm.on(
+      `claude:queued:${tabId}`,
+      () => {
+        setIsQueued(true);
+      }
+    );
+
     const unsubOutput = window.sandstorm.on(
       `claude:output:${tabId}`,
       (data: unknown) => {
+        setIsQueued(false);
         setStreamingContent((prev) => prev + (data as string));
       }
     );
 
     const unsubDone = window.sandstorm.on(`claude:done:${tabId}`, () => {
+      setIsQueued(false);
       setStreamingContent((prev) => {
         if (prev) {
           setMessages((msgs) => [...msgs, { role: 'assistant', content: prev }]);
@@ -68,6 +78,7 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
     const unsubError = window.sandstorm.on(
       `claude:error:${tabId}`,
       (error: unknown) => {
+        setIsQueued(false);
         setStreamingContent((prev) => {
           const errorMsg = (prev ? prev + '\n\n' : '') + 'Error: ' + (error as string);
           setMessages((msgs) => [
@@ -97,6 +108,7 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
     );
 
     return () => {
+      unsubQueued();
       unsubOutput();
       unsubDone();
       unsubError();
@@ -128,7 +140,7 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
   return (
     <div className="flex flex-col h-full bg-sandstorm-bg">
       {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2 border-b border-sandstorm-border shrink-0">
+      <div className="flex items-center justify-between px-4 border-b border-sandstorm-border shrink-0 h-10">
         <div className="flex items-center gap-2">
           <div className="w-5 h-5 rounded bg-gradient-to-br from-orange-500 to-amber-400 flex items-center justify-center">
             <svg
@@ -194,7 +206,7 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
             <div className="rounded-lg px-3 py-2 text-sm bg-sandstorm-surface text-sandstorm-muted border border-sandstorm-border">
               <span className="flex items-center gap-1.5">
                 <span className="w-1.5 h-1.5 rounded-full bg-sandstorm-accent animate-pulse" />
-                Thinking...
+                {isQueued ? 'Message queued...' : 'Thinking...'}
               </span>
             </div>
           </div>
