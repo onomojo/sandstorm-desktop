@@ -1,4 +1,4 @@
-import { ipcMain, dialog, BrowserWindow } from 'electron';
+import { ipcMain, dialog, BrowserWindow, app } from 'electron';
 import { spawn } from 'child_process';
 import fs from 'fs';
 import path from 'path';
@@ -17,6 +17,7 @@ import { CreateStackOpts } from './control-plane/stack-manager';
  * Skips if skills are already present and up to date.
  */
 function syncSkillsToProject(projectDir: string, sandstormCliDir: string): void {
+  try {
   const skillsSrc = path.join(sandstormCliDir, 'skills');
   const skillsDest = path.join(projectDir, '.claude', 'skills');
 
@@ -46,6 +47,9 @@ function syncSkillsToProject(projectDir: string, sandstormCliDir: string): void 
   fs.mkdirSync(skillsDest, { recursive: true });
   for (const file of srcFiles) {
     fs.copyFileSync(path.join(skillsSrc, file), path.join(skillsDest, file));
+  }
+  } catch {
+    // Skill sync is non-critical — dont crash or trigger permission prompts
   }
 }
 
@@ -94,23 +98,29 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     const result = await dialog.showOpenDialog(win!, {
       properties: ['openDirectory'],
       title: 'Open Project Directory',
+      defaultPath: app.getPath('home'),
     });
     if (result.canceled || result.filePaths.length === 0) return null;
     return result.filePaths[0];
   });
 
   ipcMain.handle('projects:checkInit', async (_event, directory: string) => {
-    const sandstormDir = path.join(directory, '.sandstorm');
-    const configPath = path.join(sandstormDir, 'config');
-    const composePath = path.join(sandstormDir, 'docker-compose.yml');
-    const isInitialized = fs.existsSync(configPath) && fs.existsSync(composePath);
+    try {
+      const sandstormDir = path.join(directory, '.sandstorm');
+      const configPath = path.join(sandstormDir, 'config');
+      const composePath = path.join(sandstormDir, 'docker-compose.yml');
+      const isInitialized = fs.existsSync(configPath) && fs.existsSync(composePath);
 
-    // Auto-sync skills if project is initialized but skills are missing
-    if (isInitialized) {
-      syncSkillsToProject(directory, cliDir);
+      // Auto-sync skills if project is initialized but skills are missing
+      if (isInitialized) {
+        syncSkillsToProject(directory, cliDir);
+      }
+
+      return isInitialized;
+    } catch {
+      // Directory not accessible - treat as uninitialized
+      return false;
     }
-
-    return isInitialized;
   });
 
   ipcMain.handle('projects:initialize', async (_event, directory: string) => {

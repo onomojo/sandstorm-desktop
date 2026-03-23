@@ -481,29 +481,34 @@ export class StackManager {
   }
 
   private discoverServicePorts(projectDir: string): Promise<ServicePort[]> {
-    // Read .sandstorm/config for PORT_MAP
-    const configPath = path.join(projectDir, '.sandstorm', 'config');
-    if (!fs.existsSync(configPath)) return Promise.resolve([]);
+    try {
+      // Read .sandstorm/config for PORT_MAP
+      const configPath = path.join(projectDir, '.sandstorm', 'config');
+      if (!fs.existsSync(configPath)) return Promise.resolve([]);
 
-    const config = fs.readFileSync(configPath, 'utf-8');
-    const portMapLine = config
-      .split('\n')
-      .find((l) => l.startsWith('PORT_MAP='));
-    if (!portMapLine) return Promise.resolve([]);
+      const config = fs.readFileSync(configPath, 'utf-8');
+      const portMapLine = config
+        .split('\n')
+        .find((l) => l.startsWith('PORT_MAP='));
+      if (!portMapLine) return Promise.resolve([]);
 
-    const portMapValue = portMapLine.split('=')[1]?.replace(/"/g, '');
-    if (!portMapValue) return Promise.resolve([]);
+      const portMapValue = portMapLine.split('=')[1]?.replace(/"/g, '');
+      if (!portMapValue) return Promise.resolve([]);
 
-    // Format: service:host_port:container_port:index,...
-    // Use service_index as the key to match compose env var format: SANDSTORM_PORT_<service>_<index>
-    return Promise.resolve(
-      portMapValue.split(',').map((entry) => {
-        const [service, , containerPort, index] = entry.split(':');
-        return {
-          service: `${service}_${index || '0'}`,
-          containerPort: parseInt(containerPort, 10),
-        };
-      })
-    );
+      // Format: service:host_port:container_port:index,...
+      // Use service_index as the key to match compose env var format: SANDSTORM_PORT_<service>_<index>
+      return Promise.resolve(
+        portMapValue.split(',').map((entry) => {
+          const [service, , containerPort, index] = entry.split(':');
+          return {
+            service: `${service}_${index || '0'}`,
+            containerPort: parseInt(containerPort, 10),
+          };
+        })
+      );
+    } catch {
+      // Project directory not accessible — return empty ports
+      return Promise.resolve([]);
+    }
   }
 }
