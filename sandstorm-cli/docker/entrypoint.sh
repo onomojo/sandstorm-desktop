@@ -85,11 +85,23 @@ chown -R claude:claude /usr/local/bundle 2>/dev/null || true
 
 # Write sandstorm instructions to user-level CLAUDE.md
 # (Claude Code reads ~/.claude/CLAUDE.md alongside project-level CLAUDE.md)
+mkdir -p /home/claude/.claude
 if [ -f /usr/bin/SANDSTORM_INNER.md ]; then
-  mkdir -p /home/claude/.claude
   cp /usr/bin/SANDSTORM_INNER.md /home/claude/.claude/CLAUDE.md
-  chown -R claude:claude /home/claude/.claude
 fi
+
+# Append per-project context from .sandstorm/context/*.md (mounted read-only)
+if [ -d /sandstorm-context ] && ls /sandstorm-context/*.md 1>/dev/null 2>&1; then
+  echo "" >> /home/claude/.claude/CLAUDE.md
+  echo "# Per-Project Context" >> /home/claude/.claude/CLAUDE.md
+  for ctx in /sandstorm-context/*.md; do
+    echo "" >> /home/claude/.claude/CLAUDE.md
+    cat "$ctx" >> /home/claude/.claude/CLAUDE.md
+  done
+  echo "  Per-project context injected from .sandstorm/context/"
+fi
+
+chown -R claude:claude /home/claude/.claude
 
 # Fix docker socket permissions so claude user can access it
 if [ -S /var/run/docker.sock ]; then

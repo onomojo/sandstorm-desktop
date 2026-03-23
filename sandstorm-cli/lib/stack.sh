@@ -254,8 +254,13 @@ print_port_map() {
 compute_port_env
 
 run_compose() {
+  # Ensure context dir exists (compose volume mount requires it)
+  local context_dir="$PROJECT_ROOT/.sandstorm/context"
+  mkdir -p "$context_dir"
+
   SANDSTORM_DIR="$SANDSTORM_DIR" \
   SANDSTORM_WORKSPACE="$WORKSPACE" \
+  SANDSTORM_CONTEXT="$context_dir" \
   SANDSTORM_PROJECT="$COMPOSE_PROJECT" \
   SANDSTORM_STACK_ID="$STACK_ID" \
   GIT_USER_NAME="$GIT_AUTHOR_NAME" \
