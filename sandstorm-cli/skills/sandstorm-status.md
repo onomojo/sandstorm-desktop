@@ -32,7 +32,7 @@ Shows the last N lines of task output (default: 50).
 ```bash
 sandstorm diff <stack_id>
 ```
-Shows all uncommitted changes in the stack's workspace.
+Shows untracked/modified file summary and all uncommitted changes in the stack's workspace. This is the primary review mechanism — inner Claude does not commit, so all changes appear here.
 
 ### Container logs
 ```bash
@@ -50,6 +50,7 @@ Tails Docker logs for a service (default: `claude`).
 | RUNNING | Task is currently executing |
 | COMPLETED | Last task finished successfully |
 | FAILED | Last task failed |
+| PR-CREATED | Changes pushed and PR created |
 | DOWN | Containers not running |
 
 ## Common monitoring patterns
@@ -68,7 +69,7 @@ sandstorm task-output 1
 **Review completed work:**
 ```bash
 sandstorm task-status 1    # Confirm completed
-sandstorm diff 1           # Review changes
+sandstorm diff 1           # Review uncommitted changes (this is the intended review mechanism)
 sandstorm task-output 1    # See what Claude did
 ```
 
@@ -84,3 +85,4 @@ sandstorm logs 1           # Check container logs
 - **Never poll in a loop.** Run status checks as one-shot commands.
 - **Always use `sandstorm` commands** for monitoring — don't bypass with raw `docker` commands.
 - Task output is stored in `/tmp/claude-task.log` inside the container.
+- `sandstorm diff` shows uncommitted changes because inner Claude does not commit. This is by design — it lets you review everything before pushing.

@@ -315,11 +315,11 @@ case "$COMMAND" in
       esac
     done
 
-    # Default to main if no branch specified
+    # Default to stack ID as branch name if no branch specified
     if [ -n "$BRANCH" ]; then
       export GIT_BRANCH="$BRANCH"
     else
-      export GIT_BRANCH="main"
+      export GIT_BRANCH="$STACK_ID"
     fi
 
     echo "Starting Sandstorm stack ${STACK_ID} (${COMPOSE_PROJECT})..."
@@ -558,7 +558,7 @@ case "$COMMAND" in
 
   # -----------------------------------------------------------------
   diff)
-    docker exec -u claude -w /app "$CONTAINER_NAME" git diff
+    docker exec -u claude -w /app "$CONTAINER_NAME" bash -c 'git status --short && echo "---" && git diff'
     ;;
 
   # -----------------------------------------------------------------
@@ -601,6 +601,7 @@ case "$COMMAND" in
       -u claude \
       -w /app \
       -e GITHUB_TOKEN="$GITHUB_TOKEN" \
+      -e GH_TOKEN="$GITHUB_TOKEN" \
       -e GIT_AUTHOR_NAME="$GIT_AUTHOR_NAME" \
       -e GIT_AUTHOR_EMAIL="$GIT_AUTHOR_EMAIL" \
       -e GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" \
@@ -613,67 +614,22 @@ case "$COMMAND" in
         done
         git add -A
         git diff --cached --quiet || git commit -m "'"${COMMIT_MSG}"'"
-        git push origin "'"${CURRENT_BRANCH}"'"
+        git push -u origin "'"${CURRENT_BRANCH}"'"
+        # Create PR back to main
+        if git log origin/main.."'"${CURRENT_BRANCH}"'" --oneline | head -1 | grep -q .; then
+          gh pr create \
+            --title "'"${COMMIT_MSG}"'" \
+            --body "Changes from Sandstorm stack '"${STACK_ID}"'" \
+            --base main \
+            --head "'"${CURRENT_BRANCH}"'" 2>/dev/null || echo "PR already exists or could not be created"
+        fi
         git remote set-url origin "https://github.com/'"${GIT_REPO}"'.git"
       '
 
-    registry_write "$STACK_ID" "" "$CURRENT_BRANCH" "" "pushed" ""
+    registry_write "$STACK_ID" "" "$CURRENT_BRANCH" "" "pr-created" ""
 
     echo ""
-    echo "Done! Changes pushed to ${CURRENT_BRANCH}."
-    ;;
-
-  # -----------------------------------------------------------------
-  publish)
-    FORCE=false
-    for arg in "$@"; do
-      [ "$arg" = "--force" ] && FORCE=true
-    done
-    BRANCH="${3}"
-    COMMIT_MSG="${4:-"Changes from Sandstorm stack ${STACK_ID}"}"
-
-    if [ -z "$BRANCH" ]; then
-      echo "Error: Branch name required."
-      echo "Usage: sandstorm publish <id> <branch_name> [\"commit message\"]"
-      exit 1
-    fi
-
-    check_ticket_match "$BRANCH" "$FORCE"
-    resolve_github_token
-
-    echo "Publishing from stack ${STACK_ID}..."
-    echo "  Branch: ${BRANCH}"
-
-    PROTECTED_FILES="${PROTECTED_FILES:-CLAUDE.md}"
-
-    echo ""
-    echo "Committing and pushing..."
-    docker exec \
-      -u claude \
-      -w /app \
-      -e GITHUB_TOKEN="$GITHUB_TOKEN" \
-      -e GH_TOKEN="$GITHUB_TOKEN" \
-      -e GIT_AUTHOR_NAME="$GIT_AUTHOR_NAME" \
-      -e GIT_AUTHOR_EMAIL="$GIT_AUTHOR_EMAIL" \
-      -e GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME" \
-      -e GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL" \
-      "$CONTAINER_NAME" bash -c '
-        set -e
-        git remote set-url origin "https://${GITHUB_TOKEN}@github.com/'"${GIT_REPO}"'.git"
-        git checkout -b "'"${BRANCH}"'"
-        for f in '"${PROTECTED_FILES}"'; do
-          git checkout -- "$f" 2>/dev/null || true
-        done
-        git add -A
-        git commit -m "'"${COMMIT_MSG}"'"
-        git push -u origin "'"${BRANCH}"'"
-        git remote set-url origin "https://github.com/'"${GIT_REPO}"'.git"
-      '
-
-    registry_write "$STACK_ID" "" "$BRANCH" "" "published" ""
-
-    echo ""
-    echo "Done! Branch ${BRANCH} pushed."
+    echo "Done! Changes pushed to ${CURRENT_BRANCH} and PR created."
     ;;
 
   # -----------------------------------------------------------------
@@ -719,9 +675,8 @@ case "$COMMAND" in
     echo "  task-status <id>                       Check task status"
     echo "  task-output <id> [lines]               Show task output"
     echo ""
-    echo "  diff <id>                              Show git diff"
-    echo "  push <id> [\"msg\"] [--force]            Commit and push"
-    echo "  publish <id> <branch> [\"msg\"] [--force] Create branch and push"
+    echo "  diff <id>                              Show git diff and untracked files"
+    echo "  push <id> [\"msg\"] [--force]            Commit, push, and create PR"
     echo "  status                                 Dashboard of all stacks"
     echo "  logs <id> [service]                    Tail container logs (default: claude)"
     ;;
