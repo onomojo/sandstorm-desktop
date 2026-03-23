@@ -11,6 +11,16 @@ import {
   claudeSessionManager,
 } from './index';
 import { CreateStackOpts } from './control-plane/stack-manager';
+import {
+  getCustomContext,
+  saveCustomInstructions,
+  listCustomSkills,
+  getCustomSkill,
+  saveCustomSkill,
+  deleteCustomSkill,
+  getCustomSettings,
+  saveCustomSettings,
+} from './custom-context';
 
 /**
  * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
@@ -228,6 +238,55 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   ipcMain.handle('stats:task-metrics', async (_event, stackId: string) => {
     return stackManager.getStackTaskMetrics(stackId);
   });
+
+  // --- Custom Context ---
+
+  ipcMain.handle('context:get', async (_event, projectDir: string) => {
+    return getCustomContext(projectDir);
+  });
+
+  ipcMain.handle(
+    'context:saveInstructions',
+    async (_event, projectDir: string, content: string) => {
+      saveCustomInstructions(projectDir, content);
+    }
+  );
+
+  ipcMain.handle('context:listSkills', async (_event, projectDir: string) => {
+    return listCustomSkills(projectDir);
+  });
+
+  ipcMain.handle(
+    'context:getSkill',
+    async (_event, projectDir: string, name: string) => {
+      return getCustomSkill(projectDir, name);
+    }
+  );
+
+  ipcMain.handle(
+    'context:saveSkill',
+    async (_event, projectDir: string, name: string, content: string) => {
+      saveCustomSkill(projectDir, name, content);
+    }
+  );
+
+  ipcMain.handle(
+    'context:deleteSkill',
+    async (_event, projectDir: string, name: string) => {
+      deleteCustomSkill(projectDir, name);
+    }
+  );
+
+  ipcMain.handle('context:getSettings', async (_event, projectDir: string) => {
+    return getCustomSettings(projectDir);
+  });
+
+  ipcMain.handle(
+    'context:saveSettings',
+    async (_event, projectDir: string, content: string) => {
+      saveCustomSettings(projectDir, content);
+    }
+  );
 
   // --- Runtime ---
 

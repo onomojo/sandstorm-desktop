@@ -177,6 +177,16 @@ declare global {
         reset: (tabId: string) => Promise<void>;
         history: (tabId: string) => Promise<{ messages: Array<{ role: string; content: string }>; processing: boolean }>;
       };
+      context: {
+        get: (projectDir: string) => Promise<{ instructions: string; skills: string[]; settings: string }>;
+        saveInstructions: (projectDir: string, content: string) => Promise<void>;
+        listSkills: (projectDir: string) => Promise<string[]>;
+        getSkill: (projectDir: string, name: string) => Promise<string>;
+        saveSkill: (projectDir: string, name: string, content: string) => Promise<void>;
+        deleteSkill: (projectDir: string, name: string) => Promise<void>;
+        getSettings: (projectDir: string) => Promise<string>;
+        saveSettings: (projectDir: string, content: string) => Promise<void>;
+      };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
   }
