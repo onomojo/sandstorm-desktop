@@ -358,7 +358,7 @@ export function Dashboard() {
                     <th className="text-left font-medium px-3 py-2">Description</th>
                     <th className="text-left font-medium px-3 py-2">Services</th>
                     <th className="text-left font-medium px-3 py-2">Resources</th>
-                    <th className="text-left font-medium px-3 py-2">Updated</th>
+                    <th className="text-left font-medium px-3 py-2">Duration</th>
                     <th className="text-right font-medium px-3 py-2"></th>
                   </tr>
                 </thead>

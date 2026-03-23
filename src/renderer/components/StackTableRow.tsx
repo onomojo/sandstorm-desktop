@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 
 function formatBytes(bytes: number): string {
@@ -29,23 +29,34 @@ const STATUS_LABELS: Record<string, string> = {
   stopped: 'Stopped',
 };
 
-function timeAgo(dateStr: string): string {
+function formatDuration(dateStr: string): string {
   const date = new Date(dateStr);
   const now = new Date();
   const diffMs = now.getTime() - date.getTime();
   const diffMin = Math.floor(diffMs / 60000);
 
-  if (diffMin < 1) return 'just now';
-  if (diffMin < 60) return `${diffMin}m ago`;
+  if (diffMin < 1) return '<1m';
+  if (diffMin < 60) return `${diffMin}m`;
   const diffHrs = Math.floor(diffMin / 60);
-  if (diffHrs < 24) return `${diffHrs}h ago`;
+  const remainMin = diffMin % 60;
+  if (diffHrs < 24) return remainMin > 0 ? `${diffHrs}h ${remainMin}m` : `${diffHrs}h`;
   const diffDays = Math.floor(diffHrs / 24);
-  return `${diffDays}d ago`;
+  const remainHrs = diffHrs % 24;
+  return remainHrs > 0 ? `${diffDays}d ${remainHrs}h` : `${diffDays}d`;
 }
 
 export function StackTableRow({ stack, showProject }: { stack: Stack; showProject?: boolean }) {
   const { selectStack, refreshStacks, stackMetrics } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
+  const [duration, setDuration] = useState(() => formatDuration(stack.created_at));
+
+  useEffect(() => {
+    setDuration(formatDuration(stack.created_at));
+    const interval = setInterval(() => {
+      setDuration(formatDuration(stack.created_at));
+    }, 30000);
+    return () => clearInterval(interval);
+  }, [stack.created_at]);
 
   const runningCount = stack.services.filter((s) => s.status === 'running').length;
   const totalCount = stack.services.length;
@@ -121,8 +132,8 @@ export function StackTableRow({ stack, showProject }: { stack: Stack; showProjec
           <span className="text-sandstorm-muted">—</span>
         )}
       </td>
-      <td className="px-3 py-2 whitespace-nowrap text-sandstorm-muted">
-        {timeAgo(stack.updated_at)}
+      <td className="px-3 py-2 whitespace-nowrap text-sandstorm-muted tabular-nums">
+        {duration}
       </td>
       <td className="px-3 py-2 whitespace-nowrap text-right">
         <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
