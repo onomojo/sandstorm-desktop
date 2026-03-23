@@ -1,0 +1,37 @@
+name: verify
+description: Test that Claude uses the verify skill correctly
+test_cases:
+  - name: basic_verify
+    prompt: "verify the build"
+    expected:
+      - skill: verify
+      - command_contains: "npm test"
+      - command_contains: "npx tsc --noEmit"
+      - command_contains: "npm run build"
+    tags: [verify, build, test]
+
+  - name: verify_after_ui_change
+    prompt: "I just changed the UI, verify it works"
+    expected:
+      - skill: verify
+      - command_contains: "npm test"
+      - command_contains: "npm run build"
+      - command_contains: "take_screenshot"
+    tags: [verify, build, ui]
+
+  - name: package_request
+    prompt: "package the app"
+    expected:
+      - skill: verify
+      - command_contains: "npm run package"
+      - command_contains: "--config.npmRebuild=false"
+    tags: [verify, package]
+
+  - name: test_and_build
+    prompt: "run the tests and make sure everything builds"
+    expected:
+      - skill: verify
+      - command_contains: "npm test"
+      - command_contains: "npm run build"
+      - command_contains: "npx electron-rebuild"
+    tags: [verify, test, build]
