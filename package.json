@@ -19,7 +19,8 @@
     "test:integration": "vitest run --config vitest.integration.config.ts",
     "test:e2e": "playwright test",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "release": "bash scripts/build.sh"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",
