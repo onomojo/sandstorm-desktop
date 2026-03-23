@@ -300,18 +300,32 @@ rl.on('line', async (line) => {
     args.push('--dangerously-skip-permissions');
 
     const cwd = projectDir || process.cwd();
-    const claudeBin = process.env.HOME ? path.join(process.env.HOME, '.local', 'bin', 'claude') : 'claude';
+
+    // Resolve claude binary: check specific known path before falling back to PATH lookup
+    let claudeBin = 'claude';
+    const pathExtras: string[] = [
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/usr/local/sbin',
+    ];
+    if (process.env.HOME) {
+      const homeLocalBin = path.join(process.env.HOME, '.local', 'bin');
+      const homeClaudePath = path.join(homeLocalBin, 'claude');
+      try {
+        if (fs.existsSync(homeClaudePath)) {
+          claudeBin = homeClaudePath;
+          pathExtras.unshift(homeLocalBin);
+        }
+      } catch {
+        // Home directory not accessible — skip it, rely on system PATH
+      }
+    }
+
     const child = spawn(claudeBin, args, {
       cwd,
       env: {
         ...process.env,
-        PATH: [
-          `${process.env.HOME}/.local/bin`,
-          '/opt/homebrew/bin',
-          '/usr/local/bin',
-          '/usr/local/sbin',
-          process.env.PATH,
-        ].join(':'),
+        PATH: [...pathExtras, process.env.PATH].filter(Boolean).join(':'),
       },
       stdio: ['ignore', 'pipe', 'pipe'],
     });

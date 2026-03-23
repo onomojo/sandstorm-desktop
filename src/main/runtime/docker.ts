@@ -1,5 +1,7 @@
 import Dockerode from 'dockerode';
 import { spawn } from 'child_process';
+import fs from 'fs';
+import path from 'path';
 import {
   ContainerRuntime,
   ComposeOpts,
@@ -13,13 +15,41 @@ import {
   ExecResult,
 } from './types';
 
+/**
+ * Resolve the Docker socket path. Checks existence to avoid triggering
+ * macOS TCC permission prompts for inaccessible paths.
+ */
+function resolveDockerSocket(explicit?: string): string {
+  if (explicit) return explicit;
+
+  const candidates = [
+    '/var/run/docker.sock',
+  ];
+
+  // On macOS, Docker Desktop exposes a per-user socket that doesn't need elevated permissions
+  if (process.env.HOME) {
+    candidates.push(path.join(process.env.HOME, '.docker', 'run', 'docker.sock'));
+  }
+
+  for (const sock of candidates) {
+    try {
+      if (fs.existsSync(sock)) return sock;
+    } catch {
+      // Path not accessible — skip without triggering further prompts
+    }
+  }
+
+  // Fallback to default; Dockerode will fail gracefully on connect
+  return '/var/run/docker.sock';
+}
+
 export class DockerRuntime implements ContainerRuntime {
   readonly name = 'docker';
   private docker: Dockerode;
 
   constructor(socketPath?: string) {
     this.docker = new Dockerode({
-      socketPath: socketPath ?? '/var/run/docker.sock',
+      socketPath: resolveDockerSocket(socketPath),
     });
   }
 
@@ -234,12 +264,12 @@ export class DockerRuntime implements ContainerRuntime {
           ...process.env,
           ...env,
           PATH: [
-            `${process.env.HOME}/.local/bin`,
+            ...(process.env.HOME ? [`${process.env.HOME}/.local/bin`] : []),
             '/opt/homebrew/bin',
             '/usr/local/bin',
             '/usr/local/sbin',
             process.env.PATH,
-          ].join(':'),
+          ].filter(Boolean).join(':'),
         },
         stdio: 'pipe',
       });
