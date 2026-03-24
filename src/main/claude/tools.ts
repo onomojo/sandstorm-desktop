@@ -74,9 +74,63 @@ export const tools: ToolDefinition[] = [
       required: ['stackId'],
     },
   },
-  // NOTE: teardown_stack intentionally removed from Claude tools.
-  // Stacks should only be torn down by explicit user action in the UI,
-  // never automatically by the outer Claude agent.
+  {
+    name: 'get_task_status',
+    description:
+      'Get the current task status for a stack (running, completed, failed, idle)',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        stackId: { type: 'string', description: 'Stack ID' },
+      },
+      required: ['stackId'],
+    },
+  },
+  {
+    name: 'get_task_output',
+    description:
+      'Get the latest output from the running or most recent task in a stack',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        stackId: { type: 'string', description: 'Stack ID' },
+        lines: {
+          type: 'number',
+          description: 'Number of lines to return (default: 50)',
+        },
+      },
+      required: ['stackId'],
+    },
+  },
+  {
+    name: 'teardown_stack',
+    description:
+      'Tear down a stack — stops containers, removes workspace, archives to history',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        stackId: { type: 'string', description: 'Stack ID to tear down' },
+      },
+      required: ['stackId'],
+    },
+  },
+  {
+    name: 'get_logs',
+    description:
+      'Get container logs from a stack, optionally filtered to a specific service',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        stackId: { type: 'string', description: 'Stack ID' },
+        service: {
+          type: 'string',
+          description:
+            'Service name to get logs for (e.g., "claude", "app"). Omit for all services.',
+        },
+      },
+      required: ['stackId'],
+    },
+  },
 ];
 
 export async function handleToolCall(
@@ -114,9 +168,23 @@ export async function handleToolCall(
       );
       return { success: true };
 
+    case 'get_task_status':
+      return stackManager.getTaskStatus(input.stackId as string);
+
+    case 'get_task_output':
+      return stackManager.getTaskOutput(
+        input.stackId as string,
+        (input.lines as number | undefined) ?? 50
+      );
+
     case 'teardown_stack':
-      throw new Error(
-        'Automated stack teardown is disabled. Stacks can only be torn down by the user through the UI.'
+      stackManager.teardownStack(input.stackId as string);
+      return { success: true };
+
+    case 'get_logs':
+      return stackManager.getLogs(
+        input.stackId as string,
+        input.service as string | undefined
       );
 
     default:
