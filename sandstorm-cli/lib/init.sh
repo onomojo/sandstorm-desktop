@@ -290,6 +290,7 @@ HEADER
       - SANDSTORM_STACK_ID
     volumes:
       - \${SANDSTORM_WORKSPACE}:/app
+      - \${SANDSTORM_CONTEXT}:/sandstorm-context:ro
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "test", "-f", "/app/.sandstorm-ready"]
