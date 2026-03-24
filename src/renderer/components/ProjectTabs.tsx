@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAppStore } from '../store';
 
 export function ProjectTabs() {
@@ -9,6 +9,22 @@ export function ProjectTabs() {
     setShowOpenProjectDialog,
     removeProject,
   } = useAppStore();
+
+  const [confirmingCloseId, setConfirmingCloseId] = useState<number | null>(null);
+
+  const handleClose = (e: React.MouseEvent, projectId: number) => {
+    e.stopPropagation();
+    setConfirmingCloseId(projectId);
+  };
+
+  const confirmClose = async (projectId: number) => {
+    setConfirmingCloseId(null);
+    await removeProject(projectId);
+  };
+
+  const cancelClose = () => {
+    setConfirmingCloseId(null);
+  };
 
   return (
     <div className="titlebar-no-drag flex items-center bg-sandstorm-surface border-b border-sandstorm-border shrink-0 overflow-x-auto">
@@ -31,24 +47,29 @@ export function ProjectTabs() {
 
       {/* Project tabs */}
       {projects.map((project) => (
-        <button
-          key={project.id}
-          onClick={() => setActiveProjectId(project.id)}
-          onContextMenu={(e) => {
-            e.preventDefault();
-            if (confirm(`Remove project "${project.name}" from tabs?`)) {
-              removeProject(project.id);
-            }
-          }}
-          className={`group shrink-0 px-4 py-2 text-xs font-medium transition-colors border-b-2 ${
-            activeProjectId === project.id
-              ? 'border-sandstorm-accent text-sandstorm-accent'
-              : 'border-transparent text-sandstorm-muted hover:text-sandstorm-text-secondary'
-          }`}
-          title={project.directory}
-        >
-          {project.name}
-        </button>
+        <div key={project.id} className="group relative shrink-0">
+          <button
+            onClick={() => setActiveProjectId(project.id)}
+            className={`shrink-0 pl-4 pr-7 py-2 text-xs font-medium transition-colors border-b-2 ${
+              activeProjectId === project.id
+                ? 'border-sandstorm-accent text-sandstorm-accent'
+                : 'border-transparent text-sandstorm-muted hover:text-sandstorm-text-secondary'
+            }`}
+            title={project.directory}
+          >
+            {project.name}
+          </button>
+          <button
+            onClick={(e) => handleClose(e, project.id)}
+            className="absolute right-1 top-1/2 -translate-y-1/2 p-0.5 rounded opacity-0 group-hover:opacity-100 hover:!opacity-100 hover:bg-sandstorm-border text-sandstorm-muted hover:text-sandstorm-text-secondary transition-opacity"
+            aria-label={`Close ${project.name}`}
+            title={`Close ${project.name}`}
+          >
+            <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M18 6L6 18M6 6l12 12"/>
+            </svg>
+          </button>
+        </div>
       ))}
 
       {/* Add project button */}
@@ -61,6 +82,34 @@ export function ProjectTabs() {
           <path d="M12 5v14M5 12h14"/>
         </svg>
       </button>
+
+      {/* Close confirmation dialog */}
+      {confirmingCloseId !== null && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50" onClick={cancelClose}>
+          <div className="bg-sandstorm-surface border border-sandstorm-border rounded-lg p-4 shadow-lg max-w-sm" onClick={(e) => e.stopPropagation()}>
+            <p className="text-sm text-sandstorm-text-primary mb-1">
+              Close project &quot;{projects.find((p) => p.id === confirmingCloseId)?.name}&quot;?
+            </p>
+            <p className="text-xs text-sandstorm-muted mb-4">
+              This won&apos;t affect running stacks.
+            </p>
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={cancelClose}
+                className="px-3 py-1.5 text-xs rounded bg-sandstorm-border text-sandstorm-text-secondary hover:bg-sandstorm-border/80"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => confirmClose(confirmingCloseId)}
+                className="px-3 py-1.5 text-xs rounded bg-sandstorm-accent text-white hover:bg-sandstorm-accent/80"
+              >
+                Close Project
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
