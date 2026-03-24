@@ -2,6 +2,7 @@ import React, { useEffect, useState, useCallback, useRef } from 'react';
 import { useAppStore, StackHistoryRecord } from '../store';
 import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
+import { TicketView } from './TicketView';
 import { UninitializedProject } from './UninitializedProject';
 import { ClaudeSession } from './ClaudeSession';
 import { AuthIndicator } from './AuthIndicator';
@@ -126,6 +127,14 @@ export function Dashboard() {
   const setViewMode = (mode: 'cards' | 'table') => {
     localStorage.setItem('sandstorm-view-mode', mode);
     _setViewMode(mode);
+  };
+  const [dashboardView, _setDashboardView] = useState<'stacks' | 'tickets'>(() => {
+    const saved = localStorage.getItem('sandstorm-dashboard-view');
+    return saved === 'tickets' ? 'tickets' : 'stacks';
+  });
+  const setDashboardView = (view: 'stacks' | 'tickets') => {
+    localStorage.setItem('sandstorm-dashboard-view', view);
+    _setDashboardView(view);
   };
   const [leftWidth, setLeftWidth] = useState(55); // percentage
   const dragging = useRef(false);
@@ -306,30 +315,55 @@ export function Dashboard() {
               </span>
             )}
             {dashboardTab === 'active' && (
-              <div className="ml-auto flex items-center gap-0.5 bg-sandstorm-bg rounded-md p-0.5 border border-sandstorm-border">
-                <button
-                  onClick={() => setViewMode('cards')}
-                  className={`p-1 rounded transition-colors ${viewMode === 'cards' ? 'bg-sandstorm-surface text-sandstorm-text shadow-sm' : 'text-sandstorm-muted hover:text-sandstorm-text-secondary'}`}
-                  title="Card view"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <rect x="3" y="3" width="7" height="7" rx="1" />
-                    <rect x="14" y="3" width="7" height="7" rx="1" />
-                    <rect x="3" y="14" width="7" height="7" rx="1" />
-                    <rect x="14" y="14" width="7" height="7" rx="1" />
-                  </svg>
-                </button>
-                <button
-                  onClick={() => setViewMode('table')}
-                  className={`p-1 rounded transition-colors ${viewMode === 'table' ? 'bg-sandstorm-surface text-sandstorm-text shadow-sm' : 'text-sandstorm-muted hover:text-sandstorm-text-secondary'}`}
-                  title="Table view"
-                >
-                  <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <line x1="3" y1="6" x2="21" y2="6" />
-                    <line x1="3" y1="12" x2="21" y2="12" />
-                    <line x1="3" y1="18" x2="21" y2="18" />
-                  </svg>
-                </button>
+              <div className="ml-auto flex items-center gap-2">
+                {/* Stack View / Ticket View toggle */}
+                <div className="flex items-center gap-0.5 bg-sandstorm-bg rounded-md p-0.5 border border-sandstorm-border">
+                  <button
+                    onClick={() => setDashboardView('stacks')}
+                    className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${dashboardView === 'stacks' ? 'bg-sandstorm-surface text-sandstorm-text shadow-sm' : 'text-sandstorm-muted hover:text-sandstorm-text-secondary'}`}
+                    title="Stack view"
+                    data-testid="view-stacks"
+                  >
+                    Stacks
+                  </button>
+                  <button
+                    onClick={() => setDashboardView('tickets')}
+                    className={`px-2 py-1 rounded text-[11px] font-medium transition-colors ${dashboardView === 'tickets' ? 'bg-sandstorm-surface text-sandstorm-text shadow-sm' : 'text-sandstorm-muted hover:text-sandstorm-text-secondary'}`}
+                    title="Ticket view"
+                    data-testid="view-tickets"
+                  >
+                    Tickets
+                  </button>
+                </div>
+
+                {/* Card / Table toggle (only in stack view) */}
+                {dashboardView === 'stacks' && (
+                  <div className="flex items-center gap-0.5 bg-sandstorm-bg rounded-md p-0.5 border border-sandstorm-border">
+                    <button
+                      onClick={() => setViewMode('cards')}
+                      className={`p-1 rounded transition-colors ${viewMode === 'cards' ? 'bg-sandstorm-surface text-sandstorm-text shadow-sm' : 'text-sandstorm-muted hover:text-sandstorm-text-secondary'}`}
+                      title="Card view"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <rect x="3" y="3" width="7" height="7" rx="1" />
+                        <rect x="14" y="3" width="7" height="7" rx="1" />
+                        <rect x="3" y="14" width="7" height="7" rx="1" />
+                        <rect x="14" y="14" width="7" height="7" rx="1" />
+                      </svg>
+                    </button>
+                    <button
+                      onClick={() => setViewMode('table')}
+                      className={`p-1 rounded transition-colors ${viewMode === 'table' ? 'bg-sandstorm-surface text-sandstorm-text shadow-sm' : 'text-sandstorm-muted hover:text-sandstorm-text-secondary'}`}
+                      title="Table view"
+                    >
+                      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <line x1="3" y1="6" x2="21" y2="6" />
+                        <line x1="3" y1="12" x2="21" y2="12" />
+                        <line x1="3" y1="18" x2="21" y2="18" />
+                      </svg>
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </div>
@@ -362,6 +396,8 @@ export function Dashboard() {
                   Create a stack &rarr;
                 </button>
               </div>
+            ) : dashboardView === 'tickets' ? (
+              <TicketView stacks={stacks} showProject={!project} />
             ) : viewMode === 'cards' ? (
               <div className="space-y-2 p-4">
                 {stacks.map((stack) => (
