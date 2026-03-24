@@ -6,6 +6,16 @@ This is an Electron desktop app (React + Tailwind + TypeScript). It packages int
 
 Every task MUST end with a successful /verify. This runs all build verification steps (tests, types, build, electron-rebuild, package, run). Do not report a task as complete unless /verify passes.
 
+## Mandatory tests
+
+Every code change — new features, bug fixes, refactors — MUST include tests. Work is NOT considered complete until tests are written and all tests pass. No exceptions.
+
+- New components require unit tests covering rendering, user interactions, and edge cases
+- Bug fixes require a regression test that would have caught the bug
+- Tests live in `tests/` mirroring the source structure (e.g., `tests/unit/components/` for renderer components)
+- Follow existing test patterns: Vitest + @testing-library/react for components, see `tests/unit/components/` for examples
+- Run `npm test` to verify all tests pass before marking work complete
+
 ## Product vision
 
 Sandstorm Desktop is a cross-platform control plane for managing isolated agent stacks. Think Docker Desktop but oriented towards AI agent orchestration.
