@@ -364,6 +364,69 @@ export class StackManager {
     }
   }
 
+  getTaskStatus(stackId: string): { status: string; task?: Task } {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+
+    const runningTask = this.registry.getRunningTask(stackId);
+    if (runningTask) {
+      return { status: 'running', task: runningTask };
+    }
+
+    const tasks = this.registry.getTasksForStack(stackId);
+    if (tasks.length > 0) {
+      return { status: tasks[0].status, task: tasks[0] };
+    }
+
+    return { status: 'idle' };
+  }
+
+  async getTaskOutput(stackId: string, lines: number = 50): Promise<string> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+
+    const claudeContainer = await this.findClaudeContainer(stack);
+    if (!claudeContainer) {
+      throw new Error(`Claude container not found for stack "${stackId}"`);
+    }
+
+    try {
+      const result = await this.runtime.exec(claudeContainer.id, [
+        'tail', '-n', String(lines), '/tmp/claude-task.log',
+      ]);
+      return result.stdout;
+    } catch {
+      return '(no task output available)';
+    }
+  }
+
+  async getLogs(stackId: string, service?: string): Promise<string> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+
+    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
+    const filterName = service
+      ? `${composeProjectName}-${service}`
+      : composeProjectName;
+    const containers = await this.runtime.listContainers({ name: filterName });
+
+    if (containers.length === 0) {
+      throw new Error(`No containers found for stack "${stackId}"${service ? ` service "${service}"` : ''}`);
+    }
+
+    const logParts: string[] = [];
+    for (const c of containers) {
+      const chunks: string[] = [];
+      for await (const chunk of this.runtime.logs(c.id, { tail: 100 })) {
+        chunks.push(chunk);
+      }
+      const serviceName = this.extractServiceName(c.name, composeProjectName);
+      logParts.push(`=== ${serviceName} ===\n${chunks.join('')}`);
+    }
+
+    return logParts.join('\n\n');
+  }
+
   getTasksForStack(stackId: string): Task[] {
     return this.registry.getTasksForStack(stackId);
   }
