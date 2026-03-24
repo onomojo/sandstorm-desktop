@@ -388,6 +388,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           '',
           'services:',
           '  claude:',
+          `    image: sandstorm-${projectName}-claude`,
           '    build:',
           '      context: ${SANDSTORM_DIR}',
           '      dockerfile: docker/Dockerfile',

@@ -369,10 +369,27 @@ case "$COMMAND" in
     # Make workspace world-readable/writable so container users can access it
     chmod -R a+rwX "$WORKSPACE" 2>/dev/null || true
 
-    # Build and start in background — returns immediately
+    # Build and start in background — returns immediately.
+    # Skip --build if all images referenced in the compose file already exist,
+    # avoiding redundant rebuilds and orphaned dangling images (see #13).
     (
       trap 'registry_write "$STACK_ID" "" "" "" "cancelled" ""; exit 1' INT TERM HUP
-      if run_compose up -d --build > /tmp/sandstorm-build-${STACK_ID}.log 2>&1; then
+      BUILD_FLAG="--build"
+      EXISTING_IMAGES=$(run_compose config --images 2>/dev/null || true)
+      if [ -n "$EXISTING_IMAGES" ]; then
+        ALL_EXIST=true
+        while IFS= read -r img; do
+          [ -z "$img" ] && continue
+          if ! docker image inspect "$img" > /dev/null 2>&1; then
+            ALL_EXIST=false
+            break
+          fi
+        done <<< "$EXISTING_IMAGES"
+        if [ "$ALL_EXIST" = true ]; then
+          BUILD_FLAG=""
+        fi
+      fi
+      if run_compose up -d $BUILD_FLAG > /tmp/sandstorm-build-${STACK_ID}.log 2>&1; then
         registry_write "$STACK_ID" "" "" "" "up" ""
       else
         registry_write "$STACK_ID" "" "" "" "failed" ""
@@ -405,8 +422,11 @@ case "$COMMAND" in
   down)
     echo "Tearing down Sandstorm stack ${STACK_ID} (${COMPOSE_PROJECT})..."
     if [ -f "$WORKSPACE_COMPOSE" ]; then
-      run_compose down -v
+      run_compose down -v --rmi local
     fi
+
+    # Prune dangling images left by previous builds (best effort, see #13)
+    docker image prune -f > /dev/null 2>&1 || true
 
     # Clean up workspace (may contain files owned by container users)
     if [ -d "$WORKSPACE" ]; then
