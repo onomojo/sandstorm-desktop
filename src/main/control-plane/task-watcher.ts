@@ -11,10 +11,21 @@ export interface TaskEvents {
 
 /** Max consecutive exec failures before marking a task as failed */
 const MAX_CONSECUTIVE_ERRORS = 30;
+/** Max consecutive polls that return a stale terminal status (completed/failed)
+ *  before we accept it as valid even without seeing "running" first.
+ *  Acts as a safety net if the task runner crashes before writing "running". */
+const MAX_STALE_POLLS = 30;
 
 export class TaskWatcher extends EventEmitter {
   private watchers = new Map<string, NodeJS.Timeout>();
   private errorCounts = new Map<string, number>();
+  /** Tracks whether we've seen "running" status for the current watch cycle.
+   *  Prevents stale "completed" from a prior task from triggering false completion.
+   *  Assumes the task runner always writes "running" before completion and that
+   *  at least one poll lands while the task is in "running" state (safe because
+   *  Claude tasks take many seconds and the default poll interval is 2 s). */
+  private seenRunning = new Map<string, boolean>();
+  private stalePollCounts = new Map<string, number>();
   private pollInterval: number;
   private onStatusChange?: () => void;
 
@@ -40,6 +51,8 @@ export class TaskWatcher extends EventEmitter {
     }
 
     this.errorCounts.set(stackId, 0);
+    this.seenRunning.set(stackId, false);
+    this.stalePollCounts.set(stackId, 0);
 
     const interval = setInterval(async () => {
       await this.checkTaskStatus(stackId, containerId);
@@ -55,6 +68,8 @@ export class TaskWatcher extends EventEmitter {
       this.watchers.delete(stackId);
     }
     this.errorCounts.delete(stackId);
+    this.seenRunning.delete(stackId);
+    this.stalePollCounts.delete(stackId);
   }
 
   unwatchAll(): void {
@@ -101,7 +116,24 @@ export class TaskWatcher extends EventEmitter {
       ]);
       const status = result.stdout.trim();
 
+      if (status === 'running') {
+        this.seenRunning.set(stackId, true);
+        this.errorCounts.set(stackId, 0);
+        return;
+      }
+
       if (status === 'completed' || status === 'failed') {
+        // Ignore stale completion from a prior task — we must see "running"
+        // at least once before treating completion as valid.
+        // Safety net: if we never see "running" (e.g. task runner crashed),
+        // accept the status after MAX_STALE_POLLS to avoid polling forever.
+        if (!this.seenRunning.get(stackId)) {
+          const staleCount = (this.stalePollCounts.get(stackId) ?? 0) + 1;
+          this.stalePollCounts.set(stackId, staleCount);
+          if (staleCount < MAX_STALE_POLLS) {
+            return;
+          }
+        }
         let exitCode: number;
         try {
           const exitResult = await this.runtime.exec(containerId, [
