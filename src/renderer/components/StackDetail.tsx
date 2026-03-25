@@ -102,10 +102,13 @@ export function StackDetail({
     }
   };
 
-  const statusLabel =
-    stack.status === 'completed'
-      ? 'Needs Review'
-      : stack.status.charAt(0).toUpperCase() + stack.status.slice(1);
+  const STATUS_DETAIL_LABELS: Record<string, string> = {
+    completed: 'Needs Review',
+    pushed: 'Pushed',
+    pr_created: 'PR Open',
+  };
+  const statusLabel = STATUS_DETAIL_LABELS[stack.status]
+    ?? stack.status.charAt(0).toUpperCase() + stack.status.slice(1);
 
   const statusStyle =
     stack.status === 'completed'
@@ -114,7 +117,9 @@ export function StackDetail({
         ? 'bg-red-500/10 border-red-500/20 text-red-400'
         : stack.status === 'running'
           ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
-          : 'bg-gray-500/10 border-gray-500/20 text-gray-400';
+          : stack.status === 'pushed' || stack.status === 'pr_created'
+            ? 'bg-violet-500/10 border-violet-500/20 text-violet-400'
+            : 'bg-gray-500/10 border-gray-500/20 text-gray-400';
 
   return (
     <div className="h-full flex flex-col animate-fade-in">

@@ -18,6 +18,8 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     description: null,
     status: 'up',
     error: null,
+    pr_url: null,
+    pr_number: null,
     runtime: 'docker',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
@@ -81,6 +83,8 @@ describe('StackCard', () => {
       ['failed', 'Failed'],
       ['idle', 'Idle'],
       ['stopped', 'Stopped'],
+      ['pushed', 'Pushed'],
+      ['pr_created', 'PR Open'],
     ];
 
     for (const [status, label] of statuses) {
@@ -132,6 +136,30 @@ describe('StackCard', () => {
     expect(screen.getByTestId('stack-status-fail-no-msg').textContent).toBe('Failed');
     // No error message text should be present beyond the status badge
     expect(screen.queryByText(/compose failed/)).toBeNull();
+  });
+
+  it('shows PR link for pr_created stacks', () => {
+    render(
+      <StackCard
+        stack={makeStack({
+          id: 'pr-stack',
+          status: 'pr_created',
+          pr_url: 'https://github.com/org/repo/pull/42',
+          pr_number: 42,
+        })}
+      />
+    );
+    const prLink = screen.getByTestId('pr-link-pr-stack');
+    expect(prLink).toBeDefined();
+    expect(prLink.textContent).toContain('PR #42');
+    expect(prLink.getAttribute('href')).toBe('https://github.com/org/repo/pull/42');
+  });
+
+  it('does not show PR link for non-pr_created stacks', () => {
+    render(
+      <StackCard stack={makeStack({ id: 'no-pr', status: 'pushed' })} />
+    );
+    expect(screen.queryByTestId('pr-link-no-pr')).toBeNull();
   });
 
   it('shows service health dots', () => {

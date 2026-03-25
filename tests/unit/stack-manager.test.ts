@@ -632,5 +632,68 @@ describe('StackManager', () => {
 
       await expect(manager.push('push-fail')).rejects.toThrow('push failed: no remote');
     });
+
+    it('sets stack status to pushed after successful push', async () => {
+      registry.createStack(makeStack('push-status'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Done!',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await manager.push('push-status');
+      const stack = registry.getStack('push-status');
+      expect(stack!.status).toBe('pushed');
+    });
+
+    it('calls onStackUpdate after successful push', async () => {
+      registry.createStack(makeStack('push-notify'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+      const updateCallback = vi.fn();
+      manager.setOnStackUpdate(updateCallback);
+
+      await manager.push('push-notify');
+      expect(updateCallback).toHaveBeenCalled();
+    });
+
+    it('does not set pushed status when push fails', async () => {
+      registry.createStack(makeStack('push-no-status'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '',
+        stderr: 'push failed',
+        exitCode: 1,
+      });
+
+      await expect(manager.push('push-no-status')).rejects.toThrow();
+      const stack = registry.getStack('push-no-status');
+      expect(stack!.status).toBe('up');
+    });
+  });
+
+  describe('setPullRequest', () => {
+    it('sets pr_created status and stores PR info', () => {
+      registry.createStack(makeStack('pr-test'));
+      registry.updateStackStatus('pr-test', 'pushed');
+
+      manager.setPullRequest('pr-test', 'https://github.com/org/repo/pull/42', 42);
+
+      const stack = registry.getStack('pr-test');
+      expect(stack!.status).toBe('pr_created');
+      expect(stack!.pr_url).toBe('https://github.com/org/repo/pull/42');
+      expect(stack!.pr_number).toBe(42);
+    });
+
+    it('throws for non-existent stack', () => {
+      expect(() => manager.setPullRequest('ghost', 'url', 1)).toThrow('not found');
+    });
+
+    it('calls onStackUpdate callback', () => {
+      registry.createStack(makeStack('pr-notify'));
+      const updateCallback = vi.fn();
+      manager.setOnStackUpdate(updateCallback);
+
+      manager.setPullRequest('pr-notify', 'https://github.com/org/repo/pull/1', 1);
+      expect(updateCallback).toHaveBeenCalled();
+    });
   });
 });

@@ -25,6 +25,7 @@ export function mockSandstormApi() {
       stop: vi.fn().mockResolvedValue(undefined),
       start: vi.fn().mockResolvedValue(undefined),
       history: vi.fn().mockResolvedValue([]),
+      setPr: vi.fn().mockResolvedValue(undefined),
     },
     tasks: {
       dispatch: vi.fn().mockResolvedValue({ id: 1, stack_id: 'test', prompt: '', status: 'running' }),

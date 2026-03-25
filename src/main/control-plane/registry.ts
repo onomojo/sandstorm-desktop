@@ -12,6 +12,8 @@ export interface Stack {
   description: string | null;
   status: StackStatus;
   error: string | null;
+  pr_url: string | null;
+  pr_number: number | null;
   runtime: 'docker' | 'podman';
   created_at: string;
   updated_at: string;
@@ -24,7 +26,9 @@ export type StackStatus =
   | 'completed'
   | 'failed'
   | 'idle'
-  | 'stopped';
+  | 'stopped'
+  | 'pushed'
+  | 'pr_created';
 
 export interface Task {
   id: number;
@@ -150,6 +154,18 @@ export class Registry {
     } catch {
       // Column already exists
     }
+    // Add pr_url column if missing (migration for pushed/pr_created statuses)
+    try {
+      this.db.run('ALTER TABLE stacks ADD COLUMN pr_url TEXT');
+    } catch {
+      // Column already exists
+    }
+    // Add pr_number column if missing
+    try {
+      this.db.run('ALTER TABLE stacks ADD COLUMN pr_number INTEGER');
+    } catch {
+      // Column already exists
+    }
     this.db.run(`
       CREATE TABLE IF NOT EXISTS ports (
         stack_id       TEXT NOT NULL REFERENCES stacks(id) ON DELETE CASCADE,
@@ -237,7 +253,7 @@ export class Registry {
 
   // --- Stacks ---
 
-  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error'>): Stack {
+  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number'>): Stack {
     this.execute(
       `INSERT INTO stacks (id, project, project_dir, ticket, branch, description, status, runtime)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -266,6 +282,13 @@ export class Registry {
         [status, id]
       );
     }
+  }
+
+  setPullRequest(id: string, prUrl: string, prNumber: number): void {
+    this.execute(
+      "UPDATE stacks SET status = 'pr_created', pr_url = ?, pr_number = ?, updated_at = datetime('now') WHERE id = ?",
+      [prUrl, prNumber, id]
+    );
   }
 
   deleteStack(id: string): void {

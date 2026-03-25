@@ -18,6 +18,8 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     description: null,
     status: 'up',
     error: null,
+    pr_url: null,
+    pr_number: null,
     runtime: 'docker',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),

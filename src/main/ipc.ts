@@ -200,7 +200,8 @@ async function syncCredsToRunningStacks(): Promise<void> {
   try {
     const stacks = await stackManager.listStacksWithServices();
     for (const stack of stacks) {
-      if (stack.status !== 'running' && stack.status !== 'up') continue;
+      const activeStatuses = new Set(['running', 'up', 'pushed', 'pr_created']);
+      if (!activeStatuses.has(stack.status)) continue;
       const claudeService = stack.services?.find(
         (s: { name: string }) => s.name === 'claude'
       );
@@ -473,6 +474,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     'push:execute',
     async (_event, stackId: string, message?: string) => {
       await stackManager.push(stackId, message);
+    }
+  );
+
+  ipcMain.handle(
+    'stacks:setPr',
+    (_event, stackId: string, prUrl: string, prNumber: number) => {
+      stackManager.setPullRequest(stackId, prUrl, prNumber);
     }
   );
 
