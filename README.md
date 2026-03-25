@@ -131,7 +131,7 @@ Produces a `.dmg` in `release/`.
 |---|---|
 | Desktop shell | Electron + electron-vite |
 | UI | React 18 + Tailwind CSS + Zustand |
-| Control plane | sql.js (SQLite) |
+| Control plane | better-sqlite3 (SQLite) |
 | Container runtime | dockerode (Docker API) |
 | Agent | Claude Code CLI |
 | Packaging | electron-builder |
