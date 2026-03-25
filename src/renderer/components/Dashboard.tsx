@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback, useRef } from 'react';
+import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
 import { useAppStore, StackHistoryRecord } from '../store';
 import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
@@ -7,6 +7,18 @@ import { UninitializedProject } from './UninitializedProject';
 import { ClaudeSession } from './ClaudeSession';
 import { AuthIndicator } from './AuthIndicator';
 import { ProjectContext } from './ProjectContext';
+import { ResizableTableHeader } from './ResizableTableHeader';
+import { useResizableColumns, ColumnDef } from '../hooks/useResizableColumns';
+
+const TABLE_COLUMNS: (ColumnDef & { label: string; align?: 'left' | 'right' })[] = [
+  { key: 'status', label: 'Status', minWidth: 60, defaultWidth: 90 },
+  { key: 'name', label: 'Name', minWidth: 80, defaultWidth: 140 },
+  { key: 'description', label: 'Description', minWidth: 80, defaultWidth: 200 },
+  { key: 'services', label: 'Services', minWidth: 60, defaultWidth: 100 },
+  { key: 'resources', label: 'Resources', minWidth: 60, defaultWidth: 120 },
+  { key: 'duration', label: 'Duration', minWidth: 50, defaultWidth: 80 },
+  { key: 'actions', label: '', minWidth: 40, defaultWidth: 60, align: 'right' as const },
+];
 
 type DashboardTab = 'active' | 'history';
 
@@ -139,6 +151,7 @@ export function Dashboard() {
   const [leftWidth, setLeftWidth] = useState(55); // percentage
   const dragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const { columnWidths, startResize } = useResizableColumns('stack-table', TABLE_COLUMNS);
 
   useEffect(() => {
     if (!project) {
@@ -411,21 +424,15 @@ export function Dashboard() {
                 ))}
               </div>
             ) : (
-              <table className="w-full text-xs">
-                <thead>
-                  <tr className="border-b border-sandstorm-border text-sandstorm-muted">
-                    <th className="text-left font-medium px-3 py-2">Status</th>
-                    <th className="text-left font-medium px-3 py-2">Name</th>
-                    <th className="text-left font-medium px-3 py-2">Description</th>
-                    <th className="text-left font-medium px-3 py-2">Services</th>
-                    <th className="text-left font-medium px-3 py-2">Resources</th>
-                    <th className="text-left font-medium px-3 py-2">Duration</th>
-                    <th className="text-right font-medium px-3 py-2"></th>
-                  </tr>
-                </thead>
+              <table className="w-full text-xs" style={{ tableLayout: 'fixed' }} data-testid="stack-table">
+                <ResizableTableHeader
+                  columns={TABLE_COLUMNS}
+                  columnWidths={columnWidths}
+                  onResizeStart={startResize}
+                />
                 <tbody>
                   {stacks.map((stack) => (
-                    <StackTableRow key={stack.id} stack={stack} showProject={!project} />
+                    <StackTableRow key={stack.id} stack={stack} showProject={!project} columnWidths={columnWidths} />
                   ))}
                 </tbody>
               </table>

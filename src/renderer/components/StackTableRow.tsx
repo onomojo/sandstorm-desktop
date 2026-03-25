@@ -45,7 +45,7 @@ function formatDuration(dateStr: string): string {
   return remainHrs > 0 ? `${diffDays}d ${remainHrs}h` : `${diffDays}d`;
 }
 
-export function StackTableRow({ stack, showProject }: { stack: Stack; showProject?: boolean }) {
+export function StackTableRow({ stack, showProject, columnWidths }: { stack: Stack; showProject?: boolean; columnWidths?: Record<string, number> }) {
   const { selectStack, refreshStacks, stackMetrics } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
   const [duration, setDuration] = useState(() => formatDuration(stack.created_at));
@@ -79,13 +79,13 @@ export function StackTableRow({ stack, showProject }: { stack: Stack; showProjec
       className="border-b border-sandstorm-border hover:bg-sandstorm-surface-hover cursor-pointer transition-colors group"
       onClick={() => selectStack(stack.id)}
     >
-      <td className="px-3 py-2 whitespace-nowrap">
+      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.status ? { width: `${columnWidths.status}px` } : undefined}>
         <div className="flex items-center gap-1.5">
           <span className={`w-1.5 h-1.5 rounded-full ${statusColor} shrink-0`} />
           <span className="text-sandstorm-text-secondary">{statusLabel}</span>
         </div>
       </td>
-      <td className="px-3 py-2 whitespace-nowrap">
+      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.name ? { width: `${columnWidths.name}px` } : undefined}>
         <div className="flex items-center gap-1.5 min-w-0">
           {showProject && (
             <span className="text-sandstorm-muted truncate">{stack.project}/</span>
@@ -93,12 +93,12 @@ export function StackTableRow({ stack, showProject }: { stack: Stack; showProjec
           <span className="font-medium text-sandstorm-text truncate">{stack.id}</span>
         </div>
       </td>
-      <td className="px-3 py-2 max-w-[200px]">
+      <td className="px-3 py-2 overflow-hidden" style={columnWidths?.description ? { width: `${columnWidths.description}px` } : undefined}>
         <span className="text-sandstorm-text-secondary truncate block">
           {stack.description || <span className="text-sandstorm-muted">—</span>}
         </span>
       </td>
-      <td className="px-3 py-2 whitespace-nowrap">
+      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.services ? { width: `${columnWidths.services}px` } : undefined}>
         {totalCount > 0 ? (
           <div className="flex items-center gap-1.5">
             <span className="flex gap-0.5">
@@ -122,7 +122,7 @@ export function StackTableRow({ stack, showProject }: { stack: Stack; showProjec
           <span className="text-sandstorm-muted">—</span>
         )}
       </td>
-      <td className="px-3 py-2 whitespace-nowrap">
+      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.resources ? { width: `${columnWidths.resources}px` } : undefined}>
         {metrics && metrics.totalMemory > 0 ? (
           <div className="flex items-center gap-2 text-sandstorm-muted tabular-nums">
             <span title="Memory">{formatBytes(metrics.totalMemory)}</span>
@@ -132,10 +132,10 @@ export function StackTableRow({ stack, showProject }: { stack: Stack; showProjec
           <span className="text-sandstorm-muted">—</span>
         )}
       </td>
-      <td className="px-3 py-2 whitespace-nowrap text-sandstorm-muted tabular-nums">
+      <td className="px-3 py-2 whitespace-nowrap text-sandstorm-muted tabular-nums overflow-hidden" style={columnWidths?.duration ? { width: `${columnWidths.duration}px` } : undefined}>
         {duration}
       </td>
-      <td className="px-3 py-2 whitespace-nowrap text-right">
+      <td className="px-3 py-2 whitespace-nowrap text-right overflow-hidden" style={columnWidths?.actions ? { width: `${columnWidths.actions}px` } : undefined}>
         <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
           {stack.status !== 'running' && (
             <button
