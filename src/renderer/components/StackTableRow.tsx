@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
+import { getStackDuration, isTerminalStatus, DURATION_UPDATE_INTERVAL } from '../utils/duration';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -29,34 +30,24 @@ const STATUS_LABELS: Record<string, string> = {
   stopped: 'Stopped',
 };
 
-function formatDuration(dateStr: string): string {
-  const date = new Date(dateStr);
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMin = Math.floor(diffMs / 60000);
-
-  if (diffMin < 1) return '<1m';
-  if (diffMin < 60) return `${diffMin}m`;
-  const diffHrs = Math.floor(diffMin / 60);
-  const remainMin = diffMin % 60;
-  if (diffHrs < 24) return remainMin > 0 ? `${diffHrs}h ${remainMin}m` : `${diffHrs}h`;
-  const diffDays = Math.floor(diffHrs / 24);
-  const remainHrs = diffHrs % 24;
-  return remainHrs > 0 ? `${diffDays}d ${remainHrs}h` : `${diffDays}d`;
-}
-
 export function StackTableRow({ stack, showProject, columnWidths }: { stack: Stack; showProject?: boolean; columnWidths?: Record<string, number> }) {
   const { selectStack, refreshStacks, stackMetrics } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
-  const [duration, setDuration] = useState(() => formatDuration(stack.created_at));
+  const [duration, setDuration] = useState(() =>
+    getStackDuration(stack.created_at, stack.updated_at, stack.status)
+  );
 
   useEffect(() => {
-    setDuration(formatDuration(stack.created_at));
-    const interval = setInterval(() => {
-      setDuration(formatDuration(stack.created_at));
-    }, 30000);
-    return () => clearInterval(interval);
-  }, [stack.created_at]);
+    setDuration(getStackDuration(stack.created_at, stack.updated_at, stack.status));
+
+    // Only tick for active (non-terminal) stacks
+    if (!isTerminalStatus(stack.status)) {
+      const interval = setInterval(() => {
+        setDuration(getStackDuration(stack.created_at, stack.updated_at, stack.status));
+      }, DURATION_UPDATE_INTERVAL);
+      return () => clearInterval(interval);
+    }
+  }, [stack.created_at, stack.updated_at, stack.status]);
 
   const runningCount = stack.services.filter((s) => s.status === 'running').length;
   const totalCount = stack.services.length;
