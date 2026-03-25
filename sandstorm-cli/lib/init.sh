@@ -215,8 +215,6 @@ PORT_OFFSET=10
 # Optional: ticket prefix for branch safety checks (e.g., PROJ)
 # TICKET_PREFIX=
 
-# Optional: files to restore before push (prevents container edits to these)
-# PROTECTED_FILES=CLAUDE.md
 EOF
 
 echo "  Created .sandstorm/config"
