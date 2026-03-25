@@ -1,5 +1,6 @@
 import React from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
+import { getStackDuration } from '../utils/duration';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -45,35 +46,12 @@ function timeAgo(dateStr: string): string {
   return `${diffDays}d ago`;
 }
 
-function parseUtcDate(dateStr: string): Date {
-  if (!dateStr.endsWith('Z') && !dateStr.includes('+')) {
-    return new Date(dateStr + 'Z');
-  }
-  return new Date(dateStr);
-}
-
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
   if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(0)} MB`;
   return `${(bytes / 1073741824).toFixed(1)} GB`;
-}
-
-function formatDuration(createdAt: string): string {
-  const created = parseUtcDate(createdAt);
-  const now = new Date();
-  const diffMs = now.getTime() - created.getTime();
-  if (diffMs < 0) return '0s';
-  const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainMin = minutes % 60;
-  if (hours < 24) return `${hours}h ${remainMin}m`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
 }
 
 function formatMs(ms: number): string {
@@ -230,7 +208,7 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
                 </span>
               )}
               <span className="tabular-nums" title="Running duration">
-                {formatDuration(stack.created_at)}
+                {getStackDuration(stack.created_at, stack.updated_at, stack.status)}
               </span>
               {metrics.taskMetrics.totalTasks > 0 && (
                 <>

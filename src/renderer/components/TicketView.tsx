@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
+import { getStackDuration } from '../utils/duration';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -30,22 +31,6 @@ const STATUS_LABELS: Record<string, string> = {
   idle: 'Idle',
   stopped: 'Stopped',
 };
-
-function formatDuration(createdAt: string): string {
-  const created = new Date(createdAt.endsWith('Z') || createdAt.includes('+') ? createdAt : createdAt + 'Z');
-  const now = new Date();
-  const diffMs = now.getTime() - created.getTime();
-  if (diffMs < 0) return '0s';
-  const seconds = Math.floor(diffMs / 1000);
-  if (seconds < 60) return `${seconds}s`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m`;
-  const hours = Math.floor(minutes / 60);
-  const remainMin = minutes % 60;
-  if (hours < 24) return `${hours}h ${remainMin}m`;
-  const days = Math.floor(hours / 24);
-  return `${days}d ${hours % 24}h`;
-}
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -263,7 +248,7 @@ function TicketStackRow({ stack, showProject }: { stack: Stack; showProject?: bo
         )}
 
         <span className="ml-auto text-[11px] text-sandstorm-muted tabular-nums shrink-0">
-          {formatDuration(stack.created_at)}
+          {getStackDuration(stack.created_at, stack.updated_at, stack.status)}
         </span>
 
         {/* Hover action buttons */}
