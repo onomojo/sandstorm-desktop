@@ -4,10 +4,10 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, act } from '@testing-library/react';
-import { ClaudeSession } from '../../../src/renderer/components/ClaudeSession';
+import { AgentSession } from '../../../src/renderer/components/AgentSession';
 import { mockSandstormApi } from './setup';
 
-describe('ClaudeSession', () => {
+describe('AgentSession', () => {
   let api: ReturnType<typeof mockSandstormApi>;
   // Track event listeners registered via window.sandstorm.on
   let eventHandlers: Record<string, (...args: unknown[]) => void>;
@@ -21,17 +21,16 @@ describe('ClaudeSession', () => {
         delete eventHandlers[channel];
       };
     });
-    api.claude.history.mockResolvedValue({ messages: [], processing: false });
+    api.agent.history.mockResolvedValue({ messages: [], processing: false });
   });
 
-  it('sets isLoading=false immediately on claude:done before history fetch (fixes #28)', async () => {
-    // Render the component
+  it('sets isLoading=false immediately on agent:done before history fetch (fixes #28)', async () => {
     await act(async () => {
-      render(<ClaudeSession tabId="test-tab" projectDir="/test" />);
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
     });
 
     // Simulate sending a message — the user-message handler sets isLoading=true
-    const userMsgHandler = eventHandlers['claude:user-message:test-tab'];
+    const userMsgHandler = eventHandlers['agent:user-message:test-tab'];
     expect(userMsgHandler).toBeDefined();
     act(() => {
       userMsgHandler('hello');
@@ -40,18 +39,16 @@ describe('ClaudeSession', () => {
     // The "Thinking..." indicator should be visible (isLoading=true)
     expect(screen.getByText('Thinking...')).toBeDefined();
 
-    // Now simulate claude:done firing. Even if history returns processing=true
-    // (due to a stuck backend session), isLoading should be reset to false first.
-    api.claude.history.mockResolvedValue({ messages: [
+    // Now simulate agent:done firing.
+    api.agent.history.mockResolvedValue({ messages: [
       { role: 'user', content: 'hello' },
       { role: 'assistant', content: 'Hi there' },
     ], processing: false });
 
-    const doneHandler = eventHandlers['claude:done:test-tab'];
+    const doneHandler = eventHandlers['agent:done:test-tab'];
     expect(doneHandler).toBeDefined();
     await act(async () => {
       doneHandler();
-      // Let the history promise resolve
       await Promise.resolve();
     });
 
@@ -61,17 +58,17 @@ describe('ClaudeSession', () => {
 
   it('re-enables isLoading when backend has queued messages after done (fixes #28)', async () => {
     await act(async () => {
-      render(<ClaudeSession tabId="test-tab" projectDir="/test" />);
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
     });
 
     // Simulate a done event where the backend is still processing queued messages
-    api.claude.history.mockResolvedValue({ messages: [
+    api.agent.history.mockResolvedValue({ messages: [
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'response' },
       { role: 'user', content: 'second' },
     ], processing: true });
 
-    const doneHandler = eventHandlers['claude:done:test-tab'];
+    const doneHandler = eventHandlers['agent:done:test-tab'];
     await act(async () => {
       doneHandler();
       await Promise.resolve();
@@ -81,20 +78,20 @@ describe('ClaudeSession', () => {
     expect(screen.getByText('Thinking...')).toBeDefined();
   });
 
-  it('clears isLoading on claude:error (fixes #28)', async () => {
+  it('clears isLoading on agent:error (fixes #28)', async () => {
     await act(async () => {
-      render(<ClaudeSession tabId="test-tab" projectDir="/test" />);
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
     });
 
     // Simulate user message to set isLoading=true
-    const userMsgHandler = eventHandlers['claude:user-message:test-tab'];
+    const userMsgHandler = eventHandlers['agent:user-message:test-tab'];
     act(() => {
       userMsgHandler('hello');
     });
     expect(screen.getByText('Thinking...')).toBeDefined();
 
     // Simulate error
-    const errorHandler = eventHandlers['claude:error:test-tab'];
+    const errorHandler = eventHandlers['agent:error:test-tab'];
     act(() => {
       errorHandler('spawn failed');
     });

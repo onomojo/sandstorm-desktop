@@ -42,7 +42,7 @@ export interface SandstormAPI {
   runtime: {
     available: () => Promise<{ docker: boolean; podman: boolean }>;
   };
-  claude: {
+  agent: {
     send: (tabId: string, message: string, projectDir?: string) => Promise<void>;
     cancel: (tabId: string) => Promise<void>;
     reset: (tabId: string) => Promise<void>;
@@ -110,12 +110,12 @@ const api: SandstormAPI = {
   runtime: {
     available: () => ipcRenderer.invoke('runtime:available'),
   },
-  claude: {
+  agent: {
     send: (tabId, message, projectDir) =>
-      ipcRenderer.invoke('claude:send', tabId, message, projectDir),
-    cancel: (tabId) => ipcRenderer.invoke('claude:cancel', tabId),
-    reset: (tabId) => ipcRenderer.invoke('claude:reset', tabId),
-    history: (tabId) => ipcRenderer.invoke('claude:history', tabId),
+      ipcRenderer.invoke('agent:send', tabId, message, projectDir),
+    cancel: (tabId) => ipcRenderer.invoke('agent:cancel', tabId),
+    reset: (tabId) => ipcRenderer.invoke('agent:reset', tabId),
+    history: (tabId) => ipcRenderer.invoke('agent:history', tabId),
   },
   context: {
     get: (projectDir) => ipcRenderer.invoke('context:get', projectDir),

@@ -105,6 +105,16 @@ describe('Registry', () => {
     it('handles empty project list', () => {
       expect(registry.listProjects()).toEqual([]);
     });
+
+    it('normalizes project directory paths (strips trailing slashes)', () => {
+      const project = registry.addProject('/home/user/myapp/');
+      expect(project.directory).toBe('/home/user/myapp');
+    });
+
+    it('normalizes project directory paths (resolves dot segments)', () => {
+      const project = registry.addProject('/home/user/../user/myapp');
+      expect(project.directory).toBe('/home/user/myapp');
+    });
   });
 
   // ===========================================
@@ -134,6 +144,14 @@ describe('Registry', () => {
       const retrieved = registry.getStack('test-stack');
       expect(retrieved).toBeDefined();
       expect(retrieved!.id).toBe('test-stack');
+    });
+
+    it('normalizes stack project_dir paths', () => {
+      const stack = registry.createStack(makeStack({
+        id: 'norm-stack',
+        project_dir: '/home/user/myproject/',
+      }));
+      expect(stack.project_dir).toBe('/home/user/myproject');
     });
 
     it('creates a stack with null optional fields', () => {

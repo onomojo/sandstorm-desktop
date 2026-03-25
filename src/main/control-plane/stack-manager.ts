@@ -5,6 +5,7 @@ import { Registry, Stack, StackHistoryRecord, Task } from './registry';
 import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
+import { SandstormError, ErrorCode } from '../errors';
 
 export interface CreateStackOpts {
   name: string;
@@ -188,7 +189,7 @@ export class StackManager {
       const result = await this.runCli(opts.projectDir, args, portEnv);
 
       if (result.exitCode !== 0) {
-        throw new Error(result.stderr.trim() || result.stdout.trim() || 'Stack creation failed');
+        throw new SandstormError(ErrorCode.COMPOSE_FAILED, result.stderr.trim() || result.stdout.trim() || 'Stack creation failed');
       }
 
       this.registry.updateStackStatus(opts.name, 'up');
@@ -207,7 +208,7 @@ export class StackManager {
 
   stopStack(stackId: string): void {
     const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     this.taskWatcher.unwatch(stackId);
     this.registry.updateStackStatus(stackId, 'stopped');
@@ -227,7 +228,7 @@ export class StackManager {
 
   startStack(stackId: string): void {
     const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     this.registry.updateStackStatus(stackId, 'building');
     this.notifyUpdate();
@@ -240,7 +241,7 @@ export class StackManager {
     try {
       const result = await this.runCli(stack.project_dir, ['start', stackId]);
       if (result.exitCode !== 0) {
-        throw new Error(result.stderr.trim() || result.stdout.trim() || 'Stack start failed');
+        throw new SandstormError(ErrorCode.COMPOSE_FAILED, result.stderr.trim() || result.stdout.trim() || 'Stack start failed');
       }
       this.registry.updateStackStatus(stackId, 'up');
       this.notifyUpdate();
@@ -253,7 +254,7 @@ export class StackManager {
 
   teardownStack(stackId: string): void {
     const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     this.taskWatcher.unwatch(stackId);
 
@@ -285,14 +286,14 @@ export class StackManager {
 
   async dispatchTask(stackId: string, prompt: string): Promise<Task> {
     const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     const task = this.registry.createTask(stackId, prompt);
 
     try {
       const claudeContainer = await this.findClaudeContainer(stack);
       if (!claudeContainer) {
-        throw new Error(`Claude container not found for stack "${stackId}"`);
+        throw new SandstormError(ErrorCode.CONTAINER_UNREACHABLE, `Agent container not found for stack "${stackId}"`);
       }
 
       // Use the sandstorm CLI to dispatch the task. The CLI's `task` command
@@ -302,7 +303,8 @@ export class StackManager {
       const result = await this.runCli(stack.project_dir, ['task', stackId, prompt]);
 
       if (result.exitCode !== 0) {
-        throw new Error(
+        throw new SandstormError(
+          ErrorCode.TASK_DISPATCH_FAILED,
           result.stderr.trim() || result.stdout.trim() || 'Task dispatch failed'
         );
       }
@@ -345,7 +347,7 @@ export class StackManager {
 
   async getDiff(stackId: string): Promise<string> {
     const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     const result = await this.runCli(stack.project_dir, ['diff', stackId]);
     return result.stdout;
@@ -353,20 +355,20 @@ export class StackManager {
 
   async push(stackId: string, message?: string): Promise<void> {
     const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     const args = ['push', stackId];
     if (message) args.push(message);
 
     const result = await this.runCli(stack.project_dir, args);
     if (result.exitCode !== 0) {
-      throw new Error(result.stderr.trim() || result.stdout.trim() || 'Push failed');
+      throw new SandstormError(ErrorCode.COMPOSE_FAILED, result.stderr.trim() || result.stdout.trim() || 'Push failed');
     }
   }
 
   getTaskStatus(stackId: string): { status: string; task?: Task } {
     const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     const runningTask = this.registry.getRunningTask(stackId);
     if (runningTask) {
@@ -383,11 +385,11 @@ export class StackManager {
 
   async getTaskOutput(stackId: string, lines: number = 50): Promise<string> {
     const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     const claudeContainer = await this.findClaudeContainer(stack);
     if (!claudeContainer) {
-      throw new Error(`Claude container not found for stack "${stackId}"`);
+      throw new SandstormError(ErrorCode.CONTAINER_UNREACHABLE, `Agent container not found for stack "${stackId}"`);
     }
 
     try {
@@ -402,7 +404,7 @@ export class StackManager {
 
   async getLogs(stackId: string, service?: string): Promise<string> {
     const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
     const filterName = service
@@ -411,7 +413,7 @@ export class StackManager {
     const containers = await this.runtime.listContainers({ name: filterName });
 
     if (containers.length === 0) {
-      throw new Error(`No containers found for stack "${stackId}"${service ? ` service "${service}"` : ''}`);
+      throw new SandstormError(ErrorCode.CONTAINER_UNREACHABLE, `No containers found for stack "${stackId}"${service ? ` service "${service}"` : ''}`);
     }
 
     const logParts: string[] = [];
