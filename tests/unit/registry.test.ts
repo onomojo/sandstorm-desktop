@@ -336,6 +336,16 @@ describe('Registry', () => {
       expect(() => registry.createTask('nonexistent', 'oops')).toThrow();
     });
 
+    it('sets and retrieves task warning', () => {
+      const task = registry.createTask('task-stack', 'Suspicious task');
+      expect(task.warnings).toBeNull();
+
+      registry.setTaskWarning(task.id, 'Task completed suspiciously fast');
+      const tasks = registry.getTasksForStack('task-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.warnings).toBe('Task completed suspiciously fast');
+    });
+
     it('tasks are ordered by started_at DESC', () => {
       registry.createTask('task-stack', 'First');
       registry.createTask('task-stack', 'Second');

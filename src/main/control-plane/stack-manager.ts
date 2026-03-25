@@ -194,9 +194,22 @@ export class StackManager {
       this.registry.updateStackStatus(opts.name, 'up');
       this.notifyUpdate();
 
-      // If a task was provided, dispatch it immediately
+      // If a task was provided, dispatch it (with one retry on failure)
       if (opts.task) {
-        await this.dispatchTask(opts.name, opts.task);
+        try {
+          await this.dispatchTask(opts.name, opts.task);
+        } catch (firstErr) {
+          // Wait and retry once — the container may need more time
+          await new Promise((resolve) => setTimeout(resolve, 10000));
+          try {
+            await this.dispatchTask(opts.name, opts.task);
+          } catch (retryErr) {
+            const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
+            this.registry.updateStackStatus(opts.name, 'failed', `Task dispatch failed after retry: ${msg}`);
+            this.notifyUpdate();
+            return;
+          }
+        }
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
@@ -283,6 +296,47 @@ export class StackManager {
     }
   }
 
+  /**
+   * Wait for the inner Claude agent to be ready inside the container.
+   * Checks every `intervalMs` for up to `timeoutMs` by exec-ing into
+   * the container and looking for a running claude process or readiness file.
+   */
+  async waitForClaudeReady(
+    containerId: string,
+    timeoutMs: number = 60000,
+    intervalMs: number = 2000
+  ): Promise<void> {
+    const deadline = Date.now() + timeoutMs;
+
+    while (Date.now() < deadline) {
+      try {
+        // Check for readiness file first (most reliable)
+        const readyResult = await this.runtime.exec(containerId, [
+          'test', '-f', '/tmp/claude-ready',
+        ]);
+        if (readyResult.exitCode === 0) return;
+      } catch {
+        // exec failed — container may still be starting
+      }
+
+      try {
+        // Fallback: check if claude process is running
+        const psResult = await this.runtime.exec(containerId, [
+          'pgrep', '-f', 'claude',
+        ]);
+        if (psResult.exitCode === 0 && psResult.stdout.trim()) return;
+      } catch {
+        // exec failed — container may still be starting
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    throw new Error(
+      `Claude agent in container "${containerId}" not ready after ${timeoutMs / 1000}s`
+    );
+  }
+
   async dispatchTask(stackId: string, prompt: string): Promise<Task> {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
@@ -294,6 +348,9 @@ export class StackManager {
       if (!claudeContainer) {
         throw new Error(`Claude container not found for stack "${stackId}"`);
       }
+
+      // Wait for the inner Claude agent to be ready before dispatching
+      await this.waitForClaudeReady(claudeContainer.id);
 
       // Use the sandstorm CLI to dispatch the task. The CLI's `task` command
       // handles credential sync (OAuth), writes files as the correct user

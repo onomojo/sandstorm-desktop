@@ -32,6 +32,7 @@ export interface Task {
   prompt: string;
   status: 'running' | 'completed' | 'failed';
   exit_code: number | null;
+  warnings: string | null;
   started_at: string;
   finished_at: string | null;
 }
@@ -147,6 +148,12 @@ export class Registry {
     // Add error column if missing (migration for existing databases)
     try {
       this.db.run('ALTER TABLE stacks ADD COLUMN error TEXT');
+    } catch {
+      // Column already exists
+    }
+    // Add warnings column to tasks if missing
+    try {
+      this.db.run('ALTER TABLE tasks ADD COLUMN warnings TEXT');
     } catch {
       // Column already exists
     }
@@ -306,6 +313,13 @@ export class Registry {
     return this.queryAll<Task>(
       'SELECT * FROM tasks WHERE stack_id = ? ORDER BY started_at DESC',
       [stackId]
+    );
+  }
+
+  setTaskWarning(taskId: number, warning: string): void {
+    this.execute(
+      'UPDATE tasks SET warnings = ? WHERE id = ?',
+      [warning, taskId]
     );
   }
 
