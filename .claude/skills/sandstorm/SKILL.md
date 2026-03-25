@@ -23,46 +23,55 @@ Sandstorm manages isolated Docker agent stacks. Each stack is a full clone of th
 | `mcp__sandstorm-tools__push_stack` | Commit and push changes from a stack |
 | `mcp__sandstorm-tools__teardown_stack` | Tear down a stack (stops containers, cleans up) |
 
+## Critical Rules
+
+- **NEVER set `branch` to `main`.** Omit the `branch` parameter — it defaults to the stack name, which becomes a feature branch. Setting `branch: "main"` causes pushes to go directly to main, bypassing code review. This has caused loss of work.
+- **NEVER tear down stacks unless the user explicitly asks.** No inference, no cleanup, no "let me tear this down first." The ONLY valid trigger is the user directly requesting teardown.
+- **Always create PRs after pushing.** Use `gh pr create` to open a pull request from the feature branch.
+
 ## Workflows
 
 ### Typical flow: ticket to PR
 
-1. `create_stack` — name, projectDir, branch, ticket
+1. `create_stack` — name, projectDir, ticket (do NOT pass branch — it defaults to the stack name)
 2. `dispatch_task` — goal-oriented prompt describing the work
 3. `get_task_status` — check when done
 4. `get_diff` — review changes
-5. `push_stack` — commit and push
-6. `teardown_stack` — clean up
+5. `push_stack` — commit and push to the feature branch
+6. `gh pr create` — create a pull request
+
+Do NOT tear down stacks — only the user decides when to tear down.
 
 ### Create stack and dispatch work
 
 ```
 mcp__sandstorm-tools__create_stack({
-  name: "fix-auth-bug",
+  name: "issue-28-fix-auth-bug",
   projectDir: "/path/to/project",
-  branch: "fix/auth-bug",
-  ticket: "PROJ-123",
+  ticket: "28",
   task: "Fix the auth token expiry bug. Users should see a clear error and be redirected to login."
 })
 ```
+
+**NEVER pass `branch: "main"`. Omit the branch parameter entirely.**
 
 The `task` parameter dispatches work immediately after creation — no need to call `dispatch_task` separately.
 
 ### Monitor and iterate
 
 ```
-mcp__sandstorm-tools__get_task_status({ stackId: "fix-auth-bug" })
-mcp__sandstorm-tools__get_task_output({ stackId: "fix-auth-bug" })
-mcp__sandstorm-tools__get_diff({ stackId: "fix-auth-bug" })
-mcp__sandstorm-tools__dispatch_task({ stackId: "fix-auth-bug", prompt: "Looks good but add limit/offset params" })
+mcp__sandstorm-tools__get_task_status({ stackId: "issue-28-fix-auth-bug" })
+mcp__sandstorm-tools__get_task_output({ stackId: "issue-28-fix-auth-bug" })
+mcp__sandstorm-tools__get_diff({ stackId: "issue-28-fix-auth-bug" })
+mcp__sandstorm-tools__dispatch_task({ stackId: "issue-28-fix-auth-bug", prompt: "Looks good but add limit/offset params" })
 ```
 
-### Review, push, tear down
+### Review, push, create PR
 
 ```
-mcp__sandstorm-tools__get_diff({ stackId: "fix-auth-bug" })
-mcp__sandstorm-tools__push_stack({ stackId: "fix-auth-bug", message: "Fix auth token expiry with user-facing error" })
-mcp__sandstorm-tools__teardown_stack({ stackId: "fix-auth-bug" })
+mcp__sandstorm-tools__get_diff({ stackId: "issue-28-fix-auth-bug" })
+mcp__sandstorm-tools__push_stack({ stackId: "issue-28-fix-auth-bug", message: "Fix auth token expiry with user-facing error" })
+gh pr create --title "Fix auth token expiry" --body "Fixes #28"
 ```
 
 ## Tool Details
@@ -74,7 +83,7 @@ mcp__sandstorm-tools__teardown_stack({ stackId: "fix-auth-bug" })
 | `name` | Yes | Stack name — becomes the stack ID (e.g., `fix-auth-bug`) |
 | `projectDir` | Yes | Absolute path to the project directory |
 | `ticket` | No | Associated ticket ID (e.g., `PROJ-123`) |
-| `branch` | No | Git branch name (defaults to stack name) |
+| `branch` | No | Git branch name (defaults to stack name). **NEVER set to `main`.** |
 | `description` | No | Short description of the work |
 | `runtime` | No | `docker` (default) or `podman` |
 | `task` | No | Task to dispatch immediately after creation |
@@ -135,3 +144,6 @@ Stops containers, removes workspace, archives stack to history. **This is irreve
 - **Check before teardown.** Always `get_diff` before `teardown_stack` to avoid losing work.
 - **Goal-oriented prompts.** Tell inner Claude what to achieve, not which lines to edit.
 - **Stacks appear in the UI.** Because MCP tools go through the Electron control plane, every stack you create will be visible in the Sandstorm Desktop UI.
+- **NEVER use `main` as the branch.** Omit the branch parameter so stacks always work on feature branches.
+- **NEVER tear down stacks** unless the user explicitly requests it. No automatic cleanup.
+- **Always create PRs.** After `push_stack`, use `gh pr create` to open a pull request.
