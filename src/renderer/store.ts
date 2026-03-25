@@ -171,7 +171,7 @@ declare global {
       runtime: {
         available: () => Promise<{ docker: boolean; podman: boolean }>;
       };
-      claude: {
+      agent: {
         send: (tabId: string, message: string, projectDir?: string) => Promise<void>;
         cancel: (tabId: string) => Promise<void>;
         reset: (tabId: string) => Promise<void>;

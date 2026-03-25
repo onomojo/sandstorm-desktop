@@ -4,7 +4,7 @@ import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
 import { TicketView } from './TicketView';
 import { UninitializedProject } from './UninitializedProject';
-import { ClaudeSession } from './ClaudeSession';
+import { AgentSession } from './AgentSession';
 import { AuthIndicator } from './AuthIndicator';
 import { ProjectContext } from './ProjectContext';
 import { ResizableTableHeader } from './ResizableTableHeader';
@@ -271,7 +271,7 @@ export function Dashboard() {
       <div className="flex-1 flex min-h-0" ref={containerRef}>
         {/* Left column — Claude orchestration chat */}
         <div className="shrink-0 border-r border-sandstorm-border" style={{ width: `${leftWidth}%` }}>
-          <ClaudeSession key={claudeTabId} tabId={claudeTabId} projectDir={project?.directory} />
+          <AgentSession key={claudeTabId} tabId={claudeTabId} projectDir={project?.directory} />
         </div>
 
         {/* Draggable divider */}

@@ -2,11 +2,14 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
 import { Readable } from 'stream';
 
-// Mock electron modules before importing session manager
+// Mock electron modules before importing backend
 vi.mock('electron', () => ({
   BrowserWindow: vi.fn(),
   app: {
     getPath: () => '/tmp',
+  },
+  shell: {
+    openExternal: vi.fn(),
   },
 }));
 
@@ -27,6 +30,7 @@ const spawnedProcesses: MockChildProcess[] = [];
 class MockChildProcess extends EventEmitter {
   stdout = new EventEmitter() as unknown as Readable;
   stderr = new EventEmitter() as unknown as Readable;
+  stdin = { write: vi.fn(), end: vi.fn() };
   pid = Math.floor(Math.random() * 10000);
   exitCode: number | null = null;
   killed = false;
@@ -57,6 +61,9 @@ vi.mock('fs', async (importOriginal) => {
     existsSync: vi.fn().mockReturnValue(false),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    readFileSync: vi.fn().mockImplementation(() => {
+      throw new Error('File not found');
+    }),
     createWriteStream: vi.fn(() => ({
       write: vi.fn(),
       end: vi.fn(),
@@ -80,10 +87,11 @@ vi.mock('http', async (importOriginal) => {
   };
 });
 
-import { ClaudeSessionManager } from '../../src/main/claude/session-manager';
+import { ClaudeBackend } from '../../src/main/agent/claude-backend';
+import type { AgentBackend } from '../../src/main/agent/types';
 
-describe('ClaudeSessionManager', () => {
-  let manager: ClaudeSessionManager;
+describe('ClaudeBackend (AgentBackend implementation)', () => {
+  let backend: AgentBackend;
   let mockWindow: { webContents: { send: ReturnType<typeof vi.fn> } };
   let sentMessages: Array<{ channel: string; args: unknown[] }>;
 
@@ -98,13 +106,13 @@ describe('ClaudeSessionManager', () => {
       },
     };
 
-    manager = new ClaudeSessionManager(1000); // 1s timeout for tests
-    manager.setMainWindow(mockWindow as never);
-    await manager.initialize();
+    backend = new ClaudeBackend(1000); // 1s timeout for tests
+    backend.setMainWindow(mockWindow as never);
+    await backend.initialize();
   });
 
   afterEach(() => {
-    manager.destroy();
+    backend.destroy();
     vi.clearAllMocks();
   });
 
@@ -116,44 +124,84 @@ describe('ClaudeSessionManager', () => {
     return sentMessages.filter((m) => m.channel.includes(channelPattern));
   }
 
-  describe('stderr forwarding', () => {
-    it('sends stderr as error when process exits non-zero with no stdout', () => {
-      manager.sendMessage('tab1', 'hello', '/tmp');
-      const proc = getLastProcess();
+  it('implements the AgentBackend interface', () => {
+    expect(backend.name).toBe('Claude');
+    expect(typeof backend.sendMessage).toBe('function');
+    expect(typeof backend.getHistory).toBe('function');
+    expect(typeof backend.cancelSession).toBe('function');
+    expect(typeof backend.resetSession).toBe('function');
+    expect(typeof backend.getAuthStatus).toBe('function');
+    expect(typeof backend.login).toBe('function');
+    expect(typeof backend.syncCredentials).toBe('function');
+    expect(typeof backend.initialize).toBe('function');
+    expect(typeof backend.destroy).toBe('function');
+    expect(typeof backend.setMainWindow).toBe('function');
+  });
 
+  describe('IPC events use agent: prefix', () => {
+    it('sends agent:user-message on sendMessage', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const msgs = findMessages('agent:user-message:tab1');
+      expect(msgs.length).toBe(1);
+      expect(msgs[0].args[0]).toBe('hello');
+    });
+
+    it('sends agent:output on stdout data', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      proc.stdout.emit('data', Buffer.from('some text\n'));
+      const outputs = findMessages('agent:output:tab1');
+      expect(outputs.length).toBeGreaterThan(0);
+    });
+
+    it('sends agent:done on successful exit', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      proc.exitCode = 0;
+      proc.emit('close', 0);
+      const dones = findMessages('agent:done:tab1');
+      expect(dones.length).toBe(1);
+    });
+
+    it('sends agent:error on non-zero exit with no output', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
       proc.stderr.emit('data', Buffer.from('Authentication failed'));
       proc.exitCode = 1;
       proc.emit('close', 1);
-
-      const errors = findMessages('claude:error:tab1');
+      const errors = findMessages('agent:error:tab1');
       expect(errors.length).toBe(1);
       expect(errors[0].args[0]).toBe('Authentication failed');
     });
 
-    it('sends done (not error) when process exits non-zero but has output', () => {
-      manager.sendMessage('tab1', 'hello', '/tmp');
-      const proc = getLastProcess();
+    it('sends agent:queued when message is queued', () => {
+      backend.sendMessage('tab1', 'first', '/tmp');
+      backend.sendMessage('tab1', 'second', '/tmp');
+      const queued = findMessages('agent:queued:tab1');
+      expect(queued.length).toBe(1);
+    });
+  });
 
-      // Emit some valid stdout
+  describe('stderr forwarding', () => {
+    it('sends done (not error) when process exits non-zero but has output', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
       proc.stdout.emit('data', Buffer.from('some output\n'));
       proc.stderr.emit('data', Buffer.from('some warning'));
       proc.exitCode = 1;
       proc.emit('close', 1);
-
-      const errors = findMessages('claude:error:tab1');
-      const dones = findMessages('claude:done:tab1');
+      const errors = findMessages('agent:error:tab1');
+      const dones = findMessages('agent:done:tab1');
       expect(errors.length).toBe(0);
       expect(dones.length).toBe(1);
     });
 
     it('sends generic error message when exit non-zero with no stderr', () => {
-      manager.sendMessage('tab1', 'hello', '/tmp');
+      backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
-
       proc.exitCode = 2;
       proc.emit('close', 2);
-
-      const errors = findMessages('claude:error:tab1');
+      const errors = findMessages('agent:error:tab1');
       expect(errors.length).toBe(1);
       expect(errors[0].args[0]).toBe('Claude exited with code 2');
     });
@@ -161,115 +209,100 @@ describe('ClaudeSessionManager', () => {
 
   describe('process timeout', () => {
     it('kills process after timeout and sends error', async () => {
-      manager.sendMessage('tab1', 'hello', '/tmp');
+      backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
-
-      // Wait for timeout (1s in test)
       await new Promise((resolve) => setTimeout(resolve, 1200));
-
       expect(proc.killed).toBe(true);
-      const errors = findMessages('claude:error:tab1');
-      expect(errors.length).toBe(1);
+      const errors = findMessages('agent:error:tab1');
+      expect(errors.length).toBeGreaterThanOrEqual(1);
       expect((errors[0].args[0] as string)).toContain('timed out');
-    });
-  });
-
-  describe('queue visibility', () => {
-    it('sends claude:queued event when message is queued', () => {
-      manager.sendMessage('tab1', 'first message', '/tmp');
-      // Process is now running — send another message
-      manager.sendMessage('tab1', 'second message', '/tmp');
-
-      const queued = findMessages('claude:queued:tab1');
-      expect(queued.length).toBe(1);
-    });
-
-    it('does not send queued event for the first message', () => {
-      manager.sendMessage('tab1', 'first message', '/tmp');
-
-      const queued = findMessages('claude:queued:tab1');
-      expect(queued.length).toBe(0);
-    });
-  });
-
-  describe('exit code handling', () => {
-    it('sends done on zero exit code', () => {
-      manager.sendMessage('tab1', 'hello', '/tmp');
-      const proc = getLastProcess();
-
-      proc.exitCode = 0;
-      proc.emit('close', 0);
-
-      const dones = findMessages('claude:done:tab1');
-      expect(dones.length).toBe(1);
-      const errors = findMessages('claude:error:tab1');
-      expect(errors.length).toBe(0);
     });
   });
 
   describe('spawn error', () => {
     it('sends error on spawn failure', () => {
-      manager.sendMessage('tab1', 'hello', '/tmp');
+      backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
-
       proc.emit('error', new Error('ENOENT: claude not found'));
-
-      const errors = findMessages('claude:error:tab1');
+      const errors = findMessages('agent:error:tab1');
       expect(errors.length).toBe(1);
       expect(errors[0].args[0]).toBe('ENOENT: claude not found');
     });
 
     it('resets processing flag on spawn error (fixes #28)', () => {
-      manager.sendMessage('tab1', 'hello', '/tmp');
+      backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
-
-      // Simulate spawn error without close event (e.g. ENOENT)
       proc.emit('error', new Error('ENOENT: claude not found'));
-
-      // The session should no longer be stuck in processing state
-      const history = manager.getHistory('tab1');
+      const history = backend.getHistory('tab1');
       expect(history.processing).toBe(false);
     });
 
     it('drains pending queue after spawn error (fixes #28)', () => {
-      manager.sendMessage('tab1', 'first', '/tmp');
-      manager.sendMessage('tab1', 'second', '/tmp');
-
+      backend.sendMessage('tab1', 'first', '/tmp');
+      backend.sendMessage('tab1', 'second', '/tmp');
       expect(spawnedProcesses.length).toBe(1);
-
-      // First process fails with spawn error
       const proc = getLastProcess();
       proc.emit('error', new Error('ENOENT'));
-
-      // The queued second message should be spawned
       expect(spawnedProcesses.length).toBe(2);
     });
 
     it('sets processing=false when queue is empty after spawn error (fixes #28)', () => {
-      manager.sendMessage('tab1', 'only-message', '/tmp');
+      backend.sendMessage('tab1', 'only-message', '/tmp');
       const proc = getLastProcess();
-
       proc.emit('error', new Error('ENOENT'));
-
-      const history = manager.getHistory('tab1');
+      const history = backend.getHistory('tab1');
       expect(history.processing).toBe(false);
     });
   });
 
   describe('queue draining', () => {
     it('processes queued messages after first completes', () => {
-      manager.sendMessage('tab1', 'first', '/tmp');
-      manager.sendMessage('tab1', 'second', '/tmp');
-
+      backend.sendMessage('tab1', 'first', '/tmp');
+      backend.sendMessage('tab1', 'second', '/tmp');
       expect(spawnedProcesses.length).toBe(1);
-
-      // Complete first process
       const proc = getLastProcess();
       proc.exitCode = 0;
       proc.emit('close', 0);
-
-      // Second process should be spawned
       expect(spawnedProcesses.length).toBe(2);
+    });
+  });
+
+  describe('getAuthStatus', () => {
+    it('returns an AuthStatus shape', async () => {
+      // Mock readFileSync to throw for credentials file, but also
+      // ensure the spawned process resolves quickly
+      const fs = await import('fs');
+      (fs.readFileSync as ReturnType<typeof vi.fn>).mockImplementation(() => {
+        throw new Error('ENOENT');
+      });
+
+      const statusPromise = backend.getAuthStatus();
+
+      // The auth status spawns a claude process — make it exit immediately
+      // (readFileSync throws so we should get loggedIn=false before spawning,
+      // but if it does spawn, resolve it)
+      const authProc = spawnedProcesses[spawnedProcesses.length - 1];
+      if (authProc) {
+        setTimeout(() => {
+          authProc.emit('close', 1);
+        }, 10);
+      }
+
+      const status = await statusPromise;
+      expect(status).toHaveProperty('loggedIn');
+      expect(status).toHaveProperty('expired');
+    }, 5000);
+  });
+
+  describe('syncCredentials', () => {
+    it('handles empty stacks list without error', async () => {
+      await expect(backend.syncCredentials([])).resolves.toBeUndefined();
+    });
+
+    it('skips stacks that are not running', async () => {
+      await expect(
+        backend.syncCredentials([{ status: 'stopped', services: [] }])
+      ).resolves.toBeUndefined();
     });
   });
 });

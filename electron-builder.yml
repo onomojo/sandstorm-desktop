@@ -8,10 +8,13 @@ directories:
 files:
   - dist/**/*
   - package.json
-  - sandstorm-cli/**
 asarUnpack:
   - "**/*.node"
-  - "sandstorm-cli/**"
+extraResources:
+  - from: sandstorm-cli
+    to: sandstorm-cli
+    filter:
+      - "**/*"
 mac:
   target: [dmg]
   icon: resources/icon.icns
