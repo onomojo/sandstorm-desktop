@@ -18,6 +18,9 @@ echo "==> Building app..."
 npm run build
 
 echo "==> Rebuilding native modules for Electron..."
+# electron-rebuild recompiles native Node modules for Electron's Node version.
+# We use --only to skip cpu-features (transitive dep via ssh2) which fails to compile on Linux.
+# If you add a new native module, add it to the comma-separated list below.
 npx electron-rebuild --only better-sqlite3
 echo "    Native module rebuild step complete."
 
