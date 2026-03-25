@@ -58,20 +58,26 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
 
     const unsubDone = window.sandstorm.on(`claude:done:${tabId}`, () => {
       setIsQueued(false);
+      // Reset loading immediately — don't wait for async history fetch which
+      // can return a stale processing=true if the backend session is stuck.
+      setIsLoading(false);
       setStreamingContent((prev) => {
         if (prev) {
           setMessages((msgs) => [...msgs, { role: 'assistant', content: prev }]);
         }
         return '';
       });
-      // Re-fetch history to get authoritative state (processing flag, full messages)
+      // Re-fetch history to get authoritative message list
       window.sandstorm.claude.history(tabId).then((result) => {
         const typed = result.messages.map((m) => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
         }));
         setMessages(typed);
-        setIsLoading(result.processing);
+        // Only re-enable loading if backend is actively processing a queued message
+        if (result.processing) {
+          setIsLoading(true);
+        }
       });
     });
 

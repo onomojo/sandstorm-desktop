@@ -218,6 +218,42 @@ describe('ClaudeSessionManager', () => {
       expect(errors.length).toBe(1);
       expect(errors[0].args[0]).toBe('ENOENT: claude not found');
     });
+
+    it('resets processing flag on spawn error (fixes #28)', () => {
+      manager.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+
+      // Simulate spawn error without close event (e.g. ENOENT)
+      proc.emit('error', new Error('ENOENT: claude not found'));
+
+      // The session should no longer be stuck in processing state
+      const history = manager.getHistory('tab1');
+      expect(history.processing).toBe(false);
+    });
+
+    it('drains pending queue after spawn error (fixes #28)', () => {
+      manager.sendMessage('tab1', 'first', '/tmp');
+      manager.sendMessage('tab1', 'second', '/tmp');
+
+      expect(spawnedProcesses.length).toBe(1);
+
+      // First process fails with spawn error
+      const proc = getLastProcess();
+      proc.emit('error', new Error('ENOENT'));
+
+      // The queued second message should be spawned
+      expect(spawnedProcesses.length).toBe(2);
+    });
+
+    it('sets processing=false when queue is empty after spawn error (fixes #28)', () => {
+      manager.sendMessage('tab1', 'only-message', '/tmp');
+      const proc = getLastProcess();
+
+      proc.emit('error', new Error('ENOENT'));
+
+      const history = manager.getHistory('tab1');
+      expect(history.processing).toBe(false);
+    });
   });
 
   describe('queue draining', () => {

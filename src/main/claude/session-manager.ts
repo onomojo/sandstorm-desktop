@@ -431,7 +431,17 @@ rl.on('line', async (line) => {
 
     child.on('error', (err) => {
       clearTimeout(timeout);
-      if (session) session.process = null;
+      if (session) {
+        session.process = null;
+        // Drain pending messages queue — same as 'close' handler
+        if (session.pendingMessages.length > 0) {
+          const next = session.pendingMessages.shift()!;
+          this.log(`Dequeuing message after error for tab=${tabId} (remaining: ${session.pendingMessages.length})`);
+          this.spawnClaude(tabId, next, session.projectDir);
+        } else {
+          session.processing = false;
+        }
+      }
       this.log(`Spawn error for tab=${tabId}: ${err.message}`);
       send(`claude:error:${tabId}`, err.message);
     });

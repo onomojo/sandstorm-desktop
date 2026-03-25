@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 import { Dashboard } from '../../../src/renderer/components/Dashboard';
 import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
@@ -186,6 +186,28 @@ describe('Dashboard', () => {
     render(<Dashboard />);
     // Only active (running/up) count is displayed in the UI
     expect(screen.getByText('1 active')).toBeDefined();
+  });
+
+  it('cleans up body styles when unmounting mid-drag (fixes #28)', () => {
+    const { container, unmount } = render(<Dashboard />);
+
+    // Find the drag divider (the element with cursor-col-resize class)
+    const divider = container.querySelector('.cursor-col-resize');
+    expect(divider).not.toBeNull();
+
+    // Start a drag via mousedown on the divider
+    fireEvent.mouseDown(divider!);
+
+    // Body styles should now be set by the drag handler
+    expect(document.body.style.cursor).toBe('col-resize');
+    expect(document.body.style.userSelect).toBe('none');
+
+    // Unmount the component WITHOUT mouseup (simulates navigating to StackDetail mid-drag)
+    unmount();
+
+    // Body styles should be cleaned up by the effect cleanup
+    expect(document.body.style.cursor).toBe('');
+    expect(document.body.style.userSelect).toBe('');
   });
 
   it('filters stacks by active project', () => {
