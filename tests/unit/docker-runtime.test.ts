@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DockerRuntime } from '../../src/main/runtime/docker';
 
 // Mock dockerode
@@ -40,8 +40,14 @@ vi.mock('dockerode', () => {
             on: vi.fn().mockImplementation((event: string, cb: Function) => {
               if (event === 'end') setTimeout(cb, 10);
             }),
+            destroy: vi.fn(),
           }),
           inspect: vi.fn().mockResolvedValue({ ExitCode: 0 }),
+        }),
+        stats: vi.fn().mockResolvedValue({
+          memory_stats: { usage: 1024 * 1024, limit: 4 * 1024 * 1024 * 1024 },
+          cpu_stats: { cpu_usage: { total_usage: 2000 }, system_cpu_usage: 10000, online_cpus: 4 },
+          precpu_stats: { cpu_usage: { total_usage: 1000 }, system_cpu_usage: 9000 },
         }),
       }),
     })),
@@ -53,6 +59,10 @@ describe('DockerRuntime', () => {
 
   beforeEach(() => {
     runtime = new DockerRuntime();
+  });
+
+  afterEach(() => {
+    runtime.destroy();
   });
 
   it('reports availability via ping', async () => {
@@ -83,5 +93,51 @@ describe('DockerRuntime', () => {
 
   it('has correct name', () => {
     expect(runtime.name).toBe('docker');
+  });
+
+  // --- Connection manager integration ---
+
+  it('exposes connection manager', () => {
+    const cm = runtime.getConnectionManager();
+    expect(cm).toBeDefined();
+    expect(typeof cm.isConnected).toBe('boolean');
+  });
+
+  it('containerStats returns zeros when throttled', async () => {
+    const cm = runtime.getConnectionManager();
+    // Force throttle by reporting many failures
+    for (let i = 0; i < 5; i++) cm.reportFailure();
+
+    const stats = await runtime.containerStats('abc123');
+    expect(stats.memoryUsage).toBe(0);
+    expect(stats.cpuPercent).toBe(0);
+  });
+
+  it('containerStats returns zeros when stats slots exhausted', async () => {
+    const cm = runtime.getConnectionManager();
+    // Force connected state
+    cm.reportSuccess();
+    // Exhaust all stats slots
+    for (let i = 0; i < 10; i++) cm.acquireStatsSlot();
+
+    const stats = await runtime.containerStats('abc123');
+    expect(stats.memoryUsage).toBe(0);
+  });
+
+  it('listContainers returns empty array when throttled', async () => {
+    const cm = runtime.getConnectionManager();
+    for (let i = 0; i < 5; i++) cm.reportFailure();
+
+    const containers = await runtime.listContainers();
+    expect(containers).toEqual([]);
+  });
+
+  // --- Stream cleanup ---
+
+  it('destroy cleans up connection manager', () => {
+    const cm = runtime.getConnectionManager();
+    const stopSpy = vi.spyOn(cm, 'destroy');
+    runtime.destroy();
+    expect(stopSpy).toHaveBeenCalled();
   });
 });
