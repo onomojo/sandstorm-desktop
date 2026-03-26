@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi, type Mock } from 'vitest';
+import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -16,6 +17,7 @@ const {
   mockAgentBackend,
   mockDockerConnectionManager,
   mockCustomContext,
+  mockSpawn,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 
@@ -83,6 +85,8 @@ const {
     saveCustomSettings: vi.fn(),
   };
 
+  const mockSpawn = vi.fn();
+
   return {
     registeredHandlers,
     mockRegistry,
@@ -92,6 +96,7 @@ const {
     mockAgentBackend,
     mockDockerConnectionManager,
     mockCustomContext,
+    mockSpawn,
   };
 });
 
@@ -126,6 +131,10 @@ vi.mock('../../src/main/index', () => ({
 }));
 
 vi.mock('../../src/main/custom-context', () => mockCustomContext);
+
+vi.mock('child_process', () => ({
+  spawn: mockSpawn,
+}));
 
 // ---------------------------------------------------------------------------
 // Import after mocks
@@ -494,6 +503,82 @@ describe('IPC Handlers', () => {
       it('returns false for non-existent directory', async () => {
         const result = await invokeHandler('projects:checkInit', '/nonexistent/path');
         expect(result).toBe(false);
+      });
+    });
+
+    describe('projects:initialize', () => {
+      it('returns success when CLI init exits with code 0', async () => {
+        const child = new EventEmitter();
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        Object.assign(child, { stdout, stderr, stdin: null });
+        mockSpawn.mockReturnValue(child);
+
+        const promise = invokeHandler('projects:initialize', '/some/project');
+
+        // Simulate successful CLI exit
+        child.emit('close', 0);
+
+        const result = await promise;
+        expect(result).toEqual({ success: true });
+        expect(mockSpawn).toHaveBeenCalledWith(
+          'bash',
+          ['/tmp/sandstorm-cli/bin/sandstorm', 'init', '-y'],
+          expect.objectContaining({ cwd: '/some/project' }),
+        );
+      });
+
+      it('returns error when CLI init fails and project has a compose file', async () => {
+        const child = new EventEmitter();
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        Object.assign(child, { stdout, stderr, stdin: null });
+        mockSpawn.mockReturnValue(child);
+
+        // Create a temp dir with a docker-compose.yml so the handler surfaces the error
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-init-test-'));
+        fs.writeFileSync(path.join(tmpDir, 'docker-compose.yml'), 'services: {}');
+
+        const promise = invokeHandler('projects:initialize', tmpDir);
+
+        // Simulate CLI failure with stderr output
+        stderr.emit('data', Buffer.from('Docker daemon not running'));
+        child.emit('close', 1);
+
+        const result = await promise;
+        expect(result).toEqual({
+          success: false,
+          error: expect.stringContaining('Docker daemon not running'),
+        });
+
+        // Cleanup
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      });
+
+      it('returns error when spawn emits an error event', async () => {
+        const child = new EventEmitter();
+        const stdout = new EventEmitter();
+        const stderr = new EventEmitter();
+        Object.assign(child, { stdout, stderr, stdin: null });
+        mockSpawn.mockReturnValue(child);
+
+        // Create a temp dir with a docker-compose.yml
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-init-test-'));
+        fs.writeFileSync(path.join(tmpDir, 'docker-compose.yml'), 'services: {}');
+
+        const promise = invokeHandler('projects:initialize', tmpDir);
+
+        // Simulate spawn error (e.g., bash not found)
+        child.emit('error', new Error('spawn bash ENOENT'));
+
+        const result = await promise;
+        expect(result).toEqual({
+          success: false,
+          error: expect.stringContaining('spawn bash ENOENT'),
+        });
+
+        // Cleanup
+        fs.rmSync(tmpDir, { recursive: true, force: true });
       });
     });
   });
