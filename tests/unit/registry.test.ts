@@ -730,6 +730,33 @@ describe('Registry', () => {
       const task = registry.createTask('token-stack', 'test', 'sonnet');
       expect(task.model).toBe('sonnet');
     });
+
+    it('new tasks have zero loop iteration counts', () => {
+      const task = registry.createTask('token-stack', 'test');
+      expect(task.review_iterations).toBe(0);
+      expect(task.verify_retries).toBe(0);
+    });
+
+    it('setTaskIterations stores review iterations and verify retries', () => {
+      const task = registry.createTask('token-stack', 'test');
+      registry.setTaskIterations(task.id, 3, 1);
+
+      const tasks = registry.getTasksForStack('token-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.review_iterations).toBe(3);
+      expect(updated.verify_retries).toBe(1);
+    });
+
+    it('setTaskIterations overwrites previous values', () => {
+      const task = registry.createTask('token-stack', 'test');
+      registry.setTaskIterations(task.id, 2, 1);
+      registry.setTaskIterations(task.id, 5, 3);
+
+      const tasks = registry.getTasksForStack('token-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.review_iterations).toBe(5);
+      expect(updated.verify_retries).toBe(3);
+    });
   });
 
   // ===========================================

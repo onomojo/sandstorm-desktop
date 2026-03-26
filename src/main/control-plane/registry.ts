@@ -45,6 +45,8 @@ export interface Task {
   session_id: string | null;
   input_tokens: number;
   output_tokens: number;
+  review_iterations: number;
+  verify_retries: number;
   started_at: string;
   finished_at: string | null;
 }
@@ -257,8 +259,15 @@ export class Registry {
       this.setSchemaVersion(4);
     }
 
+    if (currentVersion < 5) {
+      // Add loop iteration tracking columns to tasks
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN review_iterations INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN verify_retries INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      this.setSchemaVersion(5);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 5) { ... this.setSchemaVersion(5); }
+    // if (currentVersion < 6) { ... this.setSchemaVersion(6); }
   }
 
   // --- Projects ---
@@ -401,6 +410,12 @@ export class Registry {
 
   setTaskSessionId(taskId: number, sessionId: string): void {
     this.db.prepare('UPDATE tasks SET session_id = ? WHERE id = ?').run(sessionId, taskId);
+  }
+
+  setTaskIterations(taskId: number, reviewIterations: number, verifyRetries: number): void {
+    this.db.prepare(
+      'UPDATE tasks SET review_iterations = ?, verify_retries = ? WHERE id = ?'
+    ).run(reviewIterations, verifyRetries, taskId);
   }
 
   getStackTokenUsage(stackId: string): TokenUsage {

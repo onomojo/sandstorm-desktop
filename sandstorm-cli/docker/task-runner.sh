@@ -417,6 +417,10 @@ while true; do
     rm -f /tmp/claude-review-task.log
     rm -f /tmp/claude-verify.log
 
+    # Write loop iteration counts for the task watcher to read
+    echo "${TOTAL_REVIEW_ITERATIONS}" > /tmp/claude-task.review-iterations
+    echo "${TOTAL_VERIFY_RETRIES}" > /tmp/claude-task.verify-retries
+
     if [ $TASK_DONE -eq 1 ]; then
       echo 0 > /tmp/claude-task.exit
       echo "completed" > /tmp/claude-task.status

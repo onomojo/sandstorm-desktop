@@ -796,6 +796,72 @@ describe('TaskWatcher', () => {
     watcher.unwatchAll();
   });
 
+  // --- Loop iteration reading ---
+
+  it('reads loop iteration counts from container on task completion', async () => {
+    const runtime = createSequencedRuntime(['running', 'completed'], '0');
+    const origExec = (runtime.exec as ReturnType<typeof vi.fn>).getMockImplementation()!;
+    (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+      async (id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.review-iterations')) {
+          return { exitCode: 0, stdout: '3', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-task.verify-retries')) {
+          return { exitCode: 0, stdout: '1', stderr: '' };
+        }
+        return origExec(id, cmd);
+      }
+    );
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'loop iteration task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    // Give async iteration reading time to complete
+    await new Promise((r) => setTimeout(r, 200));
+
+    const tasks = registry.getTasksForStack('watch-stack');
+    const task = tasks.find((t) => t.prompt === 'loop iteration task');
+    expect(task!.review_iterations).toBe(3);
+    expect(task!.verify_retries).toBe(1);
+
+    watcher.unwatchAll();
+  });
+
+  it('handles missing iteration files gracefully (single-pass task)', async () => {
+    const runtime = createSequencedRuntime(['running', 'completed'], '0');
+    const origExec = (runtime.exec as ReturnType<typeof vi.fn>).getMockImplementation()!;
+    (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+      async (id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.review-iterations') || cmd.includes('/tmp/claude-task.verify-retries')) {
+          throw new Error('No such file');
+        }
+        return origExec(id, cmd);
+      }
+    );
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'single-pass task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    const tasks = registry.getTasksForStack('watch-stack');
+    const task = tasks.find((t) => t.prompt === 'single-pass task');
+    expect(task!.review_iterations).toBe(0);
+    expect(task!.verify_retries).toBe(0);
+
+    watcher.unwatchAll();
+  });
+
   // --- Stale poll safety net ---
 
   it('accepts stale status after MAX_STALE_POLLS without seeing running', async () => {

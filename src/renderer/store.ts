@@ -46,6 +46,8 @@ export interface Task {
   session_id: string | null;
   input_tokens: number;
   output_tokens: number;
+  review_iterations: number;
+  verify_retries: number;
   started_at: string;
   finished_at: string | null;
 }
