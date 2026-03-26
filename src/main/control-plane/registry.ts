@@ -361,26 +361,30 @@ export class Registry {
   // --- Token Usage ---
 
   updateTaskTokens(taskId: number, inputTokens: number, outputTokens: number): void {
-    // Read old values first so we can compute the delta for the stack aggregate
-    const old = this.db.prepare(
-      'SELECT stack_id, input_tokens, output_tokens FROM tasks WHERE id = ?'
-    ).get(taskId) as { stack_id: string; input_tokens: number; output_tokens: number } | undefined;
-    if (!old) return;
+    // Wrap in a transaction to prevent race conditions from concurrent task completions
+    const updateFn = this.db.transaction(() => {
+      // Read old values first so we can compute the delta for the stack aggregate
+      const old = this.db.prepare(
+        'SELECT stack_id, input_tokens, output_tokens FROM tasks WHERE id = ?'
+      ).get(taskId) as { stack_id: string; input_tokens: number; output_tokens: number } | undefined;
+      if (!old) return;
 
-    const inputDelta = inputTokens - old.input_tokens;
-    const outputDelta = outputTokens - old.output_tokens;
+      const inputDelta = inputTokens - old.input_tokens;
+      const outputDelta = outputTokens - old.output_tokens;
 
-    // SET (not increment) — parseTokenUsage returns cumulative values
-    this.db.prepare(
-      'UPDATE tasks SET input_tokens = ?, output_tokens = ? WHERE id = ?'
-    ).run(inputTokens, outputTokens, taskId);
-
-    // Update stack aggregate by the delta
-    if (inputDelta !== 0 || outputDelta !== 0) {
+      // SET (not increment) — parseTokenUsage returns cumulative values
       this.db.prepare(
-        'UPDATE stacks SET total_input_tokens = total_input_tokens + ?, total_output_tokens = total_output_tokens + ? WHERE id = ?'
-      ).run(inputDelta, outputDelta, old.stack_id);
-    }
+        'UPDATE tasks SET input_tokens = ?, output_tokens = ? WHERE id = ?'
+      ).run(inputTokens, outputTokens, taskId);
+
+      // Update stack aggregate by the delta
+      if (inputDelta !== 0 || outputDelta !== 0) {
+        this.db.prepare(
+          'UPDATE stacks SET total_input_tokens = total_input_tokens + ?, total_output_tokens = total_output_tokens + ? WHERE id = ?'
+        ).run(inputDelta, outputDelta, old.stack_id);
+      }
+    });
+    updateFn();
   }
 
   setTaskSessionId(taskId: number, sessionId: string): void {
@@ -405,10 +409,10 @@ export class Registry {
     ).run(resetAt, stackId);
   }
 
-  clearRateLimit(stackId: string): void {
+  clearRateLimit(stackId: string, targetStatus: StackStatus = 'idle'): void {
     this.db.prepare(
-      "UPDATE stacks SET rate_limit_reset_at = NULL, status = 'idle', updated_at = datetime('now') WHERE id = ?"
-    ).run(stackId);
+      "UPDATE stacks SET rate_limit_reset_at = NULL, status = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(targetStatus, stackId);
   }
 
   getRateLimitedStacks(): Stack[] {

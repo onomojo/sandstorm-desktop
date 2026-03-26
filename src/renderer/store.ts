@@ -350,9 +350,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({ stackMetrics: metrics });
 
-      // Also refresh token usage and rate limit state
-      await get().refreshTokenUsage();
-      await get().refreshRateLimitState();
+      // Also refresh token usage and rate limit state in parallel
+      await Promise.all([
+        get().refreshTokenUsage(),
+        get().refreshRateLimitState(),
+      ]);
     } catch {
       // Metrics refresh failure is non-fatal
     }

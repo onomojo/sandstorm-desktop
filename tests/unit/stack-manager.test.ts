@@ -840,4 +840,146 @@ describe('StackManager', () => {
       expect(updateCallback).toHaveBeenCalled();
     });
   });
+
+  describe('rate limit handling', () => {
+    it('blocks dispatch when rate limited', async () => {
+      registry.createStack(makeStack('rl-block'));
+
+      // Simulate rate limit by emitting event through task watcher
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'rl-block',
+        rateLimit: {
+          reset_at: new Date(Date.now() + 60000).toISOString(),
+          reason: 'Rate limit exceeded',
+        },
+      });
+
+      await expect(
+        manager.dispatchTask('rl-block', 'do work')
+      ).rejects.toThrow('rate limit');
+    });
+
+    it('handleRateLimit skips stacks in terminal status', () => {
+      registry.createStack(makeStack('rl-completed'));
+      registry.updateStackStatus('rl-completed', 'completed');
+      registry.createStack(makeStack('rl-failed'));
+      registry.updateStackStatus('rl-failed', 'failed');
+      registry.createStack(makeStack('rl-running'));
+      registry.updateStackStatus('rl-running', 'running');
+
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'rl-completed',
+        rateLimit: {
+          reset_at: new Date(Date.now() + 60000).toISOString(),
+          reason: 'Rate limit exceeded',
+        },
+      });
+
+      // Completed and failed stacks should NOT be marked as rate_limited
+      expect(registry.getStack('rl-completed')!.status).toBe('completed');
+      expect(registry.getStack('rl-failed')!.status).toBe('failed');
+      // Running stack should be marked as rate_limited
+      expect(registry.getStack('rl-running')!.status).toBe('rate_limited');
+    });
+
+    it('getRateLimitState returns correct state', () => {
+      registry.createStack(makeStack('rl-state'));
+      const resetAt = new Date(Date.now() + 60000).toISOString();
+      registry.setRateLimitReset('rl-state', resetAt);
+
+      const state = manager.getRateLimitState();
+      expect(state.active).toBe(true);
+      expect(state.affected_stacks).toContain('rl-state');
+      expect(state.reset_at).toBe(resetAt);
+    });
+
+    it('isRateLimited returns false when no stacks are limited', () => {
+      expect(manager.isRateLimited()).toBe(false);
+    });
+
+    it('schedules auto-resume timer on rate limit', () => {
+      registry.createStack(makeStack('rl-timer'));
+      registry.updateStackStatus('rl-timer', 'running');
+
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'rl-timer',
+        rateLimit: {
+          reset_at: new Date(Date.now() + 60000).toISOString(),
+          reason: 'Rate limit exceeded',
+        },
+      });
+
+      // The global rate limit should be active
+      expect(manager.isRateLimited()).toBe(true);
+    });
+
+    it('resumeRateLimitedStacks clears expired rate limits on startup', () => {
+      registry.createStack(makeStack('rl-expired'));
+      // Set a rate limit that expired in the past
+      registry.setRateLimitReset('rl-expired', new Date(Date.now() - 60000).toISOString());
+
+      manager.resumeRateLimitedStacks();
+
+      const stack = registry.getStack('rl-expired');
+      expect(stack!.status).toBe('idle');
+      expect(stack!.rate_limit_reset_at).toBeNull();
+    });
+
+    it('resumeRateLimitedStacks keeps future rate limits and re-schedules', () => {
+      registry.createStack(makeStack('rl-future'));
+      const futureReset = new Date(Date.now() + 300000).toISOString();
+      registry.setRateLimitReset('rl-future', futureReset);
+
+      manager.resumeRateLimitedStacks();
+
+      // Stack should still be rate_limited since the reset is in the future
+      const stack = registry.getStack('rl-future');
+      expect(stack!.status).toBe('rate_limited');
+      // Global rate limit should be active (timer scheduled)
+      expect(manager.isRateLimited()).toBe(true);
+    });
+
+    it('destroy clears all timers', () => {
+      registry.createStack(makeStack('rl-destroy'));
+      registry.updateStackStatus('rl-destroy', 'running');
+
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'rl-destroy',
+        rateLimit: {
+          reset_at: new Date(Date.now() + 60000).toISOString(),
+          reason: 'Rate limit exceeded',
+        },
+      });
+
+      // Should not throw
+      manager.destroy();
+    });
+  });
+
+  describe('token usage', () => {
+    it('getStackTokenUsage returns zeros for stack with no tokens', () => {
+      registry.createStack(makeStack('token-test'));
+      const usage = manager.getStackTokenUsage('token-test');
+      expect(usage.input_tokens).toBe(0);
+      expect(usage.output_tokens).toBe(0);
+      expect(usage.total_tokens).toBe(0);
+    });
+
+    it('getGlobalTokenUsage aggregates across stacks', () => {
+      registry.createStack(makeStack('tok-1'));
+      registry.createStack(makeStack('tok-2'));
+
+      // Create tasks and update tokens to populate aggregates
+      const task1 = registry.createTask('tok-1', 'task 1');
+      registry.updateTaskTokens(task1.id, 100, 50);
+      const task2 = registry.createTask('tok-2', 'task 2');
+      registry.updateTaskTokens(task2.id, 200, 100);
+
+      const global = manager.getGlobalTokenUsage();
+      expect(global.total_input_tokens).toBe(300);
+      expect(global.total_output_tokens).toBe(150);
+      expect(global.total_tokens).toBe(450);
+      expect(global.per_stack).toHaveLength(2);
+    });
+  });
 });

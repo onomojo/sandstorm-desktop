@@ -127,8 +127,8 @@ function parseResetTime(output: string): string | null {
     return new Date(Date.now() + ms).toISOString();
   }
 
-  // Default: assume 1 hour reset if we can't parse the time
-  return new Date(Date.now() + 3600 * 1000).toISOString();
+  // No recognizable time pattern — return null; callers should apply their own default
+  return null;
 }
 
 /**

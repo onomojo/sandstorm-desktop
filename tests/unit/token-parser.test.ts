@@ -126,13 +126,10 @@ describe('parseRateLimit', () => {
     expect(Math.abs(resetTime - expected)).toBeLessThan(5000);
   });
 
-  it('defaults to 1 hour if no time can be parsed', () => {
+  it('returns null reset_at when no time can be parsed', () => {
     const result = parseRateLimit('rate limit exceeded');
     expect(result).not.toBeNull();
-
-    const resetTime = new Date(result!.reset_at!).getTime();
-    const expected = Date.now() + 3600 * 1000;
-    expect(Math.abs(resetTime - expected)).toBeLessThan(5000);
+    expect(result!.reset_at).toBeNull();
   });
 
   it('extracts reason from JSON error', () => {

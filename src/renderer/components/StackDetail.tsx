@@ -4,7 +4,7 @@ import { ServiceList } from './ServiceList';
 import { TaskOutput } from './TaskOutput';
 import { DiffViewer } from './DiffViewer';
 import { LogViewer } from './LogViewer';
-import { formatTokenCount as formatDetailTokens } from '../utils/format';
+import { formatTokenCount, formatBytes, formatMs } from '../utils/format';
 
 type Tab = 'output' | 'diff' | 'logs' | 'history';
 
@@ -182,7 +182,7 @@ export function StackDetail({
       {(metrics || stack.total_input_tokens > 0 || stack.total_output_tokens > 0) && (
         <div className="px-5 py-2 border-b border-sandstorm-border shrink-0 flex items-center gap-4 text-[11px]">
           {metrics && metrics.totalMemory > 0 && (
-            <MetricBadge label="Memory" value={formatDetailBytes(metrics.totalMemory)} />
+            <MetricBadge label="Memory" value={formatBytes(metrics.totalMemory)} />
           )}
           {metrics && metrics.containers.length > 0 && (
             <MetricBadge
@@ -199,7 +199,7 @@ export function StackDetail({
               {metrics.taskMetrics.avgTaskDurationMs > 0 && (
                 <MetricBadge
                   label="Avg Task"
-                  value={formatDetailMs(metrics.taskMetrics.avgTaskDurationMs)}
+                  value={formatMs(metrics.taskMetrics.avgTaskDurationMs)}
                 />
               )}
             </>
@@ -214,15 +214,15 @@ export function StackDetail({
             <>
               <MetricBadge
                 label="Input"
-                value={formatDetailTokens(stack.total_input_tokens)}
+                value={formatTokenCount(stack.total_input_tokens)}
               />
               <MetricBadge
                 label="Output"
-                value={formatDetailTokens(stack.total_output_tokens)}
+                value={formatTokenCount(stack.total_output_tokens)}
               />
               <MetricBadge
                 label="Total"
-                value={formatDetailTokens(stack.total_input_tokens + stack.total_output_tokens)}
+                value={formatTokenCount(stack.total_input_tokens + stack.total_output_tokens)}
               />
             </>
           )}
@@ -376,21 +376,6 @@ export function StackDetail({
     </div>
   );
 }
-
-function formatDetailBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(0)} MB`;
-  return `${(bytes / 1073741824).toFixed(1)} GB`;
-}
-
-function formatDetailMs(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(0)}s`;
-  return `${(ms / 60000).toFixed(1)}m`;
-}
-
 
 function MetricBadge({ label, value }: { label: string; value: string }) {
   return (

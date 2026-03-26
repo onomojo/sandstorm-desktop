@@ -1,15 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 import { getStackDuration, isTerminalStatus, DURATION_UPDATE_INTERVAL } from '../utils/duration';
-import { formatTokenCount } from '../utils/format';
-
-function formatBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(0)} MB`;
-  return `${(bytes / 1073741824).toFixed(1)} GB`;
-}
+import { formatTokenCount, formatBytes } from '../utils/format';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',

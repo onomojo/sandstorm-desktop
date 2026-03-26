@@ -675,16 +675,20 @@ export class StackManager {
 
     // All stacks share the same Claude API account, so a rate limit on one
     // stack means all stacks are affected. Mark all running stacks.
+    // Skip stacks already in terminal status (completed/failed) — their task
+    // is done and overwriting status would be incorrect.
+    const terminalStatuses = new Set(['completed', 'failed']);
     const stacks = this.registry.listStacks();
+    const resetAt = rateLimit.reset_at ?? new Date(Date.now() + 3600000).toISOString();
     for (const stack of stacks) {
-      if (stack.status === 'running') {
-        const resetAt = rateLimit.reset_at ?? new Date(Date.now() + 3600000).toISOString();
+      if (stack.status === 'running' && !terminalStatuses.has(stack.status)) {
         this.registry.setRateLimitReset(stack.id, resetAt);
       }
     }
 
-    // Also mark the triggering stack if not already
-    if (rateLimit.reset_at) {
+    // Also mark the triggering stack if not already in a terminal status
+    const triggeringStack = this.registry.getStack(stackId);
+    if (rateLimit.reset_at && triggeringStack && !terminalStatuses.has(triggeringStack.status)) {
       this.registry.setRateLimitReset(stackId, rateLimit.reset_at);
     }
 
@@ -701,11 +705,10 @@ export class StackManager {
     const delayMs = Math.max(0, resetTime - Date.now()) + 5000; // 5s buffer after reset
 
     // Clear any existing global resume timer
-    for (const [key, timer] of this.rateLimitResumeTimers) {
-      if (key === '__global__') {
-        clearTimeout(timer);
-        this.rateLimitResumeTimers.delete(key);
-      }
+    const existing = this.rateLimitResumeTimers.get('__global__');
+    if (existing) {
+      clearTimeout(existing);
+      this.rateLimitResumeTimers.delete('__global__');
     }
 
     const timer = setTimeout(() => {
@@ -722,24 +725,22 @@ export class StackManager {
     const limitedStacks = this.registry.getRateLimitedStacks();
 
     for (const stack of limitedStacks) {
-      // Clear the rate limit status
-      this.registry.clearRateLimit(stack.id);
-
       // Find the last task for this stack to get its session_id
       const tasks = this.registry.getTasksForStack(stack.id);
       const lastTask = tasks[0]; // Most recent (sorted DESC)
 
       if (lastTask && lastTask.session_id && lastTask.prompt) {
-        // Resume the task using the session ID
+        // Clear rate limit and set to running atomically before attempting resume
+        this.registry.clearRateLimit(stack.id, 'running');
         try {
           await this.resumeTask(stack.id, lastTask.prompt, lastTask.session_id);
         } catch {
-          // If resume fails, just mark stack as failed
+          // If resume fails, mark stack as failed (not stuck in running)
           this.registry.updateStackStatus(stack.id, 'failed', 'Auto-resume after rate limit failed');
         }
       } else {
         // No session to resume — mark as idle so user can manually re-dispatch
-        this.registry.updateStackStatus(stack.id, 'idle');
+        this.registry.clearRateLimit(stack.id, 'idle');
       }
     }
 
@@ -767,17 +768,25 @@ export class StackManager {
       // Store the session ID on the new task for future resume capability
       this.registry.setTaskSessionId(task.id, sessionId);
 
-      // Dispatch with resume session — the CLI task command should support session resume
-      const result = await this.runCli(stack.project_dir, [
+      // Try to resume with --resume flag; fall back to re-dispatching the original prompt
+      // if the CLI doesn't support session resume
+      let result = await this.runCli(stack.project_dir, [
         'task', stackId, 'continue',
-        '--session', sessionId,
+        '--resume', sessionId,
       ]);
 
       if (result.exitCode !== 0) {
-        throw new SandstormError(
-          ErrorCode.TASK_DISPATCH_FAILED,
-          result.stderr.trim() || result.stdout.trim() || 'Task resume failed'
-        );
+        const errMsg = result.stderr.trim() || result.stdout.trim() || '';
+        // If the CLI doesn't recognize --resume, fall back to plain dispatch
+        if (errMsg.includes('unknown option') || errMsg.includes('unrecognized') || errMsg.includes('--resume')) {
+          result = await this.runCli(stack.project_dir, ['task', stackId, originalPrompt]);
+        }
+        if (result.exitCode !== 0) {
+          throw new SandstormError(
+            ErrorCode.TASK_DISPATCH_FAILED,
+            result.stderr.trim() || result.stdout.trim() || 'Task resume failed'
+          );
+        }
       }
 
       this.taskWatcher.watch(stackId, claudeContainer.id);
@@ -789,6 +798,55 @@ export class StackManager {
       this.notifyUpdate();
       throw err;
     }
+  }
+
+  /**
+   * On startup, recover stacks stuck in rate_limited status.
+   * Re-schedules resume timers or clears rate limit state.
+   * Similar to how running tasks are resumed on restart.
+   */
+  resumeRateLimitedStacks(): void {
+    const limitedStacks = this.registry.getRateLimitedStacks();
+    if (limitedStacks.length === 0) return;
+
+    // Check if any stack has a future reset time we can schedule
+    const now = Date.now();
+    let latestResetAt: string | null = null;
+
+    for (const stack of limitedStacks) {
+      if (stack.rate_limit_reset_at) {
+        const resetTime = new Date(stack.rate_limit_reset_at).getTime();
+        if (resetTime > now) {
+          // Still in the future — keep rate_limited and schedule resume
+          if (!latestResetAt || resetTime > new Date(latestResetAt).getTime()) {
+            latestResetAt = stack.rate_limit_reset_at;
+          }
+        } else {
+          // Reset time has passed — clear immediately
+          this.registry.clearRateLimit(stack.id, 'idle');
+        }
+      } else {
+        // No reset time — clear the stale rate limit
+        this.registry.clearRateLimit(stack.id, 'idle');
+      }
+    }
+
+    if (latestResetAt) {
+      this.globalRateLimitActive = true;
+      this.scheduleAutoResume(latestResetAt);
+    }
+
+    this.notifyUpdate();
+  }
+
+  /**
+   * Clean up timers. Call from the app shutdown path.
+   */
+  destroy(): void {
+    for (const timer of this.rateLimitResumeTimers.values()) {
+      clearTimeout(timer);
+    }
+    this.rateLimitResumeTimers.clear();
   }
 
   /**
