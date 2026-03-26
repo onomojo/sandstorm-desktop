@@ -10,6 +10,8 @@ const STATUS_COLORS: Record<string, string> = {
   failed: 'bg-red-400',
   idle: 'bg-amber-400',
   stopped: 'bg-gray-500',
+  pushed: 'bg-violet-400',
+  pr_created: 'bg-violet-400',
 };
 
 const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
@@ -20,6 +22,8 @@ const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
   failed: { bg: 'bg-red-500/10 border-red-500/20', text: 'text-red-400' },
   idle: { bg: 'bg-amber-500/10 border-amber-500/20', text: 'text-amber-400' },
   stopped: { bg: 'bg-gray-500/10 border-gray-500/20', text: 'text-gray-400' },
+  pushed: { bg: 'bg-violet-500/10 border-violet-500/20', text: 'text-violet-400' },
+  pr_created: { bg: 'bg-violet-500/10 border-violet-500/20', text: 'text-violet-400' },
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -30,6 +34,8 @@ const STATUS_LABELS: Record<string, string> = {
   failed: 'Failed',
   idle: 'Idle',
   stopped: 'Stopped',
+  pushed: 'Pushed',
+  pr_created: 'PR Open',
 };
 
 function timeAgo(dateStr: string): string {
@@ -234,9 +240,26 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
         </div>
       </div>
 
+      {/* PR badge for pr_created stacks */}
+      {stack.status === 'pr_created' && stack.pr_url && (
+        <div className="mt-2 ml-5">
+          <a
+            href={stack.pr_url}
+            onClick={(e) => { e.stopPropagation(); window.open(stack.pr_url!, '_blank'); e.preventDefault(); }}
+            className="inline-flex items-center gap-1.5 text-[11px] font-medium text-violet-400 bg-violet-500/10 border border-violet-500/20 rounded-md px-2 py-1 hover:bg-violet-500/20 transition-colors"
+            data-testid={`pr-link-${stack.id}`}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 012 2v7"/><path d="M6 9v12"/>
+            </svg>
+            PR #{stack.pr_number}
+          </a>
+        </div>
+      )}
+
       {/* Action buttons */}
       <div className="mt-3 ml-5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-        {stack.status === 'completed' && (
+        {(stack.status === 'completed' || stack.status === 'pushed' || stack.status === 'pr_created') && (
           <>
             <ActionButton label="View Diff" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
             <ActionButton label="Push" onClick={(e) => { e.stopPropagation(); window.sandstorm.push.execute(stack.id); }} primary />
@@ -245,13 +268,13 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
         {stack.status === 'running' && (
           <ActionButton label="View Output" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
         )}
-        {(stack.status === 'up' || stack.status === 'idle') && (
+        {(stack.status === 'up' || stack.status === 'idle' || stack.status === 'pushed' || stack.status === 'pr_created') && (
           <ActionButton label="New Task" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
         )}
         {stack.status === 'stopped' && (
           <ActionButton label="Start" onClick={handleStart} primary />
         )}
-        {(stack.status === 'up' || stack.status === 'idle' || stack.status === 'running' || stack.status === 'completed') && (
+        {(stack.status === 'up' || stack.status === 'idle' || stack.status === 'running' || stack.status === 'completed' || stack.status === 'pushed' || stack.status === 'pr_created') && (
           <ActionButton label="Stop" onClick={handleStop} />
         )}
         {stack.status !== 'stopped' && (

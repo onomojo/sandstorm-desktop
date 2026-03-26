@@ -221,11 +221,41 @@ describe('Registry', () => {
 
     it('cycles through all valid statuses', () => {
       registry.createStack(makeStack({ id: 'cycle' }));
-      const statuses = ['building', 'up', 'running', 'completed', 'failed', 'idle', 'stopped'] as const;
+      const statuses = ['building', 'up', 'running', 'completed', 'failed', 'idle', 'stopped', 'pushed', 'pr_created'] as const;
       for (const s of statuses) {
         registry.updateStackStatus('cycle', s);
         expect(registry.getStack('cycle')!.status).toBe(s);
       }
+    });
+
+    it('has null pr_url and pr_number by default', () => {
+      registry.createStack(makeStack({ id: 'pr-default' }));
+      const stack = registry.getStack('pr-default');
+      expect(stack!.pr_url).toBeNull();
+      expect(stack!.pr_number).toBeNull();
+    });
+
+    it('setPullRequest stores PR info and sets status to pr_created', () => {
+      registry.createStack(makeStack({ id: 'pr-test' }));
+      registry.updateStackStatus('pr-test', 'pushed');
+      registry.setPullRequest('pr-test', 'https://github.com/org/repo/pull/42', 42);
+
+      const stack = registry.getStack('pr-test');
+      expect(stack!.status).toBe('pr_created');
+      expect(stack!.pr_url).toBe('https://github.com/org/repo/pull/42');
+      expect(stack!.pr_number).toBe(42);
+    });
+
+    it('transitions from up to pushed to pr_created', () => {
+      registry.createStack(makeStack({ id: 'lifecycle' }));
+      registry.updateStackStatus('lifecycle', 'up');
+      expect(registry.getStack('lifecycle')!.status).toBe('up');
+
+      registry.updateStackStatus('lifecycle', 'pushed');
+      expect(registry.getStack('lifecycle')!.status).toBe('pushed');
+
+      registry.setPullRequest('lifecycle', 'https://github.com/org/repo/pull/1', 1);
+      expect(registry.getStack('lifecycle')!.status).toBe('pr_created');
     });
 
     it('deletes a stack', () => {

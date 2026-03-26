@@ -18,6 +18,8 @@ const STATUS_COLORS: Record<string, string> = {
   failed: 'bg-red-400',
   idle: 'bg-amber-400',
   stopped: 'bg-gray-500',
+  pushed: 'bg-violet-400',
+  pr_created: 'bg-violet-400',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -28,6 +30,8 @@ const STATUS_LABELS: Record<string, string> = {
   failed: 'Failed',
   idle: 'Idle',
   stopped: 'Stopped',
+  pushed: 'Pushed',
+  pr_created: 'PR Open',
 };
 
 export function StackTableRow({ stack, showProject, columnWidths }: { stack: Stack; showProject?: boolean; columnWidths?: Record<string, number> }) {

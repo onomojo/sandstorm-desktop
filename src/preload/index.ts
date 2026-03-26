@@ -17,6 +17,7 @@ export interface SandstormAPI {
     stop: (id: string) => Promise<void>;
     start: (id: string) => Promise<void>;
     history: () => Promise<unknown[]>;
+    setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
   };
   tasks: {
     dispatch: (stackId: string, prompt: string) => Promise<unknown>;
@@ -85,6 +86,8 @@ const api: SandstormAPI = {
     stop: (id) => ipcRenderer.invoke('stacks:stop', id),
     start: (id) => ipcRenderer.invoke('stacks:start', id),
     history: () => ipcRenderer.invoke('stacks:history'),
+    setPr: (id: string, prUrl: string, prNumber: number) =>
+      ipcRenderer.invoke('stacks:setPr', id, prUrl, prNumber),
   },
   tasks: {
     dispatch: (stackId, prompt) =>

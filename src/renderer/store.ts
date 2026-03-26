@@ -16,6 +16,8 @@ export interface Stack {
   description: string | null;
   status: string;
   error: string | null;
+  pr_url: string | null;
+  pr_number: number | null;
   runtime: 'docker' | 'podman';
   created_at: string;
   updated_at: string;
@@ -152,6 +154,7 @@ declare global {
         stop: (id: string) => Promise<void>;
         start: (id: string) => Promise<void>;
         history: () => Promise<StackHistoryRecord[]>;
+        setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
       };
       tasks: {
         dispatch: (stackId: string, prompt: string) => Promise<Task>;
@@ -283,7 +286,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { stacks, dockerConnected } = get();
       // Skip metrics refresh when Docker is disconnected
       if (!dockerConnected) return;
-      const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed']);
+      const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed', 'pushed', 'pr_created']);
       const activeStacks = stacks.filter((s) => activeStatuses.has(s.status));
       const metrics: Record<string, StackMetrics> = {};
 

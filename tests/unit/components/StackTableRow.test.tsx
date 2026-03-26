@@ -18,6 +18,8 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     description: null,
     status: 'running',
     error: null,
+    pr_url: null,
+    pr_number: null,
     runtime: 'docker',
     created_at: '2026-03-25 10:00:00',
     updated_at: '2026-03-25 10:05:00',

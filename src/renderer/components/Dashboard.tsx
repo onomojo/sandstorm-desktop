@@ -221,7 +221,7 @@ export function Dashboard() {
   }
 
   const runningCount = stacks.filter((s) => s.status === 'running' || s.status === 'up').length;
-  const completedCount = stacks.filter((s) => s.status === 'completed').length;
+  const completedCount = stacks.filter((s) => s.status === 'completed' || s.status === 'pushed' || s.status === 'pr_created').length;
   const stoppedCount = stacks.filter((s) => s.status === 'stopped').length;
 
   const title = project ? project.name : 'All Stacks';

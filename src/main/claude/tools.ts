@@ -131,6 +131,20 @@ export const tools: ToolDefinition[] = [
       required: ['stackId'],
     },
   },
+  {
+    name: 'set_pr',
+    description:
+      'Record that a pull request was created for a stack. Updates the stack status to pr_created and stores the PR URL and number.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        stackId: { type: 'string', description: 'Stack ID' },
+        prUrl: { type: 'string', description: 'Full URL of the pull request' },
+        prNumber: { type: 'number', description: 'Pull request number' },
+      },
+      required: ['stackId', 'prUrl', 'prNumber'],
+    },
+  },
 ];
 
 export async function handleToolCall(
@@ -186,6 +200,14 @@ export async function handleToolCall(
         input.stackId as string,
         input.service as string | undefined
       );
+
+    case 'set_pr':
+      stackManager.setPullRequest(
+        input.stackId as string,
+        input.prUrl as string,
+        input.prNumber as number
+      );
+      return { success: true };
 
     default:
       throw new Error(`Unknown tool: ${name}`);

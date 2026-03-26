@@ -318,6 +318,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   );
 
+  ipcMain.handle(
+    'stacks:setPr',
+    (_event, stackId: string, prUrl: string, prNumber: number) => {
+      stackManager.setPullRequest(stackId, prUrl, prNumber);
+    }
+  );
+
   // --- Ports ---
 
   ipcMain.handle('ports:get', async (_event, stackId: string) => {

@@ -421,6 +421,17 @@ export class StackManager {
     if (result.exitCode !== 0) {
       throw new SandstormError(ErrorCode.COMPOSE_FAILED, result.stderr.trim() || result.stdout.trim() || 'Push failed');
     }
+
+    this.registry.updateStackStatus(stackId, 'pushed');
+    this.notifyUpdate();
+  }
+
+  setPullRequest(stackId: string, prUrl: string, prNumber: number): void {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+
+    this.registry.setPullRequest(stackId, prUrl, prNumber);
+    this.notifyUpdate();
   }
 
   getTaskStatus(stackId: string): { status: string; task?: Task } {

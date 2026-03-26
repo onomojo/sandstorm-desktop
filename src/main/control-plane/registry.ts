@@ -12,6 +12,8 @@ export interface Stack {
   description: string | null;
   status: StackStatus;
   error: string | null;
+  pr_url: string | null;
+  pr_number: number | null;
   runtime: 'docker' | 'podman';
   created_at: string;
   updated_at: string;
@@ -24,7 +26,9 @@ export type StackStatus =
   | 'completed'
   | 'failed'
   | 'idle'
-  | 'stopped';
+  | 'stopped'
+  | 'pushed'
+  | 'pr_created';
 
 export interface Task {
   id: number;
@@ -190,6 +194,17 @@ export class Registry {
     }
 
     if (currentVersion < 2) {
+      // Add pr_url and pr_number columns for pushed/pr_created statuses
+      try {
+        this.db.exec('ALTER TABLE stacks ADD COLUMN pr_url TEXT');
+      } catch {
+        // Column already exists
+      }
+      try {
+        this.db.exec('ALTER TABLE stacks ADD COLUMN pr_number INTEGER');
+      } catch {
+        // Column already exists
+      }
       // Add warnings column to tasks table
       try {
         this.db.exec('ALTER TABLE tasks ADD COLUMN warnings TEXT');
@@ -228,7 +243,7 @@ export class Registry {
 
   // --- Stacks ---
 
-  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error'>): Stack {
+  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number'>): Stack {
     const normalizedDir = path.resolve(stack.project_dir);
     this.db.prepare(
       `INSERT INTO stacks (id, project, project_dir, ticket, branch, description, status, runtime)
@@ -255,6 +270,12 @@ export class Registry {
         "UPDATE stacks SET status = ?, updated_at = datetime('now') WHERE id = ?"
       ).run(status, id);
     }
+  }
+
+  setPullRequest(id: string, prUrl: string, prNumber: number): void {
+    this.db.prepare(
+      "UPDATE stacks SET status = 'pr_created', pr_url = ?, pr_number = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(prUrl, prNumber, id);
   }
 
   deleteStack(id: string): void {
