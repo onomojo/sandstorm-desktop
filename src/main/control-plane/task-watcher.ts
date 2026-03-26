@@ -1,12 +1,14 @@
 import { EventEmitter } from 'events';
 import { Registry, Task } from './registry';
 import { ContainerRuntime } from '../runtime/types';
+import { parseTokenUsage, parseRateLimit, ParsedRateLimit } from './token-parser';
 
 export interface TaskEvents {
   'task:started': { stackId: string; task: Task };
   'task:completed': { stackId: string; task: Task };
   'task:failed': { stackId: string; task: Task };
   'task:output': { stackId: string; taskId: number; data: string };
+  'task:rate_limited': { stackId: string; rateLimit: ParsedRateLimit };
 }
 
 /** Max consecutive exec failures before marking a task as failed */
@@ -109,6 +111,11 @@ export class TaskWatcher extends EventEmitter {
       }
     }
 
+    // Read token usage and session ID from task log (async, best-effort)
+    if (containerId) {
+      this.readTaskTokens(task.id, stackId, containerId).catch(() => {});
+    }
+
     const updatedTask = {
       ...task,
       status,
@@ -121,6 +128,62 @@ export class TaskWatcher extends EventEmitter {
     this.emit(event, { stackId, task: updatedTask });
     this.onStatusChange?.();
     this.unwatch(stackId);
+  }
+
+  /**
+   * Read token usage from the task log file inside the container.
+   * Also detects rate limit errors and emits events accordingly.
+   */
+  private async readTaskTokens(
+    taskId: number,
+    stackId: string,
+    containerId: string
+  ): Promise<void> {
+    let rateLimitEmitted = false;
+
+    try {
+      const result = await this.runtime.exec(containerId, [
+        'cat', '/tmp/claude-task.log',
+      ]);
+      const output = result.stdout;
+
+      // Parse token usage
+      const usage = parseTokenUsage(output);
+      if (usage.input_tokens > 0 || usage.output_tokens > 0) {
+        this.registry.updateTaskTokens(taskId, usage.input_tokens, usage.output_tokens);
+      }
+
+      // Store session ID for potential resume
+      if (usage.session_id) {
+        this.registry.setTaskSessionId(taskId, usage.session_id);
+      }
+
+      // Check for rate limit errors
+      const rateLimit = parseRateLimit(output);
+      if (rateLimit) {
+        this.emit('task:rate_limited', { stackId, rateLimit });
+        rateLimitEmitted = true;
+        this.onStatusChange?.();
+      }
+    } catch {
+      // Best effort — container may be unreachable
+    }
+
+    // Also check stderr for rate limit info (skip if already detected)
+    if (!rateLimitEmitted) {
+      try {
+        const stderrResult = await this.runtime.exec(containerId, [
+          'cat', '/tmp/claude-task.stderr',
+        ]);
+        const rateLimit = parseRateLimit(stderrResult.stdout);
+        if (rateLimit) {
+          this.emit('task:rate_limited', { stackId, rateLimit });
+          this.onStatusChange?.();
+        }
+      } catch {
+        // stderr file may not exist
+      }
+    }
   }
 
   /**

@@ -47,6 +47,9 @@ export function mockSandstormApi() {
       stackMemory: vi.fn().mockResolvedValue(0),
       stackDetailed: vi.fn().mockResolvedValue({ stackId: '', totalMemory: 0, containers: [] }),
       taskMetrics: vi.fn().mockResolvedValue({ stackId: '', totalTasks: 0, completedTasks: 0, failedTasks: 0, runningTasks: 0, avgTaskDurationMs: 0 }),
+      tokenUsage: vi.fn().mockResolvedValue({ stackId: '', input_tokens: 0, output_tokens: 0, total_tokens: 0 }),
+      globalTokenUsage: vi.fn().mockResolvedValue({ total_input_tokens: 0, total_output_tokens: 0, total_tokens: 0, per_stack: [] }),
+      rateLimit: vi.fn().mockResolvedValue({ active: false, reset_at: null, affected_stacks: [], reason: null }),
     },
     runtime: {
       available: vi.fn().mockResolvedValue({ docker: true, podman: false }),

@@ -4,6 +4,7 @@ import { ServiceList } from './ServiceList';
 import { TaskOutput } from './TaskOutput';
 import { DiffViewer } from './DiffViewer';
 import { LogViewer } from './LogViewer';
+import { formatTokenCount, formatBytes, formatMs } from '../utils/format';
 
 type Tab = 'output' | 'diff' | 'logs' | 'history';
 
@@ -106,6 +107,7 @@ export function StackDetail({
     completed: 'Needs Review',
     pushed: 'Pushed',
     pr_created: 'PR Open',
+    rate_limited: 'Rate Limited',
   };
   const statusLabel = STATUS_DETAIL_LABELS[stack.status]
     ?? stack.status.charAt(0).toUpperCase() + stack.status.slice(1);
@@ -119,7 +121,9 @@ export function StackDetail({
           ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
           : stack.status === 'pushed' || stack.status === 'pr_created'
             ? 'bg-violet-500/10 border-violet-500/20 text-violet-400'
-            : 'bg-gray-500/10 border-gray-500/20 text-gray-400';
+            : stack.status === 'rate_limited'
+              ? 'bg-orange-500/10 border-orange-500/20 text-orange-400'
+              : 'bg-gray-500/10 border-gray-500/20 text-gray-400';
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
@@ -157,19 +161,36 @@ export function StackDetail({
         </div>
       </div>
 
-      {/* Metrics bar */}
-      {metrics && (
-        <div className="px-5 py-2 border-b border-sandstorm-border shrink-0 flex items-center gap-4 text-[11px]">
-          {metrics.totalMemory > 0 && (
-            <MetricBadge label="Memory" value={formatDetailBytes(metrics.totalMemory)} />
+      {/* Rate limit banner */}
+      {stack.status === 'rate_limited' && (
+        <div className="px-5 py-2 border-b border-orange-500/20 bg-orange-500/5 shrink-0 flex items-center gap-3 text-xs text-orange-400">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z"/>
+            <line x1="12" y1="9" x2="12" y2="13"/><line x1="12" y1="17" x2="12.01" y2="17"/>
+          </svg>
+          <span className="font-medium">Rate limit hit</span>
+          {stack.rate_limit_reset_at && (
+            <span>
+              — auto-resumes at {new Date(stack.rate_limit_reset_at).toLocaleTimeString()}
+            </span>
           )}
-          {metrics.containers.length > 0 && (
+          {stack.error && <span className="text-orange-300/70 ml-auto truncate max-w-[300px]">{stack.error}</span>}
+        </div>
+      )}
+
+      {/* Metrics bar */}
+      {(metrics || stack.total_input_tokens > 0 || stack.total_output_tokens > 0) && (
+        <div className="px-5 py-2 border-b border-sandstorm-border shrink-0 flex items-center gap-4 text-[11px]">
+          {metrics && metrics.totalMemory > 0 && (
+            <MetricBadge label="Memory" value={formatBytes(metrics.totalMemory)} />
+          )}
+          {metrics && metrics.containers.length > 0 && (
             <MetricBadge
               label="CPU"
               value={`${metrics.containers.reduce((s, c) => s + c.cpuPercent, 0).toFixed(1)}%`}
             />
           )}
-          {metrics.taskMetrics.totalTasks > 0 && (
+          {metrics && metrics.taskMetrics.totalTasks > 0 && (
             <>
               <MetricBadge
                 label="Tasks"
@@ -178,7 +199,7 @@ export function StackDetail({
               {metrics.taskMetrics.avgTaskDurationMs > 0 && (
                 <MetricBadge
                   label="Avg Task"
-                  value={formatDetailMs(metrics.taskMetrics.avgTaskDurationMs)}
+                  value={formatMs(metrics.taskMetrics.avgTaskDurationMs)}
                 />
               )}
             </>
@@ -188,6 +209,22 @@ export function StackDetail({
               label="Running"
               value={`${stack.services.filter((s) => s.status === 'running').length}/${stack.services.length}`}
             />
+          )}
+          {(stack.total_input_tokens > 0 || stack.total_output_tokens > 0) && (
+            <>
+              <MetricBadge
+                label="Input"
+                value={formatTokenCount(stack.total_input_tokens)}
+              />
+              <MetricBadge
+                label="Output"
+                value={formatTokenCount(stack.total_output_tokens)}
+              />
+              <MetricBadge
+                label="Total"
+                value={formatTokenCount(stack.total_input_tokens + stack.total_output_tokens)}
+              />
+            </>
           )}
         </div>
       )}
@@ -338,20 +375,6 @@ export function StackDetail({
       </div>
     </div>
   );
-}
-
-function formatDetailBytes(bytes: number): string {
-  if (bytes === 0) return '0 B';
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1048576) return `${(bytes / 1024).toFixed(0)} KB`;
-  if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(0)} MB`;
-  return `${(bytes / 1073741824).toFixed(1)} GB`;
-}
-
-function formatDetailMs(ms: number): string {
-  if (ms < 1000) return `${Math.round(ms)}ms`;
-  if (ms < 60000) return `${(ms / 1000).toFixed(0)}s`;
-  return `${(ms / 60000).toFixed(1)}m`;
 }
 
 function MetricBadge({ label, value }: { label: string; value: string }) {

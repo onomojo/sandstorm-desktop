@@ -19,6 +19,9 @@ export interface Stack {
   pr_url: string | null;
   pr_number: number | null;
   runtime: 'docker' | 'podman';
+  total_input_tokens: number;
+  total_output_tokens: number;
+  rate_limit_reset_at: string | null;
   created_at: string;
   updated_at: string;
   services: ServiceInfo[];
@@ -39,8 +42,32 @@ export interface Task {
   prompt: string;
   status: string;
   exit_code: number | null;
+  session_id: string | null;
+  input_tokens: number;
+  output_tokens: number;
   started_at: string;
   finished_at: string | null;
+}
+
+export interface TokenUsageStats {
+  stackId: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface GlobalTokenUsage {
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
+  per_stack: TokenUsageStats[];
+}
+
+export interface RateLimitState {
+  active: boolean;
+  reset_at: string | null;
+  affected_stacks: string[];
+  reason: string | null;
 }
 
 export interface PortMapping {
@@ -108,6 +135,10 @@ interface AppState {
   loading: boolean;
   error: string | null;
 
+  // Token usage & rate limits
+  globalTokenUsage: GlobalTokenUsage | null;
+  rateLimitState: RateLimitState | null;
+
   // Docker connection
   setDockerConnected: (connected: boolean) => void;
 
@@ -128,6 +159,8 @@ interface AppState {
   refreshStacks: () => Promise<void>;
   refreshStackHistory: () => Promise<void>;
   refreshMetrics: () => Promise<void>;
+  refreshTokenUsage: () => Promise<void>;
+  refreshRateLimitState: () => Promise<void>;
 
   // Derived
   filteredStacks: () => Stack[];
@@ -176,6 +209,9 @@ declare global {
         stackMemory: (stackId: string) => Promise<number>;
         stackDetailed: (stackId: string) => Promise<{ stackId: string; totalMemory: number; containers: ContainerStatsEntry[] }>;
         taskMetrics: (stackId: string) => Promise<TaskMetrics>;
+        tokenUsage: (stackId: string) => Promise<TokenUsageStats>;
+        globalTokenUsage: () => Promise<GlobalTokenUsage>;
+        rateLimit: () => Promise<RateLimitState>;
       };
       runtime: {
         available: () => Promise<{ docker: boolean; podman: boolean }>;
@@ -226,6 +262,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   showNewStackDialog: false,
   loading: false,
   error: null,
+
+  // Token usage & rate limits
+  globalTokenUsage: null,
+  rateLimitState: null,
 
   // Project actions
   setProjects: (projects) => set({ projects }),
@@ -286,7 +326,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { stacks, dockerConnected } = get();
       // Skip metrics refresh when Docker is disconnected
       if (!dockerConnected) return;
-      const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed', 'pushed', 'pr_created']);
+      const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed', 'pushed', 'pr_created', 'rate_limited']);
       const activeStacks = stacks.filter((s) => activeStatuses.has(s.status));
       const metrics: Record<string, StackMetrics> = {};
 
@@ -309,8 +349,32 @@ export const useAppStore = create<AppState>((set, get) => ({
       );
 
       set({ stackMetrics: metrics });
+
+      // Also refresh token usage and rate limit state in parallel
+      await Promise.all([
+        get().refreshTokenUsage(),
+        get().refreshRateLimitState(),
+      ]);
     } catch {
       // Metrics refresh failure is non-fatal
+    }
+  },
+
+  refreshTokenUsage: async () => {
+    try {
+      const globalTokenUsage = await window.sandstorm.stats.globalTokenUsage();
+      set({ globalTokenUsage });
+    } catch {
+      // Token usage refresh failure is non-fatal
+    }
+  },
+
+  refreshRateLimitState: async () => {
+    try {
+      const rateLimitState = await window.sandstorm.stats.rateLimit();
+      set({ rateLimitState });
+    } catch {
+      // Rate limit state refresh failure is non-fatal
     }
   },
 

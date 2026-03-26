@@ -101,6 +101,9 @@ async function initializeApp(): Promise<void> {
     cliDir
   );
 
+  // Recover stacks stuck in rate_limited status from a previous session
+  stackManager.resumeRateLimitedStacks();
+
   // Set up Docker connection manager for health monitoring
   if (dockerRuntime instanceof DockerRuntime) {
     dockerConnectionManager = (dockerRuntime as DockerRuntime).getConnectionManager();
@@ -159,6 +162,7 @@ app.on('window-all-closed', () => {
 
 app.on('before-quit', () => {
   agentBackend?.destroy();
+  stackManager?.destroy();
   taskWatcher?.unwatchAll();
   if (dockerRuntime instanceof DockerRuntime) {
     (dockerRuntime as DockerRuntime).destroy();

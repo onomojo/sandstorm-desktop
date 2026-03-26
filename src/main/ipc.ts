@@ -359,6 +359,18 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return stackManager.getStackTaskMetrics(stackId);
   });
 
+  ipcMain.handle('stats:token-usage', async (_event, stackId: string) => {
+    return stackManager.getStackTokenUsage(stackId);
+  });
+
+  ipcMain.handle('stats:global-token-usage', async () => {
+    return stackManager.getGlobalTokenUsage();
+  });
+
+  ipcMain.handle('stats:rate-limit', async () => {
+    return stackManager.getRateLimitState();
+  });
+
   // --- Custom Context ---
 
   ipcMain.handle('context:get', async (_event, projectDir: string) => {

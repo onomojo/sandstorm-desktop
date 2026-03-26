@@ -23,6 +23,9 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     runtime: 'docker',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    rate_limit_reset_at: null,
     services: [
       { name: 'claude', status: 'running', containerId: 'c1' },
       { name: 'app', status: 'running', containerId: 'c2' },

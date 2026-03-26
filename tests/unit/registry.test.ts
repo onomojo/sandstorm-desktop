@@ -221,7 +221,7 @@ describe('Registry', () => {
 
     it('cycles through all valid statuses', () => {
       registry.createStack(makeStack({ id: 'cycle' }));
-      const statuses = ['building', 'up', 'running', 'completed', 'failed', 'idle', 'stopped', 'pushed', 'pr_created'] as const;
+      const statuses = ['building', 'up', 'running', 'completed', 'failed', 'idle', 'stopped', 'pushed', 'pr_created', 'rate_limited'] as const;
       for (const s of statuses) {
         registry.updateStackStatus('cycle', s);
         expect(registry.getStack('cycle')!.status).toBe(s);
@@ -625,6 +625,161 @@ describe('Registry', () => {
 
     it('returns empty history when none exists', () => {
       expect(registry.listStackHistory()).toEqual([]);
+    });
+  });
+
+  // ===========================================
+  // Token Usage
+  // ===========================================
+  describe('token usage', () => {
+    beforeEach(() => {
+      registry.createStack(makeStack({ id: 'token-stack', status: 'up' }));
+    });
+
+    it('new stacks have zero token counts', () => {
+      const stack = registry.getStack('token-stack');
+      expect(stack!.total_input_tokens).toBe(0);
+      expect(stack!.total_output_tokens).toBe(0);
+    });
+
+    it('new tasks have zero token counts', () => {
+      const task = registry.createTask('token-stack', 'test');
+      expect(task.input_tokens).toBe(0);
+      expect(task.output_tokens).toBe(0);
+    });
+
+    it('updateTaskTokens increments task and stack totals', () => {
+      const task = registry.createTask('token-stack', 'test');
+      registry.updateTaskTokens(task.id, 1000, 500);
+
+      const tasks = registry.getTasksForStack('token-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.input_tokens).toBe(1000);
+      expect(updated.output_tokens).toBe(500);
+
+      const stack = registry.getStack('token-stack');
+      expect(stack!.total_input_tokens).toBe(1000);
+      expect(stack!.total_output_tokens).toBe(500);
+    });
+
+    it('uses SET semantics — second call replaces, not accumulates', () => {
+      const task = registry.createTask('token-stack', 'test');
+      registry.updateTaskTokens(task.id, 100, 50);
+      registry.updateTaskTokens(task.id, 200, 100);
+
+      const tasks = registry.getTasksForStack('token-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.input_tokens).toBe(200);
+      expect(updated.output_tokens).toBe(100);
+
+      // Stack aggregate should reflect only the final values (delta-based)
+      const stack = registry.getStack('token-stack');
+      expect(stack!.total_input_tokens).toBe(200);
+      expect(stack!.total_output_tokens).toBe(100);
+    });
+
+    it('accumulates tokens across multiple tasks on same stack', () => {
+      const task1 = registry.createTask('token-stack', 'task 1');
+      registry.updateTaskTokens(task1.id, 500, 200);
+      registry.completeTask(task1.id, 0);
+
+      const task2 = registry.createTask('token-stack', 'task 2');
+      registry.updateTaskTokens(task2.id, 300, 100);
+
+      const stack = registry.getStack('token-stack');
+      expect(stack!.total_input_tokens).toBe(800);
+      expect(stack!.total_output_tokens).toBe(300);
+    });
+
+    it('getStackTokenUsage returns aggregated tokens', () => {
+      const task = registry.createTask('token-stack', 'test');
+      registry.updateTaskTokens(task.id, 2000, 1000);
+
+      const usage = registry.getStackTokenUsage('token-stack');
+      expect(usage.input_tokens).toBe(2000);
+      expect(usage.output_tokens).toBe(1000);
+    });
+
+    it('getStackTokenUsage returns zeros for non-existent stack', () => {
+      const usage = registry.getStackTokenUsage('nonexistent');
+      expect(usage.input_tokens).toBe(0);
+      expect(usage.output_tokens).toBe(0);
+    });
+
+    it('setTaskSessionId stores session ID', () => {
+      const task = registry.createTask('token-stack', 'test');
+      expect(task.session_id).toBeNull();
+
+      registry.setTaskSessionId(task.id, 'session-abc-123');
+      const tasks = registry.getTasksForStack('token-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.session_id).toBe('session-abc-123');
+    });
+  });
+
+  // ===========================================
+  // Rate Limits
+  // ===========================================
+  describe('rate limits', () => {
+    beforeEach(() => {
+      registry.createStack(makeStack({ id: 'rl-stack-1', status: 'running' }));
+      registry.createStack(makeStack({ id: 'rl-stack-2', status: 'running' }));
+    });
+
+    it('new stacks have null rate_limit_reset_at', () => {
+      const stack = registry.getStack('rl-stack-1');
+      expect(stack!.rate_limit_reset_at).toBeNull();
+    });
+
+    it('setRateLimitReset sets status and reset time', () => {
+      const resetAt = '2026-03-26T16:00:00.000Z';
+      registry.setRateLimitReset('rl-stack-1', resetAt);
+
+      const stack = registry.getStack('rl-stack-1');
+      expect(stack!.status).toBe('rate_limited');
+      expect(stack!.rate_limit_reset_at).toBe(resetAt);
+    });
+
+    it('clearRateLimit removes reset time and resets status to idle', () => {
+      registry.setRateLimitReset('rl-stack-1', '2026-03-26T16:00:00.000Z');
+      registry.clearRateLimit('rl-stack-1');
+
+      const stack = registry.getStack('rl-stack-1');
+      expect(stack!.rate_limit_reset_at).toBeNull();
+      expect(stack!.status).toBe('idle');
+    });
+
+    it('clearRateLimit with custom target status sets that status', () => {
+      registry.setRateLimitReset('rl-stack-1', '2026-03-26T16:00:00.000Z');
+      registry.clearRateLimit('rl-stack-1', 'running');
+
+      const stack = registry.getStack('rl-stack-1');
+      expect(stack!.rate_limit_reset_at).toBeNull();
+      expect(stack!.status).toBe('running');
+    });
+
+    it('getRateLimitedStacks returns only rate_limited stacks', () => {
+      registry.setRateLimitReset('rl-stack-1', '2026-03-26T16:00:00.000Z');
+
+      const limited = registry.getRateLimitedStacks();
+      expect(limited).toHaveLength(1);
+      expect(limited[0].id).toBe('rl-stack-1');
+    });
+
+    it('getRateLimitedStacks returns empty when none are limited', () => {
+      expect(registry.getRateLimitedStacks()).toHaveLength(0);
+    });
+
+    it('getGlobalRateLimitReset returns earliest reset time', () => {
+      registry.setRateLimitReset('rl-stack-1', '2026-03-26T17:00:00.000Z');
+      registry.setRateLimitReset('rl-stack-2', '2026-03-26T16:00:00.000Z');
+
+      const resetAt = registry.getGlobalRateLimitReset();
+      expect(resetAt).toBe('2026-03-26T16:00:00.000Z');
+    });
+
+    it('getGlobalRateLimitReset returns null when no limits', () => {
+      expect(registry.getGlobalRateLimitReset()).toBeNull();
     });
   });
 
