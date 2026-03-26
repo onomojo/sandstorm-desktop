@@ -111,9 +111,10 @@ export class TaskWatcher extends EventEmitter {
       }
     }
 
-    // Read token usage and session ID from task log (async, best-effort)
+    // Read token usage, session ID, and loop iterations from task log (async, best-effort)
     if (containerId) {
       this.readTaskTokens(task.id, stackId, containerId).catch(() => {});
+      this.readTaskIterations(task.id, containerId).catch(() => {});
     }
 
     const updatedTask = {
@@ -183,6 +184,41 @@ export class TaskWatcher extends EventEmitter {
       } catch {
         // stderr file may not exist
       }
+    }
+  }
+
+  /**
+   * Read loop iteration counts from files written by task-runner.sh.
+   */
+  private async readTaskIterations(
+    taskId: number,
+    containerId: string
+  ): Promise<void> {
+    let reviewIterations = 0;
+    let verifyRetries = 0;
+
+    try {
+      const result = await this.runtime.exec(containerId, [
+        'cat', '/tmp/claude-task.review-iterations',
+      ]);
+      const parsed = parseInt(result.stdout.trim(), 10);
+      if (!isNaN(parsed)) reviewIterations = parsed;
+    } catch {
+      // File may not exist (single-pass task)
+    }
+
+    try {
+      const result = await this.runtime.exec(containerId, [
+        'cat', '/tmp/claude-task.verify-retries',
+      ]);
+      const parsed = parseInt(result.stdout.trim(), 10);
+      if (!isNaN(parsed)) verifyRetries = parsed;
+    } catch {
+      // File may not exist (single-pass task)
+    }
+
+    if (reviewIterations > 0 || verifyRetries > 0) {
+      this.registry.setTaskIterations(taskId, reviewIterations, verifyRetries);
     }
   }
 

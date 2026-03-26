@@ -147,6 +147,79 @@ describe('StackDetail', () => {
     });
   });
 
+  it('shows loop iteration counts for completed tasks in History tab', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Add feature',
+        model: null,
+        status: 'completed',
+        exit_code: 0,
+        review_iterations: 3,
+        verify_retries: 1,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    fireEvent.click(screen.getByText('History'));
+
+    await waitFor(() => {
+      expect(screen.getByText('3 reviews, 1 retry')).toBeDefined();
+    });
+  });
+
+  it('does not show loop iterations when both are zero', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Simple task',
+        model: null,
+        status: 'completed',
+        exit_code: 0,
+        review_iterations: 0,
+        verify_retries: 0,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    fireEvent.click(screen.getByText('History'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Simple task')).toBeDefined();
+    });
+    expect(screen.queryByText(/review/)).toBeNull();
+  });
+
+  it('pluralizes loop iteration labels correctly', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Single iteration task',
+        model: null,
+        status: 'completed',
+        exit_code: 0,
+        review_iterations: 1,
+        verify_retries: 0,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    fireEvent.click(screen.getByText('History'));
+
+    await waitFor(() => {
+      expect(screen.getByText('1 review, 0 retries')).toBeDefined();
+    });
+  });
+
   it('shows task history in the History tab', async () => {
     api.tasks.list.mockResolvedValue([
       {
