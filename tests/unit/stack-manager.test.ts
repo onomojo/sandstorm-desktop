@@ -1079,4 +1079,467 @@ describe('StackManager', () => {
       expect(global.per_stack).toHaveLength(2);
     });
   });
+
+  describe('getTaskStatus', () => {
+    it('returns running status with task when a task is running', () => {
+      registry.createStack(makeStack('status-test'));
+      registry.createTask('status-test', 'do work');
+
+      const result = manager.getTaskStatus('status-test');
+      expect(result.status).toBe('running');
+      expect(result.task).toBeDefined();
+      expect(result.task!.prompt).toBe('do work');
+    });
+
+    it('returns latest completed task status when no running task', () => {
+      registry.createStack(makeStack('status-done'));
+      const task = registry.createTask('status-done', 'done work');
+      registry.completeTask(task.id, 0);
+
+      const result = manager.getTaskStatus('status-done');
+      expect(result.status).toBe('completed');
+      expect(result.task).toBeDefined();
+    });
+
+    it('returns idle when stack has no tasks', () => {
+      registry.createStack(makeStack('status-idle'));
+
+      const result = manager.getTaskStatus('status-idle');
+      expect(result.status).toBe('idle');
+      expect(result.task).toBeUndefined();
+    });
+
+    it('throws for non-existent stack', () => {
+      expect(() => manager.getTaskStatus('ghost')).toThrow('not found');
+    });
+  });
+
+  describe('getTaskOutput', () => {
+    it('returns task log output from container', async () => {
+      registry.createStack(makeStack('output-test'));
+      (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_id: string, cmd: string[]) => {
+          if (cmd.includes('/tmp/claude-task.log')) {
+            return { exitCode: 0, stdout: 'line 1\nline 2\nline 3', stderr: '' };
+          }
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+      );
+
+      const output = await manager.getTaskOutput('output-test');
+      expect(output).toBe('line 1\nline 2\nline 3');
+    });
+
+    it('passes line count to tail command', async () => {
+      registry.createStack(makeStack('output-lines'));
+      const execSpy = (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_id: string, cmd: string[]) => {
+          if (cmd.includes('/tmp/claude-task.log')) {
+            return { exitCode: 0, stdout: 'output', stderr: '' };
+          }
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+      );
+
+      await manager.getTaskOutput('output-lines', 100);
+
+      const tailCall = execSpy.mock.calls.find(
+        (c: unknown[]) => Array.isArray(c[1]) && c[1].includes('/tmp/claude-task.log')
+      );
+      expect(tailCall).toBeDefined();
+      expect(tailCall![1]).toContain('100');
+    });
+
+    it('returns fallback message when exec fails', async () => {
+      registry.createStack(makeStack('output-fail'));
+      (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_id: string, cmd: string[]) => {
+          if (cmd.includes('/tmp/claude-task.log')) {
+            throw new Error('container stopped');
+          }
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+      );
+
+      const output = await manager.getTaskOutput('output-fail');
+      expect(output).toBe('(no task output available)');
+    });
+
+    it('throws when no agent container found', async () => {
+      registry.createStack(makeStack('output-no-claude'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+      await expect(manager.getTaskOutput('output-no-claude')).rejects.toThrow(
+        'Agent container not found'
+      );
+    });
+
+    it('throws for non-existent stack', async () => {
+      await expect(manager.getTaskOutput('ghost')).rejects.toThrow('not found');
+    });
+  });
+
+  describe('getLogs', () => {
+    it('returns logs from all containers in a stack', async () => {
+      registry.createStack(makeStack('logs-test'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          id: 'c1', name: 'sandstorm-proj-logs-test-claude-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+        {
+          id: 'c2', name: 'sandstorm-proj-logs-test-api-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+      ]);
+      (runtime.logs as ReturnType<typeof vi.fn>).mockImplementation(async function* (_id: string) {
+        yield `logs from ${_id}\n`;
+      });
+
+      const logs = await manager.getLogs('logs-test');
+      expect(logs).toContain('=== claude ===');
+      expect(logs).toContain('=== api ===');
+      expect(logs).toContain('logs from c1');
+      expect(logs).toContain('logs from c2');
+    });
+
+    it('filters by service name when provided', async () => {
+      registry.createStack(makeStack('logs-svc'));
+      const listSpy = (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          id: 'c1', name: 'sandstorm-proj-logs-svc-claude-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+      ]);
+      (runtime.logs as ReturnType<typeof vi.fn>).mockImplementation(async function* () {
+        yield 'data\n';
+      });
+
+      await manager.getLogs('logs-svc', 'claude');
+
+      // Should filter by service name in the container name filter
+      const filterArg = listSpy.mock.calls[0][0];
+      expect(filterArg.name).toContain('claude');
+    });
+
+    it('throws when no containers found', async () => {
+      registry.createStack(makeStack('logs-empty'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
+
+      await expect(manager.getLogs('logs-empty')).rejects.toThrow('No containers found');
+    });
+
+    it('throws for non-existent stack', async () => {
+      await expect(manager.getLogs('ghost')).rejects.toThrow('not found');
+    });
+  });
+
+  describe('getStackDetailedStats', () => {
+    it('returns stats for running containers', async () => {
+      registry.createStack(makeStack('stats-test'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          id: 'c1', name: 'sandstorm-proj-stats-test-claude-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+        {
+          id: 'c2', name: 'sandstorm-proj-stats-test-api-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+      ]);
+      (runtime as any).containerStats = vi.fn().mockImplementation(async (id: string) => ({
+        memoryUsage: id === 'c1' ? 100_000_000 : 50_000_000,
+        memoryLimit: 500_000_000,
+        cpuPercent: 25,
+      }));
+
+      const stats = await manager.getStackDetailedStats('stats-test');
+      expect(stats.stackId).toBe('stats-test');
+      expect(stats.totalMemory).toBe(150_000_000);
+      expect(stats.containers).toHaveLength(2);
+      expect(stats.containers[0].name).toBe('claude');
+      expect(stats.containers[0].memoryUsage).toBe(100_000_000);
+      expect(stats.containers[1].name).toBe('api');
+    });
+
+    it('skips non-running containers', async () => {
+      registry.createStack(makeStack('stats-skip'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          id: 'c1', name: 'sandstorm-proj-stats-skip-claude-1',
+          image: 'img', status: 'exited', state: 'exited', ports: [], labels: {}, created: '',
+        },
+      ]);
+
+      const stats = await manager.getStackDetailedStats('stats-skip');
+      expect(stats.containers).toHaveLength(0);
+      expect(stats.totalMemory).toBe(0);
+    });
+
+    it('returns empty stats for non-existent stack', async () => {
+      const stats = await manager.getStackDetailedStats('ghost');
+      expect(stats.totalMemory).toBe(0);
+      expect(stats.containers).toEqual([]);
+    });
+
+    it('handles containerStats failure gracefully', async () => {
+      registry.createStack(makeStack('stats-err'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          id: 'c1', name: 'sandstorm-proj-stats-err-claude-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+      ]);
+      (runtime as any).containerStats = vi.fn().mockRejectedValue(new Error('stats unavailable'));
+
+      const stats = await manager.getStackDetailedStats('stats-err');
+      // Should not throw, just skip the container
+      expect(stats.containers).toHaveLength(0);
+      expect(stats.totalMemory).toBe(0);
+    });
+  });
+
+  describe('getStackMemoryUsage', () => {
+    it('returns total memory from detailed stats', async () => {
+      registry.createStack(makeStack('mem-test'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          id: 'c1', name: 'sandstorm-proj-mem-test-claude-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+      ]);
+      (runtime as any).containerStats = vi.fn().mockResolvedValue({
+        memoryUsage: 200_000_000,
+        memoryLimit: 500_000_000,
+        cpuPercent: 10,
+      });
+
+      const mem = await manager.getStackMemoryUsage('mem-test');
+      expect(mem).toBe(200_000_000);
+    });
+  });
+
+  describe('getStackTaskMetrics', () => {
+    it('returns correct metrics for mixed task states', () => {
+      registry.createStack(makeStack('metrics-test'));
+
+      // Create tasks with various states
+      const t1 = registry.createTask('metrics-test', 'task 1');
+      registry.completeTask(t1.id, 0); // completed
+
+      const t2 = registry.createTask('metrics-test', 'task 2');
+      registry.completeTask(t2.id, 1); // failed
+
+      registry.createTask('metrics-test', 'task 3'); // running
+
+      const metrics = manager.getStackTaskMetrics('metrics-test');
+      expect(metrics.stackId).toBe('metrics-test');
+      expect(metrics.totalTasks).toBe(3);
+      expect(metrics.completedTasks).toBe(1);
+      expect(metrics.failedTasks).toBe(1);
+      expect(metrics.runningTasks).toBe(1);
+    });
+
+    it('calculates average duration for completed tasks', () => {
+      registry.createStack(makeStack('metrics-dur'));
+
+      // We need tasks with finished_at to calculate duration
+      const t1 = registry.createTask('metrics-dur', 'task 1');
+      registry.completeTask(t1.id, 0);
+      const t2 = registry.createTask('metrics-dur', 'task 2');
+      registry.completeTask(t2.id, 0);
+
+      const metrics = manager.getStackTaskMetrics('metrics-dur');
+      expect(metrics.completedTasks).toBe(2);
+      // Duration should be calculated (both tasks completed very quickly in tests)
+      expect(metrics.avgTaskDurationMs).toBeGreaterThanOrEqual(0);
+    });
+
+    it('returns zero metrics for stack with no tasks', () => {
+      registry.createStack(makeStack('metrics-empty'));
+
+      const metrics = manager.getStackTaskMetrics('metrics-empty');
+      expect(metrics.totalTasks).toBe(0);
+      expect(metrics.completedTasks).toBe(0);
+      expect(metrics.failedTasks).toBe(0);
+      expect(metrics.runningTasks).toBe(0);
+      expect(metrics.avgTaskDurationMs).toBe(0);
+    });
+  });
+
+  describe('getServices and findClaudeContainer', () => {
+    it('getStackWithServices maps containers to service info', async () => {
+      registry.createStack(makeStack('svc-map'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          id: 'c1', name: 'sandstorm-proj-svc-map-claude-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+        {
+          id: 'c2', name: 'sandstorm-proj-svc-map-api-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+      ]);
+
+      const result = await manager.getStackWithServices('svc-map');
+      expect(result!.services).toHaveLength(2);
+      expect(result!.services.map(s => s.name).sort()).toEqual(['api', 'claude']);
+      expect(result!.services[0].containerId).toBeDefined();
+    });
+
+    it('findClaudeContainer is used by dispatchTask', async () => {
+      registry.createStack(makeStack('find-claude'));
+      // Return a container matching the claude naming convention
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockImplementation(
+        async (filter?: { name?: string }) => {
+          if (filter?.name?.includes('claude')) {
+            return [{
+              id: 'claude-abc', name: 'sandstorm-proj-find-claude-claude-1',
+              image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+            }];
+          }
+          return [];
+        }
+      );
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
+
+      const task = await manager.dispatchTask('find-claude', 'do work');
+      expect(task).toBeDefined();
+
+      // Verify listContainers was called with claude filter
+      const listCalls = (runtime.listContainers as ReturnType<typeof vi.fn>).mock.calls;
+      const claudeFilter = listCalls.find(
+        (c: unknown[]) => typeof c[0] === 'object' && (c[0] as any).name?.includes('claude')
+      );
+      expect(claudeFilter).toBeDefined();
+    });
+
+    it('returns empty services when no containers found', async () => {
+      registry.createStack(makeStack('svc-empty'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValue([]);
+
+      const result = await manager.getStackWithServices('svc-empty');
+      expect(result!.services).toEqual([]);
+    });
+  });
+
+  describe('resumeTask (via autoResumeAfterRateLimit)', () => {
+    it('auto-resumes tasks with session ID after rate limit clears', async () => {
+      registry.createStack(makeStack('resume-test'));
+      registry.updateStackStatus('resume-test', 'running');
+
+      // Create a task with a session ID (task stays running — rate limit hit mid-task)
+      const task = registry.createTask('resume-test', 'original work');
+      registry.setTaskSessionId(task.id, 'sess-123');
+
+      // Mock runCli for resume dispatch BEFORE triggering rate limit
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'ok', stderr: '', exitCode: 0,
+      });
+
+      // Use a very short reset time so the auto-resume fires quickly
+      const resetAt = new Date(Date.now() + 100).toISOString();
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'resume-test',
+        rateLimit: { reset_at: resetAt, reason: 'Rate limit hit' },
+      });
+
+      // Stack should be rate_limited now
+      expect(registry.getStack('resume-test')!.status).toBe('rate_limited');
+
+      // Wait for the auto-resume timer (100ms delay + 5000ms buffer)
+      await vi.waitFor(() => {
+        const resumeCall = runCliSpy.mock.calls.find(
+          (c: unknown[]) => Array.isArray(c[1]) && c[1].includes('--resume')
+        );
+        expect(resumeCall).toBeDefined();
+      }, { timeout: 10000 });
+
+      // Verify --resume was called with the session ID
+      const resumeCall = runCliSpy.mock.calls.find(
+        (c: unknown[]) => Array.isArray(c[1]) && c[1].includes('--resume')
+      );
+      expect(resumeCall![1]).toContain('sess-123');
+
+      // Global rate limit should be cleared
+      expect(manager.isRateLimited()).toBe(false);
+    }, 15000);
+
+    it('marks stack as idle when no session to resume', async () => {
+      registry.createStack(makeStack('resume-no-sess'));
+      registry.updateStackStatus('resume-no-sess', 'running');
+
+      // Create a task WITHOUT a session ID (task stays running)
+      registry.createTask('resume-no-sess', 'work');
+
+      // Trigger rate limit while stack is running (non-terminal)
+      const resetAt = new Date(Date.now() + 100).toISOString();
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'resume-no-sess',
+        rateLimit: { reset_at: resetAt, reason: 'Rate limit hit' },
+      });
+
+      expect(registry.getStack('resume-no-sess')!.status).toBe('rate_limited');
+
+      // Wait for auto-resume to fire — no session_id means it clears to idle
+      await vi.waitFor(() => {
+        const stack = registry.getStack('resume-no-sess');
+        expect(stack!.status).toBe('idle');
+      }, { timeout: 10000 });
+    }, 15000);
+
+    it('marks stack as failed when resume dispatch fails', async () => {
+      registry.createStack(makeStack('resume-fail'));
+      registry.updateStackStatus('resume-fail', 'running');
+
+      const task = registry.createTask('resume-fail', 'work');
+      registry.setTaskSessionId(task.id, 'sess-456');
+
+      // Make the resume dispatch fail (CLI returns error)
+      vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: 'dispatch failed', exitCode: 1,
+      });
+
+      const resetAt = new Date(Date.now() + 100).toISOString();
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'resume-fail',
+        rateLimit: { reset_at: resetAt, reason: 'Rate limit hit' },
+      });
+
+      expect(registry.getStack('resume-fail')!.status).toBe('rate_limited');
+
+      await vi.waitFor(() => {
+        const stack = registry.getStack('resume-fail');
+        expect(stack!.status).toBe('failed');
+      }, { timeout: 10000 });
+    }, 15000);
+
+    it('resumeTask falls back to plain dispatch when --resume not supported', async () => {
+      registry.createStack(makeStack('resume-fallback'));
+      registry.updateStackStatus('resume-fallback', 'running');
+
+      const task = registry.createTask('resume-fallback', 'original prompt');
+      registry.setTaskSessionId(task.id, 'sess-789');
+
+      // First call (with --resume) fails with "unknown option", second call succeeds
+      let callCount = 0;
+      vi.spyOn(manager, 'runCli').mockImplementation(async (_dir, args) => {
+        callCount++;
+        if (Array.isArray(args) && args.includes('--resume')) {
+          return { stdout: '', stderr: 'unknown option --resume', exitCode: 1 };
+        }
+        return { stdout: 'ok', stderr: '', exitCode: 0 };
+      });
+
+      const resetAt = new Date(Date.now() + 100).toISOString();
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'resume-fallback',
+        rateLimit: { reset_at: resetAt, reason: 'Rate limit hit' },
+      });
+
+      await vi.waitFor(() => {
+        expect(callCount).toBeGreaterThanOrEqual(2);
+      }, { timeout: 10000 });
+    }, 15000);
+  });
 });
