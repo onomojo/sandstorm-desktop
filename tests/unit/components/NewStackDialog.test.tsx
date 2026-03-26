@@ -141,16 +141,17 @@ describe('NewStackDialog', () => {
     expect(screen.queryByPlaceholderText('/home/user/projects/myapp')).toBeNull();
   });
 
-  it('renders model selector with Sonnet and Opus options', () => {
+  it('renders model selector with Auto, Sonnet, and Opus options', () => {
     render(<NewStackDialog />);
+    expect(screen.getByTestId('model-auto')).toBeDefined();
     expect(screen.getByTestId('model-sonnet')).toBeDefined();
     expect(screen.getByTestId('model-opus')).toBeDefined();
   });
 
-  it('defaults to sonnet model', () => {
+  it('defaults to auto model', () => {
     render(<NewStackDialog />);
-    const sonnetBtn = screen.getByTestId('model-sonnet');
-    expect(sonnetBtn.className).toContain('border-sandstorm-accent');
+    const autoBtn = screen.getByTestId('model-auto');
+    expect(autoBtn.className).toContain('border-sandstorm-accent');
   });
 
   it('passes model to stacks.create', async () => {
@@ -176,6 +177,33 @@ describe('NewStackDialog', () => {
         expect.objectContaining({
           name: 'model-stack',
           model: 'opus',
+        })
+      );
+    });
+  });
+
+  it('passes auto model by default when no override selected', async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({
+      projects: [{ id: 1, name: 'proj', directory: '/proj', added_at: '' }],
+      activeProjectId: 1,
+    });
+
+    api.stacks.create.mockResolvedValue({
+      id: 'auto-stack', project: 'proj', status: 'building', services: [],
+    });
+    api.stacks.list.mockResolvedValue([]);
+
+    render(<NewStackDialog />);
+
+    await user.type(screen.getByTestId('stack-name'), 'auto-stack');
+    fireEvent.click(screen.getByTestId('launch-btn'));
+
+    await waitFor(() => {
+      expect(api.stacks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'auto-stack',
+          model: 'auto',
         })
       );
     });

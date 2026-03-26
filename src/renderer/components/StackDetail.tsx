@@ -32,7 +32,7 @@ export function StackDetail({
   const [diff, setDiff] = useState('');
   const [selectedLogContainer, setSelectedLogContainer] = useState<string | null>(null);
   const [dispatching, setDispatching] = useState(false);
-  const [taskModel, setTaskModel] = useState<string>('sonnet');
+  const [taskModel, setTaskModel] = useState<string>('auto');
 
   const loadTasks = useCallback(async () => {
     const taskList = await window.sandstorm.tasks.list(stackId);
@@ -355,7 +355,7 @@ export function StackDetail({
           />
           <div className="flex flex-col gap-1.5 shrink-0">
             <div className="flex gap-1">
-              {(['sonnet', 'opus'] as const).map((m) => (
+              {(['auto', 'sonnet', 'opus'] as const).map((m) => (
                 <button
                   key={m}
                   onClick={() => setTaskModel(m)}

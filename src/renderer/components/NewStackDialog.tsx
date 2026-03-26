@@ -22,7 +22,7 @@ export function NewStackDialog() {
   const [projectDir, setProjectDir] = useState(project?.directory ?? '');
   const [runtime, setRuntime] = useState<'docker' | 'podman'>('docker');
   const [task, setTask] = useState('');
-  const [model, setModel] = useState<string>('sonnet');
+  const [model, setModel] = useState<string>('auto');
   const [error, setError] = useState<string | null>(null);
   const nameValidationError = useMemo(() => validateStackName(name.trim()), [name]);
   const [runtimes, setRuntimes] = useState({ docker: false, podman: false });
@@ -173,6 +173,7 @@ export function NewStackDialog() {
           <Field label="Model" hint="Claude model for the inner agent">
             <div className="flex gap-2">
               {([
+                { id: 'auto', label: 'Auto', desc: 'Intelligent triage' },
                 { id: 'sonnet', label: 'Sonnet', desc: 'Fast & efficient' },
                 { id: 'opus', label: 'Opus', desc: 'Most capable' },
               ] as const).map((m) => (
