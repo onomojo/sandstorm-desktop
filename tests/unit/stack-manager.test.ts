@@ -343,6 +343,24 @@ describe('StackManager', () => {
       );
     });
 
+    it('resolves "auto" model to undefined and omits from CLI args', async () => {
+      registry.createStack(makeStack('auto-model'));
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const task = await manager.dispatchTask('auto-model', 'Simple task', 'auto');
+      // "auto" should resolve to null in the DB (undefined → null via registry)
+      expect(task.model).toBeNull();
+      // CLI args should NOT contain --model
+      expect(runCliSpy).toHaveBeenCalledWith(
+        '/proj',
+        ['task', 'auto-model', 'Simple task']
+      );
+    });
+
     it('omits model from CLI args when not provided', async () => {
       registry.createStack(makeStack('no-model'));
       const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({

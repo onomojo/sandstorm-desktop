@@ -13,11 +13,12 @@ while true; do
     LABEL=$(echo "$PROMPT" | head -1 | cut -c1-60)
 
     # Read model selection if provided
-    MODEL_FLAG=""
+    MODEL_ARGS=()
+    TASK_MODEL=""
     if [ -f /tmp/claude-task-model.txt ]; then
       TASK_MODEL=$(cat /tmp/claude-task-model.txt 2>/dev/null | tr -d '[:space:]')
       if [ -n "$TASK_MODEL" ]; then
-        MODEL_FLAG="--model $TASK_MODEL"
+        MODEL_ARGS=(--model "$TASK_MODEL")
       fi
       rm -f /tmp/claude-task-model.txt
     fi
@@ -25,7 +26,7 @@ while true; do
     echo ""
     echo "=========================================="
     echo "  Task: $LABEL"
-    if [ -n "$MODEL_FLAG" ]; then
+    if [ ${#MODEL_ARGS[@]} -gt 0 ]; then
       echo "  Model: $TASK_MODEL"
     fi
     echo "=========================================="
@@ -41,7 +42,7 @@ while true; do
     # special characters (backticks, $, quotes, etc.) in prompts.
     cat /tmp/claude-task-prompt.txt \
       | claude --dangerously-skip-permissions --verbose --output-format stream-json \
-          $MODEL_FLAG \
+          "${MODEL_ARGS[@]}" \
           --include-partial-messages --print -p - 2>&1 \
       | jq -rj --unbuffered '
           if .type == "stream_event" then

@@ -248,7 +248,12 @@ export class Registry {
 
     if (currentVersion < 4) {
       // Add model column to tasks for intelligent model selection
-      try { this.db.exec('ALTER TABLE tasks ADD COLUMN model TEXT'); } catch { /* exists */ }
+      try {
+        this.db.exec('ALTER TABLE tasks ADD COLUMN model TEXT');
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes('duplicate column')) throw err;
+      }
       this.setSchemaVersion(4);
     }
 

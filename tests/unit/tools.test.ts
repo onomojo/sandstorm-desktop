@@ -39,8 +39,8 @@ describe('MCP tools', () => {
     });
   });
 
-  describe('handleToolCall — auto model resolution', () => {
-    it('resolves "auto" to undefined for create_stack', async () => {
+  describe('handleToolCall — model passthrough', () => {
+    it('passes "auto" through to createStack (resolution happens in stack-manager)', async () => {
       await handleToolCall('create_stack', {
         name: 'test-stack',
         projectDir: '/proj',
@@ -48,7 +48,7 @@ describe('MCP tools', () => {
       });
 
       expect(stackManager.createStack).toHaveBeenCalledWith(
-        expect.objectContaining({ model: undefined })
+        expect.objectContaining({ model: 'auto' })
       );
     });
 
@@ -64,7 +64,7 @@ describe('MCP tools', () => {
       );
     });
 
-    it('resolves "auto" to undefined for dispatch_task', async () => {
+    it('passes "auto" through to dispatchTask (resolution happens in stack-manager)', async () => {
       await handleToolCall('dispatch_task', {
         stackId: 'test-stack',
         prompt: 'Fix a typo',
@@ -74,7 +74,7 @@ describe('MCP tools', () => {
       expect(stackManager.dispatchTask).toHaveBeenCalledWith(
         'test-stack',
         'Fix a typo',
-        undefined
+        'auto'
       );
     });
 
@@ -92,7 +92,7 @@ describe('MCP tools', () => {
       );
     });
 
-    it('treats omitted model as undefined (not auto)', async () => {
+    it('treats omitted model as undefined', async () => {
       await handleToolCall('dispatch_task', {
         stackId: 'test-stack',
         prompt: 'Some task',

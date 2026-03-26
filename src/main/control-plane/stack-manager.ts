@@ -180,6 +180,11 @@ export class StackManager {
   createStack(opts: CreateStackOpts): Stack {
     const projectName = path.basename(opts.projectDir);
 
+    // Resolve "auto" → undefined so the CLI never receives "--model auto"
+    if (opts.model === 'auto') {
+      opts = { ...opts, model: undefined };
+    }
+
     // Create registry entry first (ports table has FK to stacks)
     const stack = this.registry.createStack({
       id: opts.name,
@@ -370,6 +375,11 @@ export class StackManager {
   }
 
   async dispatchTask(stackId: string, prompt: string, model?: string): Promise<Task> {
+    // Resolve "auto" → undefined so the CLI never receives "--model auto"
+    if (model === 'auto') {
+      model = undefined;
+    }
+
     // Block dispatch if rate limited
     if (this.isRateLimited()) {
       const state = this.getRateLimitState();

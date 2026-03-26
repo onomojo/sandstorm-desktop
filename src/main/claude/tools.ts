@@ -162,11 +162,7 @@ export async function handleToolCall(
   input: Record<string, unknown>
 ): Promise<unknown> {
   switch (name) {
-    case 'create_stack': {
-      // Resolve "auto" to undefined — outer Claude should have already chosen
-      // a concrete model via triage, but if "auto" leaks through, let the
-      // system fall back to the default (sonnet).
-      const createModel = input.model === 'auto' ? undefined : (input.model as string | undefined);
+    case 'create_stack':
       return stackManager.createStack({
         name: input.name as string,
         projectDir: input.projectDir as string,
@@ -175,21 +171,18 @@ export async function handleToolCall(
         description: input.description as string | undefined,
         runtime: (input.runtime as 'docker' | 'podman') ?? 'docker',
         task: input.task as string | undefined,
-        model: createModel,
+        model: input.model as string | undefined,
       });
-    }
 
     case 'list_stacks':
       return stackManager.listStacksWithServices();
 
-    case 'dispatch_task': {
-      const dispatchModel = input.model === 'auto' ? undefined : (input.model as string | undefined);
+    case 'dispatch_task':
       return stackManager.dispatchTask(
         input.stackId as string,
         input.prompt as string,
-        dispatchModel
+        input.model as string | undefined
       );
-    }
 
     case 'get_diff':
       return stackManager.getDiff(input.stackId as string);

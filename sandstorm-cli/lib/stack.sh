@@ -501,16 +501,16 @@ case "$COMMAND" in
       registry_write "$STACK_ID" "$TICKET" "" "$TASK_LABEL" "running" "$TASK_CONTENT"
 
       echo "Sending task to Claude in stack ${STACK_ID} (synchronous)..."
-      TTY_FLAG=""
+      TTY_FLAG=()
       if [ -t 0 ]; then
-        TTY_FLAG="-it"
+        TTY_FLAG=(-it)
       fi
-      MODEL_ARG=""
+      MODEL_ARG=()
       if [ -n "$TASK_MODEL" ]; then
-        MODEL_ARG="--model $TASK_MODEL"
+        MODEL_ARG=(--model "$TASK_MODEL")
       fi
-      docker exec $TTY_FLAG -u claude "$CONTAINER_NAME" \
-        claude --dangerously-skip-permissions $MODEL_ARG --print -p "$TASK_CONTENT"
+      docker exec "${TTY_FLAG[@]}" -u claude "$CONTAINER_NAME" \
+        claude --dangerously-skip-permissions "${MODEL_ARG[@]}" --print -p "$TASK_CONTENT"
 
       FINAL_BRANCH=$(docker exec -u claude -w /app "$CONTAINER_NAME" git branch --show-current 2>/dev/null || echo "")
       registry_write "$STACK_ID" "" "$FINAL_BRANCH" "" "completed" ""
