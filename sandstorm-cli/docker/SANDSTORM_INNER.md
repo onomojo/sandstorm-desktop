@@ -44,6 +44,26 @@ Use Docker service hostnames to reach services in this stack:
 - **Fill a form:** `navigate_page` → `fill` / `click`
 - **Check network:** `navigate_page` → `list_network_requests`
 
+## Dual-Loop Workflow
+
+Your work goes through an automated review and verification loop:
+
+1. **You write code** (execution pass)
+2. **A review agent** (with fresh context) reviews your diff against the original task
+3. If the review finds issues, you'll receive a report — **fix all listed issues without argument**
+4. Once review passes, **verification runs**: `npm test`, `tsc --noEmit`, `npm run build`
+5. If verification fails, you'll receive the error output — **fix the failures**
+
+This loop repeats until review + verification both pass (or max iterations are reached).
+
+### What this means for you
+
+- **Write tests** for every code change — missing tests will fail review
+- **Don't skip error handling** — the review agent checks for it
+- **When you receive review feedback**, fix exactly what's listed. Don't refactor unrelated code.
+- **When you receive verify failures**, focus on the specific errors (test failures, type errors, build errors)
+- The review agent has NO context from your session — it only sees the task description and your diff. Write clean, self-explanatory code.
+
 ## What you should NOT do
 
 - Do not push to GitHub (you only have read-only access)

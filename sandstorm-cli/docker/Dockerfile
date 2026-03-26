@@ -64,6 +64,7 @@ RUN npm install -g chrome-devtools-mcp@latest
 COPY docker/entrypoint.sh /usr/bin/sandstorm-entrypoint.sh
 COPY docker/task-runner.sh /usr/bin/sandstorm-task-runner.sh
 COPY docker/SANDSTORM_INNER.md /usr/bin/SANDSTORM_INNER.md
+COPY docker/review-prompt.md /usr/bin/review-prompt.md
 RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh
 
 WORKDIR /app
