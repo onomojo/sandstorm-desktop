@@ -104,6 +104,9 @@ export default function App() {
           <span className="text-xs font-semibold text-sandstorm-muted tracking-wide uppercase">
             Sandstorm
           </span>
+          <span className="text-[10px] text-sandstorm-muted/50 font-mono" title={`Build: ${__GIT_COMMIT__}`}>
+            {__GIT_COMMIT__}
+          </span>
         </div>
       </div>
 

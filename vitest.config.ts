@@ -2,6 +2,9 @@ import { defineConfig } from 'vitest/config';
 import path from 'path';
 
 export default defineConfig({
+  define: {
+    __GIT_COMMIT__: JSON.stringify('test'),
+  },
   test: {
     include: ['tests/unit/**/*.test.{ts,tsx}'],
     environment: 'node',
