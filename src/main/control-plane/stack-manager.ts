@@ -1,11 +1,12 @@
 import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
-import { Registry, Stack, StackHistoryRecord, Task } from './registry';
+import { Registry, Stack, StackHistoryRecord, Task, TokenUsage } from './registry';
 import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
+import { ParsedRateLimit } from './token-parser';
 
 export interface CreateStackOpts {
   name: string;
@@ -53,6 +54,27 @@ export interface TaskMetrics {
   avgTaskDurationMs: number;
 }
 
+export interface TokenUsageStats {
+  stackId: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
+export interface GlobalTokenUsage {
+  total_input_tokens: number;
+  total_output_tokens: number;
+  total_tokens: number;
+  per_stack: TokenUsageStats[];
+}
+
+export interface RateLimitState {
+  active: boolean;
+  reset_at: string | null;
+  affected_stacks: string[];
+  reason: string | null;
+}
+
 /**
  * Sanitize a string for use in Docker Compose project names.
  * Compose project names must consist only of lowercase alphanumeric characters,
@@ -83,6 +105,9 @@ interface CliResult {
 
 export class StackManager {
   private onStackUpdate?: () => void;
+  private rateLimitResumeTimers = new Map<string, NodeJS.Timeout>();
+  private globalRateLimitActive = false;
+  private globalRateLimitReason: string | null = null;
 
   constructor(
     private registry: Registry,
@@ -93,6 +118,11 @@ export class StackManager {
   ) {
     // When the task watcher detects a status change, push a UI update
     this.taskWatcher.setOnStatusChange(() => this.notifyUpdate());
+
+    // Listen for rate limit events from the task watcher
+    this.taskWatcher.on('task:rate_limited', ({ stackId, rateLimit }: { stackId: string; rateLimit: ParsedRateLimit }) => {
+      this.handleRateLimit(stackId, rateLimit);
+    });
   }
 
   setOnStackUpdate(callback: () => void): void {
@@ -339,6 +369,18 @@ export class StackManager {
   }
 
   async dispatchTask(stackId: string, prompt: string): Promise<Task> {
+    // Block dispatch if rate limited
+    if (this.isRateLimited()) {
+      const state = this.getRateLimitState();
+      const resetMsg = state.reset_at
+        ? ` Resets at ${new Date(state.reset_at).toLocaleTimeString()}.`
+        : '';
+      throw new SandstormError(
+        ErrorCode.TASK_DISPATCH_FAILED,
+        `Task dispatch blocked: rate limit active.${resetMsg} Tasks will auto-resume when limits reset.`
+      );
+    }
+
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
@@ -571,6 +613,191 @@ export class StackManager {
       runningTasks,
       avgTaskDurationMs: durationCount > 0 ? totalDurationMs / durationCount : 0,
     };
+  }
+
+  // --- Token Usage ---
+
+  getStackTokenUsage(stackId: string): TokenUsageStats {
+    const usage = this.registry.getStackTokenUsage(stackId);
+    return {
+      stackId,
+      input_tokens: usage.input_tokens,
+      output_tokens: usage.output_tokens,
+      total_tokens: usage.input_tokens + usage.output_tokens,
+    };
+  }
+
+  getGlobalTokenUsage(): GlobalTokenUsage {
+    // Use token columns already on the Stack objects to avoid N+1 queries
+    const stacks = this.registry.listStacks();
+    let totalInput = 0;
+    let totalOutput = 0;
+    const perStack: TokenUsageStats[] = [];
+
+    for (const stack of stacks) {
+      totalInput += stack.total_input_tokens;
+      totalOutput += stack.total_output_tokens;
+      if (stack.total_input_tokens > 0 || stack.total_output_tokens > 0) {
+        perStack.push({
+          stackId: stack.id,
+          input_tokens: stack.total_input_tokens,
+          output_tokens: stack.total_output_tokens,
+          total_tokens: stack.total_input_tokens + stack.total_output_tokens,
+        });
+      }
+    }
+
+    return {
+      total_input_tokens: totalInput,
+      total_output_tokens: totalOutput,
+      total_tokens: totalInput + totalOutput,
+      per_stack: perStack.sort((a, b) => b.total_tokens - a.total_tokens),
+    };
+  }
+
+  // --- Rate Limit Handling ---
+
+  getRateLimitState(): RateLimitState {
+    const limitedStacks = this.registry.getRateLimitedStacks();
+    const resetAt = this.registry.getGlobalRateLimitReset();
+
+    return {
+      active: this.globalRateLimitActive || limitedStacks.length > 0,
+      reset_at: resetAt,
+      affected_stacks: limitedStacks.map((s) => s.id),
+      reason: this.globalRateLimitReason,
+    };
+  }
+
+  private handleRateLimit(stackId: string, rateLimit: ParsedRateLimit): void {
+    this.globalRateLimitActive = true;
+    this.globalRateLimitReason = rateLimit.reason;
+
+    // All stacks share the same Claude API account, so a rate limit on one
+    // stack means all stacks are affected. Mark all running stacks.
+    const stacks = this.registry.listStacks();
+    for (const stack of stacks) {
+      if (stack.status === 'running') {
+        const resetAt = rateLimit.reset_at ?? new Date(Date.now() + 3600000).toISOString();
+        this.registry.setRateLimitReset(stack.id, resetAt);
+      }
+    }
+
+    // Also mark the triggering stack if not already
+    if (rateLimit.reset_at) {
+      this.registry.setRateLimitReset(stackId, rateLimit.reset_at);
+    }
+
+    this.notifyUpdate();
+
+    // Schedule auto-resume
+    if (rateLimit.reset_at) {
+      this.scheduleAutoResume(rateLimit.reset_at);
+    }
+  }
+
+  private scheduleAutoResume(resetAt: string): void {
+    const resetTime = new Date(resetAt).getTime();
+    const delayMs = Math.max(0, resetTime - Date.now()) + 5000; // 5s buffer after reset
+
+    // Clear any existing global resume timer
+    for (const [key, timer] of this.rateLimitResumeTimers) {
+      if (key === '__global__') {
+        clearTimeout(timer);
+        this.rateLimitResumeTimers.delete(key);
+      }
+    }
+
+    const timer = setTimeout(() => {
+      this.autoResumeAfterRateLimit().catch(() => {});
+    }, delayMs);
+
+    this.rateLimitResumeTimers.set('__global__', timer);
+  }
+
+  private async autoResumeAfterRateLimit(): Promise<void> {
+    this.globalRateLimitActive = false;
+    this.globalRateLimitReason = null;
+
+    const limitedStacks = this.registry.getRateLimitedStacks();
+
+    for (const stack of limitedStacks) {
+      // Clear the rate limit status
+      this.registry.clearRateLimit(stack.id);
+
+      // Find the last task for this stack to get its session_id
+      const tasks = this.registry.getTasksForStack(stack.id);
+      const lastTask = tasks[0]; // Most recent (sorted DESC)
+
+      if (lastTask && lastTask.session_id && lastTask.prompt) {
+        // Resume the task using the session ID
+        try {
+          await this.resumeTask(stack.id, lastTask.prompt, lastTask.session_id);
+        } catch {
+          // If resume fails, just mark stack as failed
+          this.registry.updateStackStatus(stack.id, 'failed', 'Auto-resume after rate limit failed');
+        }
+      } else {
+        // No session to resume — mark as idle so user can manually re-dispatch
+        this.registry.updateStackStatus(stack.id, 'idle');
+      }
+    }
+
+    this.notifyUpdate();
+  }
+
+  /**
+   * Resume a task by dispatching with "continue" prompt using --resume <sessionId>.
+   * The inner Claude will pick up where it left off.
+   */
+  private async resumeTask(stackId: string, originalPrompt: string, sessionId: string): Promise<Task> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    const task = this.registry.createTask(stackId, `[resumed] ${originalPrompt}`);
+
+    try {
+      const claudeContainer = await this.findClaudeContainer(stack);
+      if (!claudeContainer) {
+        throw new SandstormError(ErrorCode.CONTAINER_UNREACHABLE, `Agent container not found for stack "${stackId}"`);
+      }
+
+      await this.waitForClaudeReady(claudeContainer.id);
+
+      // Store the session ID on the new task for future resume capability
+      this.registry.setTaskSessionId(task.id, sessionId);
+
+      // Dispatch with resume session — the CLI task command should support session resume
+      const result = await this.runCli(stack.project_dir, [
+        'task', stackId, 'continue',
+        '--session', sessionId,
+      ]);
+
+      if (result.exitCode !== 0) {
+        throw new SandstormError(
+          ErrorCode.TASK_DISPATCH_FAILED,
+          result.stderr.trim() || result.stdout.trim() || 'Task resume failed'
+        );
+      }
+
+      this.taskWatcher.watch(stackId, claudeContainer.id);
+      this.taskWatcher.streamOutput(stackId, claudeContainer.id, () => {}).catch(() => {});
+
+      return task;
+    } catch (err) {
+      this.registry.completeTask(task.id, 1);
+      this.notifyUpdate();
+      throw err;
+    }
+  }
+
+  /**
+   * Check if dispatching is currently blocked by rate limits.
+   */
+  isRateLimited(): boolean {
+    if (this.globalRateLimitActive) return true;
+    const limitedStacks = this.registry.getRateLimitedStacks();
+    return limitedStacks.length > 0;
   }
 
   // --- Private helpers ---

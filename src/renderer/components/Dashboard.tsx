@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { useAppStore, StackHistoryRecord } from '../store';
+import { useAppStore, StackHistoryRecord, GlobalTokenUsage, RateLimitState } from '../store';
 import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
 import { TicketView } from './TicketView';
@@ -9,6 +9,7 @@ import { AuthIndicator } from './AuthIndicator';
 import { ProjectContext } from './ProjectContext';
 import { ResizableTableHeader } from './ResizableTableHeader';
 import { useResizableColumns, ColumnDef } from '../hooks/useResizableColumns';
+import { formatTokenCount } from '../utils/format';
 
 const TABLE_COLUMNS: (ColumnDef & { label: string; align?: 'left' | 'right' })[] = [
   { key: 'status', label: 'Status', minWidth: 60, defaultWidth: 90 },
@@ -123,8 +124,69 @@ function HistoryCard({ record, showProject }: { record: StackHistoryRecord; show
   );
 }
 
+function RateLimitBanner({ rateLimitState }: { rateLimitState: RateLimitState }) {
+  const [countdown, setCountdown] = useState('');
+
+  useEffect(() => {
+    if (!rateLimitState.reset_at) return;
+
+    const update = () => {
+      const now = Date.now();
+      const reset = new Date(rateLimitState.reset_at!).getTime();
+      const diff = reset - now;
+      if (diff <= 0) {
+        setCountdown('resuming...');
+        return;
+      }
+      const mins = Math.floor(diff / 60000);
+      const secs = Math.floor((diff % 60000) / 1000);
+      setCountdown(mins > 0 ? `${mins}m ${secs}s` : `${secs}s`);
+    };
+
+    update();
+    const interval = setInterval(update, 1000);
+    return () => clearInterval(interval);
+  }, [rateLimitState.reset_at]);
+
+  return (
+    <div className="px-6 py-2 bg-orange-500/10 border-b border-orange-500/20 flex items-center gap-3 text-xs shrink-0" data-testid="rate-limit-banner">
+      <div className="w-2 h-2 rounded-full bg-orange-400 animate-pulse shrink-0" />
+      <span className="font-semibold text-orange-400">Rate Limit Active</span>
+      {rateLimitState.reason && (
+        <span className="text-orange-300/70 truncate max-w-[300px]">{rateLimitState.reason}</span>
+      )}
+      {rateLimitState.reset_at && (
+        <span className="text-orange-400 tabular-nums ml-auto shrink-0">
+          Resumes in {countdown}
+        </span>
+      )}
+      <span className="text-orange-300/50">
+        {rateLimitState.affected_stacks.length} stack{rateLimitState.affected_stacks.length !== 1 ? 's' : ''} affected
+      </span>
+    </div>
+  );
+}
+
+function TokenUsageSummary({ usage }: { usage: GlobalTokenUsage }) {
+  if (usage.total_tokens === 0) return null;
+
+  return (
+    <div className="flex items-center gap-3 text-[11px] text-sandstorm-muted" data-testid="token-usage-summary">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+        <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
+      </svg>
+      <span className="tabular-nums" title={`Input: ${usage.total_input_tokens.toLocaleString()} / Output: ${usage.total_output_tokens.toLocaleString()}`}>
+        {formatTokenCount(usage.total_tokens)} tokens
+      </span>
+      <span className="text-sandstorm-muted/50">
+        ({formatTokenCount(usage.total_input_tokens)} in / {formatTokenCount(usage.total_output_tokens)} out)
+      </span>
+    </div>
+  );
+}
+
 export function Dashboard() {
-  const { setShowNewStackDialog, filteredStacks, filteredStackHistory, activeProject } = useAppStore();
+  const { setShowNewStackDialog, filteredStacks, filteredStackHistory, activeProject, globalTokenUsage, rateLimitState } = useAppStore();
   const stacks = filteredStacks();
   const history = filteredStackHistory();
   const project = activeProject();
@@ -267,6 +329,9 @@ export function Dashboard() {
         </div>
       </div>
 
+      {/* Rate limit banner */}
+      {rateLimitState?.active && <RateLimitBanner rateLimitState={rateLimitState} />}
+
       {/* Two-column layout: Claude chat (left) + Stacks (right) */}
       <div className="flex-1 flex min-h-0" ref={containerRef}>
         {/* Left column — Claude orchestration chat */}
@@ -333,6 +398,7 @@ export function Dashboard() {
                 {completedCount} review
               </span>
             )}
+            {globalTokenUsage && <TokenUsageSummary usage={globalTokenUsage} />}
             {dashboardTab === 'active' && (
               <div className="ml-auto flex items-center gap-2">
                 {/* Stack View / Ticket View toggle */}

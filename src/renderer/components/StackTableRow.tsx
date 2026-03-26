@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 import { getStackDuration, isTerminalStatus, DURATION_UPDATE_INTERVAL } from '../utils/duration';
+import { formatTokenCount } from '../utils/format';
 
 function formatBytes(bytes: number): string {
   if (bytes === 0) return '0 B';
@@ -20,6 +21,7 @@ const STATUS_COLORS: Record<string, string> = {
   stopped: 'bg-gray-500',
   pushed: 'bg-violet-400',
   pr_created: 'bg-violet-400',
+  rate_limited: 'bg-orange-400 animate-pulse',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -32,6 +34,7 @@ const STATUS_LABELS: Record<string, string> = {
   stopped: 'Stopped',
   pushed: 'Pushed',
   pr_created: 'PR Open',
+  rate_limited: 'Limited',
 };
 
 export function StackTableRow({ stack, showProject, columnWidths }: { stack: Stack; showProject?: boolean; columnWidths?: Record<string, number> }) {
@@ -118,14 +121,22 @@ export function StackTableRow({ stack, showProject, columnWidths }: { stack: Sta
         )}
       </td>
       <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.resources ? { width: `${columnWidths.resources}px` } : undefined}>
-        {metrics && metrics.totalMemory > 0 ? (
-          <div className="flex items-center gap-2 text-sandstorm-muted tabular-nums">
-            <span title="Memory">{formatBytes(metrics.totalMemory)}</span>
-            <span title="CPU">{metrics.containers.reduce((s, c) => s + c.cpuPercent, 0).toFixed(1)}%</span>
-          </div>
-        ) : (
-          <span className="text-sandstorm-muted">—</span>
-        )}
+        <div className="flex items-center gap-2 text-sandstorm-muted tabular-nums">
+          {metrics && metrics.totalMemory > 0 ? (
+            <>
+              <span title="Memory">{formatBytes(metrics.totalMemory)}</span>
+              <span title="CPU">{metrics.containers.reduce((s, c) => s + c.cpuPercent, 0).toFixed(1)}%</span>
+            </>
+          ) : null}
+          {(stack.total_input_tokens > 0 || stack.total_output_tokens > 0) ? (
+            <span title={`In: ${stack.total_input_tokens.toLocaleString()} / Out: ${stack.total_output_tokens.toLocaleString()}`}>
+              {formatTokenCount(stack.total_input_tokens + stack.total_output_tokens)} tok
+            </span>
+          ) : null}
+          {!metrics?.totalMemory && !stack.total_input_tokens && !stack.total_output_tokens && (
+            <span>—</span>
+          )}
+        </div>
       </td>
       <td className="px-3 py-2 whitespace-nowrap text-sandstorm-muted tabular-nums overflow-hidden" style={columnWidths?.duration ? { width: `${columnWidths.duration}px` } : undefined}>
         {duration}

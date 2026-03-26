@@ -15,6 +15,9 @@ export interface Stack {
   pr_url: string | null;
   pr_number: number | null;
   runtime: 'docker' | 'podman';
+  total_input_tokens: number;
+  total_output_tokens: number;
+  rate_limit_reset_at: string | null;
   created_at: string;
   updated_at: string;
 }
@@ -28,7 +31,8 @@ export type StackStatus =
   | 'idle'
   | 'stopped'
   | 'pushed'
-  | 'pr_created';
+  | 'pr_created'
+  | 'rate_limited';
 
 export interface Task {
   id: number;
@@ -37,8 +41,21 @@ export interface Task {
   status: 'running' | 'completed' | 'failed';
   exit_code: number | null;
   warnings: string | null;
+  session_id: string | null;
+  input_tokens: number;
+  output_tokens: number;
   started_at: string;
   finished_at: string | null;
+}
+
+export interface TokenUsage {
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface RateLimitInfo {
+  reset_at: string;  // ISO timestamp when the rate limit resets
+  reason: string;    // Error message from the rate limit
 }
 
 export interface PortMapping {
@@ -214,8 +231,22 @@ export class Registry {
       this.setSchemaVersion(2);
     }
 
+    if (currentVersion < 3) {
+      // Add token tracking columns to tasks
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN session_id TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN input_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN output_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+
+      // Add aggregate token tracking and rate limit info to stacks
+      try { this.db.exec('ALTER TABLE stacks ADD COLUMN total_input_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE stacks ADD COLUMN total_output_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE stacks ADD COLUMN rate_limit_reset_at TEXT'); } catch { /* exists */ }
+
+      this.setSchemaVersion(3);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 3) { ... this.setSchemaVersion(3); }
+    // if (currentVersion < 4) { ... this.setSchemaVersion(4); }
   }
 
   // --- Projects ---
@@ -243,7 +274,7 @@ export class Registry {
 
   // --- Stacks ---
 
-  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number'>): Stack {
+  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'rate_limit_reset_at'>): Stack {
     const normalizedDir = path.resolve(stack.project_dir);
     this.db.prepare(
       `INSERT INTO stacks (id, project, project_dir, ticket, branch, description, status, runtime)
@@ -325,6 +356,72 @@ export class Registry {
     return this.db.prepare(
       "SELECT * FROM tasks WHERE stack_id = ? AND status = 'running' LIMIT 1"
     ).get(stackId) as Task | undefined;
+  }
+
+  // --- Token Usage ---
+
+  updateTaskTokens(taskId: number, inputTokens: number, outputTokens: number): void {
+    // Read old values first so we can compute the delta for the stack aggregate
+    const old = this.db.prepare(
+      'SELECT stack_id, input_tokens, output_tokens FROM tasks WHERE id = ?'
+    ).get(taskId) as { stack_id: string; input_tokens: number; output_tokens: number } | undefined;
+    if (!old) return;
+
+    const inputDelta = inputTokens - old.input_tokens;
+    const outputDelta = outputTokens - old.output_tokens;
+
+    // SET (not increment) — parseTokenUsage returns cumulative values
+    this.db.prepare(
+      'UPDATE tasks SET input_tokens = ?, output_tokens = ? WHERE id = ?'
+    ).run(inputTokens, outputTokens, taskId);
+
+    // Update stack aggregate by the delta
+    if (inputDelta !== 0 || outputDelta !== 0) {
+      this.db.prepare(
+        'UPDATE stacks SET total_input_tokens = total_input_tokens + ?, total_output_tokens = total_output_tokens + ? WHERE id = ?'
+      ).run(inputDelta, outputDelta, old.stack_id);
+    }
+  }
+
+  setTaskSessionId(taskId: number, sessionId: string): void {
+    this.db.prepare('UPDATE tasks SET session_id = ? WHERE id = ?').run(sessionId, taskId);
+  }
+
+  getStackTokenUsage(stackId: string): TokenUsage {
+    const row = this.db.prepare(
+      'SELECT total_input_tokens, total_output_tokens FROM stacks WHERE id = ?'
+    ).get(stackId) as { total_input_tokens: number; total_output_tokens: number } | undefined;
+    return {
+      input_tokens: row?.total_input_tokens ?? 0,
+      output_tokens: row?.total_output_tokens ?? 0,
+    };
+  }
+
+  // --- Rate Limits ---
+
+  setRateLimitReset(stackId: string, resetAt: string): void {
+    this.db.prepare(
+      "UPDATE stacks SET status = 'rate_limited', rate_limit_reset_at = ?, updated_at = datetime('now') WHERE id = ?"
+    ).run(resetAt, stackId);
+  }
+
+  clearRateLimit(stackId: string): void {
+    this.db.prepare(
+      "UPDATE stacks SET rate_limit_reset_at = NULL, status = 'idle', updated_at = datetime('now') WHERE id = ?"
+    ).run(stackId);
+  }
+
+  getRateLimitedStacks(): Stack[] {
+    return this.db.prepare(
+      "SELECT * FROM stacks WHERE status = 'rate_limited'"
+    ).all() as Stack[];
+  }
+
+  getGlobalRateLimitReset(): string | null {
+    const row = this.db.prepare(
+      "SELECT MIN(rate_limit_reset_at) as reset_at FROM stacks WHERE status = 'rate_limited' AND rate_limit_reset_at IS NOT NULL"
+    ).get() as { reset_at: string | null } | undefined;
+    return row?.reset_at ?? null;
   }
 
   // --- Ports ---

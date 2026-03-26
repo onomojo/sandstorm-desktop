@@ -1,6 +1,7 @@
 import React from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 import { getStackDuration } from '../utils/duration';
+import { formatTokenCount } from '../utils/format';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -12,6 +13,7 @@ const STATUS_COLORS: Record<string, string> = {
   stopped: 'bg-gray-500',
   pushed: 'bg-violet-400',
   pr_created: 'bg-violet-400',
+  rate_limited: 'bg-orange-400 animate-pulse',
 };
 
 const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
@@ -24,6 +26,7 @@ const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
   stopped: { bg: 'bg-gray-500/10 border-gray-500/20', text: 'text-gray-400' },
   pushed: { bg: 'bg-violet-500/10 border-violet-500/20', text: 'text-violet-400' },
   pr_created: { bg: 'bg-violet-500/10 border-violet-500/20', text: 'text-violet-400' },
+  rate_limited: { bg: 'bg-orange-500/10 border-orange-500/20', text: 'text-orange-400' },
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -36,6 +39,7 @@ const STATUS_LABELS: Record<string, string> = {
   stopped: 'Stopped',
   pushed: 'Pushed',
   pr_created: 'PR Open',
+  rate_limited: 'Rate Limited',
 };
 
 function timeAgo(dateStr: string): string {
@@ -200,6 +204,16 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
             </div>
           )}
 
+          {/* Rate limit indicator */}
+          {stack.status === 'rate_limited' && stack.rate_limit_reset_at && (
+            <div className="mt-2 ml-5 text-xs text-orange-400 bg-orange-500/10 border border-orange-500/20 rounded-md px-2.5 py-1.5 flex items-center gap-2">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/>
+              </svg>
+              Rate limited — resumes at {new Date(stack.rate_limit_reset_at).toLocaleTimeString()}
+            </div>
+          )}
+
           {/* Metrics */}
           {metrics && (
             <div className="mt-2 ml-5 flex items-center gap-3 text-[11px] text-sandstorm-muted">
@@ -227,6 +241,11 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
                     </span>
                   )}
                 </>
+              )}
+              {(stack.total_input_tokens > 0 || stack.total_output_tokens > 0) && (
+                <span className="tabular-nums" title={`Input: ${stack.total_input_tokens.toLocaleString()} / Output: ${stack.total_output_tokens.toLocaleString()}`}>
+                  {formatTokenCount(stack.total_input_tokens + stack.total_output_tokens)} tokens
+                </span>
               )}
             </div>
           )}

@@ -39,6 +39,9 @@ export interface SandstormAPI {
     stackMemory: (stackId: string) => Promise<number>;
     stackDetailed: (stackId: string) => Promise<unknown>;
     taskMetrics: (stackId: string) => Promise<unknown>;
+    tokenUsage: (stackId: string) => Promise<unknown>;
+    globalTokenUsage: () => Promise<unknown>;
+    rateLimit: () => Promise<unknown>;
   };
   runtime: {
     available: () => Promise<{ docker: boolean; podman: boolean }>;
@@ -112,6 +115,9 @@ const api: SandstormAPI = {
     stackMemory: (stackId) => ipcRenderer.invoke('stats:stack-memory', stackId),
     stackDetailed: (stackId) => ipcRenderer.invoke('stats:stack-detailed', stackId),
     taskMetrics: (stackId) => ipcRenderer.invoke('stats:task-metrics', stackId),
+    tokenUsage: (stackId) => ipcRenderer.invoke('stats:token-usage', stackId),
+    globalTokenUsage: () => ipcRenderer.invoke('stats:global-token-usage'),
+    rateLimit: () => ipcRenderer.invoke('stats:rate-limit'),
   },
   runtime: {
     available: () => ipcRenderer.invoke('runtime:available'),
