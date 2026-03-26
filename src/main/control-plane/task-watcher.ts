@@ -143,7 +143,7 @@ export class TaskWatcher extends EventEmitter {
 
     try {
       const result = await this.runtime.exec(containerId, [
-        'cat', '/tmp/claude-task.log',
+        'cat', '/tmp/claude-raw.log',
       ]);
       const output = result.stdout;
 

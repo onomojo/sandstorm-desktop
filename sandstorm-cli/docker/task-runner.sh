@@ -21,29 +21,44 @@ while true; do
 
     # Stream claude output in real-time using --output-format stream-json.
     # With --include-partial-messages, we get raw API streaming events
-    # (content_block_delta) that arrive token-by-token. We extract the
-    # text deltas with jq for human-readable real-time output in docker logs.
+    # (content_block_delta) that arrive token-by-token.
+    #
+    # Pipeline:
+    #   claude → tee raw JSON (for token parser) → jq (human-readable) → tee task log (for UI)
+    #
+    # The raw JSON log preserves all stream events including token usage in
+    # "result" and "message_delta" events. The jq filter produces clean,
+    # scannable output for the UI.
     #
     # Prompt is piped via stdin (-p -) to avoid shell quoting issues with
     # special characters (backticks, $, quotes, etc.) in prompts.
     cat /tmp/claude-task-prompt.txt \
       | claude --dangerously-skip-permissions --verbose --output-format stream-json \
           --include-partial-messages --print -p - 2>&1 \
+      | stdbuf -o0 tee /tmp/claude-raw.log \
       | jq -rj --unbuffered '
           if .type == "stream_event" then
             if .event.type == "content_block_delta" and .event.delta.type == "text_delta" then
               .event.delta.text
-            elif .event.type == "content_block_delta" and .event.delta.type == "input_json_delta" then
-              empty
             elif .event.type == "content_block_start" and .event.content_block.type == "tool_use" then
-              "\n[" + .event.content_block.name + "] "
+              "\n── \(.event.content_block.name) ──\n"
+            elif .event.type == "content_block_start" and .event.content_block.type == "text" then
+              ""
             else
               empty
             end
           elif .type == "assistant" then
             (.message.content[]? |
               if .type == "tool_use" then
-                "\n[" + .name + ": " + (.input | if .command then .command elif .file_path then .file_path elif .pattern then .pattern elif .prompt then (.prompt | split("\n")[0][:80]) else (tostring[:100]) end) + "]\n"
+                "\n── \(.name) ──\n" +
+                (.input |
+                  if .command then "  $ \(.command)\n"
+                  elif .file_path then "  \(.file_path)\n"
+                  elif .pattern then "  \(.pattern)\n"
+                  elif .prompt then "  \(.prompt | split("\n")[0][:100])\n"
+                  else "  \(tostring[:120])\n"
+                  end
+                )
               elif .type == "text" then
                 .text
               else
@@ -53,7 +68,7 @@ while true; do
           elif .type == "result" then
             "\n" + (.result // "") + "\n"
           elif .type == "error" then
-            "\nERROR: " + (.error.message // "unknown error") + "\n"
+            "\n❌ ERROR: " + (.error.message // "unknown error") + "\n"
           else
             empty
           end
