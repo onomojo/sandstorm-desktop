@@ -14,6 +14,10 @@ echo "    Platform: $platform"
 echo "==> Installing dependencies..."
 npm ci
 
+echo "==> Writing build version..."
+git rev-parse --short HEAD > src/renderer/build-version.txt
+echo "    Commit: $(cat src/renderer/build-version.txt)"
+
 echo "==> Building app..."
 npm run build
 

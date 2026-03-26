@@ -3,4 +3,7 @@ declare module '*.png' {
   export default src;
 }
 
-declare const __GIT_COMMIT__: string;
+declare module '*?raw' {
+  const content: string;
+  export default content;
+}
