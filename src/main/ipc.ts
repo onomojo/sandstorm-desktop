@@ -9,6 +9,7 @@ import {
   podmanRuntime,
   cliDir,
   agentBackend,
+  dockerConnectionManager,
 } from './index';
 import { CreateStackOpts } from './control-plane/stack-manager';
 import {
@@ -409,6 +410,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     ]);
     return { docker: dockerAvail, podman: podmanAvail };
   });
+
+  ipcMain.handle('docker:status', () => {
+    return {
+      connected: dockerConnectionManager?.isConnected ?? false,
+    };
+  });
+
   // --- Auth (delegated to agent backend) ---
 
   ipcMain.handle('auth:status', async () => {

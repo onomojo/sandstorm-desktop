@@ -62,6 +62,9 @@ export interface SandstormAPI {
     status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
     login: () => Promise<{ success: boolean; error?: string }>;
   };
+  docker: {
+    status: () => Promise<{ connected: boolean }>;
+  };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
@@ -137,6 +140,9 @@ const api: SandstormAPI = {
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),
     login: () => ipcRenderer.invoke('auth:login'),
+  },
+  docker: {
+    status: () => ipcRenderer.invoke('docker:status'),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

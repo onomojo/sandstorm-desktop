@@ -7,26 +7,66 @@ import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
 import trayIcon from './tray-icon.png';
 
+/** Polling interval when Docker is connected (ms) */
+const STACK_POLL_INTERVAL = 3000;
+/** Polling interval when Docker is disconnected (ms) — slow down to avoid hammering */
+const STACK_POLL_INTERVAL_DISCONNECTED = 10_000;
+/** Metrics polling interval (ms) */
+const METRICS_POLL_INTERVAL = 15_000;
+
 export default function App() {
   const {
     selectedStackId,
     showNewStackDialog,
     showOpenProjectDialog,
+    dockerConnected,
     refreshStacks,
     refreshProjects,
     refreshStackHistory,
     refreshMetrics,
     selectStack,
+    setDockerConnected,
     error,
   } = useAppStore();
+
+  // Check Docker status on mount and listen for connection events
+  useEffect(() => {
+    // Initial status check
+    window.sandstorm.docker.status().then(({ connected }) => {
+      setDockerConnected(connected);
+    }).catch(() => {});
+
+    const unsubConnected = window.sandstorm.on('docker:connected', () => {
+      setDockerConnected(true);
+      // Immediately refresh on reconnect
+      refreshStacks();
+      refreshMetrics();
+    });
+    const unsubDisconnected = window.sandstorm.on('docker:disconnected', () => {
+      setDockerConnected(false);
+    });
+
+    return () => {
+      unsubConnected();
+      unsubDisconnected();
+    };
+  }, [setDockerConnected, refreshStacks, refreshMetrics]);
 
   useEffect(() => {
     refreshProjects();
     refreshStacks();
     refreshStackHistory();
     refreshMetrics();
-    const interval = setInterval(refreshStacks, 3000);
-    const metricsInterval = setInterval(refreshMetrics, 15000);
+
+    // Adaptive polling: slower when Docker is disconnected
+    const pollInterval = dockerConnected
+      ? STACK_POLL_INTERVAL
+      : STACK_POLL_INTERVAL_DISCONNECTED;
+    const interval = setInterval(refreshStacks, pollInterval);
+    // Only poll metrics when Docker is connected
+    const metricsInterval = dockerConnected
+      ? setInterval(refreshMetrics, METRICS_POLL_INTERVAL)
+      : null;
 
     const unsubCompleted = window.sandstorm.on('task:completed', () => {
       refreshStacks();
@@ -47,13 +87,13 @@ export default function App() {
 
     return () => {
       clearInterval(interval);
-      clearInterval(metricsInterval);
+      if (metricsInterval) clearInterval(metricsInterval);
       unsubCompleted();
       unsubFailed();
       unsubNavigate();
       unsubStacksUpdated();
     };
-  }, [refreshStacks, refreshProjects, refreshStackHistory, refreshMetrics, selectStack]);
+  }, [dockerConnected, refreshStacks, refreshProjects, refreshStackHistory, refreshMetrics, selectStack]);
 
   return (
     <div className="h-screen flex flex-col bg-sandstorm-bg text-sandstorm-text">
@@ -69,6 +109,16 @@ export default function App() {
 
       {/* Project tabs */}
       <ProjectTabs />
+
+      {/* Docker disconnected banner */}
+      {!dockerConnected && (
+        <div className="bg-yellow-500/10 border-b border-yellow-500/20 px-4 py-2.5 text-sm text-yellow-400 flex items-center gap-2 shrink-0 animate-fade-in">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0">
+            <path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+          </svg>
+          Docker is unavailable — waiting for reconnection. Stack data may be stale.
+        </div>
+      )}
 
       {/* Error banner */}
       {error && (
