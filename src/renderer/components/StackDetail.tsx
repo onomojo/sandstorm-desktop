@@ -318,9 +318,13 @@ export function StackDetail({
                             ? `Failed (exit ${task.exit_code})`
                             : 'Running...'}
                       </span>
-                      {task.model && (
+                      {(task.resolved_model || task.model) && (
                         <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-sandstorm-muted">
-                          {task.model}
+                          {task.resolved_model
+                            ? task.model
+                              ? task.resolved_model
+                              : `auto \u2192 ${task.resolved_model}`
+                            : task.model}
                         </span>
                       )}
                       <span className="text-sandstorm-muted text-[10px] ml-auto tabular-nums">

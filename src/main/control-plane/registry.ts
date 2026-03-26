@@ -39,6 +39,7 @@ export interface Task {
   stack_id: string;
   prompt: string;
   model: string | null;
+  resolved_model: string | null;
   status: 'running' | 'completed' | 'failed';
   exit_code: number | null;
   warnings: string | null;
@@ -257,8 +258,19 @@ export class Registry {
       this.setSchemaVersion(4);
     }
 
+    if (currentVersion < 5) {
+      // Add resolved_model column — the actual model used when "auto" was selected
+      try {
+        this.db.exec('ALTER TABLE tasks ADD COLUMN resolved_model TEXT');
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes('duplicate column')) throw err;
+      }
+      this.setSchemaVersion(5);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 5) { ... this.setSchemaVersion(5); }
+    // if (currentVersion < 6) { ... this.setSchemaVersion(6); }
   }
 
   // --- Projects ---
@@ -362,6 +374,12 @@ export class Registry {
     this.db.prepare(
       'UPDATE tasks SET warnings = ? WHERE id = ?'
     ).run(warning, taskId);
+  }
+
+  updateTaskResolvedModel(taskId: number, resolvedModel: string): void {
+    this.db.prepare(
+      'UPDATE tasks SET resolved_model = ? WHERE id = ?'
+    ).run(resolvedModel, taskId);
   }
 
   getRunningTask(stackId: string): Task | undefined {
