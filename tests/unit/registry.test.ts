@@ -715,6 +715,21 @@ describe('Registry', () => {
       const updated = tasks.find(t => t.id === task.id)!;
       expect(updated.session_id).toBe('session-abc-123');
     });
+
+    it('createTask stores model when provided', () => {
+      const task = registry.createTask('token-stack', 'test', 'opus');
+      expect(task.model).toBe('opus');
+    });
+
+    it('createTask stores null model when not provided', () => {
+      const task = registry.createTask('token-stack', 'test');
+      expect(task.model).toBeNull();
+    });
+
+    it('createTask stores sonnet model', () => {
+      const task = registry.createTask('token-stack', 'test', 'sonnet');
+      expect(task.model).toBe('sonnet');
+    });
   });
 
   // ===========================================

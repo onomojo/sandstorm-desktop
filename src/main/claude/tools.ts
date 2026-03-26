@@ -27,6 +27,11 @@ export const tools: ToolDefinition[] = [
         description: { type: 'string', description: 'Short description of the work' },
         runtime: { type: 'string', enum: ['docker', 'podman'], description: 'Container runtime' },
         task: { type: 'string', description: 'Task to dispatch immediately after creation' },
+        model: {
+          type: 'string',
+          enum: ['auto', 'sonnet', 'opus'],
+          description: 'Claude model for inner agent. Default is "auto", which means YOU must analyze the task complexity and choose the best model. When "auto" or omitted, perform a lightweight triage:\n\n**Choose "sonnet" (fast & efficient) when:**\n- Typo fixes, config changes, simple bug fixes\n- Well-defined tasks with clear scope (1-3 files)\n- Routine refactors following existing patterns\n- Straightforward feature additions with no design decisions\n\n**Choose "opus" (most capable) when:**\n- Architectural changes or multi-file features requiring design decisions\n- Tricky bugs that need deep reasoning or cross-cutting analysis\n- Security-sensitive or performance-critical work\n- Tasks involving new patterns not yet established in the codebase\n- Open-ended features where the approach is ambiguous\n\n**Complexity signals to evaluate:**\n- Number of files likely involved\n- Whether the task requires architectural decisions\n- Whether it\'s a well-defined fix vs. open-ended feature\n- Presence of security/performance concerns\n- Whether the task involves new patterns or follows existing ones\n\nWhen you choose a model via triage, communicate your reasoning briefly (e.g., "Using Sonnet — straightforward config change" or "Using Opus — multi-file architectural refactor").',
+        },
       },
       required: ['name', 'projectDir'],
     },
@@ -47,6 +52,11 @@ export const tools: ToolDefinition[] = [
       properties: {
         stackId: { type: 'string', description: 'Stack ID to dispatch to' },
         prompt: { type: 'string', description: 'Task description for inner Claude' },
+        model: {
+          type: 'string',
+          enum: ['auto', 'sonnet', 'opus'],
+          description: 'Claude model for this task. Default is "auto", which means YOU must analyze the task complexity and choose the best model. When "auto" or omitted, perform a lightweight triage:\n\n**Choose "sonnet"** for: typo fixes, config changes, simple bugs, well-defined tasks (1-3 files), routine refactors, straightforward additions.\n**Choose "opus"** for: architectural changes, multi-file features with design decisions, tricky bugs, security/performance-critical work, new patterns, ambiguous scope.\n\nEvaluate: file count, architectural decisions needed, well-defined vs open-ended, security/perf concerns, new vs existing patterns.\n\nCommunicate your reasoning briefly when auto-selecting.',
+        },
       },
       required: ['stackId', 'prompt'],
     },
@@ -161,6 +171,7 @@ export async function handleToolCall(
         description: input.description as string | undefined,
         runtime: (input.runtime as 'docker' | 'podman') ?? 'docker',
         task: input.task as string | undefined,
+        model: input.model as string | undefined,
       });
 
     case 'list_stacks':
@@ -169,7 +180,8 @@ export async function handleToolCall(
     case 'dispatch_task':
       return stackManager.dispatchTask(
         input.stackId as string,
-        input.prompt as string
+        input.prompt as string,
+        input.model as string | undefined
       );
 
     case 'get_diff':

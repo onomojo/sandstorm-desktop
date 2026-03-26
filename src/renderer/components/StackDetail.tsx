@@ -32,6 +32,7 @@ export function StackDetail({
   const [diff, setDiff] = useState('');
   const [selectedLogContainer, setSelectedLogContainer] = useState<string | null>(null);
   const [dispatching, setDispatching] = useState(false);
+  const [taskModel, setTaskModel] = useState<string>('auto');
 
   const loadTasks = useCallback(async () => {
     const taskList = await window.sandstorm.tasks.list(stackId);
@@ -69,7 +70,7 @@ export function StackDetail({
     if (!taskPrompt.trim()) return;
     setDispatching(true);
     try {
-      await window.sandstorm.tasks.dispatch(stackId, taskPrompt);
+      await window.sandstorm.tasks.dispatch(stackId, taskPrompt, taskModel);
       setTaskPrompt('');
       setActiveTab('output');
       await refreshStacks();
@@ -317,6 +318,11 @@ export function StackDetail({
                             ? `Failed (exit ${task.exit_code})`
                             : 'Running...'}
                       </span>
+                      {task.model && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-sandstorm-muted">
+                          {task.model}
+                        </span>
+                      )}
                       <span className="text-sandstorm-muted text-[10px] ml-auto tabular-nums">
                         {new Date(task.started_at).toLocaleString()}
                       </span>
@@ -347,13 +353,31 @@ export function StackDetail({
               }
             }}
           />
-          <button
-            onClick={handleDispatch}
-            disabled={!taskPrompt.trim() || dispatching}
-            className="px-4 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white text-sm font-medium rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.98] shadow-glow"
-          >
-            {dispatching ? 'Sending...' : 'Dispatch'}
-          </button>
+          <div className="flex flex-col gap-1.5 shrink-0">
+            <div className="flex gap-1">
+              {(['auto', 'sonnet', 'opus'] as const).map((m) => (
+                <button
+                  key={m}
+                  onClick={() => setTaskModel(m)}
+                  className={`px-2.5 py-1 text-[10px] font-medium rounded-md border transition-all ${
+                    taskModel === m
+                      ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
+                      : 'border-sandstorm-border bg-sandstorm-bg text-sandstorm-muted hover:border-sandstorm-border-light'
+                  }`}
+                  data-testid={`dispatch-model-${m}`}
+                >
+                  {m.charAt(0).toUpperCase() + m.slice(1)}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={handleDispatch}
+              disabled={!taskPrompt.trim() || dispatching}
+              className="px-4 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white text-sm font-medium rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.98] shadow-glow"
+            >
+              {dispatching ? 'Sending...' : 'Dispatch'}
+            </button>
+          </div>
         </div>
         <div className="flex items-center gap-1.5 mt-2">
           <span className="text-[10px] text-sandstorm-muted mr-1">

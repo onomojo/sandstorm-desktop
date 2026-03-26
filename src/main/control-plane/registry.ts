@@ -38,6 +38,7 @@ export interface Task {
   id: number;
   stack_id: string;
   prompt: string;
+  model: string | null;
   status: 'running' | 'completed' | 'failed';
   exit_code: number | null;
   warnings: string | null;
@@ -245,8 +246,19 @@ export class Registry {
       this.setSchemaVersion(3);
     }
 
+    if (currentVersion < 4) {
+      // Add model column to tasks for intelligent model selection
+      try {
+        this.db.exec('ALTER TABLE tasks ADD COLUMN model TEXT');
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        if (!msg.includes('duplicate column')) throw err;
+      }
+      this.setSchemaVersion(4);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 4) { ... this.setSchemaVersion(4); }
+    // if (currentVersion < 5) { ... this.setSchemaVersion(5); }
   }
 
   // --- Projects ---
@@ -315,10 +327,10 @@ export class Registry {
 
   // --- Tasks ---
 
-  createTask(stackId: string, prompt: string): Task {
+  createTask(stackId: string, prompt: string, model?: string): Task {
     const result = this.db.prepare(
-      "INSERT INTO tasks (stack_id, prompt, status) VALUES (?, ?, 'running')"
-    ).run(stackId, prompt);
+      "INSERT INTO tasks (stack_id, prompt, model, status) VALUES (?, ?, ?, 'running')"
+    ).run(stackId, prompt, model ?? null);
     this.updateStackStatus(stackId, 'running');
     return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid) as Task;
   }

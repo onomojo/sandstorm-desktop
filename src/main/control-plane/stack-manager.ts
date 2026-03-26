@@ -16,6 +16,7 @@ export interface CreateStackOpts {
   description?: string;
   runtime: 'docker' | 'podman';
   task?: string;
+  model?: string;
 }
 
 export interface StackWithServices extends Stack {
@@ -179,6 +180,11 @@ export class StackManager {
   createStack(opts: CreateStackOpts): Stack {
     const projectName = path.basename(opts.projectDir);
 
+    // Resolve "auto" → undefined so the CLI never receives "--model auto"
+    if (opts.model === 'auto') {
+      opts = { ...opts, model: undefined };
+    }
+
     // Create registry entry first (ports table has FK to stacks)
     const stack = this.registry.createStack({
       id: opts.name,
@@ -228,12 +234,12 @@ export class StackManager {
       // If a task was provided, dispatch it (with one retry on failure)
       if (opts.task) {
         try {
-          await this.dispatchTask(opts.name, opts.task);
+          await this.dispatchTask(opts.name, opts.task, opts.model);
         } catch (firstErr) {
           // Wait and retry once — the container may need more time
           await new Promise((resolve) => setTimeout(resolve, 10000));
           try {
-            await this.dispatchTask(opts.name, opts.task);
+            await this.dispatchTask(opts.name, opts.task, opts.model);
           } catch (retryErr) {
             const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
             this.registry.updateStackStatus(opts.name, 'failed', `Task dispatch failed after retry: ${msg}`);
@@ -368,7 +374,12 @@ export class StackManager {
     );
   }
 
-  async dispatchTask(stackId: string, prompt: string): Promise<Task> {
+  async dispatchTask(stackId: string, prompt: string, model?: string): Promise<Task> {
+    // Resolve "auto" → undefined so the CLI never receives "--model auto"
+    if (model === 'auto') {
+      model = undefined;
+    }
+
     // Block dispatch if rate limited
     if (this.isRateLimited()) {
       const state = this.getRateLimitState();
@@ -384,7 +395,7 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    const task = this.registry.createTask(stackId, prompt);
+    const task = this.registry.createTask(stackId, prompt, model);
 
     try {
       const claudeContainer = await this.findClaudeContainer(stack);
@@ -399,7 +410,10 @@ export class StackManager {
       // handles credential sync (OAuth), writes files as the correct user
       // (`-u claude`), and creates the trigger file with proper ownership —
       // preventing the infinite-loop and not-logged-in bugs.
-      const result = await this.runCli(stack.project_dir, ['task', stackId, prompt]);
+      const cliArgs = ['task', stackId];
+      if (model) cliArgs.push('--model', model);
+      cliArgs.push(prompt);
+      const result = await this.runCli(stack.project_dir, cliArgs);
 
       if (result.exitCode !== 0) {
         throw new SandstormError(

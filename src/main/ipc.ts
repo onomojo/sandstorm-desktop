@@ -294,8 +294,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle(
     'tasks:dispatch',
-    async (_event, stackId: string, prompt: string) => {
-      return stackManager.dispatchTask(stackId, prompt);
+    async (_event, stackId: string, prompt: string, model?: string) => {
+      return stackManager.dispatchTask(stackId, prompt, model);
     }
   );
 

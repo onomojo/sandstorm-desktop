@@ -115,6 +115,38 @@ describe('StackDetail', () => {
     expect(dispatchBtn.hasAttribute('disabled')).toBe(true);
   });
 
+  it('renders model selector buttons for dispatch with auto default', () => {
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    expect(screen.getByTestId('dispatch-model-auto')).toBeDefined();
+    expect(screen.getByTestId('dispatch-model-sonnet')).toBeDefined();
+    expect(screen.getByTestId('dispatch-model-opus')).toBeDefined();
+    // Auto should be selected by default
+    const autoBtn = screen.getByTestId('dispatch-model-auto');
+    expect(autoBtn.className).toContain('border-sandstorm-accent');
+  });
+
+  it('shows model badge in task history', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Complex refactor',
+        model: 'opus',
+        status: 'completed',
+        exit_code: 0,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    fireEvent.click(screen.getByText('History'));
+
+    await waitFor(() => {
+      expect(screen.getByText('opus')).toBeDefined();
+    });
+  });
+
   it('shows task history in the History tab', async () => {
     api.tasks.list.mockResolvedValue([
       {
