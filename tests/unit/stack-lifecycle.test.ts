@@ -4,6 +4,8 @@ import { Registry } from '../../src/main/control-plane/registry';
 import { PortAllocator } from '../../src/main/control-plane/port-allocator';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { StackStatus } from '../../src/main/control-plane/registry';
+import { SandstormError, ErrorCode } from '../../src/main/errors';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -38,6 +40,7 @@ function createMockRuntime(): ContainerRuntime {
       },
     ]),
     inspect: vi.fn(),
+    containerStats: vi.fn().mockResolvedValue({ cpuPercent: 0, memoryUsage: 0, memoryLimit: 0 }),
     logs: vi.fn().mockReturnValue((async function* () {})()),
     exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
     isAvailable: vi.fn().mockResolvedValue(true),
@@ -45,7 +48,7 @@ function createMockRuntime(): ContainerRuntime {
   };
 }
 
-function makeStack(id: string, status: string = 'up') {
+function makeStack(id: string, status: StackStatus = 'up') {
   return {
     id,
     project: 'proj',
@@ -53,7 +56,7 @@ function makeStack(id: string, status: string = 'up') {
     ticket: null,
     branch: null,
     description: null,
-    status: status as 'up',
+    status,
     runtime: 'docker' as const,
   };
 }
@@ -287,7 +290,9 @@ describe('Stack Lifecycle Integration', () => {
       registry.createStack(secondStack);
       await expect(
         manager.dispatchTask('rl-other', 'Another task')
-      ).rejects.toThrow('rate limit');
+      ).rejects.toThrow(expect.objectContaining({
+        code: ErrorCode.TASK_DISPATCH_FAILED,
+      }));
 
       // Verify rate limit state
       const state = manager.getRateLimitState();
@@ -398,6 +403,7 @@ describe('Stack Lifecycle Integration', () => {
       const tasks = registry.getTasksForStack('no-container');
       expect(tasks).toHaveLength(1);
       expect(tasks[0].status).toBe('failed');
+      expect(tasks[0].exit_code).toBe(1);
     });
 
     it('task metrics accurately reflect mixed outcomes', async () => {
@@ -417,6 +423,38 @@ describe('Stack Lifecycle Integration', () => {
       expect(metrics.completedTasks).toBe(2);
       expect(metrics.failedTasks).toBe(1);
       expect(metrics.runningTasks).toBe(0);
+    });
+  });
+
+  describe('nonexistent stack errors', () => {
+    it('dispatchTask to a nonexistent stack throws STACK_NOT_FOUND', async () => {
+      await expect(
+        manager.dispatchTask('no-such-stack', 'Hello')
+      ).rejects.toThrow(expect.objectContaining({
+        code: ErrorCode.STACK_NOT_FOUND,
+      }));
+    });
+
+    it('teardownStack on a nonexistent stack throws STACK_NOT_FOUND', () => {
+      expect(() => manager.teardownStack('no-such-stack')).toThrow(
+        expect.objectContaining({ code: ErrorCode.STACK_NOT_FOUND })
+      );
+    });
+
+    it('push on a nonexistent stack throws STACK_NOT_FOUND', async () => {
+      await expect(
+        manager.push('no-such-stack', 'msg')
+      ).rejects.toThrow(expect.objectContaining({
+        code: ErrorCode.STACK_NOT_FOUND,
+      }));
+    });
+
+    it('getDiff on a nonexistent stack throws STACK_NOT_FOUND', async () => {
+      await expect(
+        manager.getDiff('no-such-stack')
+      ).rejects.toThrow(expect.objectContaining({
+        code: ErrorCode.STACK_NOT_FOUND,
+      }));
     });
   });
 
@@ -540,7 +578,9 @@ describe('Stack Lifecycle Integration', () => {
       expect(registry.getStack('rl-done')!.status).toBe('completed');
 
       // Dispatch to any stack should fail
-      await expect(manager.dispatchTask('rl-b', 'Blocked')).rejects.toThrow('rate limit');
+      await expect(manager.dispatchTask('rl-b', 'Blocked')).rejects.toThrow(expect.objectContaining({
+        code: ErrorCode.TASK_DISPATCH_FAILED,
+      }));
     });
   });
 
