@@ -540,4 +540,305 @@ describe('TaskWatcher', () => {
 
     watcher.unwatchAll();
   });
+
+  // --- streamOutput data flow ---
+
+  it('streamOutput emits task:output events for each chunk', async () => {
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn().mockImplementation(async function* () {
+        yield 'chunk 1\n';
+        yield 'chunk 2\n';
+        yield 'chunk 3\n';
+      }),
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'running', stderr: '' }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+      containerStats: vi.fn(),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'test task');
+
+    const outputEvents: string[] = [];
+    watcher.on('task:output', ({ data }) => {
+      outputEvents.push(data);
+    });
+
+    const callback = vi.fn();
+    await watcher.streamOutput('watch-stack', 'container-123', callback);
+
+    expect(callback).toHaveBeenCalledTimes(3);
+    expect(callback).toHaveBeenCalledWith('chunk 1\n');
+    expect(callback).toHaveBeenCalledWith('chunk 2\n');
+    expect(callback).toHaveBeenCalledWith('chunk 3\n');
+
+    expect(outputEvents).toHaveLength(3);
+    expect(outputEvents[0]).toBe('chunk 1\n');
+
+    watcher.unwatchAll();
+  });
+
+  it('streamOutput passes follow and tail options to runtime.logs', async () => {
+    const logsSpy = vi.fn().mockImplementation(async function* () {
+      yield 'data\n';
+    });
+
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: logsSpy,
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+      containerStats: vi.fn(),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    await watcher.streamOutput('watch-stack', 'container-abc', vi.fn());
+
+    expect(logsSpy).toHaveBeenCalledWith('container-abc', { follow: true, tail: 100 });
+    watcher.unwatchAll();
+  });
+
+  // --- setOnStatusChange callback ---
+
+  it('calls onStatusChange callback when task completes', async () => {
+    const runtime = createSequencedRuntime(['running', 'completed'], '0');
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+
+    const statusChangeFn = vi.fn();
+    watcher.setOnStatusChange(statusChangeFn);
+
+    registry.createTask('watch-stack', 'test task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    expect(statusChangeFn).toHaveBeenCalled();
+    watcher.unwatchAll();
+  });
+
+  it('calls onStatusChange callback when task fails', async () => {
+    const runtime = createSequencedRuntime(['running', 'failed'], '1');
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+
+    const statusChangeFn = vi.fn();
+    watcher.setOnStatusChange(statusChangeFn);
+
+    registry.createTask('watch-stack', 'failing task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:failed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    expect(statusChangeFn).toHaveBeenCalled();
+    watcher.unwatchAll();
+  });
+
+  // --- Concurrent watchers ---
+
+  it('supports watching multiple stacks concurrently', async () => {
+    // Create a second stack
+    registry.createStack({
+      id: 'watch-stack-2',
+      project: 'proj',
+      project_dir: '/proj',
+      ticket: null,
+      branch: null,
+      description: null,
+      status: 'up',
+      runtime: 'docker',
+    });
+
+    let stack1Calls = 0;
+    let stack2Calls = 0;
+
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.status')) {
+          if (_id === 'container-1') {
+            stack1Calls++;
+            return {
+              exitCode: 0,
+              stdout: stack1Calls >= 3 ? 'completed' : 'running',
+              stderr: '',
+            };
+          }
+          if (_id === 'container-2') {
+            stack2Calls++;
+            return {
+              exitCode: 0,
+              stdout: stack2Calls >= 4 ? 'completed' : 'running',
+              stderr: '',
+            };
+          }
+        }
+        if (cmd.includes('/tmp/claude-task.exit')) {
+          return { exitCode: 0, stdout: '0', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+      containerStats: vi.fn(),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+
+    registry.createTask('watch-stack', 'task 1');
+    registry.createTask('watch-stack-2', 'task 2');
+
+    const completed: string[] = [];
+    const allDone = new Promise<void>((resolve) => {
+      watcher.on('task:completed', ({ stackId }) => {
+        completed.push(stackId);
+        if (completed.length === 2) resolve();
+      });
+    });
+
+    watcher.watch('watch-stack', 'container-1');
+    watcher.watch('watch-stack-2', 'container-2');
+
+    await allDone;
+
+    expect(completed).toContain('watch-stack');
+    expect(completed).toContain('watch-stack-2');
+
+    watcher.unwatchAll();
+  });
+
+  it('re-watching a stack replaces the existing watcher', async () => {
+    const runtime = createSequencedRuntime(['running', 'running', 'completed'], '0');
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+
+    registry.createTask('watch-stack', 'task');
+
+    // Start watching with container-1
+    watcher.watch('watch-stack', 'container-1');
+
+    // Immediately re-watch with container-2 (should replace, not duplicate)
+    watcher.watch('watch-stack', 'container-2');
+
+    const completed = new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+    });
+
+    await completed;
+
+    // Verify exec was called with the second container ID
+    const execCalls = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls;
+    const lastStatusCall = execCalls.filter(
+      (c: unknown[]) => Array.isArray(c[1]) && c[1].includes('/tmp/claude-task.status')
+    );
+    // All status polls after the re-watch should use container-2
+    const container2Calls = lastStatusCall.filter((c: unknown[]) => c[0] === 'container-2');
+    expect(container2Calls.length).toBeGreaterThan(0);
+
+    watcher.unwatchAll();
+  });
+
+  // --- Rate limit event from token reading ---
+
+  it('emits task:rate_limited when rate limit detected in raw log', async () => {
+    const rawLogWithRateLimit = [
+      '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded. Resets at 2026-03-26T12:00:00Z"}}',
+    ].join('\n');
+
+    const runtime = createSequencedRuntime(['running', 'completed'], '0');
+    const origExec = (runtime.exec as ReturnType<typeof vi.fn>).getMockImplementation()!;
+    (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+      async (id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-raw.log')) {
+          return { exitCode: 0, stdout: rawLogWithRateLimit, stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-task.stderr')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        return origExec(id, cmd);
+      }
+    );
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'rate limited task');
+
+    let rateLimitEmitted = false;
+    watcher.on('task:rate_limited', ({ stackId }) => {
+      expect(stackId).toBe('watch-stack');
+      rateLimitEmitted = true;
+    });
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    // Give async token reading time to complete
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(rateLimitEmitted).toBe(true);
+    watcher.unwatchAll();
+  });
+
+  // --- Stale poll safety net ---
+
+  it('accepts stale status after MAX_STALE_POLLS without seeing running', async () => {
+    // Simulate a scenario where the task runner crashes before writing "running"
+    // The status file has "completed" from a prior task and never changes
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.status')) {
+          return { exitCode: 0, stdout: 'completed', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-task.exit')) {
+          return { exitCode: 0, stdout: '0', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+      containerStats: vi.fn(),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 10 });
+    registry.createTask('watch-stack', 'stale safety net task');
+
+    const completed = new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+    });
+
+    watcher.watch('watch-stack', 'container-123');
+    await completed;
+
+    // Should have polled MAX_STALE_POLLS (30) times before accepting
+    const execCalls = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls;
+    const statusPolls = execCalls.filter(
+      (c: unknown[]) => Array.isArray(c[1]) && c[1].includes('/tmp/claude-task.status')
+    );
+    expect(statusPolls.length).toBe(30);
+
+    watcher.unwatchAll();
+  });
 });
