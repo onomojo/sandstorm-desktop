@@ -6,6 +6,7 @@ import { NewStackDialog } from './components/NewStackDialog';
 import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
 import trayIcon from './tray-icon.png';
+import buildVersion from './build-version.txt?raw';
 
 /** Polling interval when Docker is connected (ms) */
 const STACK_POLL_INTERVAL = 3000;
@@ -104,8 +105,8 @@ export default function App() {
           <span className="text-xs font-semibold text-sandstorm-muted tracking-wide uppercase">
             Sandstorm
           </span>
-          <span className="text-[10px] text-sandstorm-muted/50 font-mono" title={`Build: ${__GIT_COMMIT__}`}>
-            {__GIT_COMMIT__}
+          <span className="text-[10px] text-sandstorm-muted/50 font-mono" title={`Build: ${buildVersion.trim()}`}>
+            {buildVersion.trim()}
           </span>
         </div>
       </div>

@@ -11,3 +11,4 @@ squashfs-root/
 .mcp.json
 .sandstorm-ready
 .sandstorm/
+src/renderer/build-version.txt
