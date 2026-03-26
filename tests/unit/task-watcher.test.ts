@@ -352,6 +352,51 @@ describe('TaskWatcher', () => {
     watcher.unwatchAll();
   });
 
+  // --- Token parsing from raw log ---
+
+  it('reads token usage from claude-raw.log (not claude-task.log)', async () => {
+    const rawJsonOutput = [
+      '{"type":"content_block_delta","delta":{"text":"Hello"}}',
+      '{"type":"result","usage":{"input_tokens":1500,"output_tokens":800},"session_id":"sess-abc"}',
+    ].join('\n');
+
+    const runtime = createSequencedRuntime(['running', 'completed'], '0');
+    // Override exec to return raw JSON for claude-raw.log
+    const origExec = runtime.exec as ReturnType<typeof vi.fn>;
+    const execImpl = origExec.getMockImplementation()!;
+    (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+      async (id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-raw.log')) {
+          return { exitCode: 0, stdout: rawJsonOutput, stderr: '' };
+        }
+        return execImpl(id, cmd);
+      }
+    );
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'token test task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    // Verify exec was called with claude-raw.log
+    const execCalls = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls;
+    const rawLogCalls = execCalls.filter(
+      (call: unknown[]) => Array.isArray(call[1]) && call[1].includes('/tmp/claude-raw.log')
+    );
+    expect(rawLogCalls.length).toBeGreaterThan(0);
+
+    // Verify token data was stored
+    const tasks = registry.getTasksForStack('watch-stack');
+    const task = tasks.find((t) => t.prompt === 'token test task');
+    expect(task!.input_tokens).toBe(1500);
+    expect(task!.output_tokens).toBe(800);
+
+    watcher.unwatchAll();
+  });
+
   // --- Exponential backoff tests ---
 
   it('applies exponential backoff on exec failures', async () => {
