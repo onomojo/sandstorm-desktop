@@ -27,16 +27,88 @@ describe('parseTokenUsage', () => {
     expect(result.session_id).toBe('sess-123');
   });
 
-  it('parses message_start with input tokens', () => {
+  it('parses message_start with input tokens (bare)', () => {
     const output = '{"type":"message_start","message":{"usage":{"input_tokens":2000}}}\n';
     const result = parseTokenUsage(output);
     expect(result.input_tokens).toBe(2000);
   });
 
-  it('parses message_delta with output tokens', () => {
+  it('parses message_delta with output tokens (bare)', () => {
     const output = '{"type":"message_delta","usage":{"output_tokens":500}}\n';
     const result = parseTokenUsage(output);
     expect(result.output_tokens).toBe(500);
+  });
+
+  it('parses stream_event wrapped message_start', () => {
+    const output = JSON.stringify({
+      type: 'stream_event',
+      event: {
+        type: 'message_start',
+        message: {
+          usage: {
+            input_tokens: 2,
+            cache_creation_input_tokens: 10783,
+            cache_read_input_tokens: 8537,
+            output_tokens: 1,
+          },
+        },
+      },
+    }) + '\n';
+    const result = parseTokenUsage(output);
+    expect(result.input_tokens).toBe(2);
+  });
+
+  it('parses stream_event wrapped message_delta', () => {
+    const output = JSON.stringify({
+      type: 'stream_event',
+      event: {
+        type: 'message_delta',
+        usage: { input_tokens: 2, output_tokens: 10 },
+      },
+    }) + '\n';
+    const result = parseTokenUsage(output);
+    expect(result.output_tokens).toBe(10);
+  });
+
+  it('parses full stream-json output with stream_event wrappers', () => {
+    const lines = [
+      JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: {
+            usage: {
+              input_tokens: 2,
+              cache_creation_input_tokens: 10783,
+              cache_read_input_tokens: 8537,
+              output_tokens: 1,
+            },
+          },
+        },
+      }),
+      JSON.stringify({
+        type: 'stream_event',
+        event: { type: 'content_block_delta', delta: { text: 'Hello' } },
+      }),
+      JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'message_delta',
+          usage: { input_tokens: 2, output_tokens: 10 },
+        },
+      }),
+      JSON.stringify({
+        type: 'result',
+        total_cost_usd: 0.07192225,
+        usage: { input_tokens: 2, output_tokens: 10 },
+        session_id: 'sess-full',
+      }),
+    ].join('\n');
+
+    const result = parseTokenUsage(lines);
+    expect(result.input_tokens).toBe(2);
+    expect(result.output_tokens).toBe(10);
+    expect(result.session_id).toBe('sess-full');
   });
 
   it('takes the last result usage (cumulative)', () => {

@@ -43,19 +43,23 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
         sessionId = parsed.session_id;
       }
 
-      // Also check nested message usage (message_start events)
-      if (parsed.type === 'message_start' && parsed.message?.usage) {
-        // message_start contains input token count
-        const msgUsage = parsed.message.usage;
+      // Unwrap stream_event wrapper: Claude CLI emits
+      // { "type": "stream_event", "event": { "type": "message_start", ... } }
+      const event = parsed.type === 'stream_event' ? parsed.event : parsed;
+      if (!event) continue;
+
+      // message_start contains input token count
+      if (event.type === 'message_start' && event.message?.usage) {
+        const msgUsage = event.message.usage;
         if (msgUsage.input_tokens) {
           inputTokens = msgUsage.input_tokens;
         }
       }
 
       // message_delta contains output token count at end of message
-      if (parsed.type === 'message_delta' && parsed.usage) {
-        if (parsed.usage.output_tokens) {
-          outputTokens = parsed.usage.output_tokens;
+      if (event.type === 'message_delta' && event.usage) {
+        if (event.usage.output_tokens) {
+          outputTokens = event.usage.output_tokens;
         }
       }
     } catch {
