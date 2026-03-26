@@ -18,6 +18,10 @@ const MAX_STALE_POLLS = 30;
 /** Tasks completing in less than this many ms with no changes are suspicious */
 const SUSPICIOUS_DURATION_MS = 30_000;
 
+/** Backoff configuration */
+const BACKOFF_BASE_MS = 500;
+const BACKOFF_MAX_MS = 30_000;
+
 export class TaskWatcher extends EventEmitter {
   private watchers = new Map<string, NodeJS.Timeout>();
   private errorCounts = new Map<string, number>();
@@ -30,6 +34,9 @@ export class TaskWatcher extends EventEmitter {
   private stalePollCounts = new Map<string, number>();
   private pollInterval: number;
   private onStatusChange?: () => void;
+
+  /** Track active output streams for cleanup */
+  private activeOutputStreams = new Map<string, AbortController>();
 
   constructor(
     private registry: Registry,
@@ -56,22 +63,25 @@ export class TaskWatcher extends EventEmitter {
     this.seenRunning.set(stackId, false);
     this.stalePollCounts.set(stackId, 0);
 
-    const interval = setInterval(async () => {
-      await this.checkTaskStatus(stackId, containerId);
-    }, this.pollInterval);
-
-    this.watchers.set(stackId, interval);
+    this.schedulePoll(stackId, containerId, this.pollInterval);
   }
 
   unwatch(stackId: string): void {
-    const interval = this.watchers.get(stackId);
-    if (interval) {
-      clearInterval(interval);
+    const timeout = this.watchers.get(stackId);
+    if (timeout) {
+      clearTimeout(timeout);
       this.watchers.delete(stackId);
     }
     this.errorCounts.delete(stackId);
     this.seenRunning.delete(stackId);
     this.stalePollCounts.delete(stackId);
+
+    // Abort any active output stream
+    const controller = this.activeOutputStreams.get(stackId);
+    if (controller) {
+      controller.abort();
+      this.activeOutputStreams.delete(stackId);
+    }
   }
 
   unwatchAll(): void {
@@ -113,6 +123,17 @@ export class TaskWatcher extends EventEmitter {
     this.unwatch(stackId);
   }
 
+  /**
+   * Schedule the next poll with adaptive timing.
+   * Uses exponential backoff on consecutive failures.
+   */
+  private schedulePoll(stackId: string, containerId: string, delayMs: number): void {
+    const timeout = setTimeout(async () => {
+      await this.checkTaskStatus(stackId, containerId);
+    }, delayMs);
+    this.watchers.set(stackId, timeout);
+  }
+
   private async checkTaskStatus(
     stackId: string,
     containerId: string
@@ -133,6 +154,8 @@ export class TaskWatcher extends EventEmitter {
       if (status === 'running') {
         this.seenRunning.set(stackId, true);
         this.errorCounts.set(stackId, 0);
+        // Healthy — poll at normal interval
+        this.schedulePoll(stackId, containerId, this.pollInterval);
         return;
       }
 
@@ -145,6 +168,7 @@ export class TaskWatcher extends EventEmitter {
           const staleCount = (this.stalePollCounts.get(stackId) ?? 0) + 1;
           this.stalePollCounts.set(stackId, staleCount);
           if (staleCount < MAX_STALE_POLLS) {
+            this.schedulePoll(stackId, containerId, this.pollInterval);
             return;
           }
         }
@@ -164,11 +188,12 @@ export class TaskWatcher extends EventEmitter {
         return;
       }
 
-      // Successful poll — reset error counter
+      // Successful poll — reset error counter, normal interval
       this.errorCounts.set(stackId, 0);
+      this.schedulePoll(stackId, containerId, this.pollInterval);
     } catch {
-      // Exec failed — container might not be ready, or ID became stale.
-      // Track consecutive failures so we don't poll forever.
+      // Exec failed — container might not be ready, or Docker daemon is down.
+      // Apply exponential backoff instead of hammering the API.
       const count = (this.errorCounts.get(stackId) ?? 0) + 1;
       this.errorCounts.set(stackId, count);
 
@@ -179,7 +204,15 @@ export class TaskWatcher extends EventEmitter {
           'failed',
           1
         );
+        return;
       }
+
+      // Exponential backoff: 500ms, 1s, 2s, 4s, ... up to 30s
+      const backoffDelay = Math.min(
+        BACKOFF_BASE_MS * Math.pow(2, count - 1),
+        BACKOFF_MAX_MS
+      );
+      this.schedulePoll(stackId, containerId, backoffDelay);
     }
   }
 
@@ -188,11 +221,21 @@ export class TaskWatcher extends EventEmitter {
     containerId: string,
     callback: (data: string) => void
   ): Promise<void> {
+    // Abort any existing stream for this stack
+    const existing = this.activeOutputStreams.get(stackId);
+    if (existing) {
+      existing.abort();
+    }
+
+    const controller = new AbortController();
+    this.activeOutputStreams.set(stackId, controller);
+
     try {
       for await (const chunk of this.runtime.logs(containerId, {
         follow: true,
         tail: 100,
       })) {
+        if (controller.signal.aborted) break;
         callback(chunk);
         this.emit('task:output', {
           stackId,
@@ -201,7 +244,9 @@ export class TaskWatcher extends EventEmitter {
         });
       }
     } catch {
-      // Stream ended
+      // Stream ended or aborted
+    } finally {
+      this.activeOutputStreams.delete(stackId);
     }
   }
 }

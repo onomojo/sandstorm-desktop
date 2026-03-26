@@ -64,6 +64,34 @@ function createSequencedRuntime(
   };
 }
 
+/**
+ * Create a mock runtime that fails exec calls a certain number of times
+ * before succeeding.
+ */
+function createFailingRuntime(failCount: number): ContainerRuntime {
+  let callIndex = 0;
+  return {
+    name: 'mock',
+    composeUp: vi.fn(),
+    composeDown: vi.fn(),
+    listContainers: vi.fn().mockResolvedValue([]),
+    inspect: vi.fn(),
+    logs: vi.fn(),
+    exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+      callIndex++;
+      if (callIndex <= failCount) {
+        throw new Error('Docker daemon not available');
+      }
+      if (cmd.includes('/tmp/claude-task.status')) {
+        return { exitCode: 0, stdout: 'running', stderr: '' };
+      }
+      return { exitCode: 0, stdout: '', stderr: '' };
+    }),
+    isAvailable: vi.fn().mockResolvedValue(true),
+    version: vi.fn().mockResolvedValue('Mock 1.0'),
+  };
+}
+
 describe('TaskWatcher', () => {
   let registry: Registry;
   let dbPath: string;
@@ -321,6 +349,150 @@ describe('TaskWatcher', () => {
 
     watcher.watch('watch-stack', 'container-123');
     await completed;
+    watcher.unwatchAll();
+  });
+
+  // --- Exponential backoff tests ---
+
+  it('applies exponential backoff on exec failures', async () => {
+    // Fail 3 times, then succeed with "running" status
+    const runtime = createFailingRuntime(3);
+    const watcher = new TaskWatcher(registry, runtime, {
+      pollInterval: 50,
+    });
+
+    registry.createTask('watch-stack', 'test task');
+    watcher.watch('watch-stack', 'container-123');
+
+    // Wait long enough for backoff: 500ms + 1000ms + 2000ms + normal poll
+    await new Promise((r) => setTimeout(r, 4000));
+
+    const execFn = runtime.exec as ReturnType<typeof vi.fn>;
+    // Should have been called: initial fail + backoff retries + success
+    expect(execFn.mock.calls.length).toBeGreaterThanOrEqual(4);
+
+    watcher.unwatchAll();
+  });
+
+  it('marks task as failed after MAX_CONSECUTIVE_ERRORS with backoff', async () => {
+    vi.useFakeTimers();
+
+    // Always fail
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockRejectedValue(new Error('Docker unavailable')),
+      isAvailable: vi.fn().mockResolvedValue(false),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+      containerStats: vi.fn(),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, {
+      pollInterval: 10,
+    });
+
+    registry.createTask('watch-stack', 'doomed task');
+
+    let taskFailed = false;
+    watcher.on('task:failed', ({ stackId }) => {
+      expect(stackId).toBe('watch-stack');
+      taskFailed = true;
+    });
+
+    watcher.watch('watch-stack', 'container-123');
+
+    // Advance through all 30 backoff cycles
+    // Each cycle: poll delay + exec resolves
+    for (let i = 0; i < 35; i++) {
+      await vi.advanceTimersByTimeAsync(31_000); // max backoff is 30s
+    }
+
+    expect(taskFailed).toBe(true);
+
+    const execFn = runtime.exec as ReturnType<typeof vi.fn>;
+    expect(execFn.mock.calls.length).toBe(30);
+
+    watcher.unwatchAll();
+    vi.useRealTimers();
+  });
+
+  // --- Output stream cleanup ---
+
+  it('cleans up output stream on unwatch', async () => {
+    let streamConsumed = false;
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn().mockImplementation(async function* () {
+        yield 'line 1\n';
+        // Simulate a long-running stream
+        await new Promise((r) => setTimeout(r, 5000));
+        streamConsumed = true;
+        yield 'line 2\n';
+      }),
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'running', stderr: '' }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+      containerStats: vi.fn(),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'test task');
+
+    const callback = vi.fn();
+    // Start streaming (fire-and-forget)
+    watcher.streamOutput('watch-stack', 'container-123', callback).catch(() => {});
+
+    // Give it time to start consuming
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Unwatch should abort the stream
+    watcher.unwatch('watch-stack');
+
+    // Wait a bit and verify the stream was not fully consumed
+    await new Promise((r) => setTimeout(r, 200));
+    expect(streamConsumed).toBe(false);
+  });
+
+  it('replaces existing output stream when streamOutput called again', async () => {
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn().mockImplementation(async function* () {
+        yield 'data\n';
+        await new Promise((r) => setTimeout(r, 10000));
+      }),
+      exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'running', stderr: '' }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+      containerStats: vi.fn(),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'test task');
+
+    // Start first stream
+    watcher.streamOutput('watch-stack', 'container-1', vi.fn()).catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+
+    // Start second stream — should abort the first
+    const callback2 = vi.fn();
+    watcher.streamOutput('watch-stack', 'container-2', callback2).catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+
+    // The logs function should have been called twice (once for each stream)
+    expect(runtime.logs).toHaveBeenCalledTimes(2);
+
     watcher.unwatchAll();
   });
 });

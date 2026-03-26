@@ -5,12 +5,12 @@ interface ChatMessage {
   content: string;
 }
 
-interface ClaudeSessionProps {
+interface AgentSessionProps {
   tabId: string;
   projectDir?: string;
 }
 
-export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
+export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -22,7 +22,7 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
 
   // On mount, fetch full history from the backend
   useEffect(() => {
-    window.sandstorm.claude.history(tabId).then((result) => {
+    window.sandstorm.agent.history(tabId).then((result) => {
       const typed = result.messages.map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
@@ -39,27 +39,25 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
     }
   }, [messages, streamingContent]);
 
-  // Listen for claude output/done/error/user-message events scoped to this tab
+  // Listen for agent output/done/error/user-message events scoped to this tab
   useEffect(() => {
     const unsubQueued = window.sandstorm.on(
-      `claude:queued:${tabId}`,
+      `agent:queued:${tabId}`,
       () => {
         setIsQueued(true);
       }
     );
 
     const unsubOutput = window.sandstorm.on(
-      `claude:output:${tabId}`,
+      `agent:output:${tabId}`,
       (data: unknown) => {
         setIsQueued(false);
         setStreamingContent((prev) => prev + (data as string));
       }
     );
 
-    const unsubDone = window.sandstorm.on(`claude:done:${tabId}`, () => {
+    const unsubDone = window.sandstorm.on(`agent:done:${tabId}`, () => {
       setIsQueued(false);
-      // Reset loading immediately — don't wait for async history fetch which
-      // can return a stale processing=true if the backend session is stuck.
       setIsLoading(false);
       setStreamingContent((prev) => {
         if (prev) {
@@ -68,13 +66,12 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
         return '';
       });
       // Re-fetch history to get authoritative message list
-      window.sandstorm.claude.history(tabId).then((result) => {
+      window.sandstorm.agent.history(tabId).then((result) => {
         const typed = result.messages.map((m) => ({
           role: m.role as 'user' | 'assistant',
           content: m.content,
         }));
         setMessages(typed);
-        // Only re-enable loading if backend is actively processing a queued message
         if (result.processing) {
           setIsLoading(true);
         }
@@ -82,7 +79,7 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
     });
 
     const unsubError = window.sandstorm.on(
-      `claude:error:${tabId}`,
+      `agent:error:${tabId}`,
       (error: unknown) => {
         setIsQueued(false);
         setStreamingContent((prev) => {
@@ -99,11 +96,10 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
 
     // Listen for user messages sent while this component might have been remounting
     const unsubUserMsg = window.sandstorm.on(
-      `claude:user-message:${tabId}`,
+      `agent:user-message:${tabId}`,
       (message: unknown) => {
         setMessages((msgs) => {
           const last = msgs[msgs.length - 1];
-          // Avoid duplicating if we just added it locally via sendMessage
           if (last && last.role === 'user' && last.content === (message as string)) {
             return msgs;
           }
@@ -127,13 +123,11 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
     const trimmed = input.trim();
     if (!trimmed) return;
 
-    // Show the user message immediately
     setMessages((prev) => [...prev, { role: 'user', content: trimmed }]);
     setInput('');
     setIsLoading(true);
 
-    // Backend handles queuing if a process is already running
-    window.sandstorm.claude.send(tabId, trimmed, projectDir);
+    window.sandstorm.agent.send(tabId, trimmed, projectDir);
   }, [input, tabId, projectDir]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
@@ -163,12 +157,12 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
             </svg>
           </div>
           <span className="text-xs font-semibold text-sandstorm-muted uppercase tracking-wide">
-            Claude
+            Agent
           </span>
         </div>
         {isLoading && (
           <button
-            onClick={() => window.sandstorm.claude.cancel(tabId)}
+            onClick={() => window.sandstorm.agent.cancel(tabId)}
             className="text-[10px] px-2 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
           >
             Cancel
@@ -180,7 +174,7 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
       <div className="flex-1 overflow-y-auto p-3 space-y-2 min-h-0">
         {messages.length === 0 && !streamingContent && !isLoading && (
           <div className="flex items-center justify-center h-full text-sandstorm-muted text-xs">
-            Ask Claude to orchestrate your stacks...
+            Ask the agent to orchestrate your stacks...
           </div>
         )}
         {messages.map((msg, i) => (
@@ -228,7 +222,7 @@ export function ClaudeSession({ tabId, projectDir }: ClaudeSessionProps) {
             value={input}
             onChange={(e) => setInput(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Message Claude..."
+            placeholder="Message the agent..."
             rows={1}
             className="flex-1 bg-sandstorm-surface border border-sandstorm-border rounded-lg px-3 py-2 text-sm text-sandstorm-text placeholder-sandstorm-muted resize-none focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
           />

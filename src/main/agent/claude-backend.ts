@@ -1,9 +1,7 @@
 /**
- * Manages embedded Claude Code CLI sessions.
- * Each tab (All + per-project) gets its own session that persists across messages.
- * Claude is spawned with --print mode, one invocation per user message,
- * using --session-id / --resume for conversation continuity.
- * MCP tools are exposed via a local HTTP bridge server.
+ * Claude implementation of AgentBackend.
+ * Manages embedded Claude Code CLI sessions with MCP tool bridge.
+ * Consolidates session management + auth logic behind the AgentBackend interface.
  */
 
 import { spawn, ChildProcess } from 'child_process';
@@ -12,17 +10,19 @@ import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { BrowserWindow } from 'electron';
+import { BrowserWindow, shell } from 'electron';
 import { app } from 'electron';
-import { handleToolCall, tools } from './tools';
+import { handleToolCall, tools } from '../claude/tools';
 import { cliDir } from '../index';
+import {
+  AgentBackend,
+  ChatMessage,
+  AuthStatus,
+  AgentSessionHistory,
+  StackInfo,
+} from './types';
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
 
 interface ClaudeSession {
   id: string;
@@ -35,7 +35,28 @@ interface ClaudeSession {
   projectDir?: string;
 }
 
-export class ClaudeSessionManager {
+function getClaudeBin(): string {
+  return process.env.HOME
+    ? path.join(process.env.HOME, '.local', 'bin', 'claude')
+    : 'claude';
+}
+
+function getClaudeEnv(): Record<string, string | undefined> {
+  return {
+    ...process.env,
+    PATH: [
+      `${process.env.HOME}/.local/bin`,
+      '/opt/homebrew/bin',
+      '/usr/local/bin',
+      '/usr/local/sbin',
+      process.env.PATH,
+    ].join(':'),
+  };
+}
+
+export class ClaudeBackend implements AgentBackend {
+  readonly name = 'Claude';
+
   private sessions = new Map<string, ClaudeSession>();
   private bridgeServer: Server | null = null;
   private bridgePort = 0;
@@ -59,7 +80,6 @@ export class ClaudeSessionManager {
       const logPath = path.join(logDir, 'sandstorm-desktop-claude.log');
       this.logStream = fs.createWriteStream(logPath, { flags: 'a' });
     } catch {
-      // Fall back to /tmp if userData not available (e.g., in tests)
       const logPath = path.join(os.tmpdir(), 'sandstorm-desktop-claude.log');
       this.logStream = fs.createWriteStream(logPath, { flags: 'a' });
     }
@@ -125,7 +145,6 @@ export class ClaudeSessionManager {
     const tmpDir = path.join(os.tmpdir(), `sandstorm-mcp-${process.pid}`);
     fs.mkdirSync(tmpDir, { recursive: true });
 
-    // MCP server script — standalone Node.js process that bridges to our HTTP server
     const serverScriptPath = path.join(tmpDir, 'mcp-server.mjs');
     const serverScript = `import http from 'http';
 import { createInterface } from 'readline';
@@ -210,7 +229,6 @@ rl.on('line', async (line) => {
 `;
     fs.writeFileSync(serverScriptPath, serverScript);
 
-    // MCP config JSON for claude CLI
     this.mcpConfigPath = path.join(tmpDir, 'mcp-config.json');
     const mcpConfig = {
       mcpServers: {
@@ -222,6 +240,8 @@ rl.on('line', async (line) => {
     };
     fs.writeFileSync(this.mcpConfigPath, JSON.stringify(mcpConfig));
   }
+
+  // --- Session management (AgentBackend interface) ---
 
   sendMessage(
     tabId: string,
@@ -244,17 +264,15 @@ rl.on('line', async (line) => {
       this.sessions.set(tabId, session);
     }
 
-    // Record user message and mark processing
     session.messages.push({ role: 'user', content: message });
     session.processing = true;
-    this.mainWindow?.webContents.send(`claude:user-message:${tabId}`, message);
+    this.mainWindow?.webContents.send(`agent:user-message:${tabId}`, message);
     this.log(`Message received for tab=${tabId}`);
 
-    // If a process is already running, queue the message
     if (session.process) {
       session.pendingMessages.push(message);
       this.log(`Message queued for tab=${tabId} (queue size: ${session.pendingMessages.length})`);
-      this.mainWindow?.webContents.send(`claude:queued:${tabId}`);
+      this.mainWindow?.webContents.send(`agent:queued:${tabId}`);
       return;
     }
 
@@ -265,13 +283,160 @@ rl.on('line', async (line) => {
     this.spawnClaude(tabId, message, session.projectDir);
   }
 
-  getHistory(tabId: string): { messages: ChatMessage[]; processing: boolean } {
+  getHistory(tabId: string): AgentSessionHistory {
     const session = this.sessions.get(tabId);
     if (!session) {
       return { messages: [], processing: false };
     }
     return { messages: [...session.messages], processing: session.processing };
   }
+
+  cancelSession(tabId: string): void {
+    const session = this.sessions.get(tabId);
+    if (session?.process) {
+      session.process.kill();
+      session.process = null;
+    }
+  }
+
+  resetSession(tabId: string): void {
+    this.cancelSession(tabId);
+    this.sessions.delete(tabId);
+  }
+
+  // --- Auth (AgentBackend interface) ---
+
+  async getAuthStatus(): Promise<AuthStatus> {
+    const credsPath = path.join(process.env.HOME || '', '.claude', '.credentials.json');
+    let expired = false;
+    let expiresAt: number | undefined;
+
+    try {
+      const raw = fs.readFileSync(credsPath, 'utf-8');
+      const creds = JSON.parse(raw);
+      const oauthData = creds.claudeAiOauth;
+      if (oauthData?.expiresAt) {
+        expiresAt = oauthData.expiresAt;
+        expired = Date.now() > oauthData.expiresAt;
+      }
+    } catch {
+      return { loggedIn: false, expired: false };
+    }
+
+    try {
+      const result = await new Promise<{ stdout: string; exitCode: number }>((resolve) => {
+        const child = spawn(getClaudeBin(), ['auth', 'status', '--output', 'json'], {
+          env: getClaudeEnv(),
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        let stdout = '';
+        child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+        child.on('close', (code) => resolve({ stdout, exitCode: code ?? 1 }));
+        child.on('error', () => resolve({ stdout: '', exitCode: 1 }));
+      });
+
+      if (result.exitCode === 0 && result.stdout.trim()) {
+        const status = JSON.parse(result.stdout.trim());
+        return {
+          loggedIn: status.loggedIn ?? false,
+          email: status.email,
+          expired,
+          expiresAt,
+        };
+      }
+    } catch {
+      // Fall through
+    }
+
+    return { loggedIn: true, expired, expiresAt };
+  }
+
+  async login(mainWindow?: BrowserWindow): Promise<{ success: boolean; error?: string }> {
+    const win = mainWindow ?? this.mainWindow;
+    return new Promise((resolve) => {
+      const child = spawn(getClaudeBin(), ['auth', 'login'], {
+        env: getClaudeEnv(),
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      let stdout = '';
+      let stderr = '';
+      let urlOpened = false;
+
+      child.stdout.on('data', (data: Buffer) => {
+        stdout += data.toString();
+        const urlMatch = stdout.match(/(https:\/\/[^\s]+)/);
+        if (urlMatch && !urlOpened) {
+          urlOpened = true;
+          shell.openExternal(urlMatch[1]);
+          win?.webContents.send('auth:url-opened', urlMatch[1]);
+        }
+      });
+
+      child.stderr.on('data', (data: Buffer) => {
+        stderr += data.toString();
+      });
+
+      setTimeout(() => {
+        try { child.stdin.write('\n'); } catch { /* Process may have exited */ }
+      }, 1000);
+
+      child.on('close', async (code) => {
+        if (code === 0) {
+          win?.webContents.send('auth:completed', true);
+          resolve({ success: true });
+        } else {
+          win?.webContents.send('auth:completed', false);
+          resolve({ success: false, error: stderr.trim() || 'Auth login failed' });
+        }
+      });
+
+      child.on('error', (err) => {
+        resolve({ success: false, error: err.message });
+      });
+
+      setTimeout(() => {
+        try { child.kill(); } catch { /* ignore */ }
+        resolve({ success: false, error: 'Auth login timed out' });
+      }, 5 * 60 * 1000);
+    });
+  }
+
+  async syncCredentials(stacks: StackInfo[]): Promise<void> {
+    const credsPath = path.join(process.env.HOME || '', '.claude', '.credentials.json');
+    let creds: string;
+    try {
+      creds = fs.readFileSync(credsPath, 'utf-8');
+    } catch {
+      return;
+    }
+
+    try {
+      for (const stack of stacks) {
+        if (stack.status !== 'running' && stack.status !== 'up') continue;
+        const claudeService = stack.services?.find(
+          (s) => s.name === 'claude'
+        );
+        if (!claudeService?.containerId) continue;
+
+        try {
+          const child = spawn('docker', [
+            'exec', '-i', '-u', 'claude', claudeService.containerId,
+            'bash', '-c', 'mkdir -p ~/.claude && cat > ~/.claude/.credentials.json',
+          ], { stdio: ['pipe', 'ignore', 'ignore'] });
+          child.stdin.write(creds);
+          child.stdin.end();
+          await new Promise<void>((resolve) => child.on('close', () => resolve()));
+        } catch {
+          // Best effort per container
+        }
+      }
+    } catch {
+      // Best effort
+    }
+  }
+
+  // --- Private: Claude CLI spawning ---
 
   private spawnClaude(tabId: string, message: string, projectDir?: string): void {
     const session = this.sessions.get(tabId);
@@ -301,7 +466,6 @@ rl.on('line', async (line) => {
 
     const cwd = projectDir || process.cwd();
 
-    // Resolve claude binary: check specific known path before falling back to PATH lookup
     let claudeBin = 'claude';
     const pathExtras: string[] = [
       '/opt/homebrew/bin',
@@ -317,7 +481,7 @@ rl.on('line', async (line) => {
           pathExtras.unshift(homeLocalBin);
         }
       } catch {
-        // Home directory not accessible — skip it, rely on system PATH
+        // Home directory not accessible
       }
     }
 
@@ -343,12 +507,11 @@ rl.on('line', async (line) => {
     let fullResponse = '';
     let stderrBuffer = '';
 
-    // Timeout: kill process if it runs too long
     const timeout = setTimeout(() => {
       if (child.exitCode === null) {
         this.log(`Timeout reached for tab=${tabId} pid=${child.pid} after ${this.timeoutMs}ms`);
         child.kill();
-        send(`claude:error:${tabId}`, `Claude process timed out after ${Math.round(this.timeoutMs / 1000)} seconds`);
+        send(`agent:error:${tabId}`, `Claude process timed out after ${Math.round(this.timeoutMs / 1000)} seconds`);
       }
     }, this.timeoutMs);
 
@@ -356,7 +519,6 @@ rl.on('line', async (line) => {
       const text = data.toString();
       outputBuffer += text;
 
-      // Parse stream-json: one JSON object per line
       const lines = outputBuffer.split('\n');
       outputBuffer = lines.pop() || '';
 
@@ -367,13 +529,12 @@ rl.on('line', async (line) => {
           const extracted = this.extractText(parsed);
           if (extracted) {
             fullResponse += extracted;
-            send(`claude:output:${tabId}`, extracted);
+            send(`agent:output:${tabId}`, extracted);
           }
         } catch {
-          // Not valid JSON — send raw
           if (line.trim()) {
             fullResponse += line;
-            send(`claude:output:${tabId}`, line);
+            send(`agent:output:${tabId}`, line);
           }
         }
       }
@@ -390,36 +551,32 @@ rl.on('line', async (line) => {
       if (session) session.process = null;
       this.log(`Claude CLI exited for tab=${tabId} code=${code}`);
 
-      // Flush remaining buffer
       if (outputBuffer.trim()) {
         try {
           const parsed = JSON.parse(outputBuffer);
           const extracted = this.extractText(parsed);
           if (extracted) {
             fullResponse += extracted;
-            send(`claude:output:${tabId}`, extracted);
+            send(`agent:output:${tabId}`, extracted);
           }
         } catch {
           fullResponse += outputBuffer;
-          send(`claude:output:${tabId}`, outputBuffer);
+          send(`agent:output:${tabId}`, outputBuffer);
         }
       }
 
-      // If non-zero exit and no output, send error from stderr
       if (code !== 0 && !fullResponse.trim()) {
         const errorMsg = stderrBuffer.trim()
           || `Claude exited with code ${code}`;
         this.log(`Sending error for tab=${tabId}: ${errorMsg}`);
-        send(`claude:error:${tabId}`, errorMsg);
+        send(`agent:error:${tabId}`, errorMsg);
       } else {
-        // Store assistant message
         if (session && fullResponse) {
           session.messages.push({ role: 'assistant', content: fullResponse });
         }
-        send(`claude:done:${tabId}`);
+        send(`agent:done:${tabId}`);
       }
 
-      // Drain pending messages queue
       if (session && session.pendingMessages.length > 0) {
         const next = session.pendingMessages.shift()!;
         this.log(`Dequeuing message for tab=${tabId} (remaining: ${session.pendingMessages.length})`);
@@ -433,7 +590,6 @@ rl.on('line', async (line) => {
       clearTimeout(timeout);
       if (session) {
         session.process = null;
-        // Drain pending messages queue — same as 'close' handler
         if (session.pendingMessages.length > 0) {
           const next = session.pendingMessages.shift()!;
           this.log(`Dequeuing message after error for tab=${tabId} (remaining: ${session.pendingMessages.length})`);
@@ -443,13 +599,11 @@ rl.on('line', async (line) => {
         }
       }
       this.log(`Spawn error for tab=${tabId}: ${err.message}`);
-      send(`claude:error:${tabId}`, err.message);
+      send(`agent:error:${tabId}`, err.message);
     });
   }
 
-  /** Extract text content from various stream-json message formats */
   private extractText(parsed: Record<string, unknown>): string | null {
-    // Format: {"type":"assistant","message":{"role":"assistant","content":[...]}}
     if (parsed.type === 'assistant') {
       const msg = parsed.message as Record<string, unknown> | undefined;
       if (msg?.content && Array.isArray(msg.content)) {
@@ -462,25 +616,11 @@ rl.on('line', async (line) => {
         if (texts.length > 0) return texts.join('');
       }
     }
-    // Format: {"type":"content_block_delta","delta":{"text":"..."}}
     if (parsed.type === 'content_block_delta') {
       const delta = parsed.delta as Record<string, unknown> | undefined;
       if (delta?.text) return delta.text as string;
     }
     return null;
-  }
-
-  cancelSession(tabId: string): void {
-    const session = this.sessions.get(tabId);
-    if (session?.process) {
-      session.process.kill();
-      session.process = null;
-    }
-  }
-
-  resetSession(tabId: string): void {
-    this.cancelSession(tabId);
-    this.sessions.delete(tabId);
   }
 
   destroy(): void {
