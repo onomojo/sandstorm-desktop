@@ -1219,7 +1219,7 @@ describe('StackManager', () => {
 
       // Should filter by service name in the container name filter
       const filterArg = listSpy.mock.calls[0][0];
-      expect(filterArg.name).toContain('claude');
+      expect(filterArg.name).toBe('sandstorm-proj-logs-svc-claude');
     });
 
     it('throws when no containers found', async () => {
@@ -1540,6 +1540,12 @@ describe('StackManager', () => {
       await vi.waitFor(() => {
         expect(callCount).toBeGreaterThanOrEqual(2);
       }, { timeout: 10000 });
+
+      const allCalls = vi.mocked(manager.runCli).mock.calls;
+      const plainDispatchCalls = allCalls.filter(
+        (c) => Array.isArray(c[1]) && !c[1].includes('--resume')
+      );
+      expect(plainDispatchCalls.length).toBeGreaterThanOrEqual(1);
     }, 15000);
   });
 });
