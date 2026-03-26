@@ -221,8 +221,13 @@ run_verify() {
 
 echo "Waiting for tasks..."
 
+# Signal readiness — entrypoint.sh hands off to us, so we own the marker from here
+echo "ready" > /tmp/claude-ready
+
 while true; do
   if [ -f /tmp/claude-task-trigger ]; then
+    # Clear readiness marker while task is running
+    rm -f /tmp/claude-ready
     rm -f /tmp/claude-task-trigger
     PROMPT=$(cat /tmp/claude-task-prompt.txt 2>/dev/null)
     LABEL=$(echo "$PROMPT" | head -1 | cut -c1-60)
@@ -265,6 +270,7 @@ while true; do
       echo "  Task finished (exit: $EXIT_CODE)"
       echo "=========================================="
       echo ""
+      echo "ready" > /tmp/claude-ready
       echo "Waiting for tasks..."
       continue
     fi
@@ -285,6 +291,7 @@ while true; do
       echo "  Task finished (exit: 0) — no code changes, single-pass"
       echo "=========================================="
       echo ""
+      echo "ready" > /tmp/claude-ready
       echo "Waiting for tasks..."
       continue
     fi
@@ -434,6 +441,8 @@ while true; do
     fi
     echo "=========================================="
     echo ""
+    # Re-signal readiness for next task
+    echo "ready" > /tmp/claude-ready
     echo "Waiting for tasks..."
   fi
   sleep 1
