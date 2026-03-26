@@ -309,6 +309,58 @@ describe('task-runner.sh dual-loop workflow', () => {
     })
   })
 
+  // ── Readiness marker ─────────────────────────────────────────────────
+
+  describe('readiness marker', () => {
+    it('creates /tmp/claude-ready before entering the wait loop', () => {
+      // The marker must be set before the first "sleep 1" iteration
+      const markerCreate = taskRunner.indexOf('"ready" > /tmp/claude-ready')
+      const waitLoop = taskRunner.indexOf('while true; do')
+      expect(markerCreate).toBeGreaterThan(-1)
+      expect(markerCreate).toBeLessThan(waitLoop)
+    })
+
+    it('clears the readiness marker when a task trigger is detected', () => {
+      const triggerCheck = taskRunner.indexOf('if [ -f /tmp/claude-task-trigger ]')
+      const markerRemove = taskRunner.indexOf('rm -f /tmp/claude-ready')
+      expect(markerRemove).toBeGreaterThan(triggerCheck)
+      // The removal should happen before task execution starts
+      const taskStart = taskRunner.indexOf('"running" > /tmp/claude-task.status')
+      expect(markerRemove).toBeLessThan(taskStart)
+    })
+
+    it('restores the readiness marker after failed initial execution', () => {
+      const failedSection = taskRunner.indexOf('Initial execution failed')
+      const nextWaiting = taskRunner.indexOf('Waiting for tasks...', failedSection)
+      const markerRestore = taskRunner.lastIndexOf('"ready" > /tmp/claude-ready', nextWaiting)
+      expect(markerRestore).toBeGreaterThan(failedSection)
+      expect(markerRestore).toBeLessThan(nextWaiting)
+    })
+
+    it('restores the readiness marker after single-pass completion', () => {
+      const singlePass = taskRunner.indexOf('no code changes, single-pass')
+      const nextWaiting = taskRunner.indexOf('Waiting for tasks...', singlePass)
+      const markerRestore = taskRunner.lastIndexOf('"ready" > /tmp/claude-ready', nextWaiting)
+      expect(markerRestore).toBeGreaterThan(singlePass)
+      expect(markerRestore).toBeLessThan(nextWaiting)
+    })
+
+    it('restores the readiness marker after dual-loop completion', () => {
+      // After the final status section, before the last "Waiting for tasks..."
+      const finalStatus = taskRunner.indexOf('# ── Final status')
+      const lastWaiting = taskRunner.lastIndexOf('Waiting for tasks...')
+      const markerRestore = taskRunner.lastIndexOf('"ready" > /tmp/claude-ready', lastWaiting)
+      expect(markerRestore).toBeGreaterThan(finalStatus)
+      expect(markerRestore).toBeLessThan(lastWaiting)
+    })
+
+    it('has at least 4 readiness marker writes (init + 3 exit paths)', () => {
+      const matches = taskRunner.match(/"ready" > \/tmp\/claude-ready/g)
+      expect(matches).not.toBeNull()
+      expect(matches!.length).toBeGreaterThanOrEqual(4)
+    })
+  })
+
   // ── Error handling ───────────────────────────────────────────────────
 
   describe('error handling', () => {
