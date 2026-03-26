@@ -328,6 +328,150 @@ describe('StackManager', () => {
     });
   });
 
+  describe('waitForClaudeReady', () => {
+    it('resolves immediately when readiness file exists', async () => {
+      registry.createStack(makeStack('ready-test'));
+      // Default mock exec returns exitCode: 0, so test -f succeeds
+      await expect(
+        manager.waitForClaudeReady('claude-container-1', 5000, 100)
+      ).resolves.toBeUndefined();
+    });
+
+    it('resolves when pgrep finds claude process (readiness file missing)', async () => {
+      let callCount = 0;
+      (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_id: string, cmd: string[]) => {
+          if (cmd.includes('test')) {
+            // readiness file not found
+            return { exitCode: 1, stdout: '', stderr: '' };
+          }
+          if (cmd.includes('pgrep')) {
+            callCount++;
+            if (callCount >= 2) {
+              return { exitCode: 0, stdout: '1234', stderr: '' };
+            }
+            return { exitCode: 1, stdout: '', stderr: '' };
+          }
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+      );
+
+      await expect(
+        manager.waitForClaudeReady('claude-container-1', 5000, 50)
+      ).resolves.toBeUndefined();
+    });
+
+    it('throws after timeout when container never becomes ready', async () => {
+      (runtime.exec as ReturnType<typeof vi.fn>).mockResolvedValue({
+        exitCode: 1,
+        stdout: '',
+        stderr: '',
+      });
+
+      await expect(
+        manager.waitForClaudeReady('claude-container-1', 200, 50)
+      ).rejects.toThrow('not ready after');
+    });
+
+    it('handles exec failures gracefully during readiness check', async () => {
+      let calls = 0;
+      (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        calls++;
+        if (calls < 4) throw new Error('container not started');
+        return { exitCode: 0, stdout: '', stderr: '' };
+      });
+
+      await expect(
+        manager.waitForClaudeReady('claude-container-1', 5000, 50)
+      ).resolves.toBeUndefined();
+    });
+  });
+
+  describe('dispatchTask with readiness', () => {
+    it('waits for readiness before dispatching', async () => {
+      registry.createStack(makeStack('ready-dispatch'));
+      const waitSpy = vi.spyOn(manager, 'waitForClaudeReady').mockResolvedValue();
+      vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'ok', stderr: '', exitCode: 0,
+      });
+
+      await manager.dispatchTask('ready-dispatch', 'do stuff');
+      expect(waitSpy).toHaveBeenCalledWith('claude-container-1');
+    });
+
+    it('fails task when readiness check times out', async () => {
+      registry.createStack(makeStack('ready-timeout'));
+      vi.spyOn(manager, 'waitForClaudeReady').mockRejectedValue(
+        new Error('not ready after 60s')
+      );
+
+      await expect(
+        manager.dispatchTask('ready-timeout', 'do stuff')
+      ).rejects.toThrow('not ready after 60s');
+
+      // Task should be marked as failed
+      const tasks = registry.getTasksForStack('ready-timeout');
+      expect(tasks[0].status).toBe('failed');
+    });
+  });
+
+  describe('buildStackInBackground task retry', () => {
+    let tmpDir: string;
+
+    beforeEach(() => {
+      const { execSync } = require('child_process');
+      const bareDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sandstorm-bare-'));
+      execSync('git init --bare', { cwd: bareDir, stdio: 'ignore' });
+      tmpDir = path.join(os.tmpdir(), `sandstorm-proj-${Date.now()}`);
+      execSync(`git clone "${bareDir}" "${tmpDir}"`, { stdio: 'ignore' });
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      fs.writeFileSync(path.join(sandstormDir, 'config'), '# empty\n');
+      execSync('git add -A && git commit -m "init" && git push origin HEAD', {
+        cwd: tmpDir, stdio: 'ignore',
+        env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test.com' },
+      });
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpDir, { recursive: true, force: true });
+    });
+
+    it('retries task dispatch once on failure then succeeds', async () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      let dispatchCalls = 0;
+      vi.spyOn(manager, 'dispatchTask').mockImplementation(async () => {
+        dispatchCalls++;
+        if (dispatchCalls === 1) throw new Error('not ready');
+        return { id: 1, stack_id: 'retry-test', prompt: 'task', status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null };
+      });
+
+      manager.createStack({ name: 'retry-test', projectDir: tmpDir, runtime: 'docker', task: 'do work' });
+
+      await vi.waitFor(() => {
+        expect(dispatchCalls).toBe(2);
+      }, { timeout: 20000 });
+
+      // Stack should NOT be failed — retry succeeded
+      const stack = registry.getStack('retry-test');
+      expect(stack!.status).not.toBe('failed');
+    }, 25000);
+
+    it('marks stack as failed when task dispatch fails after retry', async () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+      vi.spyOn(manager, 'dispatchTask').mockRejectedValue(new Error('container gone'));
+
+      manager.createStack({ name: 'retry-fail', projectDir: tmpDir, runtime: 'docker', task: 'do work' });
+
+      await vi.waitFor(() => {
+        const stack = registry.getStack('retry-fail');
+        expect(stack!.status).toBe('failed');
+        expect(stack!.error).toContain('Task dispatch failed after retry');
+      }, { timeout: 25000 });
+    }, 30000);
+  });
+
   describe('stopStack', () => {
     it('sets stack status to stopped', () => {
       registry.createStack(makeStack('stop-test'));
