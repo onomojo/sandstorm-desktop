@@ -465,10 +465,12 @@ case "$COMMAND" in
     shift 2
     SYNC_MODE=false
     TICKET=""
+    TASK_MODEL=""
     while true; do
       case "${1:-}" in
         --sync) SYNC_MODE=true; shift ;;
         --ticket) TICKET="$2"; shift 2 ;;
+        --model) TASK_MODEL="$2"; shift 2 ;;
         *) break ;;
       esac
     done
@@ -503,8 +505,12 @@ case "$COMMAND" in
       if [ -t 0 ]; then
         TTY_FLAG="-it"
       fi
+      MODEL_ARG=""
+      if [ -n "$TASK_MODEL" ]; then
+        MODEL_ARG="--model $TASK_MODEL"
+      fi
       docker exec $TTY_FLAG -u claude "$CONTAINER_NAME" \
-        claude --dangerously-skip-permissions --print -p "$TASK_CONTENT"
+        claude --dangerously-skip-permissions $MODEL_ARG --print -p "$TASK_CONTENT"
 
       FINAL_BRANCH=$(docker exec -u claude -w /app "$CONTAINER_NAME" git branch --show-current 2>/dev/null || echo "")
       registry_write "$STACK_ID" "" "$FINAL_BRANCH" "" "completed" ""
@@ -518,6 +524,12 @@ case "$COMMAND" in
 
       echo "$TASK_LABEL" | docker exec -i -u claude "$CONTAINER_NAME" \
         bash -c "cat > /tmp/claude-task-label.txt"
+
+      # Write model selection file if specified
+      if [ -n "$TASK_MODEL" ]; then
+        echo "$TASK_MODEL" | docker exec -i -u claude "$CONTAINER_NAME" \
+          bash -c "cat > /tmp/claude-task-model.txt"
+      fi
 
       # Trigger the task runner (runs as the container's main process, output goes to docker logs)
       docker exec -u claude "$CONTAINER_NAME" touch /tmp/claude-task-trigger

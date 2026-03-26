@@ -22,6 +22,7 @@ export function NewStackDialog() {
   const [projectDir, setProjectDir] = useState(project?.directory ?? '');
   const [runtime, setRuntime] = useState<'docker' | 'podman'>('docker');
   const [task, setTask] = useState('');
+  const [model, setModel] = useState<string>('sonnet');
   const [error, setError] = useState<string | null>(null);
   const nameValidationError = useMemo(() => validateStackName(name.trim()), [name]);
   const [runtimes, setRuntimes] = useState({ docker: false, podman: false });
@@ -50,6 +51,7 @@ export function NewStackDialog() {
         description: task.trim() || undefined,
         runtime,
         task: task.trim() || undefined,
+        model,
       });
       // Close dialog immediately — build happens in background
       await refreshStacks();
@@ -163,6 +165,29 @@ export function NewStackDialog() {
                 >
                   {rt.charAt(0).toUpperCase() + rt.slice(1)}
                   {!runtimes[rt] && <span className="text-[10px] block text-sandstorm-muted mt-0.5">unavailable</span>}
+                </button>
+              ))}
+            </div>
+          </Field>
+
+          <Field label="Model" hint="Claude model for the inner agent">
+            <div className="flex gap-2">
+              {([
+                { id: 'sonnet', label: 'Sonnet', desc: 'Fast & efficient' },
+                { id: 'opus', label: 'Opus', desc: 'Most capable' },
+              ] as const).map((m) => (
+                <button
+                  key={m.id}
+                  onClick={() => setModel(m.id)}
+                  className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-all ${
+                    model === m.id
+                      ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
+                      : 'border-sandstorm-border bg-sandstorm-bg text-sandstorm-muted hover:border-sandstorm-border-light'
+                  }`}
+                  data-testid={`model-${m.id}`}
+                >
+                  {m.label}
+                  <span className="text-[10px] block text-sandstorm-muted mt-0.5">{m.desc}</span>
                 </button>
               ))}
             </div>

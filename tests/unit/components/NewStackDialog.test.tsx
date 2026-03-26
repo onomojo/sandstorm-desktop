@@ -141,6 +141,46 @@ describe('NewStackDialog', () => {
     expect(screen.queryByPlaceholderText('/home/user/projects/myapp')).toBeNull();
   });
 
+  it('renders model selector with Sonnet and Opus options', () => {
+    render(<NewStackDialog />);
+    expect(screen.getByTestId('model-sonnet')).toBeDefined();
+    expect(screen.getByTestId('model-opus')).toBeDefined();
+  });
+
+  it('defaults to sonnet model', () => {
+    render(<NewStackDialog />);
+    const sonnetBtn = screen.getByTestId('model-sonnet');
+    expect(sonnetBtn.className).toContain('border-sandstorm-accent');
+  });
+
+  it('passes model to stacks.create', async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({
+      projects: [{ id: 1, name: 'proj', directory: '/proj', added_at: '' }],
+      activeProjectId: 1,
+    });
+
+    api.stacks.create.mockResolvedValue({
+      id: 'model-stack', project: 'proj', status: 'building', services: [],
+    });
+    api.stacks.list.mockResolvedValue([]);
+
+    render(<NewStackDialog />);
+
+    await user.type(screen.getByTestId('stack-name'), 'model-stack');
+    fireEvent.click(screen.getByTestId('model-opus'));
+    fireEvent.click(screen.getByTestId('launch-btn'));
+
+    await waitFor(() => {
+      expect(api.stacks.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: 'model-stack',
+          model: 'opus',
+        })
+      );
+    });
+  });
+
   describe('name validation', () => {
     it('shows error for names with spaces', async () => {
       const user = userEvent.setup();

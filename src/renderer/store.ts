@@ -40,6 +40,7 @@ export interface Task {
   id: number;
   stack_id: string;
   prompt: string;
+  model: string | null;
   status: string;
   exit_code: number | null;
   session_id: string | null;
@@ -190,7 +191,7 @@ declare global {
         setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
       };
       tasks: {
-        dispatch: (stackId: string, prompt: string) => Promise<Task>;
+        dispatch: (stackId: string, prompt: string, model?: string) => Promise<Task>;
         list: (stackId: string) => Promise<Task[]>;
       };
       diff: {

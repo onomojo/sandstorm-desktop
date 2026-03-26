@@ -326,6 +326,38 @@ describe('StackManager', () => {
         manager.dispatchTask('no-claude', 'task')
       ).rejects.toThrow('Agent container not found');
     });
+
+    it('passes model to CLI args when provided', async () => {
+      registry.createStack(makeStack('model-test'));
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const task = await manager.dispatchTask('model-test', 'Complex task', 'opus');
+      expect(task.model).toBe('opus');
+      expect(runCliSpy).toHaveBeenCalledWith(
+        '/proj',
+        ['task', 'model-test', '--model', 'opus', 'Complex task']
+      );
+    });
+
+    it('omits model from CLI args when not provided', async () => {
+      registry.createStack(makeStack('no-model'));
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const task = await manager.dispatchTask('no-model', 'Simple task');
+      expect(task.model).toBeNull();
+      expect(runCliSpy).toHaveBeenCalledWith(
+        '/proj',
+        ['task', 'no-model', 'Simple task']
+      );
+    });
   });
 
   describe('waitForClaudeReady', () => {
@@ -444,7 +476,7 @@ describe('StackManager', () => {
       vi.spyOn(manager, 'dispatchTask').mockImplementation(async () => {
         dispatchCalls++;
         if (dispatchCalls === 1) throw new Error('not ready');
-        return { id: 1, stack_id: 'retry-test', prompt: 'task', status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null };
+        return { id: 1, stack_id: 'retry-test', prompt: 'task', model: null, status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null };
       });
 
       manager.createStack({ name: 'retry-test', projectDir: tmpDir, runtime: 'docker', task: 'do work' });
