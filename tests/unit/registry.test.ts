@@ -749,6 +749,15 @@ describe('Registry', () => {
       expect(stack!.status).toBe('idle');
     });
 
+    it('clearRateLimit with custom target status sets that status', () => {
+      registry.setRateLimitReset('rl-stack-1', '2026-03-26T16:00:00.000Z');
+      registry.clearRateLimit('rl-stack-1', 'running');
+
+      const stack = registry.getStack('rl-stack-1');
+      expect(stack!.rate_limit_reset_at).toBeNull();
+      expect(stack!.status).toBe('running');
+    });
+
     it('getRateLimitedStacks returns only rate_limited stacks', () => {
       registry.setRateLimitReset('rl-stack-1', '2026-03-26T16:00:00.000Z');
 

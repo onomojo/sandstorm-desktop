@@ -681,23 +681,15 @@ export class StackManager {
     const stacks = this.registry.listStacks();
     const resetAt = rateLimit.reset_at ?? new Date(Date.now() + 3600000).toISOString();
     for (const stack of stacks) {
-      if (stack.status === 'running' && !terminalStatuses.has(stack.status)) {
+      if (!terminalStatuses.has(stack.status)) {
         this.registry.setRateLimitReset(stack.id, resetAt);
       }
     }
 
-    // Also mark the triggering stack if not already in a terminal status
-    const triggeringStack = this.registry.getStack(stackId);
-    if (rateLimit.reset_at && triggeringStack && !terminalStatuses.has(triggeringStack.status)) {
-      this.registry.setRateLimitReset(stackId, rateLimit.reset_at);
-    }
-
     this.notifyUpdate();
 
-    // Schedule auto-resume
-    if (rateLimit.reset_at) {
-      this.scheduleAutoResume(rateLimit.reset_at);
-    }
+    // Schedule auto-resume using the computed resetAt (which includes the 1h fallback)
+    this.scheduleAutoResume(resetAt);
   }
 
   private scheduleAutoResume(resetAt: string): void {

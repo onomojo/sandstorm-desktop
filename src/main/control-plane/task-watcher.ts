@@ -161,9 +161,6 @@ export class TaskWatcher extends EventEmitter {
       // Check for rate limit errors
       const rateLimit = parseRateLimit(output);
       if (rateLimit) {
-        if (rateLimit.reset_at) {
-          this.registry.setRateLimitReset(stackId, rateLimit.reset_at);
-        }
         this.emit('task:rate_limited', { stackId, rateLimit });
         rateLimitEmitted = true;
         this.onStatusChange?.();
@@ -180,9 +177,6 @@ export class TaskWatcher extends EventEmitter {
         ]);
         const rateLimit = parseRateLimit(stderrResult.stdout);
         if (rateLimit) {
-          if (rateLimit.reset_at) {
-            this.registry.setRateLimitReset(stackId, rateLimit.reset_at);
-          }
           this.emit('task:rate_limited', { stackId, rateLimit });
           this.onStatusChange?.();
         }

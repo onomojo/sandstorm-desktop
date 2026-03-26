@@ -882,6 +882,27 @@ describe('StackManager', () => {
       expect(registry.getStack('rl-running')!.status).toBe('rate_limited');
     });
 
+    it('handleRateLimit marks stacks in building, up, and idle status as rate_limited', () => {
+      registry.createStack(makeStack('rl-building'));
+      registry.updateStackStatus('rl-building', 'building');
+      registry.createStack(makeStack('rl-up'));
+      registry.updateStackStatus('rl-up', 'up');
+      registry.createStack(makeStack('rl-idle'));
+      registry.updateStackStatus('rl-idle', 'idle');
+
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'rl-building',
+        rateLimit: {
+          reset_at: new Date(Date.now() + 60000).toISOString(),
+          reason: 'Rate limit exceeded',
+        },
+      });
+
+      expect(registry.getStack('rl-building')!.status).toBe('rate_limited');
+      expect(registry.getStack('rl-up')!.status).toBe('rate_limited');
+      expect(registry.getStack('rl-idle')!.status).toBe('rate_limited');
+    });
+
     it('getRateLimitState returns correct state', () => {
       registry.createStack(makeStack('rl-state'));
       const resetAt = new Date(Date.now() + 60000).toISOString();
