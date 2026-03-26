@@ -14,6 +14,10 @@ import {
   ExecOpts,
   ExecResult,
 } from './types';
+import { DockerConnectionManager } from './docker-connection';
+
+/** Default timeout for exec calls (30 seconds) */
+const EXEC_TIMEOUT_MS = 30_000;
 
 /**
  * Resolve the Docker socket path. Checks existence to avoid triggering
@@ -46,11 +50,23 @@ function resolveDockerSocket(explicit?: string): string {
 export class DockerRuntime implements ContainerRuntime {
   readonly name = 'docker';
   private docker: Dockerode;
+  private connectionManager: DockerConnectionManager;
+
+  /** Track active log streams for cleanup */
+  private activeStreams = new Set<NodeJS.ReadableStream>();
 
   constructor(socketPath?: string) {
     this.docker = new Dockerode({
       socketPath: resolveDockerSocket(socketPath),
     });
+    this.connectionManager = new DockerConnectionManager(
+      () => this.pingDocker()
+    );
+    this.connectionManager.start();
+  }
+
+  getConnectionManager(): DockerConnectionManager {
+    return this.connectionManager;
   }
 
   async composeUp(projectDir: string, opts: ComposeOpts): Promise<void> {
@@ -71,30 +87,39 @@ export class DockerRuntime implements ContainerRuntime {
   }
 
   async listContainers(filter?: ContainerFilter): Promise<Container[]> {
-    const filters: Record<string, string[]> = {};
-    if (filter?.label) filters.label = [filter.label];
-    if (filter?.name) filters.name = [filter.name];
-    if (filter?.status) filters.status = [filter.status];
+    if (this.connectionManager.shouldThrottle()) return [];
 
-    const containers = await this.docker.listContainers({
-      all: true,
-      filters: Object.keys(filters).length > 0 ? filters : undefined,
-    });
+    try {
+      const filters: Record<string, string[]> = {};
+      if (filter?.label) filters.label = [filter.label];
+      if (filter?.name) filters.name = [filter.name];
+      if (filter?.status) filters.status = [filter.status];
 
-    return containers.map((c) => ({
-      id: c.Id,
-      name: c.Names[0]?.replace(/^\//, '') ?? '',
-      image: c.Image,
-      status: this.mapState(c.State) as ContainerStatus,
-      state: c.State,
-      ports: (c.Ports ?? []).map((p) => ({
-        hostPort: p.PublicPort ?? 0,
-        containerPort: p.PrivatePort,
-        protocol: p.Type,
-      })),
-      labels: c.Labels ?? {},
-      created: new Date(c.Created * 1000).toISOString(),
-    }));
+      const containers = await this.docker.listContainers({
+        all: true,
+        filters: Object.keys(filters).length > 0 ? filters : undefined,
+      });
+
+      this.connectionManager.reportSuccess();
+
+      return containers.map((c) => ({
+        id: c.Id,
+        name: c.Names[0]?.replace(/^\//, '') ?? '',
+        image: c.Image,
+        status: this.mapState(c.State) as ContainerStatus,
+        state: c.State,
+        ports: (c.Ports ?? []).map((p) => ({
+          hostPort: p.PublicPort ?? 0,
+          containerPort: p.PrivatePort,
+          protocol: p.Type,
+        })),
+        labels: c.Labels ?? {},
+        created: new Date(c.Created * 1000).toISOString(),
+      }));
+    } catch (err) {
+      this.connectionManager.reportFailure();
+      throw err;
+    }
   }
 
   async inspect(containerId: string): Promise<ContainerInfo> {
@@ -140,13 +165,22 @@ export class DockerRuntime implements ContainerRuntime {
     }
 
     const readable = stream as NodeJS.ReadableStream;
-    for await (const chunk of readable) {
-      // Docker multiplexed stream: first 8 bytes are header
-      const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-      if (buf.length > 8) {
-        yield buf.subarray(8).toString('utf-8');
-      } else {
-        yield buf.toString('utf-8');
+    this.activeStreams.add(readable);
+    try {
+      for await (const chunk of readable) {
+        // Docker multiplexed stream: first 8 bytes are header
+        const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+        if (buf.length > 8) {
+          yield buf.subarray(8).toString('utf-8');
+        } else {
+          yield buf.toString('utf-8');
+        }
+      }
+    } finally {
+      this.activeStreams.delete(readable);
+      // Ensure the stream is destroyed if not already
+      if ('destroy' in readable && typeof (readable as NodeJS.ReadableStream & { destroy: () => void }).destroy === 'function') {
+        (readable as NodeJS.ReadableStream & { destroy: () => void }).destroy();
       }
     }
   }
@@ -170,6 +204,11 @@ export class DockerRuntime implements ContainerRuntime {
     let stderr = '';
 
     return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        stream.destroy();
+        reject(new Error(`exec timed out after ${EXEC_TIMEOUT_MS}ms: ${cmd.join(' ')}`));
+      }, EXEC_TIMEOUT_MS);
+
       stream.on('data', (chunk: Buffer) => {
         // Demux docker stream
         if (chunk.length > 8) {
@@ -183,6 +222,7 @@ export class DockerRuntime implements ContainerRuntime {
         }
       });
       stream.on('end', async () => {
+        clearTimeout(timeout);
         try {
           const inspection = await exec.inspect();
           resolve({
@@ -194,46 +234,88 @@ export class DockerRuntime implements ContainerRuntime {
           resolve({ exitCode: 0, stdout, stderr });
         }
       });
-      stream.on('error', reject);
+      stream.on('error', (err) => {
+        clearTimeout(timeout);
+        reject(err);
+      });
     });
   }
 
   async containerStats(containerId: string): Promise<ContainerStats> {
-    const container = this.docker.getContainer(containerId);
-    const stats = await container.stats({ stream: false });
-    const data = typeof stats === 'string' ? JSON.parse(stats) : stats;
-
-    const memoryUsage = data.memory_stats?.usage ?? 0;
-    const memoryLimit = data.memory_stats?.limit ?? 0;
-
-    // CPU calculation
-    let cpuPercent = 0;
-    const cpuDelta =
-      (data.cpu_stats?.cpu_usage?.total_usage ?? 0) -
-      (data.precpu_stats?.cpu_usage?.total_usage ?? 0);
-    const systemDelta =
-      (data.cpu_stats?.system_cpu_usage ?? 0) -
-      (data.precpu_stats?.system_cpu_usage ?? 0);
-    const numCpus = data.cpu_stats?.online_cpus ?? 1;
-    if (systemDelta > 0 && cpuDelta >= 0) {
-      cpuPercent = (cpuDelta / systemDelta) * numCpus * 100;
+    if (this.connectionManager.shouldThrottle()) {
+      return { memoryUsage: 0, memoryLimit: 0, cpuPercent: 0 };
     }
 
-    return { memoryUsage, memoryLimit, cpuPercent };
+    if (!this.connectionManager.acquireStatsSlot()) {
+      return { memoryUsage: 0, memoryLimit: 0, cpuPercent: 0 };
+    }
+
+    try {
+      if (!this.connectionManager.acquireRateLimit()) {
+        return { memoryUsage: 0, memoryLimit: 0, cpuPercent: 0 };
+      }
+
+      const container = this.docker.getContainer(containerId);
+      const stats = await container.stats({ stream: false });
+      const data = typeof stats === 'string' ? JSON.parse(stats) : stats;
+
+      this.connectionManager.reportSuccess();
+
+      const memoryUsage = data.memory_stats?.usage ?? 0;
+      const memoryLimit = data.memory_stats?.limit ?? 0;
+
+      // CPU calculation
+      let cpuPercent = 0;
+      const cpuDelta =
+        (data.cpu_stats?.cpu_usage?.total_usage ?? 0) -
+        (data.precpu_stats?.cpu_usage?.total_usage ?? 0);
+      const systemDelta =
+        (data.cpu_stats?.system_cpu_usage ?? 0) -
+        (data.precpu_stats?.system_cpu_usage ?? 0);
+      const numCpus = data.cpu_stats?.online_cpus ?? 1;
+      if (systemDelta > 0 && cpuDelta >= 0) {
+        cpuPercent = (cpuDelta / systemDelta) * numCpus * 100;
+      }
+
+      return { memoryUsage, memoryLimit, cpuPercent };
+    } catch (err) {
+      this.connectionManager.reportFailure();
+      throw err;
+    } finally {
+      this.connectionManager.releaseStatsSlot();
+    }
   }
 
   async isAvailable(): Promise<boolean> {
+    return this.pingDocker();
+  }
+
+  async version(): Promise<string> {
+    const info = await this.docker.version();
+    return `Docker ${info.Version}`;
+  }
+
+  /**
+   * Clean up all active streams and stop health monitoring.
+   * Call on app shutdown.
+   */
+  destroy(): void {
+    for (const stream of this.activeStreams) {
+      if ('destroy' in stream && typeof (stream as NodeJS.ReadableStream & { destroy: () => void }).destroy === 'function') {
+        (stream as NodeJS.ReadableStream & { destroy: () => void }).destroy();
+      }
+    }
+    this.activeStreams.clear();
+    this.connectionManager.destroy();
+  }
+
+  private async pingDocker(): Promise<boolean> {
     try {
       await this.docker.ping();
       return true;
     } catch {
       return false;
     }
-  }
-
-  async version(): Promise<string> {
-    const info = await this.docker.version();
-    return `Docker ${info.Version}`;
   }
 
   private mapState(state: string): string {

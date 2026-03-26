@@ -7,7 +7,8 @@ import { StackManager } from './control-plane/stack-manager';
 import { DockerRuntime } from './runtime/docker';
 import { PodmanRuntime } from './runtime/podman';
 import { ContainerRuntime } from './runtime/types';
-import { ClaudeSessionManager } from './claude/session-manager';
+import { DockerConnectionManager } from './runtime/docker-connection';
+import { AgentBackend, ClaudeBackend } from './agent';
 import { registerIpcHandlers } from './ipc';
 import { createTray } from './tray';
 
@@ -21,7 +22,8 @@ export let taskWatcher: TaskWatcher;
 export let dockerRuntime: ContainerRuntime;
 export let podmanRuntime: ContainerRuntime;
 export let cliDir: string;
-export let claudeSessionManager: ClaudeSessionManager;
+export let agentBackend: AgentBackend;
+export let dockerConnectionManager: DockerConnectionManager | null = null;
 
 function createWindow(): BrowserWindow {
   nativeTheme.themeSource = 'dark';
@@ -70,7 +72,8 @@ function createWindow(): BrowserWindow {
 
 function resolveCliDir(): string {
   if (app.isPackaged) {
-    return path.join(process.resourcesPath, 'app.asar.unpacked', 'sandstorm-cli');
+    // extraResources copies sandstorm-cli to <resourcesPath>/sandstorm-cli
+    return path.join(process.resourcesPath, 'sandstorm-cli');
   }
   return path.join(app.getAppPath(), 'sandstorm-cli');
 }
@@ -98,9 +101,14 @@ async function initializeApp(): Promise<void> {
     cliDir
   );
 
-  // Initialize Claude session manager
-  claudeSessionManager = new ClaudeSessionManager();
-  await claudeSessionManager.initialize();
+  // Set up Docker connection manager for health monitoring
+  if (dockerRuntime instanceof DockerRuntime) {
+    dockerConnectionManager = (dockerRuntime as DockerRuntime).getConnectionManager();
+  }
+
+  // Initialize agent backend (currently Claude — swappable in future)
+  agentBackend = new ClaudeBackend();
+  await agentBackend.initialize();
 
   // Listen for task events to send to renderer
   taskWatcher.on('task:completed', ({ stackId, task }) => {
@@ -116,13 +124,23 @@ async function initializeApp(): Promise<void> {
   taskWatcher.on('task:output', ({ stackId, data }) => {
     mainWindow?.webContents.send('task:output', { stackId, data });
   });
+
+  // Forward Docker connection status to renderer
+  if (dockerConnectionManager) {
+    dockerConnectionManager.on('connected', () => {
+      mainWindow?.webContents.send('docker:connected');
+    });
+    dockerConnectionManager.on('disconnected', () => {
+      mainWindow?.webContents.send('docker:disconnected');
+    });
+  }
 }
 
 app.whenReady().then(async () => {
   await initializeApp();
 
   mainWindow = createWindow();
-  claudeSessionManager.setMainWindow(mainWindow);
+  agentBackend.setMainWindow(mainWindow);
   registerIpcHandlers(mainWindow);
   createTray(mainWindow);
 
@@ -140,7 +158,10 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  claudeSessionManager?.destroy();
+  agentBackend?.destroy();
   taskWatcher?.unwatchAll();
+  if (dockerRuntime instanceof DockerRuntime) {
+    (dockerRuntime as DockerRuntime).destroy();
+  }
   registry?.close();
 });

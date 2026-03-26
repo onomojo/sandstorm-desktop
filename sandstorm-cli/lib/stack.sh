@@ -615,8 +615,6 @@ case "$COMMAND" in
     echo "  Commit: ${COMMIT_MSG}"
     [ -n "$REG_TICKET" ] && echo "  Ticket: ${REG_TICKET}"
 
-    PROTECTED_FILES="${PROTECTED_FILES:-CLAUDE.md}"
-
     docker exec \
       -u claude \
       -w /app \
@@ -629,9 +627,6 @@ case "$COMMAND" in
       "$CONTAINER_NAME" bash -c '
         set -e
         git remote set-url origin "https://${GITHUB_TOKEN}@github.com/'"${GIT_REPO}"'.git"
-        for f in '"${PROTECTED_FILES}"'; do
-          git checkout -- "$f" 2>/dev/null || true
-        done
         git add -A
         git diff --cached --quiet || git commit -m "'"${COMMIT_MSG}"'"
         git push -u origin "'"${CURRENT_BRANCH}"'"

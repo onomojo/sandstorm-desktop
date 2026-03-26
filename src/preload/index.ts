@@ -43,7 +43,7 @@ export interface SandstormAPI {
   runtime: {
     available: () => Promise<{ docker: boolean; podman: boolean }>;
   };
-  claude: {
+  agent: {
     send: (tabId: string, message: string, projectDir?: string) => Promise<void>;
     cancel: (tabId: string) => Promise<void>;
     reset: (tabId: string) => Promise<void>;
@@ -62,6 +62,9 @@ export interface SandstormAPI {
   auth: {
     status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
     login: () => Promise<{ success: boolean; error?: string }>;
+  };
+  docker: {
+    status: () => Promise<{ connected: boolean }>;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
@@ -113,12 +116,12 @@ const api: SandstormAPI = {
   runtime: {
     available: () => ipcRenderer.invoke('runtime:available'),
   },
-  claude: {
+  agent: {
     send: (tabId, message, projectDir) =>
-      ipcRenderer.invoke('claude:send', tabId, message, projectDir),
-    cancel: (tabId) => ipcRenderer.invoke('claude:cancel', tabId),
-    reset: (tabId) => ipcRenderer.invoke('claude:reset', tabId),
-    history: (tabId) => ipcRenderer.invoke('claude:history', tabId),
+      ipcRenderer.invoke('agent:send', tabId, message, projectDir),
+    cancel: (tabId) => ipcRenderer.invoke('agent:cancel', tabId),
+    reset: (tabId) => ipcRenderer.invoke('agent:reset', tabId),
+    history: (tabId) => ipcRenderer.invoke('agent:history', tabId),
   },
   context: {
     get: (projectDir) => ipcRenderer.invoke('context:get', projectDir),
@@ -140,6 +143,9 @@ const api: SandstormAPI = {
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),
     login: () => ipcRenderer.invoke('auth:login'),
+  },
+  docker: {
+    status: () => ipcRenderer.invoke('docker:status'),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

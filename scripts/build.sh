@@ -18,14 +18,10 @@ echo "==> Building app..."
 npm run build
 
 echo "==> Rebuilding native modules for Electron..."
-# cpu-features may fail on Linux (needs newer g++ for -std=gnu++20) — that's OK, it's optional.
-set +e
-npx electron-rebuild
-rebuild_status=$?
-set -e
-if [ $rebuild_status -ne 0 ]; then
-  echo "    WARNING: electron-rebuild exited with $rebuild_status (cpu-features failure is OK)"
-fi
+# electron-rebuild recompiles native Node modules for Electron's Node version.
+# We use --only to skip cpu-features (transitive dep via ssh2) which fails to compile on Linux.
+# If you add a new native module, add it to the comma-separated list below.
+npx electron-rebuild --only better-sqlite3
 echo "    Native module rebuild step complete."
 
 echo "==> Packaging for $platform..."

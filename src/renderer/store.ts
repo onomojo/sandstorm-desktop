@@ -96,6 +96,9 @@ interface AppState {
   activeProjectId: number | null; // null means "All"
   showOpenProjectDialog: boolean;
 
+  // Docker connection
+  dockerConnected: boolean;
+
   // Stacks
   stacks: Stack[];
   stackHistory: StackHistoryRecord[];
@@ -104,6 +107,9 @@ interface AppState {
   stackMetrics: Record<string, StackMetrics>;
   loading: boolean;
   error: string | null;
+
+  // Docker connection
+  setDockerConnected: (connected: boolean) => void;
 
   // Project actions
   setProjects: (projects: Project[]) => void;
@@ -174,7 +180,7 @@ declare global {
       runtime: {
         available: () => Promise<{ docker: boolean; podman: boolean }>;
       };
-      claude: {
+      agent: {
         send: (tabId: string, message: string, projectDir?: string) => Promise<void>;
         cancel: (tabId: string) => Promise<void>;
         reset: (tabId: string) => Promise<void>;
@@ -194,6 +200,9 @@ declare global {
         status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
         login: () => Promise<{ success: boolean; error?: string }>;
       };
+      docker: {
+        status: () => Promise<{ connected: boolean }>;
+      };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
   }
@@ -204,6 +213,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   activeProjectId: null,
   showOpenProjectDialog: false,
+
+  // Docker connection
+  dockerConnected: true, // assume connected initially
+  setDockerConnected: (connected) => set({ dockerConnected: connected }),
 
   // Stacks
   stacks: [],
@@ -270,7 +283,9 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   refreshMetrics: async () => {
     try {
-      const { stacks } = get();
+      const { stacks, dockerConnected } = get();
+      // Skip metrics refresh when Docker is disconnected
+      if (!dockerConnected) return;
       const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed', 'pushed', 'pr_created']);
       const activeStacks = stacks.filter((s) => activeStatuses.has(s.status));
       const metrics: Record<string, StackMetrics> = {};

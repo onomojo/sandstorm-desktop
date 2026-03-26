@@ -318,13 +318,13 @@ describe('StackManager', () => {
       ).rejects.toThrow('credential sync failed');
     });
 
-    it('throws when no claude container found', async () => {
+    it('throws when no agent container found', async () => {
       registry.createStack(makeStack('no-claude'));
       (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([]);
 
       await expect(
         manager.dispatchTask('no-claude', 'task')
-      ).rejects.toThrow('Claude container not found');
+      ).rejects.toThrow('Agent container not found');
     });
   });
 
