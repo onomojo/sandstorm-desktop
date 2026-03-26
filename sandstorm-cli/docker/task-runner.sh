@@ -27,17 +27,19 @@ log_loop() {
 }
 
 # Run the claude CLI with streaming output.
-# Args: $1 = prompt file path, $2... = extra claude args
+# Args: $1 = prompt file path, $2 = raw log path, $3 = task log path, $4... = extra claude args
 run_claude() {
   local prompt_file="$1"
-  shift
+  local raw_log="${2:-/tmp/claude-raw.log}"
+  local task_log="${3:-/tmp/claude-task.log}"
+  shift 3 2>/dev/null || shift $#
   local extra_args=("$@")
 
   cat "$prompt_file" \
     | claude --dangerously-skip-permissions --verbose --output-format stream-json \
         "${extra_args[@]}" \
         --include-partial-messages --print -p - 2>&1 \
-    | stdbuf -o0 tee /tmp/claude-raw.log \
+    | stdbuf -o0 tee "$raw_log" \
     | jq -rj --unbuffered '
         if .type == "stream_event" then
           if .event.type == "content_block_delta" and .event.delta.type == "text_delta" then
@@ -75,21 +77,20 @@ run_claude() {
           empty
         end
       ' 2>/dev/null \
-    | stdbuf -o0 tee /tmp/claude-task.log
+    | stdbuf -o0 tee "$task_log"
   return ${PIPESTATUS[0]}
 }
 
 # Check if there are code changes in the workspace.
 check_for_diff() {
-  cd /app
   local diff_output
-  diff_output=$(git diff --stat HEAD 2>/dev/null)
+  diff_output=$(cd /app && git diff --stat HEAD 2>/dev/null)
   if [ -n "$diff_output" ]; then
     return 0  # changes exist
   fi
   # Also check for untracked files (new files)
   local untracked
-  untracked=$(git ls-files --others --exclude-standard 2>/dev/null)
+  untracked=$(cd /app && git ls-files --others --exclude-standard 2>/dev/null)
   if [ -n "$untracked" ]; then
     return 0  # new files exist
   fi
@@ -101,10 +102,10 @@ check_for_diff() {
 # Returns 0 if review passed, 1 if review failed.
 run_review() {
   local original_prompt="$1"
-  local diff_output
-  diff_output=$(cd /app && git diff HEAD 2>/dev/null)
-  local untracked_diff
-  untracked_diff=$(cd /app && git ls-files --others --exclude-standard -z 2>/dev/null | xargs -0 -I{} git diff --no-index /dev/null {} 2>/dev/null || true)
+
+  # Capture diffs to files to avoid bash variable size limits and special char mangling
+  (cd /app && git diff HEAD 2>/dev/null) > /tmp/claude-review-diff.txt
+  (cd /app && git ls-files --others --exclude-standard -z 2>/dev/null | xargs -0 -I{} git diff --no-index /dev/null {} 2>/dev/null || true) > /tmp/claude-review-untracked.txt
 
   # Build the review prompt from template
   local review_prompt_file="/tmp/claude-review-prompt.txt"
@@ -126,22 +127,22 @@ run_review() {
     echo "## Current Diff (staged + unstaged)"
     echo ""
     echo '```diff'
-    echo "$diff_output"
-    if [ -n "$untracked_diff" ]; then
+    cat /tmp/claude-review-diff.txt
+    if [ -s /tmp/claude-review-untracked.txt ]; then
       echo ""
       echo "# New (untracked) files:"
-      echo "$untracked_diff"
+      cat /tmp/claude-review-untracked.txt
     fi
     echo '```'
   } > "$review_prompt_file"
 
   log_loop "Starting review agent with fresh context..."
 
-  # Run claude with --no-conversation to ensure fresh context
-  run_claude "$review_prompt_file" "${MODEL_ARGS[@]}"
+  # Run claude with separate log files to preserve execution agent logs
+  run_claude "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log "${MODEL_ARGS[@]}"
   local review_exit=$?
 
-  rm -f "$review_prompt_file"
+  rm -f "$review_prompt_file" /tmp/claude-review-diff.txt /tmp/claude-review-untracked.txt
 
   if [ $review_exit -ne 0 ]; then
     log_loop "Review agent crashed (exit $review_exit), treating as REVIEW_FAIL"
@@ -149,22 +150,22 @@ run_review() {
     return 1
   fi
 
-  # Parse the review output for REVIEW_PASS or REVIEW_FAIL
-  local review_log
-  review_log=$(cat /tmp/claude-task.log 2>/dev/null)
+  # Parse only the last 10 lines for verdict to avoid false matches from quoted format text
+  local tail_output
+  tail_output=$(tail -10 /tmp/claude-review-task.log 2>/dev/null)
 
-  if echo "$review_log" | grep -q "REVIEW_PASS"; then
+  if echo "$tail_output" | grep -q "REVIEW_PASS"; then
     log_loop "Review verdict: PASS"
     return 0
-  elif echo "$review_log" | grep -q "REVIEW_FAIL"; then
+  elif echo "$tail_output" | grep -q "REVIEW_FAIL"; then
     log_loop "Review verdict: FAIL"
     # Extract the review report for the execution agent
-    echo "$review_log" > /tmp/claude-review-output.txt
+    cp /tmp/claude-review-task.log /tmp/claude-review-output.txt
     return 1
   else
     # No clear verdict — treat as fail to be safe
     log_loop "Review verdict: UNCLEAR (no REVIEW_PASS/REVIEW_FAIL found), treating as FAIL"
-    echo "$review_log" > /tmp/claude-review-output.txt
+    cp /tmp/claude-review-task.log /tmp/claude-review-output.txt
     return 1
   fi
 }
@@ -181,32 +182,35 @@ run_verify() {
 
   # Step 1: Tests
   log_loop "Verify: running npm test..."
-  if (cd /app && npm test 2>&1) | tee -a "$verify_log"; then
-    log_loop "Verify: tests PASSED"
-  else
+  (cd /app && npm test 2>&1) | tee -a "$verify_log"
+  if [ ${PIPESTATUS[0]} -ne 0 ]; then
     log_loop "Verify: tests FAILED"
     failed=1
+  else
+    log_loop "Verify: tests PASSED"
   fi
 
   # Step 2: Type check (only if tests passed — fail fast)
   if [ $failed -eq 0 ]; then
     log_loop "Verify: running tsc --noEmit..."
-    if (cd /app && npx tsc --noEmit 2>&1) | tee -a "$verify_log"; then
-      log_loop "Verify: type check PASSED"
-    else
+    (cd /app && npx tsc --noEmit 2>&1) | tee -a "$verify_log"
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
       log_loop "Verify: type check FAILED"
       failed=1
+    else
+      log_loop "Verify: type check PASSED"
     fi
   fi
 
   # Step 3: Build (only if types passed)
   if [ $failed -eq 0 ]; then
     log_loop "Verify: running npm run build..."
-    if (cd /app && npm run build 2>&1) | tee -a "$verify_log"; then
-      log_loop "Verify: build PASSED"
-    else
+    (cd /app && npm run build 2>&1) | tee -a "$verify_log"
+    if [ ${PIPESTATUS[0]} -ne 0 ]; then
       log_loop "Verify: build FAILED"
       failed=1
+    else
+      log_loop "Verify: build PASSED"
     fi
   fi
 
@@ -246,8 +250,8 @@ while true; do
 
     # ── Step 1: Initial execution pass ──────────────────────────────────
 
-    log_loop "Execution pass 1 complete, running initial claude call..."
-    run_claude /tmp/claude-task-prompt.txt "${MODEL_ARGS[@]}"
+    log_loop "Starting initial execution pass..."
+    run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log "${MODEL_ARGS[@]}"
     EXIT_CODE=${PIPESTATUS[0]}
 
     if [ $EXIT_CODE -ne 0 ]; then
@@ -338,7 +342,7 @@ while true; do
             echo "Fix all listed issues. Do not introduce new problems."
           } > "$local_fix_prompt"
 
-          run_claude "$local_fix_prompt" "${MODEL_ARGS[@]}"
+          run_claude "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log "${MODEL_ARGS[@]}"
           local fix_exit=$?
           rm -f "$local_fix_prompt"
 
@@ -386,7 +390,7 @@ while true; do
           echo "Fix the verification failures (test failures, type errors, or build errors). Do not introduce new problems."
         } > "$local_verify_fix"
 
-        run_claude "$local_verify_fix" "${MODEL_ARGS[@]}"
+        run_claude "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log "${MODEL_ARGS[@]}"
         local verify_fix_exit=$?
         rm -f "$local_verify_fix"
 
@@ -402,6 +406,8 @@ while true; do
 
     rm -f /tmp/claude-task-prompt.txt
     rm -f /tmp/claude-review-output.txt
+    rm -f /tmp/claude-review-raw.log
+    rm -f /tmp/claude-review-task.log
     rm -f /tmp/claude-verify.log
 
     if [ $TASK_DONE -eq 1 ]; then

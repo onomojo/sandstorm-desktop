@@ -108,6 +108,55 @@ describe('task-runner.sh dual-loop workflow', () => {
     })
   })
 
+  // ── Verify exit code handling ────────────────────────────────────────
+
+  describe('verify PIPESTATUS handling', () => {
+    it('uses PIPESTATUS to capture real exit codes from tee pipelines', () => {
+      // All three verify steps must use PIPESTATUS[0] instead of relying on tee exit code
+      const matches = taskRunner.match(/PIPESTATUS\[0\]/g)
+      // run_claude has one, plus 3 in run_verify = at least 4
+      expect(matches).not.toBeNull()
+      expect(matches!.length).toBeGreaterThanOrEqual(4)
+    })
+  })
+
+  // ── Review log isolation ───────────────────────────────────────────
+
+  describe('review log isolation', () => {
+    it('uses separate raw log for review agent', () => {
+      expect(taskRunner).toContain('/tmp/claude-review-raw.log')
+    })
+
+    it('uses separate task log for review agent', () => {
+      expect(taskRunner).toContain('/tmp/claude-review-task.log')
+    })
+
+    it('parses verdict from review-specific task log', () => {
+      expect(taskRunner).toContain('tail -10 /tmp/claude-review-task.log')
+    })
+
+    it('cleans up review log files', () => {
+      expect(taskRunner).toContain('rm -f /tmp/claude-review-raw.log')
+      expect(taskRunner).toContain('rm -f /tmp/claude-review-task.log')
+    })
+  })
+
+  // ── Diff handling ──────────────────────────────────────────────────
+
+  describe('review diff handling', () => {
+    it('pipes diff to a file instead of storing in a variable', () => {
+      expect(taskRunner).toContain('> /tmp/claude-review-diff.txt')
+    })
+
+    it('pipes untracked diff to a file', () => {
+      expect(taskRunner).toContain('> /tmp/claude-review-untracked.txt')
+    })
+
+    it('uses cat to include diff in review prompt', () => {
+      expect(taskRunner).toContain('cat /tmp/claude-review-diff.txt')
+    })
+  })
+
   // ── Inner loop (execution ↔ review) ──────────────────────────────────
 
   describe('inner loop', () => {
@@ -157,8 +206,8 @@ describe('task-runner.sh dual-loop workflow', () => {
       expect(taskRunner).toContain('[LOOP]')
     })
 
-    it('logs execution pass completion', () => {
-      expect(taskRunner).toContain('Execution pass 1 complete')
+    it('logs initial execution start', () => {
+      expect(taskRunner).toContain('Starting initial execution pass')
     })
 
     it('logs review iterations with counts', () => {
@@ -222,12 +271,17 @@ describe('task-runner.sh dual-loop workflow', () => {
       expect(taskRunner).toContain('MODEL_ARGS')
     })
 
+    it('accepts configurable log file paths', () => {
+      expect(taskRunner).toContain('local raw_log="${2:-/tmp/claude-raw.log}"')
+      expect(taskRunner).toContain('local task_log="${3:-/tmp/claude-task.log}"')
+    })
+
     it('writes raw log for token parsing', () => {
-      expect(taskRunner).toContain('tee /tmp/claude-raw.log')
+      expect(taskRunner).toContain('tee "$raw_log"')
     })
 
     it('writes task log for UI', () => {
-      expect(taskRunner).toContain('tee /tmp/claude-task.log')
+      expect(taskRunner).toContain('tee "$task_log"')
     })
   })
 
