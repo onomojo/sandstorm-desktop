@@ -882,6 +882,32 @@ describe('StackManager', () => {
       expect(registry.getStack('rl-running')!.status).toBe('rate_limited');
     });
 
+    it('handleRateLimit skips pushed and pr_created stacks', () => {
+      registry.createStack(makeStack('rl-pushed'));
+      registry.updateStackStatus('rl-pushed', 'pushed');
+      registry.createStack(makeStack('rl-pr'));
+      registry.updateStackStatus('rl-pr', 'pr_created');
+      registry.createStack(makeStack('rl-stopped'));
+      registry.updateStackStatus('rl-stopped', 'stopped');
+      registry.createStack(makeStack('rl-active'));
+      registry.updateStackStatus('rl-active', 'running');
+
+      taskWatcher.emit('task:rate_limited', {
+        stackId: 'rl-active',
+        rateLimit: {
+          reset_at: new Date(Date.now() + 60000).toISOString(),
+          reason: 'Rate limit exceeded',
+        },
+      });
+
+      // pushed, pr_created, and stopped stacks should NOT be affected
+      expect(registry.getStack('rl-pushed')!.status).toBe('pushed');
+      expect(registry.getStack('rl-pr')!.status).toBe('pr_created');
+      expect(registry.getStack('rl-stopped')!.status).toBe('stopped');
+      // Running stack should be marked as rate_limited
+      expect(registry.getStack('rl-active')!.status).toBe('rate_limited');
+    });
+
     it('handleRateLimit marks stacks in building, up, and idle status as rate_limited', () => {
       registry.createStack(makeStack('rl-building'));
       registry.updateStackStatus('rl-building', 'building');

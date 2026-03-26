@@ -23,6 +23,9 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     runtime: 'docker',
     created_at: '2026-03-25 10:00:00',
     updated_at: '2026-03-25 10:05:00',
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    rate_limit_reset_at: null,
     services: [],
     ...overrides,
   };

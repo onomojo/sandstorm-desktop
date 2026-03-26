@@ -677,7 +677,7 @@ export class StackManager {
     // stack means all stacks are affected. Mark all running stacks.
     // Skip stacks already in terminal status (completed/failed) — their task
     // is done and overwriting status would be incorrect.
-    const terminalStatuses = new Set(['completed', 'failed']);
+    const terminalStatuses = new Set(['completed', 'failed', 'stopped', 'pushed', 'pr_created']);
     const stacks = this.registry.listStacks();
     const resetAt = rateLimit.reset_at ?? new Date(Date.now() + 3600000).toISOString();
     for (const stack of stacks) {
