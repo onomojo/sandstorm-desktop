@@ -36,6 +36,7 @@ export interface Task {
   prompt: string;
   status: 'running' | 'completed' | 'failed';
   exit_code: number | null;
+  warnings: string | null;
   started_at: string;
   finished_at: string | null;
 }
@@ -204,11 +205,17 @@ export class Registry {
       } catch {
         // Column already exists
       }
+      // Add warnings column to tasks table
+      try {
+        this.db.exec('ALTER TABLE tasks ADD COLUMN warnings TEXT');
+      } catch {
+        // Column already exists
+      }
       this.setSchemaVersion(2);
     }
 
     // Future migrations go here:
-    // if (currentVersion < 2) { ... this.setSchemaVersion(2); }
+    // if (currentVersion < 3) { ... this.setSchemaVersion(3); }
   }
 
   // --- Projects ---
@@ -306,6 +313,12 @@ export class Registry {
     return this.db.prepare(
       'SELECT * FROM tasks WHERE stack_id = ? ORDER BY started_at DESC'
     ).all(stackId) as Task[];
+  }
+
+  setTaskWarning(taskId: number, warning: string): void {
+    this.db.prepare(
+      'UPDATE tasks SET warnings = ? WHERE id = ?'
+    ).run(warning, taskId);
   }
 
   getRunningTask(stackId: string): Task | undefined {

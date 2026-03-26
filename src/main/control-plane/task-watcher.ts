@@ -15,6 +15,8 @@ const MAX_CONSECUTIVE_ERRORS = 30;
  *  before we accept it as valid even without seeing "running" first.
  *  Acts as a safety net if the task runner crashes before writing "running". */
 const MAX_STALE_POLLS = 30;
+/** Tasks completing in less than this many ms with no changes are suspicious */
+const SUSPICIOUS_DURATION_MS = 30_000;
 
 /** Backoff configuration */
 const BACKOFF_BASE_MS = 500;
@@ -92,14 +94,26 @@ export class TaskWatcher extends EventEmitter {
     task: Task,
     stackId: string,
     status: 'completed' | 'failed',
-    exitCode: number
+    exitCode: number,
+    containerId?: string
   ): void {
     this.registry.completeTask(task.id, exitCode);
+
+    // Check for suspicious completion: fast exit with no changes
+    let warning: string | null = null;
+    if (status === 'completed' && exitCode === 0 && task.started_at) {
+      const durationMs = Date.now() - new Date(task.started_at + 'Z').getTime();
+      if (durationMs < SUSPICIOUS_DURATION_MS) {
+        warning = `Task completed suspiciously fast (${Math.round(durationMs / 1000)}s) — may not have produced real changes`;
+        this.registry.setTaskWarning(task.id, warning);
+      }
+    }
 
     const updatedTask = {
       ...task,
       status,
       exit_code: exitCode,
+      warnings: warning,
       finished_at: new Date().toISOString(),
     };
 
@@ -170,7 +184,7 @@ export class TaskWatcher extends EventEmitter {
           exitCode = status === 'completed' ? 0 : 1;
         }
 
-        this.completeTaskAndNotify(task, stackId, status, exitCode);
+        this.completeTaskAndNotify(task, stackId, status, exitCode, containerId);
         return;
       }
 
