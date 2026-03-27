@@ -284,8 +284,12 @@ describe('task-runner.sh dual-loop workflow', () => {
       expect(taskRunner).toContain('local task_log="${3:-/tmp/claude-task.log}"')
     })
 
-    it('writes raw log for token parsing', () => {
-      expect(taskRunner).toContain('tee "$raw_log"')
+    it('writes raw log for token parsing (append mode)', () => {
+      expect(taskRunner).toContain('tee -a "$raw_log"')
+    })
+
+    it('truncates raw log at task start so tokens are fresh per task', () => {
+      expect(taskRunner).toContain('> /tmp/claude-raw.log')
     })
 
     it('writes task log for UI', () => {
