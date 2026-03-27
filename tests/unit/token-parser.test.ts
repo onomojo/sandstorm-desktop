@@ -212,6 +212,42 @@ describe('parseRateLimit', () => {
     expect(parseRateLimit('line 429: some code')).toBeNull();
   });
 
+  it('does not false-positive on rate limit keywords in agent conversation content', () => {
+    // Inner Claude discussing rate limits in its output should NOT trigger detection
+    const streamOutput = [
+      JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { text: 'The rate limit detection needs to be fixed' } } }),
+      JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { text: 'We should handle HTTP 429 errors properly' } } }),
+      JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { text: 'retry after 300 seconds when rate limited' } } }),
+      JSON.stringify({ type: 'result', usage: { input_tokens: 100, output_tokens: 50 }, session_id: 'sess-1' }),
+    ].join('\n');
+    expect(parseRateLimit(streamOutput)).toBeNull();
+  });
+
+  it('does not false-positive on rate limit keywords in message_start events', () => {
+    const output = [
+      JSON.stringify({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 100 } } } }),
+      JSON.stringify({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 50 } } }),
+      JSON.stringify({ type: 'result', usage: { input_tokens: 100, output_tokens: 50 } }),
+    ].join('\n');
+    expect(parseRateLimit(output)).toBeNull();
+  });
+
+  it('detects rate limit in error-typed JSON lines', () => {
+    const output = [
+      JSON.stringify({ type: 'stream_event', event: { type: 'content_block_delta', delta: { text: 'working...' } } }),
+      JSON.stringify({ type: 'error', error: { message: 'Rate limit exceeded. Retry after 60 seconds' } }),
+    ].join('\n');
+    const result = parseRateLimit(output);
+    expect(result).not.toBeNull();
+    expect(result!.reset_at).toBeTruthy();
+  });
+
+  it('detects rate limit in result-typed JSON with error info', () => {
+    const output = JSON.stringify({ type: 'result', error: { message: 'rate limit exceeded' } });
+    const result = parseRateLimit(output);
+    expect(result).not.toBeNull();
+  });
+
   it('extracts retry-after seconds', () => {
     const result = parseRateLimit('Rate limit hit. Retry after 300 seconds');
     expect(result).not.toBeNull();
