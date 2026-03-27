@@ -20,6 +20,46 @@ import { DockerConnectionManager } from './docker-connection';
 const EXEC_TIMEOUT_MS = 30_000;
 
 /**
+ * Docker multiplexed stream header size.
+ * Each frame has an 8-byte header: [stream_type(1), padding(3), size(4 big-endian)].
+ */
+const DOCKER_HEADER_SIZE = 8;
+
+/**
+ * Demultiplex a Docker stream buffer that may contain multiple frames.
+ * Returns an array of { type, content } for each complete frame, plus any
+ * leftover bytes that form an incomplete frame (to be prepended to the next chunk).
+ */
+export function demuxDockerStream(buf: Buffer): {
+  frames: Array<{ type: number; content: string }>;
+  remainder: Buffer;
+} {
+  const frames: Array<{ type: number; content: string }> = [];
+  let offset = 0;
+
+  while (offset + DOCKER_HEADER_SIZE <= buf.length) {
+    const streamType = buf[offset];
+    const frameSize = buf.readUInt32BE(offset + 4);
+
+    // Not enough data for the full frame — return remainder
+    if (offset + DOCKER_HEADER_SIZE + frameSize > buf.length) {
+      break;
+    }
+
+    const content = buf.subarray(
+      offset + DOCKER_HEADER_SIZE,
+      offset + DOCKER_HEADER_SIZE + frameSize
+    ).toString('utf-8');
+
+    frames.push({ type: streamType, content });
+    offset += DOCKER_HEADER_SIZE + frameSize;
+  }
+
+  const remainder = offset < buf.length ? buf.subarray(offset) : Buffer.alloc(0);
+  return { frames, remainder };
+}
+
+/**
  * Resolve the Docker socket path. Checks existence to avoid triggering
  * macOS TCC permission prompts for inaccessible paths.
  */
@@ -167,14 +207,22 @@ export class DockerRuntime implements ContainerRuntime {
     const readable = stream as NodeJS.ReadableStream;
     this.activeStreams.add(readable);
     try {
+      let remainder = Buffer.alloc(0);
       for await (const chunk of readable) {
-        // Docker multiplexed stream: first 8 bytes are header
+        // Docker multiplexed stream: each frame has an 8-byte header
+        // [stream_type(1), padding(3), size(4 big-endian)].
+        // A single chunk may contain multiple frames, or a frame may span chunks.
         const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
-        if (buf.length > 8) {
-          yield buf.subarray(8).toString('utf-8');
-        } else {
-          yield buf.toString('utf-8');
+        const input = remainder.length > 0 ? Buffer.concat([remainder, buf]) : buf;
+        const { frames, remainder: leftover } = demuxDockerStream(input);
+        remainder = leftover;
+        for (const frame of frames) {
+          yield frame.content;
         }
+      }
+      // Flush any remaining bytes as raw text
+      if (remainder.length > 0) {
+        yield remainder.toString('utf-8');
       }
     } finally {
       this.activeStreams.delete(readable);
@@ -202,6 +250,7 @@ export class DockerRuntime implements ContainerRuntime {
     const stream = await exec.start({ hijack: true, stdin: false });
     let stdout = '';
     let stderr = '';
+    let remainder = Buffer.alloc(0);
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {
@@ -210,18 +259,25 @@ export class DockerRuntime implements ContainerRuntime {
       }, EXEC_TIMEOUT_MS);
 
       stream.on('data', (chunk: Buffer) => {
-        // Demux docker stream
-        if (chunk.length > 8) {
-          const type = chunk[0];
-          const content = chunk.subarray(8).toString('utf-8');
-          if (type === 1) stdout += content;
-          else if (type === 2) stderr += content;
-          else stdout += content;
-        } else {
-          stdout += chunk.toString('utf-8');
+        // Demux docker multiplexed stream: each frame has an 8-byte header
+        // [stream_type(1), padding(3), size(4 big-endian)].
+        // A single data event may contain multiple frames or partial frames.
+        const input = remainder.length > 0 ? Buffer.concat([remainder, chunk]) : chunk;
+        const result = demuxDockerStream(input);
+        remainder = result.remainder;
+
+        for (const frame of result.frames) {
+          if (frame.type === 1) stdout += frame.content;
+          else if (frame.type === 2) stderr += frame.content;
+          else stdout += frame.content;
         }
       });
       stream.on('end', async () => {
+        // Flush any remaining partial data as stdout
+        if (remainder.length > 0) {
+          stdout += remainder.toString('utf-8');
+          remainder = Buffer.alloc(0);
+        }
         clearTimeout(timeout);
         try {
           const inspection = await exec.inspect();

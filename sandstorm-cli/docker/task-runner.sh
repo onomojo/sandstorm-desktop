@@ -9,10 +9,11 @@
 #     INNER LOOP (max 5 iterations, resets each outer):
 #       Execution Agent → Review Agent (fresh context)
 #       If review fails → back to Execution Agent
-#       If review passes → proceed to Verify
-#     VERIFY: npm test, tsc --noEmit, npm run build
+#       If review passes → exit inner loop
+#     VERIFY (runs ONCE after review passes, not on every review iteration):
+#       npm test, tsc --noEmit, npm run build
 #       If pass → done
-#       If fail → back to outer loop
+#       If fail → fix errors → back to outer loop (inner counter resets)
 #
 # Runs as PID 1 so all output goes to docker logs.
 #
@@ -353,7 +354,7 @@ while true; do
           } > "$local_fix_prompt"
 
           run_claude "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log "${MODEL_ARGS[@]}"
-          local fix_exit=$?
+          fix_exit=$?
           rm -f "$local_fix_prompt"
 
           if [ $fix_exit -ne 0 ]; then
@@ -401,7 +402,7 @@ while true; do
         } > "$local_verify_fix"
 
         run_claude "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log "${MODEL_ARGS[@]}"
-        local verify_fix_exit=$?
+        verify_fix_exit=$?
         rm -f "$local_verify_fix"
 
         if [ $verify_fix_exit -ne 0 ]; then

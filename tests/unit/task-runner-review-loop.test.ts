@@ -176,6 +176,36 @@ describe('task-runner.sh dual-loop workflow', () => {
       expect(taskRunner).toContain('Inner loop exhausted')
       expect(taskRunner).toContain('Needs human intervention')
     })
+
+    it('does NOT call run_verify inside the inner review loop', () => {
+      // The inner loop runs between the REVIEW_PASSED=0 init and the "done" that closes it.
+      // Verify must NOT appear inside that block — it should only run after the inner loop exits.
+      const innerLoopStart = taskRunner.indexOf('REVIEW_PASSED=0')
+      const innerLoopCondition = taskRunner.indexOf('INNER_ITERATION -lt $MAX_INNER_ITERATIONS', innerLoopStart)
+      // Find the "done" that closes the inner while loop (first "done" after the inner loop start)
+      const afterInnerLoop = taskRunner.indexOf('\n      done', innerLoopCondition)
+      expect(afterInnerLoop).toBeGreaterThan(innerLoopStart)
+
+      // Extract the inner loop body and verify run_verify is NOT in it
+      const innerLoopBody = taskRunner.substring(innerLoopStart, afterInnerLoop)
+      expect(innerLoopBody).not.toContain('run_verify')
+    })
+  })
+
+  // ── Verify runs ONCE after review passes (not per review iteration) ───
+
+  describe('verify runs once after review passes', () => {
+    it('run_verify is called after the inner loop done keyword', () => {
+      // The inner loop ends with "done", then verify runs
+      const innerLoopDone = taskRunner.indexOf('REVIEW_PASSED=0')
+      const doneAfterInner = taskRunner.indexOf('\n      done', innerLoopDone)
+      const verifyCall = taskRunner.indexOf('run_verify', doneAfterInner)
+      expect(verifyCall).toBeGreaterThan(doneAfterInner)
+    })
+
+    it('documents that verify runs once, not per review iteration', () => {
+      expect(taskRunner).toContain('runs ONCE after review passes, not on every review iteration')
+    })
   })
 
   // ── Outer loop (verify retries) ──────────────────────────────────────
@@ -195,6 +225,17 @@ describe('task-runner.sh dual-loop workflow', () => {
 
     it('halts when outer loop is exhausted', () => {
       expect(taskRunner).toContain('Outer loop exhausted')
+    })
+
+    it('re-enters review loop after verify failure and fix', () => {
+      // After verify fails and execution agent fixes, the outer loop continues,
+      // which resets the inner loop counter and re-runs review before verify again
+      // This ensures: fix → review → verify (not just fix → verify)
+      const verifyFail = taskRunner.indexOf('Verify FAILED')
+      const sendVerifyFix = taskRunner.indexOf('Sending verify failure to execution agent', verifyFail)
+      expect(sendVerifyFix).toBeGreaterThan(verifyFail)
+      // The outer while loop continues, which re-enters the inner review loop
+      expect(taskRunner).toContain('INNER_ITERATION=0')
     })
   })
 
@@ -370,6 +411,63 @@ describe('task-runner.sh dual-loop workflow', () => {
       const matches = taskRunner.match(/"ready" > \/tmp\/claude-ready/g)
       expect(matches).not.toBeNull()
       expect(matches!.length).toBeGreaterThanOrEqual(4)
+    })
+  })
+
+  // ── No `local` outside function scope (issue #115) ──────────────────
+
+  describe('no local keyword outside function scope', () => {
+    it('does not use `local` in the outer/inner while loops', () => {
+      // Find all `local ` usages and verify they are inside function bodies.
+      // Functions in the script: log_loop, run_claude, check_for_diff, run_review, run_verify
+      const functionNames = ['log_loop', 'run_claude', 'check_for_diff', 'run_review', 'run_verify']
+
+      // Collect the line ranges of all function bodies
+      const functionRanges: Array<{ start: number; end: number }> = []
+      for (const fn of functionNames) {
+        const fnPattern = new RegExp(`^${fn}\\(\\)\\s*\\{`, 'm')
+        const match = fnPattern.exec(taskRunner)
+        if (!match) continue
+
+        const fnStart = match.index
+        // Find the matching closing brace by counting braces
+        let braceDepth = 0
+        let foundOpen = false
+        let fnEnd = fnStart
+        for (let i = fnStart; i < taskRunner.length; i++) {
+          if (taskRunner[i] === '{') { braceDepth++; foundOpen = true }
+          if (taskRunner[i] === '}') { braceDepth-- }
+          if (foundOpen && braceDepth === 0) { fnEnd = i; break }
+        }
+        functionRanges.push({ start: fnStart, end: fnEnd })
+      }
+
+      // Find all `local ` usages
+      const localRegex = /\blocal\s+\w+/g
+      let localMatch
+      const violations: string[] = []
+      while ((localMatch = localRegex.exec(taskRunner)) !== null) {
+        const pos = localMatch.index
+        const insideFunction = functionRanges.some(r => pos >= r.start && pos <= r.end)
+        if (!insideFunction) {
+          const lineNum = taskRunner.substring(0, pos).split('\n').length
+          violations.push(`line ${lineNum}: ${localMatch[0]}`)
+        }
+      }
+
+      expect(violations).toEqual([])
+    })
+
+    it('uses plain variable assignment for fix_exit in the inner loop', () => {
+      // The fix_exit variable should be assigned without `local`
+      expect(taskRunner).toContain('fix_exit=$?')
+      expect(taskRunner).not.toMatch(/local\s+fix_exit/)
+    })
+
+    it('uses plain variable assignment for verify_fix_exit in the outer loop', () => {
+      // The verify_fix_exit variable should be assigned without `local`
+      expect(taskRunner).toContain('verify_fix_exit=$?')
+      expect(taskRunner).not.toMatch(/local\s+verify_fix_exit/)
     })
   })
 
