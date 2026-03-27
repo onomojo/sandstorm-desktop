@@ -132,6 +132,7 @@ describe('StackDetail', () => {
         stack_id: 'detail-stack',
         prompt: 'Complex refactor',
         model: 'opus',
+        resolved_model: null,
         status: 'completed',
         exit_code: 0,
         started_at: new Date().toISOString(),
@@ -217,6 +218,52 @@ describe('StackDetail', () => {
 
     await waitFor(() => {
       expect(screen.getByText('1 review, 0 retries')).toBeDefined();
+    });
+  });
+
+  it('shows "auto → model" badge when resolved_model is set with auto selection', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Auto task',
+        model: null,
+        resolved_model: 'claude-sonnet-4-20250514',
+        status: 'completed',
+        exit_code: 0,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    fireEvent.click(screen.getByText('History'));
+
+    await waitFor(() => {
+      expect(screen.getByText('auto \u2192 claude-sonnet-4-20250514')).toBeDefined();
+    });
+  });
+
+  it('shows resolved_model directly when explicit model was selected', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Explicit model task',
+        model: 'opus',
+        resolved_model: 'claude-opus-4-20250514',
+        status: 'completed',
+        exit_code: 0,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    fireEvent.click(screen.getByText('History'));
+
+    await waitFor(() => {
+      expect(screen.getByText('claude-opus-4-20250514')).toBeDefined();
     });
   });
 

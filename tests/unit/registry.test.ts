@@ -757,6 +757,30 @@ describe('Registry', () => {
       expect(updated.review_iterations).toBe(5);
       expect(updated.verify_retries).toBe(3);
     });
+
+    it('new tasks have null resolved_model', () => {
+      const task = registry.createTask('token-stack', 'test');
+      expect(task.resolved_model).toBeNull();
+    });
+
+    it('updateTaskResolvedModel stores the actual model used', () => {
+      const task = registry.createTask('token-stack', 'auto test');
+      registry.updateTaskResolvedModel(task.id, 'claude-sonnet-4-20250514');
+
+      const tasks = registry.getTasksForStack('token-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.resolved_model).toBe('claude-sonnet-4-20250514');
+    });
+
+    it('updateTaskResolvedModel works alongside model field', () => {
+      const task = registry.createTask('token-stack', 'opus task', 'opus');
+      registry.updateTaskResolvedModel(task.id, 'claude-opus-4-20250514');
+
+      const tasks = registry.getTasksForStack('token-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.model).toBe('opus');
+      expect(updated.resolved_model).toBe('claude-opus-4-20250514');
+    });
   });
 
   // ===========================================

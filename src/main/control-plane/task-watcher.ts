@@ -162,6 +162,11 @@ export class TaskWatcher extends EventEmitter {
         this.registry.setTaskSessionId(taskId, usage.session_id);
       }
 
+      // Store the actual model used (important when "auto" was selected)
+      if (usage.resolved_model) {
+        this.registry.updateTaskResolvedModel(taskId, usage.resolved_model);
+      }
+
       // Check for HTTP errors in structured stream-json output
       const httpError = parseHttpError(output);
       if (httpError) {

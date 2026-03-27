@@ -141,6 +141,55 @@ describe('parseTokenUsage', () => {
     const result = parseTokenUsage(output);
     expect(result.session_id).toBe('sess-456');
   });
+
+  it('returns null resolved_model for empty input', () => {
+    const result = parseTokenUsage('');
+    expect(result.resolved_model).toBeNull();
+  });
+
+  it('extracts resolved_model from bare message_start', () => {
+    const output = '{"type":"message_start","message":{"model":"claude-sonnet-4-20250514","usage":{"input_tokens":100}}}\n';
+    const result = parseTokenUsage(output);
+    expect(result.resolved_model).toBe('claude-sonnet-4-20250514');
+    expect(result.input_tokens).toBe(100);
+  });
+
+  it('extracts resolved_model from stream_event wrapped message_start', () => {
+    const output = JSON.stringify({
+      type: 'stream_event',
+      event: {
+        type: 'message_start',
+        message: {
+          model: 'claude-opus-4-20250514',
+          usage: { input_tokens: 50 },
+        },
+      },
+    }) + '\n';
+    const result = parseTokenUsage(output);
+    expect(result.resolved_model).toBe('claude-opus-4-20250514');
+  });
+
+  it('uses first model seen when multiple message_start events exist', () => {
+    const lines = [
+      JSON.stringify({
+        type: 'message_start',
+        message: { model: 'claude-sonnet-4-20250514', usage: { input_tokens: 10 } },
+      }),
+      JSON.stringify({
+        type: 'message_start',
+        message: { model: 'claude-opus-4-20250514', usage: { input_tokens: 20 } },
+      }),
+    ].join('\n');
+    const result = parseTokenUsage(lines);
+    expect(result.resolved_model).toBe('claude-sonnet-4-20250514');
+  });
+
+  it('returns null resolved_model when message_start has no model field', () => {
+    const output = '{"type":"message_start","message":{"usage":{"input_tokens":100}}}\n';
+    const result = parseTokenUsage(output);
+    expect(result.resolved_model).toBeNull();
+    expect(result.input_tokens).toBe(100);
+  });
 });
 
 describe('parseHttpError', () => {

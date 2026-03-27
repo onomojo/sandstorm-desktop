@@ -397,6 +397,50 @@ describe('TaskWatcher', () => {
     watcher.unwatchAll();
   });
 
+  it('stores resolved_model from claude-raw.log message_start event', async () => {
+    const rawJsonOutput = [
+      JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: {
+            model: 'claude-sonnet-4-20250514',
+            usage: { input_tokens: 500 },
+          },
+        },
+      }),
+      '{"type":"result","usage":{"input_tokens":500,"output_tokens":200},"session_id":"sess-model"}',
+    ].join('\n');
+
+    const runtime = createSequencedRuntime(['running', 'completed'], '0');
+    const origExec = (runtime.exec as ReturnType<typeof vi.fn>).getMockImplementation()!;
+    (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+      async (id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-raw.log')) {
+          return { exitCode: 0, stdout: rawJsonOutput, stderr: '' };
+        }
+        return origExec(id, cmd);
+      }
+    );
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'model detection task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    // Give async token/model reading time to complete
+    await new Promise((r) => setTimeout(r, 200));
+
+    const tasks = registry.getTasksForStack('watch-stack');
+    const task = tasks.find((t) => t.prompt === 'model detection task');
+    expect(task!.resolved_model).toBe('claude-sonnet-4-20250514');
+
+    watcher.unwatchAll();
+  });
+
   // --- Exponential backoff tests ---
 
   it('applies exponential backoff on exec failures', async () => {
