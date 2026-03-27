@@ -149,10 +149,14 @@ interface AppState {
   loading: boolean;
   error: string | null;
 
-  // Token usage & rate limits
+  // Token usage
   globalTokenUsage: GlobalTokenUsage | null;
   rateLimitState: RateLimitState | null;
   accountUsage: AccountUsage | null;
+
+  // Account usage budget (persisted in localStorage)
+  tokenBudget: number; // 0 means no budget set
+  setTokenBudget: (budget: number) => void;
 
   // Docker connection
   setDockerConnected: (connected: boolean) => void;
@@ -280,10 +284,22 @@ export const useAppStore = create<AppState>((set, get) => ({
   loading: false,
   error: null,
 
-  // Token usage & rate limits
+  // Token usage
   globalTokenUsage: null,
   rateLimitState: null,
   accountUsage: null,
+
+  // Account usage budget
+  tokenBudget: (() => {
+    try {
+      const saved = localStorage.getItem('sandstorm-token-budget');
+      return saved ? Number(saved) : 0;
+    } catch { return 0; }
+  })(),
+  setTokenBudget: (budget: number) => {
+    localStorage.setItem('sandstorm-token-budget', String(budget));
+    set({ tokenBudget: budget });
+  },
 
   // Project actions
   setProjects: (projects) => set({ projects }),
@@ -344,7 +360,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { stacks, dockerConnected } = get();
       // Skip metrics refresh when Docker is disconnected
       if (!dockerConnected) return;
-      const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed', 'pushed', 'pr_created', 'rate_limited']);
+      const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed', 'pushed', 'pr_created']);
       const activeStacks = stacks.filter((s) => activeStatuses.has(s.status));
       const metrics: Record<string, StackMetrics> = {};
 
@@ -387,6 +403,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       // Token usage refresh failure is non-fatal
     }
   },
+
 
   refreshRateLimitState: async () => {
     try {

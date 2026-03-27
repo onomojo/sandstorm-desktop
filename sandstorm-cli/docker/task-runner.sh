@@ -39,7 +39,7 @@ run_claude() {
     | claude --dangerously-skip-permissions --verbose --output-format stream-json \
         "${extra_args[@]}" \
         --include-partial-messages --print -p - 2>&1 \
-    | stdbuf -o0 tee "$raw_log" \
+    | stdbuf -o0 tee -a "$raw_log" \
     | jq -rj --unbuffered '
         if .type == "stream_event" then
           if .event.type == "content_block_delta" and .event.delta.type == "text_delta" then
@@ -252,6 +252,9 @@ while true; do
     echo "=========================================="
     echo "running" > /tmp/claude-task.status
     echo $$ > /tmp/claude-task.pid
+
+    # Truncate the raw log so token data starts fresh for this task
+    > /tmp/claude-raw.log
 
     # ── Step 1: Initial execution pass ──────────────────────────────────
 

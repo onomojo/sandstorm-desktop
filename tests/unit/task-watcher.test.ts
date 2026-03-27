@@ -441,6 +441,140 @@ describe('TaskWatcher', () => {
     watcher.unwatchAll();
   });
 
+  // --- Real-time token polling while task is running ---
+
+  it('polls tokens periodically while task is running', async () => {
+    const rawJsonOutput = [
+      JSON.stringify({
+        type: 'stream_event',
+        event: {
+          type: 'message_start',
+          message: { model: 'claude-sonnet-4-20250514', usage: { input_tokens: 500 } },
+        },
+      }),
+      '{"type":"result","usage":{"input_tokens":1000,"output_tokens":400},"session_id":"sess-rt"}',
+    ].join('\n');
+
+    // Stay running for many polls, then complete
+    let statusPollCount = 0;
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.status')) {
+          statusPollCount++;
+          // Stay running for 4 polls, then complete
+          const status = statusPollCount >= 5 ? 'completed' : 'running';
+          return { exitCode: 0, stdout: status, stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-task.exit')) {
+          return { exitCode: 0, stdout: '0', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-raw.log')) {
+          return { exitCode: 0, stdout: rawJsonOutput, stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+      containerStats: vi.fn(),
+    };
+
+    // Use very short poll interval and token poll interval to trigger real-time polling
+    const watcher = new TaskWatcher(registry, runtime, {
+      pollInterval: 20,
+      tokenPollInterval: 0, // poll tokens every status check
+    });
+
+    registry.createTask('watch-stack', 'realtime token task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    // Give async operations time to settle
+    await new Promise((r) => setTimeout(r, 100));
+
+    // Verify claude-raw.log was read BEFORE completion (during running polls)
+    const execCalls = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls;
+    const rawLogCalls = execCalls.filter(
+      (call: unknown[]) => Array.isArray(call[1]) && call[1].includes('/tmp/claude-raw.log')
+    );
+    // Should have been read during running polls + on completion
+    expect(rawLogCalls.length).toBeGreaterThanOrEqual(2);
+
+    // Verify tokens were stored
+    const tasks = registry.getTasksForStack('watch-stack');
+    const task = tasks.find((t) => t.prompt === 'realtime token task');
+    expect(task!.input_tokens).toBe(1000);
+    expect(task!.output_tokens).toBe(400);
+
+    watcher.unwatchAll();
+  });
+
+  it('throttles token polling based on tokenPollInterval', async () => {
+    let statusPollCount = 0;
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.status')) {
+          statusPollCount++;
+          // Stay running for 6 polls, then complete
+          const status = statusPollCount >= 7 ? 'completed' : 'running';
+          return { exitCode: 0, stdout: status, stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-task.exit')) {
+          return { exitCode: 0, stdout: '0', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-raw.log')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+      containerStats: vi.fn(),
+    };
+
+    // Token poll interval much longer than status poll interval
+    // means tokens won't be polled every status check
+    const watcher = new TaskWatcher(registry, runtime, {
+      pollInterval: 20,
+      tokenPollInterval: 200, // much longer than poll interval
+    });
+
+    registry.createTask('watch-stack', 'throttled token task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    await new Promise((r) => setTimeout(r, 100));
+
+    const execCalls = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls;
+    const rawLogCallsDuringRunning = execCalls.filter(
+      (call: unknown[]) => Array.isArray(call[1]) && call[1].includes('/tmp/claude-raw.log')
+    );
+    // With throttling, should have fewer raw log reads than status polls
+    // At minimum: 1 during running (first poll triggers immediately) + 1 on completion
+    expect(rawLogCallsDuringRunning.length).toBeGreaterThanOrEqual(1);
+    // But fewer than total status polls (6 running + 1 completed)
+    expect(rawLogCallsDuringRunning.length).toBeLessThan(7);
+
+    watcher.unwatchAll();
+  });
+
   // --- Exponential backoff tests ---
 
   it('applies exponential backoff on exec failures', async () => {
@@ -798,11 +932,11 @@ describe('TaskWatcher', () => {
     watcher.unwatchAll();
   });
 
-  // --- Rate limit event from token reading ---
+  // --- No mid-execution error detection ---
 
-  it('emits task:rate_limited when rate limit detected in raw log', async () => {
+  it('does not emit rate limit events even when raw log contains errors', async () => {
     const rawLogWithRateLimit = [
-      '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded. Resets at 2026-03-26T12:00:00Z"}}',
+      '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}',
     ].join('\n');
 
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
@@ -812,31 +946,49 @@ describe('TaskWatcher', () => {
         if (cmd.includes('/tmp/claude-raw.log')) {
           return { exitCode: 0, stdout: rawLogWithRateLimit, stderr: '' };
         }
-        if (cmd.includes('/tmp/claude-task.stderr')) {
-          return { exitCode: 0, stdout: '', stderr: '' };
-        }
         return origExec(id, cmd);
       }
     );
 
     const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
-    registry.createTask('watch-stack', 'rate limited task');
+    registry.createTask('watch-stack', 'error in log task');
 
     let rateLimitEmitted = false;
-    watcher.on('task:rate_limited', ({ stackId }) => {
-      expect(stackId).toBe('watch-stack');
-      rateLimitEmitted = true;
-    });
+    watcher.on('task:rate_limited', () => { rateLimitEmitted = true; });
 
     await new Promise<void>((resolve) => {
       watcher.on('task:completed', () => resolve());
       watcher.watch('watch-stack', 'container-123');
     });
 
-    // Give async token reading time to complete
     await new Promise((r) => setTimeout(r, 200));
 
-    expect(rateLimitEmitted).toBe(true);
+    // Status is derived from exit code only — no mid-stream error detection
+    expect(rateLimitEmitted).toBe(false);
+    watcher.unwatchAll();
+  });
+
+  it('does not read stderr for error detection', async () => {
+    const runtime = createSequencedRuntime(['running', 'completed'], '0');
+    const origExec = (runtime.exec as ReturnType<typeof vi.fn>).getMockImplementation()!;
+    (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+      async (id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.stderr')) {
+          throw new Error('stderr should not be read for error detection');
+        }
+        return origExec(id, cmd);
+      }
+    );
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'no stderr read task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
     watcher.unwatchAll();
   });
 

@@ -18,6 +18,7 @@ const {
   mockDockerConnectionManager,
   mockCustomContext,
   mockSpawn,
+  mockFetchAccountUsage,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 
@@ -86,6 +87,7 @@ const {
   };
 
   const mockSpawn = vi.fn();
+  const mockFetchAccountUsage = vi.fn();
 
   return {
     registeredHandlers,
@@ -97,6 +99,7 @@ const {
     mockDockerConnectionManager,
     mockCustomContext,
     mockSpawn,
+    mockFetchAccountUsage,
   };
 });
 
@@ -131,6 +134,10 @@ vi.mock('../../src/main/index', () => ({
 }));
 
 vi.mock('../../src/main/custom-context', () => mockCustomContext);
+
+vi.mock('../../src/main/control-plane/account-usage', () => ({
+  fetchAccountUsage: mockFetchAccountUsage,
+}));
 
 vi.mock('child_process', () => ({
   spawn: mockSpawn,
@@ -402,13 +409,6 @@ describe('IPC Handlers', () => {
       expect(result).toEqual(usage);
     });
 
-    it('stats:rate-limit delegates to stackManager.getRateLimitState', async () => {
-      const state = { isLimited: true, resetAt: '2026-03-26T12:00:00Z' };
-      mockStackManager.getRateLimitState.mockReturnValue(state);
-
-      const result = await invokeHandler('stats:rate-limit');
-      expect(result).toEqual(state);
-    });
   });
 
   // =========================================================================
