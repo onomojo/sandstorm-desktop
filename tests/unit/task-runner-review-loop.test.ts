@@ -525,7 +525,7 @@ describe('review-prompt.md template', () => {
   })
 
   it('includes issue category tags for structured output', () => {
-    const tags = ['ARCHITECTURE', 'BEST_PRACTICE', 'SECURITY', 'TEST_COVERAGE', 'BUG']
+    const tags = ['REQUIREMENTS', 'ARCHITECTURE', 'BEST_PRACTICE', 'SECURITY', 'TEST_COVERAGE', 'BUG']
     for (const tag of tags) {
       expect(reviewPrompt).toContain(tag)
     }
@@ -533,6 +533,22 @@ describe('review-prompt.md template', () => {
 
   it('instructs the review agent to be pragmatic', () => {
     expect(reviewPrompt.toLowerCase()).toContain('pragmatic')
+  })
+
+  it('lists requirements compliance as the first review criterion', () => {
+    const reqIndex = reviewPrompt.indexOf('Requirements compliance')
+    const archIndex = reviewPrompt.indexOf('Architecture')
+    expect(reqIndex).toBeGreaterThan(-1)
+    expect(reqIndex).toBeLessThan(archIndex)
+  })
+
+  it('instructs the review agent not to override explicit task approaches', () => {
+    expect(reviewPrompt).toContain('do NOT suggest alternatives')
+  })
+
+  it('instructs the review agent to pay attention to issue comments', () => {
+    expect(reviewPrompt.toLowerCase()).toContain('comments')
+    expect(reviewPrompt).toContain('Requirements evolve')
   })
 })
 

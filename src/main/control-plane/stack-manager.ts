@@ -6,6 +6,7 @@ import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
+import { fetchIssueContext } from './github-issue';
 
 export interface CreateStackOpts {
   name: string;
@@ -366,6 +367,15 @@ export class StackManager {
 
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    // If the stack has a ticket number, fetch the full issue context
+    // (title, body, all comments) and prepend it to the prompt
+    if (stack.ticket) {
+      const issueContext = await fetchIssueContext(stack.ticket, stack.project_dir);
+      if (issueContext) {
+        prompt = `${issueContext}\n\n---\n\n## Task\n\n${prompt}`;
+      }
+    }
 
     const task = this.registry.createTask(stackId, prompt, model);
 
