@@ -1281,4 +1281,99 @@ describe('StackManager', () => {
     });
   });
 
+  describe('getRateLimitState', () => {
+    function makeRateLimitedStack(id: string, reset_at: string | null, error: string | null) {
+      return {
+        ...makeStack(id),
+        status: 'rate_limited' as const,
+        total_input_tokens: 0,
+        total_output_tokens: 0,
+        rate_limit_reset_at: reset_at,
+        error,
+        pr_url: null,
+        pr_number: null,
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+      };
+    }
+
+    it('returns inactive state when no stacks are rate limited', () => {
+      vi.spyOn(registry, 'listStacks').mockReturnValue([]);
+
+      const state = manager.getRateLimitState();
+      expect(state.active).toBe(false);
+      expect(state.reset_at).toBeNull();
+      expect(state.affected_stacks).toEqual([]);
+      expect(state.reason).toBeNull();
+    });
+
+    it('returns active state with reset_at when one stack is rate limited', () => {
+      const resetTime = '2026-03-27T20:00:00.000Z';
+      vi.spyOn(registry, 'listStacks').mockReturnValue([
+        makeRateLimitedStack('rl-1', resetTime, 'Rate limit exceeded'),
+      ]);
+
+      const state = manager.getRateLimitState();
+      expect(state.active).toBe(true);
+      expect(state.reset_at).toBe(resetTime);
+      expect(state.affected_stacks).toEqual(['rl-1']);
+      expect(state.reason).toBe('Rate limit exceeded');
+    });
+
+    it('picks the latest reset_at when multiple stacks are rate limited', () => {
+      const earlier = '2026-03-27T19:00:00.000Z';
+      const later   = '2026-03-27T21:00:00.000Z';
+      vi.spyOn(registry, 'listStacks').mockReturnValue([
+        makeRateLimitedStack('rl-a', earlier, 'first error'),
+        makeRateLimitedStack('rl-b', later, 'second error'),
+      ]);
+
+      const state = manager.getRateLimitState();
+      expect(state.active).toBe(true);
+      expect(state.reset_at).toBe(later);
+      expect(state.affected_stacks).toEqual(expect.arrayContaining(['rl-a', 'rl-b']));
+    });
+
+    it('uses the first rate-limited stack error as the reason', () => {
+      vi.spyOn(registry, 'listStacks').mockReturnValue([
+        makeRateLimitedStack('rl-first', '2026-03-27T20:00:00.000Z', 'first error'),
+        makeRateLimitedStack('rl-second', '2026-03-27T20:30:00.000Z', 'second error'),
+      ]);
+
+      const state = manager.getRateLimitState();
+      expect(state.reason).toBe('first error');
+    });
+
+    it('returns null reset_at when rate-limited stacks have no reset time', () => {
+      vi.spyOn(registry, 'listStacks').mockReturnValue([
+        makeRateLimitedStack('rl-no-time', null, 'some reason'),
+      ]);
+
+      const state = manager.getRateLimitState();
+      expect(state.active).toBe(true);
+      expect(state.reset_at).toBeNull();
+    });
+
+    it('returns null reason when rate-limited stacks have no error', () => {
+      vi.spyOn(registry, 'listStacks').mockReturnValue([
+        makeRateLimitedStack('rl-no-err', '2026-03-27T20:00:00.000Z', null),
+      ]);
+
+      const state = manager.getRateLimitState();
+      expect(state.active).toBe(true);
+      expect(state.reason).toBeNull();
+    });
+
+    it('ignores non-rate-limited stacks', () => {
+      vi.spyOn(registry, 'listStacks').mockReturnValue([
+        { ...makeStack('up-stack'), total_input_tokens: 0, total_output_tokens: 0, rate_limit_reset_at: null, pr_url: null, pr_number: null, created_at: '', updated_at: '' },
+        makeRateLimitedStack('rl-only', '2026-03-27T20:00:00.000Z', null),
+      ]);
+
+      const state = manager.getRateLimitState();
+      expect(state.active).toBe(true);
+      expect(state.affected_stacks).toEqual(['rl-only']);
+    });
+  });
+
 });
