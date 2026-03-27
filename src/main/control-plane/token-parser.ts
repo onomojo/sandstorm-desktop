@@ -73,9 +73,13 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
 /**
  * Detect rate limit errors from Claude CLI output (stdout + stderr).
  * Returns null if no rate limit detected.
+ *
+ * IMPORTANT: Only checks error/system lines — NOT conversation content.
+ * The raw log contains everything the inner Claude writes, so matching
+ * patterns like "rate limit" against the full text causes false positives
+ * when the agent discusses rate limiting in its own output.
  */
 export function parseRateLimit(output: string): ParsedRateLimit | null {
-  // Common rate limit patterns from Claude CLI / API
   const rateLimitPatterns = [
     /rate.?limit/i,
     /usage.?limit/i,
@@ -86,16 +90,65 @@ export function parseRateLimit(output: string): ParsedRateLimit | null {
     /capacity.*exceeded/i,
   ];
 
-  const isRateLimited = rateLimitPatterns.some((pattern) => pattern.test(output));
+  // Extract only error-relevant lines, skipping conversation content.
+  // In stream-json, content_block_delta events carry the agent's text output —
+  // these must be excluded to avoid false positives.
+  const errorLines = extractErrorLines(output);
+  if (errorLines.length === 0) return null;
+
+  const errorText = errorLines.join('\n');
+  const isRateLimited = rateLimitPatterns.some((pattern) => pattern.test(errorText));
   if (!isRateLimited) return null;
 
-  // Try to extract reset time
-  const resetAt = parseResetTime(output);
+  const resetAt = parseResetTime(errorText);
 
   return {
     reset_at: resetAt,
-    reason: extractRateLimitReason(output),
+    reason: extractRateLimitReason(errorText),
   };
+}
+
+/**
+ * Extract only error-relevant lines from Claude CLI output.
+ * Skips content_block_delta (agent text), content_block_start,
+ * and other content-carrying events.
+ */
+function extractErrorLines(output: string): string[] {
+  const errorLines: string[] = [];
+  // Content event types whose text should be ignored
+  const contentTypes = new Set([
+    'content_block_delta',
+    'content_block_start',
+    'content_block_stop',
+    'message_start',
+    'message_delta',
+    'message_stop',
+  ]);
+
+  for (const line of output.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    try {
+      const parsed = JSON.parse(trimmed);
+
+      // Skip content events (agent conversation text)
+      const eventType = parsed.type === 'stream_event'
+        ? parsed.event?.type
+        : parsed.type;
+      if (eventType && contentTypes.has(eventType)) continue;
+
+      // Include error objects and result messages (which may contain error info)
+      if (parsed.error || parsed.type === 'error' || parsed.type === 'result') {
+        errorLines.push(trimmed);
+      }
+    } catch {
+      // Non-JSON line (plain text from stderr) — always include
+      errorLines.push(trimmed);
+    }
+  }
+
+  return errorLines;
 }
 
 /**
