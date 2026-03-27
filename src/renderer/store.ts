@@ -41,6 +41,7 @@ export interface Task {
   stack_id: string;
   prompt: string;
   model: string | null;
+  resolved_model: string | null;
   status: string;
   exit_code: number | null;
   session_id: string | null;

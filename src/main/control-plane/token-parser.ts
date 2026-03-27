@@ -10,6 +10,7 @@ export interface ParsedTokenUsage {
   input_tokens: number;
   output_tokens: number;
   session_id: string | null;
+  resolved_model: string | null;
 }
 
 export interface ParsedRateLimit {
@@ -26,6 +27,7 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
   let inputTokens = 0;
   let outputTokens = 0;
   let sessionId: string | null = null;
+  let resolvedModel: string | null = null;
 
   for (const line of output.split('\n')) {
     if (!line.trim()) continue;
@@ -48,11 +50,16 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
       const event = parsed.type === 'stream_event' ? parsed.event : parsed;
       if (!event) continue;
 
-      // message_start contains input token count
-      if (event.type === 'message_start' && event.message?.usage) {
-        const msgUsage = event.message.usage;
-        if (msgUsage.input_tokens) {
-          inputTokens = msgUsage.input_tokens;
+      // message_start contains input token count and model
+      if (event.type === 'message_start' && event.message) {
+        if (event.message.model && !resolvedModel) {
+          resolvedModel = event.message.model;
+        }
+        if (event.message.usage) {
+          const msgUsage = event.message.usage;
+          if (msgUsage.input_tokens) {
+            inputTokens = msgUsage.input_tokens;
+          }
         }
       }
 
@@ -67,7 +74,7 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
     }
   }
 
-  return { input_tokens: inputTokens, output_tokens: outputTokens, session_id: sessionId };
+  return { input_tokens: inputTokens, output_tokens: outputTokens, session_id: sessionId, resolved_model: resolvedModel };
 }
 
 /**
