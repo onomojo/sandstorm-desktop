@@ -18,6 +18,7 @@ const {
   mockDockerConnectionManager,
   mockCustomContext,
   mockSpawn,
+  mockFetchAccountUsage,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 
@@ -47,6 +48,7 @@ const {
     getStackTaskMetrics: vi.fn(),
     getStackTokenUsage: vi.fn(),
     getGlobalTokenUsage: vi.fn(),
+    getRateLimitState: vi.fn(),
   };
 
   const mockDockerRuntime = {
@@ -85,6 +87,7 @@ const {
   };
 
   const mockSpawn = vi.fn();
+  const mockFetchAccountUsage = vi.fn();
 
   return {
     registeredHandlers,
@@ -96,6 +99,7 @@ const {
     mockDockerConnectionManager,
     mockCustomContext,
     mockSpawn,
+    mockFetchAccountUsage,
   };
 });
 
@@ -130,6 +134,10 @@ vi.mock('../../src/main/index', () => ({
 }));
 
 vi.mock('../../src/main/custom-context', () => mockCustomContext);
+
+vi.mock('../../src/main/control-plane/account-usage', () => ({
+  fetchAccountUsage: mockFetchAccountUsage,
+}));
 
 vi.mock('child_process', () => ({
   spawn: mockSpawn,
@@ -836,6 +844,8 @@ describe('IPC Handlers', () => {
       'stats:task-metrics',
       'stats:token-usage',
       'stats:global-token-usage',
+      'stats:rate-limit',
+      'stats:account-usage',
       'context:get',
       'context:saveInstructions',
       'context:listSkills',

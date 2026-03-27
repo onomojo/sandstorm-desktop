@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent } from '@testing-library/react';
 import { AccountUsageBar } from '../../../src/renderer/components/AccountUsageBar';
@@ -11,19 +11,18 @@ import { mockSandstormApi } from './setup';
 describe('AccountUsageBar', () => {
   beforeEach(() => {
     mockSandstormApi();
-    localStorage.clear();
     useAppStore.setState({
       globalTokenUsage: null,
-      tokenBudget: 0,
+      accountUsage: null,
     });
   });
 
-  it('renders nothing when no usage data', () => {
+  it('renders nothing when no usage data at all', () => {
     const { container } = render(<AccountUsageBar />);
     expect(container.innerHTML).toBe('');
   });
 
-  it('renders token counter when usage exists but no budget', () => {
+  it('renders token counter fallback when only stack usage exists (no account data)', () => {
     useAppStore.setState({
       globalTokenUsage: {
         total_input_tokens: 300000,
@@ -37,30 +36,50 @@ describe('AccountUsageBar', () => {
     expect(screen.getByTestId('usage-counter').textContent).toBe('500.0k');
   });
 
-  it('renders progress bar when budget is set', () => {
+  it('renders progress bar when account usage has a limit', () => {
     useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 300000,
-        total_output_tokens: 200000,
-        total_tokens: 500000,
-        per_stack: [],
+      accountUsage: {
+        used_tokens: 500000,
+        limit_tokens: 1000000,
+        percent: 50,
+        reset_at: null,
+        reset_in: '2h 30m',
+        subscription_type: 'max',
+        rate_limit_tier: 'default_claude_max_5x',
       },
-      tokenBudget: 1000000,
     });
     render(<AccountUsageBar />);
     expect(screen.getByTestId('usage-progress-fill')).toBeDefined();
     expect(screen.getByTestId('usage-percent').textContent).toBe('50%');
   });
 
-  it('caps progress at 100% when over budget', () => {
+  it('shows reset time when available', () => {
     useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 800000,
-        total_output_tokens: 700000,
-        total_tokens: 1500000,
-        per_stack: [],
+      accountUsage: {
+        used_tokens: 500000,
+        limit_tokens: 1000000,
+        percent: 50,
+        reset_at: '2026-03-27T20:00:00.000Z',
+        reset_in: '2h 43m',
+        subscription_type: 'max',
+        rate_limit_tier: 'default_claude_max_5x',
       },
-      tokenBudget: 1000000,
+    });
+    render(<AccountUsageBar />);
+    expect(screen.getByTestId('usage-reset-in').textContent).toBe('2h 43m');
+  });
+
+  it('caps progress at 100% when over limit', () => {
+    useAppStore.setState({
+      accountUsage: {
+        used_tokens: 1500000,
+        limit_tokens: 1000000,
+        percent: 150,
+        reset_at: null,
+        reset_in: null,
+        subscription_type: 'max',
+        rate_limit_tier: null,
+      },
     });
     render(<AccountUsageBar />);
     expect(screen.getByTestId('usage-percent').textContent).toBe('100%');
@@ -68,106 +87,67 @@ describe('AccountUsageBar', () => {
     expect(fill.style.width).toBe('100%');
   });
 
-  it('opens budget popover on click', () => {
+  it('opens usage popover on click', () => {
     useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_tokens: 0,
-        per_stack: [],
+      accountUsage: {
+        used_tokens: 500000,
+        limit_tokens: 1000000,
+        percent: 50,
+        reset_at: null,
+        reset_in: '2h 30m',
+        subscription_type: 'max',
+        rate_limit_tier: null,
       },
     });
     render(<AccountUsageBar />);
-    expect(screen.queryByTestId('budget-popover')).toBeNull();
+    expect(screen.queryByTestId('usage-popover')).toBeNull();
     fireEvent.click(screen.getByTestId('usage-bar-button'));
-    expect(screen.getByTestId('budget-popover')).toBeDefined();
+    expect(screen.getByTestId('usage-popover')).toBeDefined();
   });
 
-  it('sets budget from preset button', () => {
+  it('shows account details in popover', () => {
     useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 100000,
-        total_output_tokens: 50000,
-        total_tokens: 150000,
-        per_stack: [],
+      accountUsage: {
+        used_tokens: 500000,
+        limit_tokens: 1000000,
+        percent: 50,
+        reset_at: '2026-03-27T20:00:00.000Z',
+        reset_in: '2h 43m',
+        subscription_type: 'max',
+        rate_limit_tier: 'default_claude_max_5x',
       },
-    });
-    render(<AccountUsageBar />);
-    fireEvent.click(screen.getByTestId('usage-bar-button'));
-    fireEvent.click(screen.getByTestId('budget-preset-1000000'));
-
-    // Popover should close
-    expect(screen.queryByTestId('budget-popover')).toBeNull();
-    // Budget should be set
-    expect(useAppStore.getState().tokenBudget).toBe(1000000);
-    // Should now show progress bar
-    expect(screen.getByTestId('usage-progress-fill')).toBeDefined();
-    expect(screen.getByTestId('usage-percent').textContent).toBe('15%');
-  });
-
-  it('sets custom budget with shorthand notation', () => {
-    useAppStore.setState({
       globalTokenUsage: {
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_tokens: 0,
+        total_input_tokens: 200000,
+        total_output_tokens: 100000,
+        total_tokens: 300000,
         per_stack: [],
       },
     });
     render(<AccountUsageBar />);
     fireEvent.click(screen.getByTestId('usage-bar-button'));
 
-    const input = screen.getByTestId('custom-budget-input');
-    fireEvent.change(input, { target: { value: '2M' } });
-    fireEvent.submit(input.closest('form')!);
-
-    expect(useAppStore.getState().tokenBudget).toBe(2000000);
-  });
-
-  it('clears budget when clear button is clicked', () => {
-    useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 100000,
-        total_output_tokens: 50000,
-        total_tokens: 150000,
-        per_stack: [],
-      },
-      tokenBudget: 1000000,
-    });
-    render(<AccountUsageBar />);
-    fireEvent.click(screen.getByTestId('usage-bar-button'));
-    fireEvent.click(screen.getByTestId('clear-budget'));
-
-    expect(useAppStore.getState().tokenBudget).toBe(0);
-    // Should switch back to counter mode
-    expect(screen.getByTestId('usage-counter')).toBeDefined();
-  });
-
-  it('persists budget to localStorage', () => {
-    useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 0,
-        total_output_tokens: 0,
-        total_tokens: 0,
-        per_stack: [],
-      },
-    });
-    render(<AccountUsageBar />);
-    fireEvent.click(screen.getByTestId('usage-bar-button'));
-    fireEvent.click(screen.getByTestId('budget-preset-5000000'));
-
-    expect(localStorage.getItem('sandstorm-token-budget')).toBe('5000000');
+    const popover = screen.getByTestId('usage-popover');
+    expect(popover.textContent).toContain('Account Usage');
+    expect(popover.textContent).toContain('500.0k');
+    expect(popover.textContent).toContain('1.00M');
+    expect(popover.textContent).toContain('Max');
+    expect(popover.textContent).toContain('2h 43m');
+    // Session tokens section
+    expect(popover.textContent).toContain('Session Tokens');
+    expect(popover.textContent).toContain('300.0k');
   });
 
   it('shows correct color for high usage (red at 90%+)', () => {
     useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 500000,
-        total_output_tokens: 450000,
-        total_tokens: 950000,
-        per_stack: [],
+      accountUsage: {
+        used_tokens: 950000,
+        limit_tokens: 1000000,
+        percent: 95,
+        reset_at: null,
+        reset_in: null,
+        subscription_type: 'max',
+        rate_limit_tier: null,
       },
-      tokenBudget: 1000000,
     });
     render(<AccountUsageBar />);
     const fill = screen.getByTestId('usage-progress-fill');
@@ -178,13 +158,15 @@ describe('AccountUsageBar', () => {
 
   it('shows correct color for medium usage (yellow at 50-74%)', () => {
     useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 300000,
-        total_output_tokens: 300000,
-        total_tokens: 600000,
-        per_stack: [],
+      accountUsage: {
+        used_tokens: 600000,
+        limit_tokens: 1000000,
+        percent: 60,
+        reset_at: null,
+        reset_in: null,
+        subscription_type: 'max',
+        rate_limit_tier: null,
       },
-      tokenBudget: 1000000,
     });
     render(<AccountUsageBar />);
     const fill = screen.getByTestId('usage-progress-fill');
@@ -193,36 +175,59 @@ describe('AccountUsageBar', () => {
 
   it('shows correct color for low usage (green at <50%)', () => {
     useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 100000,
-        total_output_tokens: 100000,
-        total_tokens: 200000,
-        per_stack: [],
+      accountUsage: {
+        used_tokens: 200000,
+        limit_tokens: 1000000,
+        percent: 20,
+        reset_at: null,
+        reset_in: null,
+        subscription_type: 'max',
+        rate_limit_tier: null,
       },
-      tokenBudget: 1000000,
     });
     render(<AccountUsageBar />);
     const fill = screen.getByTestId('usage-progress-fill');
     expect(fill.className).toContain('bg-emerald-500');
   });
 
-  it('displays usage breakdown in popover', () => {
+  it('shows correct color for orange usage (75-89%)', () => {
     useAppStore.setState({
-      globalTokenUsage: {
-        total_input_tokens: 300000,
-        total_output_tokens: 200000,
-        total_tokens: 500000,
-        per_stack: [],
+      accountUsage: {
+        used_tokens: 800000,
+        limit_tokens: 1000000,
+        percent: 80,
+        reset_at: null,
+        reset_in: null,
+        subscription_type: 'max',
+        rate_limit_tier: null,
       },
-      tokenBudget: 1000000,
     });
     render(<AccountUsageBar />);
-    fireEvent.click(screen.getByTestId('usage-bar-button'));
+    const fill = screen.getByTestId('usage-progress-fill');
+    expect(fill.className).toContain('bg-orange-500');
+  });
 
-    const popover = screen.getByTestId('budget-popover');
-    expect(popover.textContent).toContain('500.0k');
-    expect(popover.textContent).toContain('300.0k');
-    expect(popover.textContent).toContain('200.0k');
-    expect(popover.textContent).toContain('1.00M'); // budget
+  it('falls back to counter when account usage has no limit', () => {
+    useAppStore.setState({
+      accountUsage: {
+        used_tokens: 0,
+        limit_tokens: 0,
+        percent: 0,
+        reset_at: null,
+        reset_in: null,
+        subscription_type: 'max',
+        rate_limit_tier: null,
+      },
+      globalTokenUsage: {
+        total_input_tokens: 100000,
+        total_output_tokens: 50000,
+        total_tokens: 150000,
+        per_stack: [],
+      },
+    });
+    render(<AccountUsageBar />);
+    // Should show counter since account usage has no limit
+    expect(screen.getByTestId('usage-counter')).toBeDefined();
+    expect(screen.getByTestId('usage-counter').textContent).toBe('150.0k');
   });
 });

@@ -12,6 +12,7 @@ import {
   dockerConnectionManager,
 } from './index';
 import { CreateStackOpts } from './control-plane/stack-manager';
+import { fetchAccountUsage } from './control-plane/account-usage';
 import {
   getCustomContext,
   saveCustomInstructions,
@@ -365,6 +366,14 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stats:global-token-usage', async () => {
     return stackManager.getGlobalTokenUsage();
+  });
+
+  ipcMain.handle('stats:rate-limit', async () => {
+    return stackManager.getRateLimitState();
+  });
+
+  ipcMain.handle('stats:account-usage', async () => {
+    return fetchAccountUsage();
   });
 
   // --- Custom Context ---

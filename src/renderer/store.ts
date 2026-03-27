@@ -67,6 +67,23 @@ export interface GlobalTokenUsage {
   per_stack: TokenUsageStats[];
 }
 
+export interface RateLimitState {
+  active: boolean;
+  reset_at: string | null;
+  affected_stacks: string[];
+  reason: string | null;
+}
+
+export interface AccountUsage {
+  used_tokens: number;
+  limit_tokens: number;
+  percent: number;
+  reset_at: string | null;
+  reset_in: string | null;
+  subscription_type: string | null;
+  rate_limit_tier: string | null;
+}
+
 export interface PortMapping {
   stack_id: string;
   service: string;
@@ -134,6 +151,8 @@ interface AppState {
 
   // Token usage
   globalTokenUsage: GlobalTokenUsage | null;
+  rateLimitState: RateLimitState | null;
+  accountUsage: AccountUsage | null;
 
   // Account usage budget (persisted in localStorage)
   tokenBudget: number; // 0 means no budget set
@@ -160,6 +179,8 @@ interface AppState {
   refreshStackHistory: () => Promise<void>;
   refreshMetrics: () => Promise<void>;
   refreshTokenUsage: () => Promise<void>;
+  refreshRateLimitState: () => Promise<void>;
+  refreshAccountUsage: () => Promise<void>;
 
   // Derived
   filteredStacks: () => Stack[];
@@ -210,6 +231,8 @@ declare global {
         taskMetrics: (stackId: string) => Promise<TaskMetrics>;
         tokenUsage: (stackId: string) => Promise<TokenUsageStats>;
         globalTokenUsage: () => Promise<GlobalTokenUsage>;
+        rateLimit: () => Promise<RateLimitState>;
+        accountUsage: () => Promise<AccountUsage | null>;
       };
       runtime: {
         available: () => Promise<{ docker: boolean; podman: boolean }>;
@@ -263,6 +286,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Token usage
   globalTokenUsage: null,
+  rateLimitState: null,
+  accountUsage: null,
 
   // Account usage budget
   tokenBudget: (() => {
@@ -359,8 +384,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({ stackMetrics: metrics });
 
-      // Also refresh token usage
-      await get().refreshTokenUsage();
+      // Also refresh token usage, rate limit state, and account usage in parallel
+      await Promise.all([
+        get().refreshTokenUsage(),
+        get().refreshRateLimitState(),
+        get().refreshAccountUsage(),
+      ]);
     } catch {
       // Metrics refresh failure is non-fatal
     }
@@ -375,6 +404,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
+
+  refreshRateLimitState: async () => {
+    try {
+      const rateLimitState = await window.sandstorm.stats.rateLimit();
+      set({ rateLimitState });
+    } catch {
+      // Rate limit state refresh failure is non-fatal
+    }
+  },
+
+  refreshAccountUsage: async () => {
+    try {
+      const accountUsage = await window.sandstorm.stats.accountUsage();
+      if (accountUsage) {
+        set({ accountUsage });
+      }
+    } catch {
+      // Account usage refresh failure is non-fatal
+    }
+  },
 
   // Derived
   filteredStacks: () => {

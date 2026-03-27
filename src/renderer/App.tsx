@@ -15,6 +15,8 @@ const STACK_POLL_INTERVAL = 3000;
 const STACK_POLL_INTERVAL_DISCONNECTED = 10_000;
 /** Metrics polling interval (ms) */
 const METRICS_POLL_INTERVAL = 15_000;
+/** Account usage polling interval (ms) — polls independently of Docker status */
+const ACCOUNT_USAGE_POLL_INTERVAL = 30_000;
 
 export default function App() {
   const {
@@ -26,6 +28,7 @@ export default function App() {
     refreshProjects,
     refreshStackHistory,
     refreshMetrics,
+    refreshAccountUsage,
     selectStack,
     setDockerConnected,
     error,
@@ -53,6 +56,13 @@ export default function App() {
       unsubDisconnected();
     };
   }, [setDockerConnected, refreshStacks, refreshMetrics]);
+
+  // Poll account usage independently of Docker — it's account-level, not stack-level
+  useEffect(() => {
+    refreshAccountUsage();
+    const interval = setInterval(refreshAccountUsage, ACCOUNT_USAGE_POLL_INTERVAL);
+    return () => clearInterval(interval);
+  }, [refreshAccountUsage]);
 
   useEffect(() => {
     refreshProjects();

@@ -2,8 +2,6 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useAppStore } from '../store';
 import { formatTokenCount } from '../utils/format';
 
-const BUDGET_PRESETS = [500_000, 1_000_000, 5_000_000, 10_000_000, 50_000_000];
-
 function getBarColor(percent: number): string {
   if (percent < 50) return 'bg-emerald-500';
   if (percent < 75) return 'bg-yellow-500';
@@ -18,10 +16,20 @@ function getTextColor(percent: number): string {
   return 'text-red-400';
 }
 
+function formatTierLabel(tier: string | null, sub: string | null): string {
+  if (sub === 'max') return 'Max';
+  if (sub === 'pro') return 'Pro';
+  if (tier) {
+    // e.g. "default_claude_max_5x" -> "Max 5x"
+    const match = tier.match(/(\w+)_(\d+x)$/);
+    if (match) return `${match[1].charAt(0).toUpperCase() + match[1].slice(1)} ${match[2]}`;
+  }
+  return sub ?? 'Unknown';
+}
+
 export function AccountUsageBar() {
-  const { globalTokenUsage, tokenBudget, setTokenBudget } = useAppStore();
+  const { accountUsage, globalTokenUsage } = useAppStore();
   const [showPopover, setShowPopover] = useState(false);
-  const [customBudget, setCustomBudget] = useState('');
   const popoverRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
 
@@ -40,36 +48,22 @@ export function AccountUsageBar() {
     return () => document.removeEventListener('mousedown', handler);
   }, [showPopover]);
 
-  const totalTokens = globalTokenUsage?.total_tokens ?? 0;
-  const hasBudget = tokenBudget > 0;
-  const percent = hasBudget ? Math.min((totalTokens / tokenBudget) * 100, 100) : 0;
+  // If we have account usage from the API with a real limit, use that.
+  // Otherwise fall back to showing aggregated stack token usage.
+  const hasAccountData = accountUsage && accountUsage.limit_tokens > 0;
+  const hasStackData = globalTokenUsage && globalTokenUsage.total_tokens > 0;
 
-  const handleSetBudget = (value: number) => {
-    setTokenBudget(value);
-    setShowPopover(false);
-    setCustomBudget('');
-  };
+  // Nothing to show at all
+  if (!hasAccountData && !hasStackData && !accountUsage) return null;
 
-  const handleCustomSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    const parsed = parseFloat(customBudget);
-    if (!isNaN(parsed) && parsed > 0) {
-      // Support shorthand: "1M", "500k", or raw numbers
-      let value = parsed;
-      const lower = customBudget.toLowerCase().trim();
-      if (lower.endsWith('m')) {
-        value = parseFloat(lower) * 1_000_000;
-      } else if (lower.endsWith('k')) {
-        value = parseFloat(lower) * 1_000;
-      }
-      if (value > 0) {
-        handleSetBudget(Math.round(value));
-      }
-    }
-  };
-
-  // Don't render anything if no usage data yet
-  if (!globalTokenUsage) return null;
+  const percent = hasAccountData ? Math.min(accountUsage.percent, 100) : 0;
+  const usedTokens = hasAccountData ? accountUsage.used_tokens : (globalTokenUsage?.total_tokens ?? 0);
+  const limitTokens = hasAccountData ? accountUsage.limit_tokens : 0;
+  const resetIn = hasAccountData ? accountUsage.reset_in : null;
+  const tierLabel = formatTierLabel(
+    accountUsage?.rate_limit_tier ?? null,
+    accountUsage?.subscription_type ?? null
+  );
 
   return (
     <div className="titlebar-no-drag relative flex items-center" data-testid="account-usage-bar">
@@ -77,7 +71,9 @@ export function AccountUsageBar() {
         ref={buttonRef}
         onClick={() => setShowPopover(!showPopover)}
         className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-sandstorm-surface-hover transition-colors group"
-        title={`Total tokens: ${totalTokens.toLocaleString()}${hasBudget ? ` / ${tokenBudget.toLocaleString()} budget` : ''}\nInput: ${(globalTokenUsage.total_input_tokens ?? 0).toLocaleString()}\nOutput: ${(globalTokenUsage.total_output_tokens ?? 0).toLocaleString()}\nClick to set budget`}
+        title={hasAccountData
+          ? `Usage: ${formatTokenCount(usedTokens)} / ${formatTokenCount(limitTokens)} (${Math.round(percent)}%)${resetIn ? `\nResets in ${resetIn}` : ''}`
+          : `Stack tokens: ${(globalTokenUsage?.total_tokens ?? 0).toLocaleString()}`}
         data-testid="usage-bar-button"
       >
         {/* Token icon */}
@@ -85,8 +81,8 @@ export function AccountUsageBar() {
           <path d="M12 2L2 7l10 5 10-5-10-5z"/><path d="M2 17l10 5 10-5"/><path d="M2 12l10 5 10-5"/>
         </svg>
 
-        {hasBudget ? (
-          /* Progress bar mode */
+        {hasAccountData ? (
+          /* Account rate limit progress bar */
           <div className="flex items-center gap-1.5">
             <div className="w-16 h-1.5 bg-sandstorm-border rounded-full overflow-hidden">
               <div
@@ -98,92 +94,108 @@ export function AccountUsageBar() {
             <span className={`text-[10px] tabular-nums font-medium ${getTextColor(percent)}`} data-testid="usage-percent">
               {Math.round(percent)}%
             </span>
+            {resetIn && (
+              <span className="text-[10px] tabular-nums text-sandstorm-muted" data-testid="usage-reset-in">
+                {resetIn}
+              </span>
+            )}
           </div>
         ) : (
-          /* Counter mode (no budget set) */
+          /* Fallback: show stack token counter */
           <span className="text-[10px] tabular-nums text-sandstorm-muted group-hover:text-sandstorm-text-secondary transition-colors" data-testid="usage-counter">
-            {formatTokenCount(totalTokens)}
+            {formatTokenCount(globalTokenUsage?.total_tokens ?? 0)}
           </span>
         )}
       </button>
 
-      {/* Budget popover */}
+      {/* Usage detail popover */}
       {showPopover && (
         <div
           ref={popoverRef}
-          className="absolute top-full right-0 mt-1 w-56 bg-sandstorm-surface border border-sandstorm-border rounded-lg shadow-xl z-50 p-3"
-          data-testid="budget-popover"
+          className="absolute top-full right-0 mt-1 w-60 bg-sandstorm-surface border border-sandstorm-border rounded-lg shadow-xl z-50 p-3"
+          data-testid="usage-popover"
         >
-          <div className="text-[11px] font-semibold text-sandstorm-text mb-2">Token Budget</div>
+          <div className="text-[11px] font-semibold text-sandstorm-text mb-2">
+            Account Usage
+          </div>
 
-          {/* Current usage summary */}
-          <div className="text-[10px] text-sandstorm-muted mb-3 space-y-0.5">
-            <div className="flex justify-between">
-              <span>Total used</span>
-              <span className="text-sandstorm-text-secondary tabular-nums">{formatTokenCount(totalTokens)}</span>
+          {/* Account rate limit info */}
+          {hasAccountData && (
+            <div className="mb-3">
+              {/* Large progress bar */}
+              <div className="w-full h-2 bg-sandstorm-border rounded-full overflow-hidden mb-1.5">
+                <div
+                  className={`h-full rounded-full transition-all duration-500 ${getBarColor(percent)}`}
+                  style={{ width: `${percent}%` }}
+                  data-testid="popover-progress-fill"
+                />
+              </div>
+              <div className="flex justify-between text-[10px]">
+                <span className={`tabular-nums font-medium ${getTextColor(percent)}`}>
+                  {formatTokenCount(usedTokens)} / {formatTokenCount(limitTokens)}
+                </span>
+                <span className="text-sandstorm-muted tabular-nums">
+                  {Math.round(percent)}%
+                </span>
+              </div>
             </div>
-            <div className="flex justify-between">
-              <span>Input</span>
-              <span className="tabular-nums">{formatTokenCount(globalTokenUsage.total_input_tokens)}</span>
-            </div>
-            <div className="flex justify-between">
-              <span>Output</span>
-              <span className="tabular-nums">{formatTokenCount(globalTokenUsage.total_output_tokens)}</span>
-            </div>
-            {hasBudget && (
-              <div className="flex justify-between pt-1 border-t border-sandstorm-border">
-                <span>Budget</span>
-                <span className="text-sandstorm-text-secondary tabular-nums">{formatTokenCount(tokenBudget)}</span>
+          )}
+
+          {/* Details */}
+          <div className="text-[10px] text-sandstorm-muted space-y-0.5">
+            {accountUsage?.subscription_type && (
+              <div className="flex justify-between">
+                <span>Plan</span>
+                <span className="text-sandstorm-text-secondary">{tierLabel}</span>
+              </div>
+            )}
+            {hasAccountData && (
+              <>
+                <div className="flex justify-between">
+                  <span>Used</span>
+                  <span className="text-sandstorm-text-secondary tabular-nums">{formatTokenCount(usedTokens)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Limit</span>
+                  <span className="text-sandstorm-text-secondary tabular-nums">{formatTokenCount(limitTokens)}</span>
+                </div>
+              </>
+            )}
+            {resetIn && (
+              <div className="flex justify-between">
+                <span>Resets in</span>
+                <span className="text-sandstorm-text-secondary" data-testid="popover-reset-in">{resetIn}</span>
+              </div>
+            )}
+            {accountUsage?.reset_at && (
+              <div className="flex justify-between">
+                <span>Resets at</span>
+                <span className="text-sandstorm-text-secondary tabular-nums">
+                  {new Date(accountUsage.reset_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                </span>
               </div>
             )}
           </div>
 
-          {/* Preset buttons */}
-          <div className="text-[10px] text-sandstorm-muted mb-1.5">Set budget</div>
-          <div className="flex flex-wrap gap-1 mb-2">
-            {BUDGET_PRESETS.map((preset) => (
-              <button
-                key={preset}
-                onClick={() => handleSetBudget(preset)}
-                className={`px-2 py-0.5 text-[10px] rounded-md border transition-colors ${
-                  tokenBudget === preset
-                    ? 'bg-sandstorm-accent/15 border-sandstorm-accent/30 text-sandstorm-accent'
-                    : 'bg-sandstorm-bg border-sandstorm-border text-sandstorm-muted hover:text-sandstorm-text-secondary hover:border-sandstorm-border-light'
-                }`}
-                data-testid={`budget-preset-${preset}`}
-              >
-                {formatTokenCount(preset)}
-              </button>
-            ))}
-          </div>
-
-          {/* Custom input */}
-          <form onSubmit={handleCustomSubmit} className="flex gap-1">
-            <input
-              type="text"
-              value={customBudget}
-              onChange={(e) => setCustomBudget(e.target.value)}
-              placeholder="e.g. 2M, 500k"
-              className="flex-1 bg-sandstorm-bg border border-sandstorm-border rounded-md px-2 py-1 text-[10px] text-sandstorm-text placeholder:text-sandstorm-muted/50 focus:outline-none focus:border-sandstorm-accent/50"
-              data-testid="custom-budget-input"
-            />
-            <button
-              type="submit"
-              className="px-2 py-1 text-[10px] bg-sandstorm-accent/15 text-sandstorm-accent rounded-md hover:bg-sandstorm-accent/25 transition-colors"
-            >
-              Set
-            </button>
-          </form>
-
-          {/* Clear budget */}
-          {hasBudget && (
-            <button
-              onClick={() => handleSetBudget(0)}
-              className="mt-2 w-full text-[10px] text-sandstorm-muted hover:text-red-400 transition-colors text-center"
-              data-testid="clear-budget"
-            >
-              Clear budget
-            </button>
+          {/* Stack usage section */}
+          {globalTokenUsage && globalTokenUsage.total_tokens > 0 && (
+            <div className="mt-3 pt-2 border-t border-sandstorm-border">
+              <div className="text-[10px] text-sandstorm-muted mb-1 font-medium">Session Tokens</div>
+              <div className="text-[10px] text-sandstorm-muted space-y-0.5">
+                <div className="flex justify-between">
+                  <span>Total</span>
+                  <span className="text-sandstorm-text-secondary tabular-nums">{formatTokenCount(globalTokenUsage.total_tokens)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Input</span>
+                  <span className="tabular-nums">{formatTokenCount(globalTokenUsage.total_input_tokens)}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span>Output</span>
+                  <span className="tabular-nums">{formatTokenCount(globalTokenUsage.total_output_tokens)}</span>
+                </div>
+              </div>
+            </div>
           )}
         </div>
       )}
