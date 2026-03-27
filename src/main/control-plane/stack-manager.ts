@@ -69,6 +69,13 @@ export interface GlobalTokenUsage {
   per_stack: TokenUsageStats[];
 }
 
+export interface RateLimitState {
+  active: boolean;
+  reset_at: string | null;
+  affected_stacks: string[];
+  reason: string | null;
+}
+
 /**
  * Sanitize a string for use in Docker Compose project names.
  * Compose project names must consist only of lowercase alphanumeric characters,
@@ -648,6 +655,35 @@ export class StackManager {
       total_output_tokens: totalOutput,
       total_tokens: totalInput + totalOutput,
       per_stack: perStack.sort((a, b) => b.total_tokens - a.total_tokens),
+    };
+  }
+
+  getRateLimitState(): RateLimitState {
+    const stacks = this.registry.listStacks();
+    const rateLimitedStacks = stacks.filter(s => s.status === 'rate_limited');
+
+    if (rateLimitedStacks.length === 0) {
+      return { active: false, reset_at: null, affected_stacks: [], reason: null };
+    }
+
+    // Find the latest reset_at among all rate-limited stacks
+    const resetTimes = rateLimitedStacks
+      .map(s => s.rate_limit_reset_at)
+      .filter((t): t is string => t !== null);
+    const reset_at = resetTimes.length > 0
+      ? resetTimes.reduce((latest, t) => (t > latest ? t : latest))
+      : null;
+
+    const reasons = rateLimitedStacks
+      .map(s => s.error)
+      .filter((e): e is string => e !== null);
+    const reason = reasons.length > 0 ? reasons[0] : null;
+
+    return {
+      active: true,
+      reset_at,
+      affected_stacks: rateLimitedStacks.map(s => s.id),
+      reason,
     };
   }
 

@@ -13,5 +13,8 @@ export default defineConfig({
       '@renderer': path.resolve(__dirname, 'src/renderer'),
       '@main': path.resolve(__dirname, 'src/main'),
     },
+    cache: {
+      dir: '/tmp/vitest-cache',
+    },
   },
 });

@@ -32,7 +32,7 @@ const DOCKER_HEADER_SIZE = 8;
  */
 export function demuxDockerStream(buf: Buffer): {
   frames: Array<{ type: number; content: string }>;
-  remainder: Buffer;
+  remainder: Buffer<ArrayBuffer>;
 } {
   const frames: Array<{ type: number; content: string }> = [];
   let offset = 0;
@@ -55,7 +55,7 @@ export function demuxDockerStream(buf: Buffer): {
     offset += DOCKER_HEADER_SIZE + frameSize;
   }
 
-  const remainder = offset < buf.length ? buf.subarray(offset) : Buffer.alloc(0);
+  const remainder = offset < buf.length ? Buffer.from(buf.subarray(offset)) : Buffer.alloc(0);
   return { frames, remainder };
 }
 
