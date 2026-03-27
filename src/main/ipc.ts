@@ -367,10 +367,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return stackManager.getGlobalTokenUsage();
   });
 
-  ipcMain.handle('stats:rate-limit', async () => {
-    return stackManager.getRateLimitState();
-  });
-
   // --- Custom Context ---
 
   ipcMain.handle('context:get', async (_event, projectDir: string) => {

@@ -41,7 +41,6 @@ export interface SandstormAPI {
     taskMetrics: (stackId: string) => Promise<unknown>;
     tokenUsage: (stackId: string) => Promise<unknown>;
     globalTokenUsage: () => Promise<unknown>;
-    rateLimit: () => Promise<unknown>;
   };
   runtime: {
     available: () => Promise<{ docker: boolean; podman: boolean }>;
@@ -117,7 +116,6 @@ const api: SandstormAPI = {
     taskMetrics: (stackId) => ipcRenderer.invoke('stats:task-metrics', stackId),
     tokenUsage: (stackId) => ipcRenderer.invoke('stats:token-usage', stackId),
     globalTokenUsage: () => ipcRenderer.invoke('stats:global-token-usage'),
-    rateLimit: () => ipcRenderer.invoke('stats:rate-limit'),
   },
   runtime: {
     available: () => ipcRenderer.invoke('runtime:available'),

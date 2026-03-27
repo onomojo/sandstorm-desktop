@@ -47,7 +47,6 @@ const {
     getStackTaskMetrics: vi.fn(),
     getStackTokenUsage: vi.fn(),
     getGlobalTokenUsage: vi.fn(),
-    getRateLimitState: vi.fn(),
   };
 
   const mockDockerRuntime = {
@@ -402,13 +401,6 @@ describe('IPC Handlers', () => {
       expect(result).toEqual(usage);
     });
 
-    it('stats:rate-limit delegates to stackManager.getRateLimitState', async () => {
-      const state = { isLimited: true, resetAt: '2026-03-26T12:00:00Z' };
-      mockStackManager.getRateLimitState.mockReturnValue(state);
-
-      const result = await invokeHandler('stats:rate-limit');
-      expect(result).toEqual(state);
-    });
   });
 
   // =========================================================================
@@ -844,7 +836,6 @@ describe('IPC Handlers', () => {
       'stats:task-metrics',
       'stats:token-usage',
       'stats:global-token-usage',
-      'stats:rate-limit',
       'context:get',
       'context:saveInstructions',
       'context:listSkills',

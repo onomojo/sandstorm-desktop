@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { useAppStore, StackHistoryRecord, GlobalTokenUsage, RateLimitState } from '../store';
+import { useAppStore, StackHistoryRecord, GlobalTokenUsage } from '../store';
 import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
 import { TicketView } from './TicketView';
@@ -124,49 +124,6 @@ function HistoryCard({ record, showProject }: { record: StackHistoryRecord; show
   );
 }
 
-function RateLimitBanner({ rateLimitState }: { rateLimitState: RateLimitState }) {
-  const [countdown, setCountdown] = useState('');
-
-  useEffect(() => {
-    if (!rateLimitState.reset_at) return;
-
-    const update = () => {
-      const now = Date.now();
-      const reset = new Date(rateLimitState.reset_at!).getTime();
-      const diff = reset - now;
-      if (diff <= 0) {
-        setCountdown('resuming...');
-        return;
-      }
-      const mins = Math.floor(diff / 60000);
-      const secs = Math.floor((diff % 60000) / 1000);
-      setCountdown(mins > 0 ? `${mins}m ${secs}s` : `${secs}s`);
-    };
-
-    update();
-    const interval = setInterval(update, 1000);
-    return () => clearInterval(interval);
-  }, [rateLimitState.reset_at]);
-
-  return (
-    <div className="px-6 py-2 bg-orange-500/10 border-b border-orange-500/20 flex items-center gap-3 text-xs shrink-0" data-testid="rate-limit-banner">
-      <div className="w-2 h-2 rounded-full bg-orange-400 animate-pulse shrink-0" />
-      <span className="font-semibold text-orange-400">Rate Limit Active</span>
-      {rateLimitState.reason && (
-        <span className="text-orange-300/70 truncate max-w-[300px]">{rateLimitState.reason}</span>
-      )}
-      {rateLimitState.reset_at && (
-        <span className="text-orange-400 tabular-nums ml-auto shrink-0">
-          Resumes in {countdown}
-        </span>
-      )}
-      <span className="text-orange-300/50">
-        {rateLimitState.affected_stacks.length} stack{rateLimitState.affected_stacks.length !== 1 ? 's' : ''} affected
-      </span>
-    </div>
-  );
-}
-
 function TokenUsageSummary({ usage }: { usage: GlobalTokenUsage }) {
   if (usage.total_tokens === 0) return null;
 
@@ -186,7 +143,7 @@ function TokenUsageSummary({ usage }: { usage: GlobalTokenUsage }) {
 }
 
 export function Dashboard() {
-  const { setShowNewStackDialog, filteredStacks, filteredStackHistory, activeProject, globalTokenUsage, rateLimitState } = useAppStore();
+  const { setShowNewStackDialog, filteredStacks, filteredStackHistory, activeProject, globalTokenUsage } = useAppStore();
   const stacks = filteredStacks();
   const history = filteredStackHistory();
   const project = activeProject();
@@ -328,9 +285,6 @@ export function Dashboard() {
           </button>
         </div>
       </div>
-
-      {/* Rate limit banner */}
-      {rateLimitState?.active && <RateLimitBanner rateLimitState={rateLimitState} />}
 
       {/* Two-column layout: Claude chat (left) + Stacks (right) */}
       <div className="flex-1 flex min-h-0" ref={containerRef}>
