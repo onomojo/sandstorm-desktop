@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { Registry, Task } from './registry';
 import { ContainerRuntime } from '../runtime/types';
-import { parseTokenUsage, parseRateLimit, ParsedRateLimit } from './token-parser';
+import { parseTokenUsage, parseHttpError, ParsedRateLimit, ParsedHttpError } from './token-parser';
 
 export interface TaskEvents {
   'task:started': { stackId: string; task: Task };
@@ -9,6 +9,8 @@ export interface TaskEvents {
   'task:failed': { stackId: string; task: Task };
   'task:output': { stackId: string; taskId: number; data: string };
   'task:rate_limited': { stackId: string; rateLimit: ParsedRateLimit };
+  'task:auth_required': { stackId: string; error: ParsedHttpError };
+  'task:server_error': { stackId: string; error: ParsedHttpError };
 }
 
 /** Max consecutive exec failures before marking a task as failed */
@@ -133,14 +135,15 @@ export class TaskWatcher extends EventEmitter {
 
   /**
    * Read token usage from the task log file inside the container.
-   * Also detects rate limit errors and emits events accordingly.
+   * Also detects HTTP errors (rate limits, auth failures, server errors)
+   * and emits typed events accordingly.
    */
   private async readTaskTokens(
     taskId: number,
     stackId: string,
     containerId: string
   ): Promise<void> {
-    let rateLimitEmitted = false;
+    let errorEmitted = false;
 
     try {
       const result = await this.runtime.exec(containerId, [
@@ -164,32 +167,52 @@ export class TaskWatcher extends EventEmitter {
         this.registry.updateTaskResolvedModel(taskId, usage.resolved_model);
       }
 
-      // Check for rate limit errors
-      const rateLimit = parseRateLimit(output);
-      if (rateLimit) {
-        this.emit('task:rate_limited', { stackId, rateLimit });
-        rateLimitEmitted = true;
-        this.onStatusChange?.();
+      // Check for HTTP errors in structured stream-json output
+      const httpError = parseHttpError(output);
+      if (httpError) {
+        this.emitHttpError(stackId, httpError);
+        errorEmitted = true;
       }
     } catch {
       // Best effort — container may be unreachable
     }
 
-    // Also check stderr for rate limit info (skip if already detected)
-    if (!rateLimitEmitted) {
+    // Also check stderr for error info (skip if already detected)
+    if (!errorEmitted) {
       try {
         const stderrResult = await this.runtime.exec(containerId, [
           'cat', '/tmp/claude-task.stderr',
         ]);
-        const rateLimit = parseRateLimit(stderrResult.stdout);
-        if (rateLimit) {
-          this.emit('task:rate_limited', { stackId, rateLimit });
-          this.onStatusChange?.();
+        const httpError = parseHttpError(stderrResult.stdout);
+        if (httpError) {
+          this.emitHttpError(stackId, httpError);
         }
       } catch {
         // stderr file may not exist
       }
     }
+  }
+
+  /**
+   * Emit the appropriate typed event for an HTTP error.
+   */
+  private emitHttpError(stackId: string, error: ParsedHttpError): void {
+    switch (error.type) {
+      case 'rate_limit':
+        this.emit('task:rate_limited', {
+          stackId,
+          rateLimit: { reset_at: error.reset_at, reason: error.reason },
+        });
+        break;
+      case 'auth_required':
+        this.emit('task:auth_required', { stackId, error });
+        break;
+      case 'server_error':
+      case 'overloaded':
+        this.emit('task:server_error', { stackId, error });
+        break;
+    }
+    this.onStatusChange?.();
   }
 
   /**
