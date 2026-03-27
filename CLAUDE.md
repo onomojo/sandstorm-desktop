@@ -64,6 +64,7 @@ If either loop exceeds max iterations ──▶ 🛑 STOP — needs human interv
   - If no issues → passes control to Verify step
 
 #### 3. Verify Step
+- Runs **once** after the review loop passes (not on every review iteration)
 - Runs the full `/verify` suite (tests, types, build, electron-rebuild, package, run)
 - If pass → work is complete
 - If fail → error output goes back to the Execution Agent (outer loop iterates, inner loop counter resets)
