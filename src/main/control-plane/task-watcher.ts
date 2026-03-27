@@ -35,6 +35,10 @@ export class TaskWatcher extends EventEmitter {
   private stalePollCounts = new Map<string, number>();
   private pollInterval: number;
   private onStatusChange?: () => void;
+  /** Tracks the last time we polled tokens for each stack (to throttle reads) */
+  private lastTokenPoll = new Map<string, number>();
+  /** How often to poll tokens while a task is running (ms) */
+  private tokenPollInterval: number;
 
   /** Track active output streams for cleanup */
   private activeOutputStreams = new Map<string, AbortController>();
@@ -42,10 +46,11 @@ export class TaskWatcher extends EventEmitter {
   constructor(
     private registry: Registry,
     private runtime: ContainerRuntime,
-    options?: { pollInterval?: number }
+    options?: { pollInterval?: number; tokenPollInterval?: number }
   ) {
     super();
     this.pollInterval = options?.pollInterval ?? 2000;
+    this.tokenPollInterval = options?.tokenPollInterval ?? 10_000;
   }
 
   /** Register a callback invoked whenever a task status changes (for UI notifications) */
@@ -76,6 +81,7 @@ export class TaskWatcher extends EventEmitter {
     this.errorCounts.delete(stackId);
     this.seenRunning.delete(stackId);
     this.stalePollCounts.delete(stackId);
+    this.lastTokenPoll.delete(stackId);
 
     // Abort any active output stream
     const controller = this.activeOutputStreams.get(stackId);
@@ -232,6 +238,18 @@ export class TaskWatcher extends EventEmitter {
       if (status === 'running') {
         this.seenRunning.set(stackId, true);
         this.errorCounts.set(stackId, 0);
+
+        // Poll tokens periodically while running (throttled)
+        const now = Date.now();
+        const lastPoll = this.lastTokenPoll.get(stackId) ?? 0;
+        if (now - lastPoll >= this.tokenPollInterval) {
+          this.lastTokenPoll.set(stackId, now);
+          const runningTask = this.registry.getRunningTask(stackId);
+          if (runningTask) {
+            this.readTaskTokens(runningTask.id, stackId, containerId).catch(() => {});
+          }
+        }
+
         // Healthy — poll at normal interval
         this.schedulePoll(stackId, containerId, this.pollInterval);
         return;
