@@ -42,6 +42,7 @@ export interface SandstormAPI {
     tokenUsage: (stackId: string) => Promise<unknown>;
     globalTokenUsage: () => Promise<unknown>;
     rateLimit: () => Promise<unknown>;
+    accountUsage: () => Promise<unknown>;
   };
   runtime: {
     available: () => Promise<{ docker: boolean; podman: boolean }>;
@@ -118,6 +119,7 @@ const api: SandstormAPI = {
     tokenUsage: (stackId) => ipcRenderer.invoke('stats:token-usage', stackId),
     globalTokenUsage: () => ipcRenderer.invoke('stats:global-token-usage'),
     rateLimit: () => ipcRenderer.invoke('stats:rate-limit'),
+    accountUsage: () => ipcRenderer.invoke('stats:account-usage'),
   },
   runtime: {
     available: () => ipcRenderer.invoke('runtime:available'),

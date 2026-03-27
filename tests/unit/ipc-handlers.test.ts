@@ -845,6 +845,7 @@ describe('IPC Handlers', () => {
       'stats:token-usage',
       'stats:global-token-usage',
       'stats:rate-limit',
+      'stats:account-usage',
       'context:get',
       'context:saveInstructions',
       'context:listSkills',

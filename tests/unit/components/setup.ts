@@ -50,6 +50,7 @@ export function mockSandstormApi() {
       tokenUsage: vi.fn().mockResolvedValue({ stackId: '', input_tokens: 0, output_tokens: 0, total_tokens: 0 }),
       globalTokenUsage: vi.fn().mockResolvedValue({ total_input_tokens: 0, total_output_tokens: 0, total_tokens: 0, per_stack: [] }),
       rateLimit: vi.fn().mockResolvedValue({ active: false, reset_at: null, affected_stacks: [], reason: null }),
+      accountUsage: vi.fn().mockResolvedValue(null),
     },
     docker: {
       status: vi.fn().mockResolvedValue({ connected: true }),
