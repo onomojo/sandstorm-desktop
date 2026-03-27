@@ -67,13 +67,6 @@ export interface GlobalTokenUsage {
   per_stack: TokenUsageStats[];
 }
 
-export interface RateLimitState {
-  active: boolean;
-  reset_at: string | null;
-  affected_stacks: string[];
-  reason: string | null;
-}
-
 export interface PortMapping {
   stack_id: string;
   service: string;
@@ -139,9 +132,8 @@ interface AppState {
   loading: boolean;
   error: string | null;
 
-  // Token usage & rate limits
+  // Token usage
   globalTokenUsage: GlobalTokenUsage | null;
-  rateLimitState: RateLimitState | null;
 
   // Account usage budget (persisted in localStorage)
   tokenBudget: number; // 0 means no budget set
@@ -168,7 +160,6 @@ interface AppState {
   refreshStackHistory: () => Promise<void>;
   refreshMetrics: () => Promise<void>;
   refreshTokenUsage: () => Promise<void>;
-  refreshRateLimitState: () => Promise<void>;
 
   // Derived
   filteredStacks: () => Stack[];
@@ -219,7 +210,6 @@ declare global {
         taskMetrics: (stackId: string) => Promise<TaskMetrics>;
         tokenUsage: (stackId: string) => Promise<TokenUsageStats>;
         globalTokenUsage: () => Promise<GlobalTokenUsage>;
-        rateLimit: () => Promise<RateLimitState>;
       };
       runtime: {
         available: () => Promise<{ docker: boolean; podman: boolean }>;
@@ -271,9 +261,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   loading: false,
   error: null,
 
-  // Token usage & rate limits
+  // Token usage
   globalTokenUsage: null,
-  rateLimitState: null,
 
   // Account usage budget
   tokenBudget: (() => {
@@ -346,7 +335,7 @@ export const useAppStore = create<AppState>((set, get) => ({
       const { stacks, dockerConnected } = get();
       // Skip metrics refresh when Docker is disconnected
       if (!dockerConnected) return;
-      const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed', 'pushed', 'pr_created', 'rate_limited']);
+      const activeStatuses = new Set(['running', 'up', 'building', 'idle', 'completed', 'pushed', 'pr_created']);
       const activeStacks = stacks.filter((s) => activeStatuses.has(s.status));
       const metrics: Record<string, StackMetrics> = {};
 
@@ -370,11 +359,8 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({ stackMetrics: metrics });
 
-      // Also refresh token usage and rate limit state in parallel
-      await Promise.all([
-        get().refreshTokenUsage(),
-        get().refreshRateLimitState(),
-      ]);
+      // Also refresh token usage
+      await get().refreshTokenUsage();
     } catch {
       // Metrics refresh failure is non-fatal
     }
@@ -389,14 +375,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  refreshRateLimitState: async () => {
-    try {
-      const rateLimitState = await window.sandstorm.stats.rateLimit();
-      set({ rateLimitState });
-    } catch {
-      // Rate limit state refresh failure is non-fatal
-    }
-  },
 
   // Derived
   filteredStacks: () => {

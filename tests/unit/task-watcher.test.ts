@@ -798,11 +798,11 @@ describe('TaskWatcher', () => {
     watcher.unwatchAll();
   });
 
-  // --- Rate limit event from token reading ---
+  // --- No mid-execution error detection ---
 
-  it('emits task:rate_limited when rate limit detected in raw log', async () => {
+  it('does not emit rate limit events even when raw log contains errors', async () => {
     const rawLogWithRateLimit = [
-      '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded. Resets at 2026-03-26T12:00:00Z"}}',
+      '{"type":"error","error":{"type":"rate_limit_error","message":"Rate limit exceeded"}}',
     ].join('\n');
 
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
@@ -812,31 +812,49 @@ describe('TaskWatcher', () => {
         if (cmd.includes('/tmp/claude-raw.log')) {
           return { exitCode: 0, stdout: rawLogWithRateLimit, stderr: '' };
         }
-        if (cmd.includes('/tmp/claude-task.stderr')) {
-          return { exitCode: 0, stdout: '', stderr: '' };
-        }
         return origExec(id, cmd);
       }
     );
 
     const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
-    registry.createTask('watch-stack', 'rate limited task');
+    registry.createTask('watch-stack', 'error in log task');
 
     let rateLimitEmitted = false;
-    watcher.on('task:rate_limited', ({ stackId }) => {
-      expect(stackId).toBe('watch-stack');
-      rateLimitEmitted = true;
-    });
+    watcher.on('task:rate_limited', () => { rateLimitEmitted = true; });
 
     await new Promise<void>((resolve) => {
       watcher.on('task:completed', () => resolve());
       watcher.watch('watch-stack', 'container-123');
     });
 
-    // Give async token reading time to complete
     await new Promise((r) => setTimeout(r, 200));
 
-    expect(rateLimitEmitted).toBe(true);
+    // Status is derived from exit code only — no mid-stream error detection
+    expect(rateLimitEmitted).toBe(false);
+    watcher.unwatchAll();
+  });
+
+  it('does not read stderr for error detection', async () => {
+    const runtime = createSequencedRuntime(['running', 'completed'], '0');
+    const origExec = (runtime.exec as ReturnType<typeof vi.fn>).getMockImplementation()!;
+    (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+      async (id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.stderr')) {
+          throw new Error('stderr should not be read for error detection');
+        }
+        return origExec(id, cmd);
+      }
+    );
+
+    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'no stderr read task');
+
+    await new Promise<void>((resolve) => {
+      watcher.on('task:completed', () => resolve());
+      watcher.watch('watch-stack', 'container-123');
+    });
+
+    await new Promise((r) => setTimeout(r, 200));
     watcher.unwatchAll();
   });
 

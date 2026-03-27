@@ -81,7 +81,6 @@ describe('Stack Lifecycle Integration', () => {
   });
 
   afterEach(() => {
-    manager.destroy();
     taskWatcher.unwatchAll();
     registry.close();
     cleanupDb(dbPath);
@@ -262,85 +261,18 @@ describe('Stack Lifecycle Integration', () => {
     });
   });
 
-  describe('rate limit recovery', () => {
-    it('blocks dispatch during rate limit and tracks state', async () => {
-      registry.createStack(makeStack('rl-lifecycle'));
+  describe('no global rate limit gate', () => {
+    it('stacks dispatch independently without global blocking', async () => {
+      registry.createStack(makeStack('ind-a'));
+      registry.createStack(makeStack('ind-b'));
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
 
-      // Dispatch a task
-      const task = await manager.dispatchTask('rl-lifecycle', 'Do work');
-      expect(registry.getStack('rl-lifecycle')!.status).toBe('running');
+      // Both stacks can dispatch tasks independently
+      const taskA = await manager.dispatchTask('ind-a', 'Task A');
+      expect(taskA.status).toBe('running');
 
-      // Simulate rate limit during task
-      const resetAt = new Date(Date.now() + 60000).toISOString();
-      taskWatcher.emit('task:rate_limited', {
-        stackId: 'rl-lifecycle',
-        rateLimit: {
-          reset_at: resetAt,
-          reason: 'Rate limit exceeded',
-        },
-      });
-
-      // Stack should be rate limited
-      expect(registry.getStack('rl-lifecycle')!.status).toBe('rate_limited');
-      expect(manager.isRateLimited()).toBe(true);
-
-      // New dispatches should be blocked
-      const secondStack = makeStack('rl-other');
-      registry.createStack(secondStack);
-      await expect(
-        manager.dispatchTask('rl-other', 'Another task')
-      ).rejects.toThrow(expect.objectContaining({
-        code: ErrorCode.TASK_DISPATCH_FAILED,
-      }));
-
-      // Verify rate limit state
-      const state = manager.getRateLimitState();
-      expect(state.active).toBe(true);
-      expect(state.affected_stacks).toContain('rl-lifecycle');
-      expect(state.reason).toBe('Rate limit exceeded');
-    });
-
-    it('rate limit affects all non-terminal stacks', () => {
-      // Create stacks in various states
-      registry.createStack(makeStack('rl-running'));
-      registry.updateStackStatus('rl-running', 'running');
-      registry.createStack(makeStack('rl-up'));
-      // rl-up is already 'up'
-      registry.createStack(makeStack('rl-completed'));
-      registry.updateStackStatus('rl-completed', 'completed');
-      registry.createStack(makeStack('rl-pushed'));
-      registry.updateStackStatus('rl-pushed', 'pushed');
-
-      // Trigger rate limit
-      taskWatcher.emit('task:rate_limited', {
-        stackId: 'rl-running',
-        rateLimit: {
-          reset_at: new Date(Date.now() + 60000).toISOString(),
-          reason: 'Rate limit exceeded',
-        },
-      });
-
-      // Non-terminal stacks should be rate limited
-      expect(registry.getStack('rl-running')!.status).toBe('rate_limited');
-      expect(registry.getStack('rl-up')!.status).toBe('rate_limited');
-
-      // Terminal stacks should be untouched
-      expect(registry.getStack('rl-completed')!.status).toBe('completed');
-      expect(registry.getStack('rl-pushed')!.status).toBe('pushed');
-    });
-
-    it('clears expired rate limits on startup resume', () => {
-      // Create a stack that was rate limited in the past
-      registry.createStack(makeStack('rl-expired'));
-      registry.setRateLimitReset('rl-expired', new Date(Date.now() - 60000).toISOString());
-      expect(registry.getStack('rl-expired')!.status).toBe('rate_limited');
-
-      // Resume should clear it
-      manager.resumeRateLimitedStacks();
-
-      expect(registry.getStack('rl-expired')!.status).toBe('idle');
-      expect(registry.getStack('rl-expired')!.rate_limit_reset_at).toBeNull();
+      const taskB = await manager.dispatchTask('ind-b', 'Task B');
+      expect(taskB.status).toBe('running');
     });
   });
 
@@ -553,34 +485,15 @@ describe('Stack Lifecycle Integration', () => {
       expect(global.per_stack).toHaveLength(2);
     });
 
-    it('rate limit on one stack affects all non-terminal stacks', async () => {
-      registry.createStack(makeStack('rl-a'));
-      registry.createStack(makeStack('rl-b'));
-      registry.createStack(makeStack('rl-done'));
-      registry.updateStackStatus('rl-done', 'completed');
-
+    it('dispatch to one stack does not affect another stack', async () => {
+      registry.createStack(makeStack('iso-a'));
+      registry.createStack(makeStack('iso-b'));
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
-      await manager.dispatchTask('rl-a', 'Working');
 
-      // Rate limit triggered by stack A
-      taskWatcher.emit('task:rate_limited', {
-        stackId: 'rl-a',
-        rateLimit: {
-          reset_at: new Date(Date.now() + 60000).toISOString(),
-          reason: 'API rate limit',
-        },
-      });
-
-      // Both active stacks affected
-      expect(registry.getStack('rl-a')!.status).toBe('rate_limited');
-      expect(registry.getStack('rl-b')!.status).toBe('rate_limited');
-      // Completed stack unaffected
-      expect(registry.getStack('rl-done')!.status).toBe('completed');
-
-      // Dispatch to any stack should fail
-      await expect(manager.dispatchTask('rl-b', 'Blocked')).rejects.toThrow(expect.objectContaining({
-        code: ErrorCode.TASK_DISPATCH_FAILED,
-      }));
+      await manager.dispatchTask('iso-a', 'Working');
+      // Stack B can still dispatch regardless of stack A's status
+      const taskB = await manager.dispatchTask('iso-b', 'Also working');
+      expect(taskB.status).toBe('running');
     });
   });
 

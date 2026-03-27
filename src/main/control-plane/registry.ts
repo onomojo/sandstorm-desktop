@@ -57,11 +57,6 @@ export interface TokenUsage {
   output_tokens: number;
 }
 
-export interface RateLimitInfo {
-  reset_at: string;  // ISO timestamp when the rate limit resets
-  reason: string;    // Error message from the rate limit
-}
-
 export interface PortMapping {
   stack_id: string;
   service: string;
@@ -444,33 +439,6 @@ export class Registry {
       input_tokens: row?.total_input_tokens ?? 0,
       output_tokens: row?.total_output_tokens ?? 0,
     };
-  }
-
-  // --- Rate Limits ---
-
-  setRateLimitReset(stackId: string, resetAt: string): void {
-    this.db.prepare(
-      "UPDATE stacks SET status = 'rate_limited', rate_limit_reset_at = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(resetAt, stackId);
-  }
-
-  clearRateLimit(stackId: string, targetStatus: StackStatus = 'idle'): void {
-    this.db.prepare(
-      "UPDATE stacks SET rate_limit_reset_at = NULL, status = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(targetStatus, stackId);
-  }
-
-  getRateLimitedStacks(): Stack[] {
-    return this.db.prepare(
-      "SELECT * FROM stacks WHERE status = 'rate_limited'"
-    ).all() as Stack[];
-  }
-
-  getGlobalRateLimitReset(): string | null {
-    const row = this.db.prepare(
-      "SELECT MIN(rate_limit_reset_at) as reset_at FROM stacks WHERE status = 'rate_limited' AND rate_limit_reset_at IS NOT NULL"
-    ).get() as { reset_at: string | null } | undefined;
-    return row?.reset_at ?? null;
   }
 
   // --- Ports ---
