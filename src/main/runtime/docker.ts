@@ -207,7 +207,7 @@ export class DockerRuntime implements ContainerRuntime {
     const readable = stream as NodeJS.ReadableStream;
     this.activeStreams.add(readable);
     try {
-      let remainder = Buffer.alloc(0);
+      let remainder: Buffer = Buffer.alloc(0);
       for await (const chunk of readable) {
         // Docker multiplexed stream: each frame has an 8-byte header
         // [stream_type(1), padding(3), size(4 big-endian)].
@@ -250,7 +250,7 @@ export class DockerRuntime implements ContainerRuntime {
     const stream = await exec.start({ hijack: true, stdin: false });
     let stdout = '';
     let stderr = '';
-    let remainder = Buffer.alloc(0);
+    let remainder: Buffer = Buffer.alloc(0);
 
     return new Promise((resolve, reject) => {
       const timeout = setTimeout(() => {

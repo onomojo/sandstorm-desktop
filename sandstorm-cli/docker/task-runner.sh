@@ -171,8 +171,40 @@ run_review() {
   fi
 }
 
+# Classify test results: checks if vitest output indicates all tests passed
+# but only has infrastructure errors (uncaught exceptions, permission errors).
+# Returns 0 if infrastructure-only errors detected, 1 otherwise.
+is_infra_error_only() {
+  local log_file="$1"
+
+  # Check if there are actual test file failures (e.g. "Test Files  2 failed")
+  if grep -qE 'Test Files.*failed' "$log_file"; then
+    return 1  # Real test failures
+  fi
+
+  # Check if there are actual test case failures (e.g. "Tests  3 failed")
+  if grep -qE '^\s*Tests.*failed' "$log_file"; then
+    return 1  # Real test failures
+  fi
+
+  # Check for infrastructure error signatures
+  local has_infra_errors=false
+  if grep -qE 'EACCES: permission denied' "$log_file"; then
+    has_infra_errors=true
+  fi
+  if grep -qE 'Uncaught Exception|Unhandled Error' "$log_file"; then
+    has_infra_errors=true
+  fi
+
+  if [ "$has_infra_errors" = true ]; then
+    return 0  # Infrastructure errors only
+  fi
+
+  return 1  # Unknown failure — treat as real
+}
+
 # Run verification: tests, type check, build.
-# Returns 0 if all pass, 1 if any fail.
+# Returns: 0 = all pass, 1 = test/type/build failure (retryable), 2 = infrastructure error (halt)
 run_verify() {
   local verify_log="/tmp/claude-verify.log"
   > "$verify_log"
@@ -185,6 +217,11 @@ run_verify() {
   log_loop "Verify: running npm test..."
   (cd /app && npm test 2>&1) | tee -a "$verify_log"
   if [ ${PIPESTATUS[0]} -ne 0 ]; then
+    # Check if this is an infrastructure error vs real test failure
+    if is_infra_error_only "$verify_log"; then
+      log_loop "Verify: tests passed but infrastructure errors detected (e.g. permission denied) — halting, not retrying"
+      return 2
+    fi
     log_loop "Verify: tests FAILED"
     failed=1
   else
@@ -373,10 +410,20 @@ while true; do
 
       log_loop "Review passed, running verification..."
 
-      if run_verify; then
+      run_verify
+      verify_result=$?
+
+      if [ $verify_result -eq 0 ]; then
         log_loop "Verification PASSED"
         log_loop "Task complete after $TOTAL_REVIEW_ITERATIONS review iteration(s), $TOTAL_VERIFY_RETRIES verify retry/retries"
         TASK_DONE=1
+      elif [ $verify_result -eq 2 ]; then
+        # Infrastructure error — not caused by the code changes, don't retry
+        log_loop "Verification hit an infrastructure error (not a code issue). Halting — needs human intervention."
+        log_loop "All tests passed but the process failed due to environment issues (e.g. permission denied)."
+        log_loop "This is NOT a failure in the code changes. Do not retry."
+        TASK_FAILED=1
+        break
       else
         TOTAL_VERIFY_RETRIES=$((TOTAL_VERIFY_RETRIES + 1))
         log_loop "Verify FAILED, outer iteration $OUTER_ITERATION/$MAX_OUTER_ITERATIONS"
