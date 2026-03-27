@@ -20,7 +20,7 @@ export interface SandstormAPI {
     setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
   };
   tasks: {
-    dispatch: (stackId: string, prompt: string, model?: string) => Promise<unknown>;
+    dispatch: (stackId: string, prompt: string, model?: string, issueUrl?: string) => Promise<unknown>;
     list: (stackId: string) => Promise<unknown[]>;
   };
   diff: {
@@ -94,8 +94,8 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('stacks:setPr', id, prUrl, prNumber),
   },
   tasks: {
-    dispatch: (stackId, prompt, model?) =>
-      ipcRenderer.invoke('tasks:dispatch', stackId, prompt, model),
+    dispatch: (stackId, prompt, model?, issueUrl?) =>
+      ipcRenderer.invoke('tasks:dispatch', stackId, prompt, model, issueUrl),
     list: (stackId) => ipcRenderer.invoke('tasks:list', stackId),
   },
   diff: {

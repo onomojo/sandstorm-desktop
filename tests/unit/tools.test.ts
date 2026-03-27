@@ -74,7 +74,8 @@ describe('MCP tools', () => {
       expect(stackManager.dispatchTask).toHaveBeenCalledWith(
         'test-stack',
         'Fix a typo',
-        'auto'
+        'auto',
+        undefined
       );
     });
 
@@ -88,7 +89,8 @@ describe('MCP tools', () => {
       expect(stackManager.dispatchTask).toHaveBeenCalledWith(
         'test-stack',
         'Refactor auth',
-        'sonnet'
+        'sonnet',
+        undefined
       );
     });
 
@@ -101,7 +103,24 @@ describe('MCP tools', () => {
       expect(stackManager.dispatchTask).toHaveBeenCalledWith(
         'test-stack',
         'Some task',
+        undefined,
         undefined
+      );
+    });
+
+    it('passes issueUrl through to dispatchTask', async () => {
+      await handleToolCall('dispatch_task', {
+        stackId: 'test-stack',
+        prompt: 'Fix the bug',
+        model: 'opus',
+        issueUrl: 'https://github.com/owner/repo/issues/42',
+      });
+
+      expect(stackManager.dispatchTask).toHaveBeenCalledWith(
+        'test-stack',
+        'Fix the bug',
+        'opus',
+        'https://github.com/owner/repo/issues/42'
       );
     });
   });

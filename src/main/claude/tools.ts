@@ -27,6 +27,7 @@ export const tools: ToolDefinition[] = [
         description: { type: 'string', description: 'Short description of the work' },
         runtime: { type: 'string', enum: ['docker', 'podman'], description: 'Container runtime' },
         task: { type: 'string', description: 'Task to dispatch immediately after creation' },
+        issueUrl: { type: 'string', description: 'GitHub issue URL (e.g., https://github.com/owner/repo/issues/123). If provided, the full issue body and all comments will be fetched and included in the task context.' },
         model: {
           type: 'string',
           enum: ['auto', 'sonnet', 'opus'],
@@ -52,6 +53,7 @@ export const tools: ToolDefinition[] = [
       properties: {
         stackId: { type: 'string', description: 'Stack ID to dispatch to' },
         prompt: { type: 'string', description: 'Task description for inner Claude' },
+        issueUrl: { type: 'string', description: 'GitHub issue URL (e.g., https://github.com/owner/repo/issues/123). If provided, the full issue body and all comments will be fetched and included in the task context.' },
         model: {
           type: 'string',
           enum: ['auto', 'sonnet', 'opus'],
@@ -172,6 +174,7 @@ export async function handleToolCall(
         runtime: (input.runtime as 'docker' | 'podman') ?? 'docker',
         task: input.task as string | undefined,
         model: input.model as string | undefined,
+        issueUrl: input.issueUrl as string | undefined,
       });
 
     case 'list_stacks':
@@ -181,7 +184,8 @@ export async function handleToolCall(
       return stackManager.dispatchTask(
         input.stackId as string,
         input.prompt as string,
-        input.model as string | undefined
+        input.model as string | undefined,
+        input.issueUrl as string | undefined
       );
 
     case 'get_diff':

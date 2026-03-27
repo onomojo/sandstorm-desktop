@@ -215,7 +215,7 @@ export class DockerRuntime implements ContainerRuntime {
         const buf = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
         const input = remainder.length > 0 ? Buffer.concat([remainder, buf]) : buf;
         const { frames, remainder: leftover } = demuxDockerStream(input);
-        remainder = leftover;
+        remainder = leftover as Buffer<ArrayBuffer>;
         for (const frame of frames) {
           yield frame.content;
         }
@@ -264,7 +264,7 @@ export class DockerRuntime implements ContainerRuntime {
         // A single data event may contain multiple frames or partial frames.
         const input = remainder.length > 0 ? Buffer.concat([remainder, chunk]) : chunk;
         const result = demuxDockerStream(input);
-        remainder = result.remainder;
+        remainder = result.remainder as Buffer<ArrayBuffer>;
 
         for (const frame of result.frames) {
           if (frame.type === 1) stdout += frame.content;

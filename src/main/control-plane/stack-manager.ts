@@ -6,6 +6,7 @@ import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
+import { fetchIssueContext } from './github-issue';
 
 export interface CreateStackOpts {
   name: string;
@@ -16,6 +17,7 @@ export interface CreateStackOpts {
   runtime: 'docker' | 'podman';
   task?: string;
   model?: string;
+  issueUrl?: string;
 }
 
 export interface StackWithServices extends Stack {
@@ -218,12 +220,12 @@ export class StackManager {
       // If a task was provided, dispatch it (with one retry on failure)
       if (opts.task) {
         try {
-          await this.dispatchTask(opts.name, opts.task, opts.model);
+          await this.dispatchTask(opts.name, opts.task, opts.model, opts.issueUrl);
         } catch (firstErr) {
           // Wait and retry once — the container may need more time
           await new Promise((resolve) => setTimeout(resolve, 10000));
           try {
-            await this.dispatchTask(opts.name, opts.task, opts.model);
+            await this.dispatchTask(opts.name, opts.task, opts.model, opts.issueUrl);
           } catch (retryErr) {
             const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
             this.registry.updateStackStatus(opts.name, 'failed', `Task dispatch failed after retry: ${msg}`);
@@ -358,7 +360,7 @@ export class StackManager {
     );
   }
 
-  async dispatchTask(stackId: string, prompt: string, model?: string): Promise<Task> {
+  async dispatchTask(stackId: string, prompt: string, model?: string, issueUrl?: string): Promise<Task> {
     // Resolve "auto" → undefined so the CLI never receives "--model auto"
     if (model === 'auto') {
       model = undefined;
@@ -367,7 +369,17 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    const task = this.registry.createTask(stackId, prompt, model);
+    // If a GitHub issue URL is provided, fetch the full issue context
+    // (title, body, comments) and prepend it to the prompt
+    let enrichedPrompt = prompt;
+    if (issueUrl) {
+      const issueContext = await fetchIssueContext(issueUrl);
+      if (issueContext) {
+        enrichedPrompt = `${issueContext}\n\n---\n\n## Task\n\n${prompt}`;
+      }
+    }
+
+    const task = this.registry.createTask(stackId, enrichedPrompt, model);
 
     try {
       const claudeContainer = await this.findClaudeContainer(stack);
@@ -384,7 +396,7 @@ export class StackManager {
       // preventing the infinite-loop and not-logged-in bugs.
       const cliArgs = ['task', stackId];
       if (model) cliArgs.push('--model', model);
-      cliArgs.push(prompt);
+      cliArgs.push(enrichedPrompt);
       const result = await this.runCli(stack.project_dir, cliArgs);
 
       if (result.exitCode !== 0) {
@@ -639,6 +651,25 @@ export class StackManager {
       total_tokens: totalInput + totalOutput,
       per_stack: perStack.sort((a, b) => b.total_tokens - a.total_tokens),
     };
+  }
+
+  getRateLimitState(): { is_rate_limited: boolean; reset_at: string | null } {
+    const stacks = this.registry.listStacks();
+    let latestReset: string | null = null;
+    let isRateLimited = false;
+
+    for (const stack of stacks) {
+      if (stack.status === 'rate_limited') {
+        isRateLimited = true;
+        if (stack.rate_limit_reset_at) {
+          if (!latestReset || stack.rate_limit_reset_at > latestReset) {
+            latestReset = stack.rate_limit_reset_at;
+          }
+        }
+      }
+    }
+
+    return { is_rate_limited: isRateLimited, reset_at: latestReset };
   }
 
   // --- Private helpers ---
