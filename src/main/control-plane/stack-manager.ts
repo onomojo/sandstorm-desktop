@@ -6,7 +6,7 @@ import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
-import { ParsedRateLimit } from './token-parser';
+import { ParsedRateLimit, ParsedHttpError } from './token-parser';
 
 export interface CreateStackOpts {
   name: string;
@@ -123,6 +123,16 @@ export class StackManager {
     // Listen for rate limit events from the task watcher
     this.taskWatcher.on('task:rate_limited', ({ stackId, rateLimit }: { stackId: string; rateLimit: ParsedRateLimit }) => {
       this.handleRateLimit(stackId, rateLimit);
+    });
+
+    // Listen for auth failure events — mark the stack as failed with auth context
+    this.taskWatcher.on('task:auth_required', ({ stackId, error }: { stackId: string; error: ParsedHttpError }) => {
+      this.handleAuthRequired(stackId, error);
+    });
+
+    // Listen for server error events — mark the stack as failed with retry context
+    this.taskWatcher.on('task:server_error', ({ stackId, error }: { stackId: string; error: ParsedHttpError }) => {
+      this.handleServerError(stackId, error);
     });
   }
 
@@ -681,6 +691,21 @@ export class StackManager {
       affected_stacks: limitedStacks.map((s) => s.id),
       reason: this.globalRateLimitReason,
     };
+  }
+
+  private handleAuthRequired(stackId: string, error: ParsedHttpError): void {
+    // Auth failures are per-account, so mark just this stack as failed
+    // (unlike rate limits which affect all stacks sharing the same API key)
+    this.registry.updateStackStatus(stackId, 'failed', `Authentication required: ${error.reason}`);
+    this.notifyUpdate();
+  }
+
+  private handleServerError(stackId: string, error: ParsedHttpError): void {
+    // Server errors (500/529) are transient — mark the stack as failed
+    // with descriptive error so user can retry
+    const prefix = error.type === 'overloaded' ? 'API overloaded' : 'Server error';
+    this.registry.updateStackStatus(stackId, 'failed', `${prefix} (${error.status_code}): ${error.reason}`);
+    this.notifyUpdate();
   }
 
   private handleRateLimit(stackId: string, rateLimit: ParsedRateLimit): void {

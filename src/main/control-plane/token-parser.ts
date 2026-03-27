@@ -1,9 +1,9 @@
 /**
- * Parses token usage and rate limit information from Claude CLI stream-json output.
+ * Parses token usage and HTTP error information from Claude CLI stream-json output.
  *
  * The Claude CLI with `--output-format stream-json` emits JSON lines including:
  * - `{ "type": "result", "result": { ... }, "session_id": "...", "usage": { "input_tokens": N, "output_tokens": N } }`
- * - Rate limit errors in stderr or result messages
+ * - Structured error events with HTTP status codes (429, 401, 500, 529)
  */
 
 export interface ParsedTokenUsage {
@@ -12,8 +12,18 @@ export interface ParsedTokenUsage {
   session_id: string | null;
 }
 
+export type HttpErrorType = 'rate_limit' | 'auth_required' | 'server_error' | 'overloaded';
+
+export interface ParsedHttpError {
+  type: HttpErrorType;
+  status_code: number;
+  reset_at: string | null;  // ISO timestamp (for rate limits)
+  reason: string;
+}
+
+/** Kept for backwards compatibility — maps to the rate_limit case of ParsedHttpError */
 export interface ParsedRateLimit {
-  reset_at: string | null;  // ISO timestamp
+  reset_at: string | null;
   reason: string;
 }
 
@@ -71,84 +81,166 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
 }
 
 /**
- * Detect rate limit errors from Claude CLI output (stdout + stderr).
- * Returns null if no rate limit detected.
+ * Detect HTTP errors from Claude CLI stream-json output by parsing structured
+ * error events. Returns null if no error detected.
  *
- * IMPORTANT: Only checks error/system lines — NOT conversation content.
- * The raw log contains everything the inner Claude writes, so matching
- * patterns like "rate limit" against the full text causes false positives
- * when the agent discusses rate limiting in its own output.
+ * Looks for structured error objects in the stream-json output that contain
+ * HTTP status codes or error type identifiers. This approach is immune to
+ * false positives from agent conversation content because it only inspects
+ * parsed error event fields, never free-text content.
+ *
+ * Detected error types:
+ * - 429 / rate_limit_error → rate_limit
+ * - 401 / authentication_error → auth_required
+ * - 500 / api_error → server_error
+ * - 529 / overloaded_error → overloaded
  */
-export function parseRateLimit(output: string): ParsedRateLimit | null {
-  const rateLimitPatterns = [
-    /rate.?limit/i,
-    /usage.?limit/i,
-    /too many requests/i,
-    /(?:HTTP|status|code)\s*429/i,
-    /exceeded.*(?:token|request|daily|hourly).*(?:limit|quota)/i,
-    /billing.*limit/i,
-    /capacity.*exceeded/i,
-  ];
-
-  // Extract only error-relevant lines, skipping conversation content.
-  // In stream-json, content_block_delta events carry the agent's text output —
-  // these must be excluded to avoid false positives.
-  const errorLines = extractErrorLines(output);
-  if (errorLines.length === 0) return null;
-
-  const errorText = errorLines.join('\n');
-  const isRateLimited = rateLimitPatterns.some((pattern) => pattern.test(errorText));
-  if (!isRateLimited) return null;
-
-  const resetAt = parseResetTime(errorText);
-
-  return {
-    reset_at: resetAt,
-    reason: extractRateLimitReason(errorText),
-  };
-}
-
-/**
- * Extract only error-relevant lines from Claude CLI output.
- * Skips content_block_delta (agent text), content_block_start,
- * and other content-carrying events.
- */
-function extractErrorLines(output: string): string[] {
-  const errorLines: string[] = [];
-  // Content event types whose text should be ignored
-  const contentTypes = new Set([
-    'content_block_delta',
-    'content_block_start',
-    'content_block_stop',
-    'message_start',
-    'message_delta',
-    'message_stop',
-  ]);
-
+export function parseHttpError(output: string): ParsedHttpError | null {
   for (const line of output.split('\n')) {
     const trimmed = line.trim();
     if (!trimmed) continue;
 
     try {
       const parsed = JSON.parse(trimmed);
+      const error = extractErrorObject(parsed);
+      if (!error) continue;
 
-      // Skip content events (agent conversation text)
-      const eventType = parsed.type === 'stream_event'
-        ? parsed.event?.type
-        : parsed.type;
-      if (eventType && contentTypes.has(eventType)) continue;
+      const classification = classifyError(error);
+      if (!classification) continue;
 
-      // Include error objects and result messages (which may contain error info)
-      if (parsed.error || parsed.type === 'error' || parsed.type === 'result') {
-        errorLines.push(trimmed);
-      }
+      const reason = error.message
+        || error.error_message
+        || classification.defaultReason;
+      const truncatedReason = reason.length > 200 ? reason.substring(0, 200) + '...' : reason;
+
+      return {
+        type: classification.type,
+        status_code: classification.statusCode,
+        reset_at: classification.type === 'rate_limit' ? parseResetTime(trimmed) : null,
+        reason: truncatedReason,
+      };
     } catch {
-      // Non-JSON line (plain text from stderr) — always include
-      errorLines.push(trimmed);
+      // Non-JSON line — check for plain-text HTTP status patterns from stderr
+      const statusMatch = trimmed.match(/\b(401|429|500|529)\b/);
+      if (statusMatch) {
+        const code = parseInt(statusMatch[1], 10);
+        const classification = classifyStatusCode(code);
+        if (classification) {
+          return {
+            type: classification.type,
+            status_code: code,
+            reset_at: classification.type === 'rate_limit' ? parseResetTime(trimmed) : null,
+            reason: trimmed.length > 200 ? trimmed.substring(0, 200) + '...' : trimmed,
+          };
+        }
+      }
     }
   }
 
-  return errorLines;
+  return null;
+}
+
+/**
+ * Backwards-compatible wrapper: returns ParsedRateLimit for 429 errors only.
+ * Used by existing code that only cares about rate limits.
+ */
+export function parseRateLimit(output: string): ParsedRateLimit | null {
+  const error = parseHttpError(output);
+  if (!error || error.type !== 'rate_limit') return null;
+  return { reset_at: error.reset_at, reason: error.reason };
+}
+
+// --- Internal helpers ---
+
+interface ErrorFields {
+  type?: string;
+  message?: string;
+  error_message?: string;
+  status_code?: number;
+  http_status?: number;
+}
+
+interface Classification {
+  type: HttpErrorType;
+  statusCode: number;
+  defaultReason: string;
+}
+
+/**
+ * Extract the error object from a parsed JSON line, handling various
+ * envelope formats (stream_event wrapper, top-level error, result with error).
+ */
+function extractErrorObject(parsed: Record<string, unknown>): ErrorFields | null {
+  // Direct error event: { "type": "error", "error": { ... } }
+  if (parsed.type === 'error' && parsed.error && typeof parsed.error === 'object') {
+    return parsed.error as ErrorFields;
+  }
+
+  // stream_event wrapper: { "type": "stream_event", "event": { "type": "error", "error": { ... } } }
+  if (parsed.type === 'stream_event' && parsed.event && typeof parsed.event === 'object') {
+    const event = parsed.event as Record<string, unknown>;
+    if (event.type === 'error' && event.error && typeof event.error === 'object') {
+      return event.error as ErrorFields;
+    }
+  }
+
+  // Result with error: { "type": "result", "error": { ... } }
+  if (parsed.type === 'result' && parsed.error && typeof parsed.error === 'object') {
+    return parsed.error as ErrorFields;
+  }
+
+  // Top-level error fields (e.g. { "error": { "type": "rate_limit_error", ... } })
+  if (parsed.error && typeof parsed.error === 'object' && !parsed.type) {
+    return parsed.error as ErrorFields;
+  }
+
+  return null;
+}
+
+/**
+ * Classify an error by its type string and/or status code.
+ */
+function classifyError(error: ErrorFields): Classification | null {
+  const errorType = error.type?.toLowerCase() ?? '';
+  const statusCode = error.status_code ?? error.http_status;
+
+  // Classify by error type string first (most reliable)
+  if (errorType.includes('rate_limit') || errorType === 'rate_limit_error') {
+    return { type: 'rate_limit', statusCode: statusCode ?? 429, defaultReason: 'Rate limit exceeded' };
+  }
+  if (errorType.includes('authentication') || errorType === 'authentication_error') {
+    return { type: 'auth_required', statusCode: statusCode ?? 401, defaultReason: 'Authentication required' };
+  }
+  if (errorType.includes('overloaded') || errorType === 'overloaded_error') {
+    return { type: 'overloaded', statusCode: statusCode ?? 529, defaultReason: 'API overloaded' };
+  }
+  if (errorType.includes('api_error') || errorType === 'api_error') {
+    return { type: 'server_error', statusCode: statusCode ?? 500, defaultReason: 'Server error' };
+  }
+
+  // Fall back to status code classification
+  if (statusCode) {
+    return classifyStatusCode(statusCode);
+  }
+
+  // Check error message for status code mentions as last resort
+  const message = error.message ?? error.error_message ?? '';
+  const msgStatusMatch = message.match(/\b(401|429|500|529)\b/);
+  if (msgStatusMatch) {
+    return classifyStatusCode(parseInt(msgStatusMatch[1], 10));
+  }
+
+  return null;
+}
+
+function classifyStatusCode(code: number): Classification | null {
+  switch (code) {
+    case 429: return { type: 'rate_limit', statusCode: 429, defaultReason: 'Rate limit exceeded' };
+    case 401: return { type: 'auth_required', statusCode: 401, defaultReason: 'Authentication required' };
+    case 500: return { type: 'server_error', statusCode: 500, defaultReason: 'Server error' };
+    case 529: return { type: 'overloaded', statusCode: 529, defaultReason: 'API overloaded' };
+    default: return null;
+  }
 }
 
 /**
@@ -186,31 +278,4 @@ function parseResetTime(output: string): string | null {
 
   // No recognizable time pattern — return null; callers should apply their own default
   return null;
-}
-
-/**
- * Extract a human-readable rate limit reason from the output.
- */
-function extractRateLimitReason(output: string): string {
-  // Try to find the most relevant error line
-  for (const line of output.split('\n')) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-
-    // Check for JSON error messages
-    try {
-      const parsed = JSON.parse(trimmed);
-      if (parsed.error?.message) return parsed.error.message;
-      if (parsed.message && typeof parsed.message === 'string') return parsed.message;
-    } catch {
-      // Not JSON
-    }
-
-    // Check for plain-text rate limit messages
-    if (/rate.?limit|usage.?limit|too many|429|exceeded|billing|capacity/i.test(trimmed)) {
-      return trimmed.length > 200 ? trimmed.substring(0, 200) + '...' : trimmed;
-    }
-  }
-
-  return 'Rate limit exceeded';
 }
