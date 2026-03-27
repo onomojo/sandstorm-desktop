@@ -5,6 +5,7 @@ import { StackDetail } from './components/StackDetail';
 import { NewStackDialog } from './components/NewStackDialog';
 import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
+import { AccountUsageBar } from './components/AccountUsageBar';
 import trayIcon from './tray-icon.png';
 import buildVersion from './build-version.txt?raw';
 
@@ -99,7 +100,7 @@ export default function App() {
   return (
     <div className="h-screen flex flex-col bg-sandstorm-bg text-sandstorm-text">
       {/* Title bar — centered on macOS to avoid traffic lights, left-aligned elsewhere */}
-      <div className={`titlebar-drag h-10 bg-sandstorm-surface border-b border-sandstorm-border flex items-center px-4 shrink-0 ${navigator.platform.includes('Mac') ? 'justify-center' : ''}`}>
+      <div className={`titlebar-drag h-10 bg-sandstorm-surface border-b border-sandstorm-border flex items-center px-4 shrink-0 relative ${navigator.platform.includes('Mac') ? 'justify-center' : ''}`}>
         <div className="titlebar-no-drag flex items-center gap-2.5">
           <img src={trayIcon} alt="Sandstorm" className="w-6 h-6" />
           <span className="text-xs font-semibold text-sandstorm-muted tracking-wide uppercase">
@@ -108,6 +109,9 @@ export default function App() {
           <span className="text-[10px] text-sandstorm-muted/50 font-mono" title={`Build: ${buildVersion.trim()}`}>
             {buildVersion.trim()}
           </span>
+        </div>
+        <div className="titlebar-no-drag absolute right-4">
+          <AccountUsageBar />
         </div>
       </div>
 

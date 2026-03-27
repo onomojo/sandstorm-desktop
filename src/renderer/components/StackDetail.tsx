@@ -327,6 +327,11 @@ export function StackDetail({
                             : task.model}
                         </span>
                       )}
+                      {task.status !== 'running' && (task.review_iterations > 0 || task.verify_retries > 0) && (
+                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-sandstorm-muted tabular-nums" title="Review iterations / Verify retries">
+                          {task.review_iterations} review{task.review_iterations !== 1 ? 's' : ''}, {task.verify_retries} retr{task.verify_retries !== 1 ? 'ies' : 'y'}
+                        </span>
+                      )}
                       <span className="text-sandstorm-muted text-[10px] ml-auto tabular-nums">
                         {new Date(task.started_at).toLocaleString()}
                       </span>

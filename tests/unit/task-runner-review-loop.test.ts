@@ -231,6 +231,14 @@ describe('task-runner.sh dual-loop workflow', () => {
       expect(taskRunner).toContain('Review iterations: $TOTAL_REVIEW_ITERATIONS')
       expect(taskRunner).toContain('Verify retries: $TOTAL_VERIFY_RETRIES')
     })
+
+    it('writes review iteration count to file for task watcher', () => {
+      expect(taskRunner).toContain('> /tmp/claude-task.review-iterations')
+    })
+
+    it('writes verify retry count to file for task watcher', () => {
+      expect(taskRunner).toContain('> /tmp/claude-task.verify-retries')
+    })
   })
 
   // ── Single-pass tasks ────────────────────────────────────────────────

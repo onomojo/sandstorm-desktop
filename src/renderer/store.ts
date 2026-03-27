@@ -47,6 +47,8 @@ export interface Task {
   session_id: string | null;
   input_tokens: number;
   output_tokens: number;
+  review_iterations: number;
+  verify_retries: number;
   started_at: string;
   finished_at: string | null;
 }
@@ -140,6 +142,10 @@ interface AppState {
   // Token usage & rate limits
   globalTokenUsage: GlobalTokenUsage | null;
   rateLimitState: RateLimitState | null;
+
+  // Account usage budget (persisted in localStorage)
+  tokenBudget: number; // 0 means no budget set
+  setTokenBudget: (budget: number) => void;
 
   // Docker connection
   setDockerConnected: (connected: boolean) => void;
@@ -268,6 +274,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Token usage & rate limits
   globalTokenUsage: null,
   rateLimitState: null,
+
+  // Account usage budget
+  tokenBudget: (() => {
+    try {
+      const saved = localStorage.getItem('sandstorm-token-budget');
+      return saved ? Number(saved) : 0;
+    } catch { return 0; }
+  })(),
+  setTokenBudget: (budget: number) => {
+    localStorage.setItem('sandstorm-token-budget', String(budget));
+    set({ tokenBudget: budget });
+  },
 
   // Project actions
   setProjects: (projects) => set({ projects }),
