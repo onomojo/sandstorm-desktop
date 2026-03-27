@@ -63,6 +63,20 @@ export function mockSandstormApi() {
       reset: vi.fn().mockResolvedValue(undefined),
       history: vi.fn().mockResolvedValue({ messages: [], processing: false }),
     },
+    auth: {
+      status: vi.fn().mockResolvedValue({ loggedIn: true, expired: false }),
+      login: vi.fn().mockResolvedValue({ success: true }),
+    },
+    context: {
+      get: vi.fn().mockResolvedValue({ instructions: '', skills: [], settings: '' }),
+      saveInstructions: vi.fn().mockResolvedValue(undefined),
+      listSkills: vi.fn().mockResolvedValue([]),
+      getSkill: vi.fn().mockResolvedValue(''),
+      saveSkill: vi.fn().mockResolvedValue(undefined),
+      deleteSkill: vi.fn().mockResolvedValue(undefined),
+      getSettings: vi.fn().mockResolvedValue(''),
+      saveSettings: vi.fn().mockResolvedValue(undefined),
+    },
     on: vi.fn().mockReturnValue(() => {}),
   };
 

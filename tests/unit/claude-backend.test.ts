@@ -294,6 +294,67 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
     }, 5000);
   });
 
+  describe('auth error detection (401 reauth)', () => {
+    it('emits auth:required when stderr contains 401', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      proc.stderr.emit('data', Buffer.from('HTTP 401 Unauthorized'));
+      const authRequired = findMessages('auth:required');
+      expect(authRequired.length).toBe(1);
+    });
+
+    it('emits auth:required when stderr contains "unauthorized"', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      proc.stderr.emit('data', Buffer.from('Error: Unauthorized access'));
+      const authRequired = findMessages('auth:required');
+      expect(authRequired.length).toBe(1);
+    });
+
+    it('emits auth:required when stderr contains "token expired"', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      proc.stderr.emit('data', Buffer.from('Your authentication token expired'));
+      const authRequired = findMessages('auth:required');
+      expect(authRequired.length).toBe(1);
+    });
+
+    it('emits auth:required when stderr contains "not authenticated"', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      proc.stderr.emit('data', Buffer.from('Error: not authenticated'));
+      const authRequired = findMessages('auth:required');
+      expect(authRequired.length).toBe(1);
+    });
+
+    it('emits auth:required on exit when error output contains auth failure', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      proc.stderr.emit('data', Buffer.from('authentication required'));
+      proc.exitCode = 1;
+      proc.emit('close', 1);
+      // Should have auth:required from both stderr streaming and on-close detection
+      const authRequired = findMessages('auth:required');
+      expect(authRequired.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('does not emit auth:required for non-auth errors', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      proc.stderr.emit('data', Buffer.from('Error: network timeout'));
+      const authRequired = findMessages('auth:required');
+      expect(authRequired.length).toBe(0);
+    });
+
+    it('does not emit auth:required for rate limit errors', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      proc.stderr.emit('data', Buffer.from('Error: rate limit exceeded, too many requests'));
+      const authRequired = findMessages('auth:required');
+      expect(authRequired.length).toBe(0);
+    });
+  });
+
   describe('syncCredentials', () => {
     it('handles empty stacks list without error', async () => {
       await expect(backend.syncCredentials([])).resolves.toBeUndefined();

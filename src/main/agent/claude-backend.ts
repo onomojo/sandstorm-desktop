@@ -544,6 +544,12 @@ rl.on('line', async (line) => {
       const text = data.toString();
       stderrBuffer += text;
       this.log(`stderr [tab=${tabId}]: ${text.trimEnd()}`);
+
+      // Detect auth errors early from stderr so the modal appears promptly
+      if (this.isAuthError(text)) {
+        this.log(`Auth error detected in stderr for tab=${tabId}, emitting auth:required`);
+        send('auth:required', text.trim());
+      }
     });
 
     child.on('close', (code) => {
@@ -569,6 +575,13 @@ rl.on('line', async (line) => {
         const errorMsg = stderrBuffer.trim()
           || `Claude exited with code ${code}`;
         this.log(`Sending error for tab=${tabId}: ${errorMsg}`);
+
+        // Detect 401/auth errors and emit auth:required so the UI can show a reauth modal
+        if (this.isAuthError(errorMsg) || this.isAuthError(fullResponse)) {
+          this.log(`Auth error detected for tab=${tabId}, emitting auth:required`);
+          send('auth:required', errorMsg);
+        }
+
         send(`agent:error:${tabId}`, errorMsg);
       } else {
         if (session && fullResponse) {
@@ -601,6 +614,25 @@ rl.on('line', async (line) => {
       this.log(`Spawn error for tab=${tabId}: ${err.message}`);
       send(`agent:error:${tabId}`, err.message);
     });
+  }
+
+  /**
+   * Detect 401/authentication errors from Claude CLI output.
+   */
+  private isAuthError(output: string): boolean {
+    if (!output) return false;
+    const patterns = [
+      /\b401\b/,
+      /unauthorized/i,
+      /authentication.*(required|failed|expired|invalid)/i,
+      /token.*(expired|invalid|revoked)/i,
+      /not\s+authenticated/i,
+      /login\s+required/i,
+      /session\s+expired/i,
+      /invalid.*credentials/i,
+      /re-?authenticate/i,
+    ];
+    return patterns.some((p) => p.test(output));
   }
 
   private extractText(parsed: Record<string, unknown>): string | null {

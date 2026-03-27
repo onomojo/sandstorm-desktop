@@ -28,6 +28,13 @@ vi.mock('../../../src/renderer/components/ProjectTabs', () => ({
 vi.mock('../../../src/renderer/components/OpenProjectDialog', () => ({
   OpenProjectDialog: () => <div data-testid="open-project-dialog" />,
 }));
+vi.mock('../../../src/renderer/components/ReauthModal', () => ({
+  ReauthModal: ({ onClose }: { onClose: () => void }) => (
+    <div data-testid="reauth-modal">
+      <button onClick={onClose}>Close</button>
+    </div>
+  ),
+}));
 vi.mock('../../../src/renderer/tray-icon.png', () => ({ default: 'tray-icon.png' }));
 
 describe('App', () => {
@@ -44,6 +51,7 @@ describe('App', () => {
       selectedStackId: null,
       showNewStackDialog: false,
       showOpenProjectDialog: false,
+      showReauthModal: false,
       dockerConnected: true,
       error: null,
     });

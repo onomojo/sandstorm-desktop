@@ -6,6 +6,7 @@ import { NewStackDialog } from './components/NewStackDialog';
 import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { AccountUsageBar } from './components/AccountUsageBar';
+import { ReauthModal } from './components/ReauthModal';
 import trayIcon from './tray-icon.png';
 import buildVersion from './build-version.txt?raw';
 
@@ -21,6 +22,8 @@ export default function App() {
     selectedStackId,
     showNewStackDialog,
     showOpenProjectDialog,
+    showReauthModal,
+    setShowReauthModal,
     dockerConnected,
     refreshStacks,
     refreshProjects,
@@ -48,11 +51,17 @@ export default function App() {
       setDockerConnected(false);
     });
 
+    // Listen for auth:required events (401 from Claude CLI)
+    const unsubAuthRequired = window.sandstorm.on('auth:required', () => {
+      setShowReauthModal(true);
+    });
+
     return () => {
       unsubConnected();
       unsubDisconnected();
+      unsubAuthRequired();
     };
-  }, [setDockerConnected, refreshStacks, refreshMetrics]);
+  }, [setDockerConnected, setShowReauthModal, refreshStacks, refreshMetrics]);
 
   useEffect(() => {
     refreshProjects();
@@ -154,6 +163,7 @@ export default function App() {
       {/* Dialogs */}
       {showNewStackDialog && <NewStackDialog />}
       {showOpenProjectDialog && <OpenProjectDialog />}
+      {showReauthModal && <ReauthModal onClose={() => setShowReauthModal(false)} />}
     </div>
   );
 }

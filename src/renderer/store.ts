@@ -142,6 +142,10 @@ interface AppState {
   globalTokenUsage: GlobalTokenUsage | null;
   rateLimitState: RateLimitState | null;
 
+  // Auth reauth modal
+  showReauthModal: boolean;
+  setShowReauthModal: (show: boolean) => void;
+
   // Account usage budget (persisted in localStorage)
   tokenBudget: number; // 0 means no budget set
   setTokenBudget: (budget: number) => void;
@@ -269,6 +273,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   showNewStackDialog: false,
   loading: false,
   error: null,
+
+  // Auth reauth modal
+  showReauthModal: false,
+  setShowReauthModal: (show) => set({ showReauthModal: show }),
 
   // Token usage & rate limits
   globalTokenUsage: null,
