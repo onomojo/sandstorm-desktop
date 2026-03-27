@@ -6,6 +6,14 @@ import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
+import {
+  fetchIssueWithComments,
+  formatIssueContext,
+  resolveGitHubToken,
+  parseRepoSlug,
+  getGitRemoteUrl,
+  parseIssueNumber,
+} from './github';
 
 export interface CreateStackOpts {
   name: string;
@@ -358,6 +366,43 @@ export class StackManager {
     );
   }
 
+  /**
+   * If the stack has a ticket that maps to a GitHub issue number,
+   * fetch the issue body + all comments and prepend them to the prompt.
+   */
+  private async enrichPromptWithIssueContext(
+    stack: Stack,
+    prompt: string
+  ): Promise<string> {
+    if (!stack.ticket) return prompt;
+
+    const issueNumber = parseIssueNumber(stack.ticket);
+    if (!issueNumber) return prompt;
+
+    const token = resolveGitHubToken();
+    if (!token) return prompt;
+
+    const remoteUrl = getGitRemoteUrl(stack.project_dir);
+    if (!remoteUrl) return prompt;
+
+    const slug = parseRepoSlug(remoteUrl);
+    if (!slug) return prompt;
+
+    try {
+      const issue = await fetchIssueWithComments(
+        slug.owner,
+        slug.repo,
+        issueNumber,
+        token
+      );
+      const context = formatIssueContext(issue);
+      return `${context}${prompt}`;
+    } catch {
+      // If we can't fetch the issue, proceed with the original prompt
+      return prompt;
+    }
+  }
+
   async dispatchTask(stackId: string, prompt: string, model?: string): Promise<Task> {
     // Resolve "auto" → undefined so the CLI never receives "--model auto"
     if (model === 'auto') {
@@ -367,7 +412,10 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    const task = this.registry.createTask(stackId, prompt, model);
+    // Enrich prompt with GitHub issue context (body + comments) if applicable
+    const enrichedPrompt = await this.enrichPromptWithIssueContext(stack, prompt);
+
+    const task = this.registry.createTask(stackId, enrichedPrompt, model);
 
     try {
       const claudeContainer = await this.findClaudeContainer(stack);
@@ -384,7 +432,7 @@ export class StackManager {
       // preventing the infinite-loop and not-logged-in bugs.
       const cliArgs = ['task', stackId];
       if (model) cliArgs.push('--model', model);
-      cliArgs.push(prompt);
+      cliArgs.push(enrichedPrompt);
       const result = await this.runCli(stack.project_dir, cliArgs);
 
       if (result.exitCode !== 0) {
@@ -639,6 +687,10 @@ export class StackManager {
       total_tokens: totalInput + totalOutput,
       per_stack: perStack.sort((a, b) => b.total_tokens - a.total_tokens),
     };
+  }
+
+  getRateLimitState(): { active: boolean; reset_at: string | null; affected_stacks: string[]; reason: string | null } {
+    return { active: false, reset_at: null, affected_stacks: [], reason: null };
   }
 
   // --- Private helpers ---

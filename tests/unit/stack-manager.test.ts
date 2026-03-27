@@ -378,6 +378,109 @@ describe('StackManager', () => {
     });
   });
 
+  describe('dispatchTask with issue enrichment', () => {
+    it('enriches prompt with GitHub issue context when stack has a ticket', async () => {
+      const stackWithTicket = { ...makeStack('enrich-test'), ticket: '42' };
+      registry.createStack(stackWithTicket);
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      // Mock the private enrichment method by mocking the github module
+      const github = await import('../../src/main/control-plane/github');
+      const fetchSpy = vi.spyOn(github, 'fetchIssueWithComments').mockResolvedValue({
+        number: 42,
+        title: 'Fix login bug',
+        state: 'open',
+        user: 'alice',
+        created_at: '2026-01-01T00:00:00Z',
+        body: 'Login is broken.',
+        labels: ['bug'],
+        comments: [
+          { user: 'bob', created_at: '2026-01-02T00:00:00Z', body: 'I can reproduce this.' },
+        ],
+      });
+      vi.spyOn(github, 'resolveGitHubToken').mockReturnValue('ghp_test');
+      vi.spyOn(github, 'getGitRemoteUrl').mockReturnValue('https://github.com/owner/repo.git');
+      vi.spyOn(github, 'parseRepoSlug').mockReturnValue({ owner: 'owner', repo: 'repo' });
+
+      const task = await manager.dispatchTask('enrich-test', 'Fix the bug');
+
+      // The prompt sent to CLI should contain the issue context
+      const cliArgs = runCliSpy.mock.calls[0][1];
+      const promptArg = cliArgs[cliArgs.length - 1];
+      expect(promptArg).toContain('Issue #42: Fix login bug');
+      expect(promptArg).toContain('Login is broken.');
+      expect(promptArg).toContain('@bob:');
+      expect(promptArg).toContain('I can reproduce this.');
+      expect(promptArg).toContain('Fix the bug');
+
+      // Task in DB should also have the enriched prompt
+      expect(task.prompt).toContain('Issue #42');
+      expect(task.prompt).toContain('Fix the bug');
+
+      fetchSpy.mockRestore();
+    });
+
+    it('uses original prompt when ticket is not a GitHub issue number', async () => {
+      const stackWithJira = { ...makeStack('jira-ticket'), ticket: 'EXP-342' };
+      registry.createStack(stackWithJira);
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const task = await manager.dispatchTask('jira-ticket', 'Fix it');
+      expect(task.prompt).toBe('Fix it');
+      expect(runCliSpy).toHaveBeenCalledWith(
+        '/proj',
+        ['task', 'jira-ticket', 'Fix it']
+      );
+    });
+
+    it('falls back to original prompt when GitHub fetch fails', async () => {
+      const stackWithTicket = { ...makeStack('fetch-fail'), ticket: '99' };
+      registry.createStack(stackWithTicket);
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const github = await import('../../src/main/control-plane/github');
+      vi.spyOn(github, 'resolveGitHubToken').mockReturnValue('ghp_test');
+      vi.spyOn(github, 'getGitRemoteUrl').mockReturnValue('https://github.com/owner/repo.git');
+      vi.spyOn(github, 'parseRepoSlug').mockReturnValue({ owner: 'owner', repo: 'repo' });
+      const fetchSpy = vi.spyOn(github, 'fetchIssueWithComments').mockRejectedValue(
+        new Error('API error')
+      );
+
+      const task = await manager.dispatchTask('fetch-fail', 'Do the work');
+      expect(task.prompt).toBe('Do the work');
+
+      fetchSpy.mockRestore();
+    });
+
+    it('skips enrichment when no GitHub token available', async () => {
+      const stackWithTicket = { ...makeStack('no-token'), ticket: '10' };
+      registry.createStack(stackWithTicket);
+      vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const github = await import('../../src/main/control-plane/github');
+      vi.spyOn(github, 'resolveGitHubToken').mockReturnValue(null);
+
+      const task = await manager.dispatchTask('no-token', 'Original prompt');
+      expect(task.prompt).toBe('Original prompt');
+    });
+  });
+
   describe('waitForClaudeReady', () => {
     it('resolves immediately when readiness file exists', async () => {
       registry.createStack(makeStack('ready-test'));
