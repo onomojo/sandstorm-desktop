@@ -195,6 +195,21 @@ export function AccountUsageBar() {
                   <span className="tabular-nums">{formatTokenCount(globalTokenUsage.total_output_tokens)}</span>
                 </div>
               </div>
+
+              {/* Per-project breakdown */}
+              {globalTokenUsage.per_project && globalTokenUsage.per_project.length > 1 && (
+                <div className="mt-2 pt-1.5 border-t border-sandstorm-border/50">
+                  <div className="text-[10px] text-sandstorm-muted mb-0.5 font-medium">By Project</div>
+                  <div className="space-y-0.5">
+                    {globalTokenUsage.per_project.map((p) => (
+                      <div key={p.project_dir} className="flex justify-between" data-testid="project-usage-row">
+                        <span className="truncate mr-2">{p.project}</span>
+                        <span className="text-sandstorm-text-secondary tabular-nums shrink-0">{formatTokenCount(p.total_tokens)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
         </div>

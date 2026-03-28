@@ -111,15 +111,15 @@ describe('parseTokenUsage', () => {
     expect(result.session_id).toBe('sess-full');
   });
 
-  it('takes the last result usage (cumulative)', () => {
+  it('accumulates result usage across multiple turns', () => {
     const output = [
       '{"type":"result","usage":{"input_tokens":100,"output_tokens":50},"session_id":"s1"}',
       '{"type":"result","usage":{"input_tokens":200,"output_tokens":150},"session_id":"s2"}',
     ].join('\n');
 
     const result = parseTokenUsage(output);
-    expect(result.input_tokens).toBe(200);
-    expect(result.output_tokens).toBe(150);
+    expect(result.input_tokens).toBe(300);
+    expect(result.output_tokens).toBe(200);
     expect(result.session_id).toBe('s2');
   });
 
@@ -140,6 +140,72 @@ describe('parseTokenUsage', () => {
     const output = '{"type":"assistant","session_id":"sess-456"}\n';
     const result = parseTokenUsage(output);
     expect(result.session_id).toBe('sess-456');
+  });
+
+  it('accumulates across many result messages (multi-turn session)', () => {
+    const output = [
+      '{"type":"result","usage":{"input_tokens":1000,"output_tokens":500},"session_id":"s1"}',
+      '{"type":"result","usage":{"input_tokens":800,"output_tokens":300},"session_id":"s1"}',
+      '{"type":"result","usage":{"input_tokens":1200,"output_tokens":600},"session_id":"s1"}',
+    ].join('\n');
+
+    const result = parseTokenUsage(output);
+    expect(result.input_tokens).toBe(3000);
+    expect(result.output_tokens).toBe(1400);
+  });
+
+  it('includes in-progress turn tokens when no result yet', () => {
+    // Simulates polling mid-task: one completed turn + one in-progress
+    const output = [
+      '{"type":"result","usage":{"input_tokens":500,"output_tokens":200}}',
+      '{"type":"message_start","message":{"usage":{"input_tokens":300}}}',
+      '{"type":"message_delta","usage":{"output_tokens":100}}',
+    ].join('\n');
+
+    const result = parseTokenUsage(output);
+    // 500 from result + 300 from in-progress message_start
+    expect(result.input_tokens).toBe(800);
+    // 200 from result + 100 from in-progress message_delta
+    expect(result.output_tokens).toBe(300);
+  });
+
+  it('resets in-progress counters when result arrives', () => {
+    // message_start/delta followed by result should not double-count
+    const output = [
+      '{"type":"message_start","message":{"usage":{"input_tokens":400}}}',
+      '{"type":"message_delta","usage":{"output_tokens":150}}',
+      '{"type":"result","usage":{"input_tokens":400,"output_tokens":150}}',
+    ].join('\n');
+
+    const result = parseTokenUsage(output);
+    // Only result counts, in-progress reset to 0
+    expect(result.input_tokens).toBe(400);
+    expect(result.output_tokens).toBe(150);
+  });
+
+  it('monotonically increases as log grows (simulates periodic polling)', () => {
+    // First poll: one result
+    const poll1 = '{"type":"result","usage":{"input_tokens":500,"output_tokens":200}}';
+    const r1 = parseTokenUsage(poll1);
+
+    // Second poll: same result + new in-progress turn
+    const poll2 = [
+      '{"type":"result","usage":{"input_tokens":500,"output_tokens":200}}',
+      '{"type":"message_start","message":{"usage":{"input_tokens":300}}}',
+    ].join('\n');
+    const r2 = parseTokenUsage(poll2);
+
+    // Third poll: two completed results
+    const poll3 = [
+      '{"type":"result","usage":{"input_tokens":500,"output_tokens":200}}',
+      '{"type":"result","usage":{"input_tokens":300,"output_tokens":100}}',
+    ].join('\n');
+    const r3 = parseTokenUsage(poll3);
+
+    // Tokens should monotonically increase
+    expect(r2.input_tokens).toBeGreaterThanOrEqual(r1.input_tokens);
+    expect(r3.input_tokens).toBeGreaterThanOrEqual(r2.input_tokens);
+    expect(r3.output_tokens).toBeGreaterThanOrEqual(r1.output_tokens);
   });
 
   it('returns null resolved_model for empty input', () => {

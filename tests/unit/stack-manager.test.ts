@@ -936,6 +936,77 @@ describe('StackManager', () => {
       expect(global.total_tokens).toBe(450);
       expect(global.per_stack).toHaveLength(2);
     });
+
+    it('getGlobalTokenUsage groups per_project across multiple projects', () => {
+      // Create stacks in two different projects
+      registry.createStack({
+        ...makeStack('proj-a-1'),
+        project: 'alpha',
+        project_dir: '/projects/alpha',
+      });
+      registry.createStack({
+        ...makeStack('proj-a-2'),
+        project: 'alpha',
+        project_dir: '/projects/alpha',
+      });
+      registry.createStack({
+        ...makeStack('proj-b-1'),
+        project: 'beta',
+        project_dir: '/projects/beta',
+      });
+
+      // Assign token usage via tasks
+      const t1 = registry.createTask('proj-a-1', 'task a1');
+      registry.updateTaskTokens(t1.id, 100, 50);
+      const t2 = registry.createTask('proj-a-2', 'task a2');
+      registry.updateTaskTokens(t2.id, 200, 80);
+      const t3 = registry.createTask('proj-b-1', 'task b1');
+      registry.updateTaskTokens(t3.id, 300, 120);
+
+      const global = manager.getGlobalTokenUsage();
+
+      // Total across all stacks
+      expect(global.total_input_tokens).toBe(600);
+      expect(global.total_output_tokens).toBe(250);
+      expect(global.total_tokens).toBe(850);
+
+      // Two distinct projects
+      expect(global.per_project).toHaveLength(2);
+
+      // Sorted by total_tokens descending: beta (420) > alpha (430)
+      // alpha: 100+200 input, 50+80 output = 430 total
+      // beta: 300 input, 120 output = 420 total
+      const alpha = global.per_project.find(p => p.project === 'alpha');
+      const beta = global.per_project.find(p => p.project === 'beta');
+
+      expect(alpha).toBeDefined();
+      expect(alpha!.input_tokens).toBe(300);
+      expect(alpha!.output_tokens).toBe(130);
+      expect(alpha!.total_tokens).toBe(430);
+      expect(alpha!.project_dir).toBe('/projects/alpha');
+
+      expect(beta).toBeDefined();
+      expect(beta!.input_tokens).toBe(300);
+      expect(beta!.output_tokens).toBe(120);
+      expect(beta!.total_tokens).toBe(420);
+      expect(beta!.project_dir).toBe('/projects/beta');
+    });
+
+    it('getGlobalTokenUsage omits projects with zero tokens from per_project', () => {
+      registry.createStack({
+        ...makeStack('zero-tok'),
+        project: 'empty-proj',
+        project_dir: '/projects/empty',
+      });
+      registry.createStack(makeStack('has-tok'));
+      const t = registry.createTask('has-tok', 'work');
+      registry.updateTaskTokens(t.id, 50, 25);
+
+      const global = manager.getGlobalTokenUsage();
+      // Only the project with tokens should appear
+      expect(global.per_project).toHaveLength(1);
+      expect(global.per_project[0].project).toBe('proj');
+    });
   });
 
   describe('getTaskStatus', () => {

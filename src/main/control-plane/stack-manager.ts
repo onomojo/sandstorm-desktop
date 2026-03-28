@@ -62,11 +62,20 @@ export interface TokenUsageStats {
   total_tokens: number;
 }
 
+export interface ProjectTokenUsage {
+  project: string;
+  project_dir: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+}
+
 export interface GlobalTokenUsage {
   total_input_tokens: number;
   total_output_tokens: number;
   total_tokens: number;
   per_stack: TokenUsageStats[];
+  per_project: ProjectTokenUsage[];
 }
 
 export interface RateLimitState {
@@ -636,6 +645,7 @@ export class StackManager {
     let totalInput = 0;
     let totalOutput = 0;
     const perStack: TokenUsageStats[] = [];
+    const projectMap = new Map<string, { project: string; project_dir: string; input: number; output: number }>();
 
     for (const stack of stacks) {
       totalInput += stack.total_input_tokens;
@@ -648,6 +658,33 @@ export class StackManager {
           total_tokens: stack.total_input_tokens + stack.total_output_tokens,
         });
       }
+
+      // Aggregate per-project
+      const existing = projectMap.get(stack.project_dir);
+      if (existing) {
+        existing.input += stack.total_input_tokens;
+        existing.output += stack.total_output_tokens;
+      } else {
+        projectMap.set(stack.project_dir, {
+          project: stack.project,
+          project_dir: stack.project_dir,
+          input: stack.total_input_tokens,
+          output: stack.total_output_tokens,
+        });
+      }
+    }
+
+    const perProject: ProjectTokenUsage[] = [];
+    for (const entry of projectMap.values()) {
+      if (entry.input > 0 || entry.output > 0) {
+        perProject.push({
+          project: entry.project,
+          project_dir: entry.project_dir,
+          input_tokens: entry.input,
+          output_tokens: entry.output,
+          total_tokens: entry.input + entry.output,
+        });
+      }
     }
 
     return {
@@ -655,6 +692,7 @@ export class StackManager {
       total_output_tokens: totalOutput,
       total_tokens: totalInput + totalOutput,
       per_stack: perStack.sort((a, b) => b.total_tokens - a.total_tokens),
+      per_project: perProject.sort((a, b) => b.total_tokens - a.total_tokens),
     };
   }
 
