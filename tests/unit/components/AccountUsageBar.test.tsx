@@ -207,6 +207,51 @@ describe('AccountUsageBar', () => {
     expect(fill.className).toContain('bg-orange-500');
   });
 
+  it('shows per-project breakdown when multiple projects exist', () => {
+    useAppStore.setState({
+      globalTokenUsage: {
+        total_input_tokens: 500000,
+        total_output_tokens: 300000,
+        total_tokens: 800000,
+        per_stack: [],
+        per_project: [
+          { project: 'alpha', project_dir: '/alpha', input_tokens: 300000, output_tokens: 200000, total_tokens: 500000 },
+          { project: 'beta', project_dir: '/beta', input_tokens: 200000, output_tokens: 100000, total_tokens: 300000 },
+        ],
+      },
+    });
+    render(<AccountUsageBar />);
+    fireEvent.click(screen.getByTestId('usage-bar-button'));
+
+    const rows = screen.getAllByTestId('project-usage-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].textContent).toContain('alpha');
+    expect(rows[1].textContent).toContain('beta');
+    // "By Project" header should be visible
+    const popover = screen.getByTestId('usage-popover');
+    expect(popover.textContent).toContain('By Project');
+  });
+
+  it('hides per-project breakdown when only one project exists', () => {
+    useAppStore.setState({
+      globalTokenUsage: {
+        total_input_tokens: 100000,
+        total_output_tokens: 50000,
+        total_tokens: 150000,
+        per_stack: [],
+        per_project: [
+          { project: 'only-one', project_dir: '/only', input_tokens: 100000, output_tokens: 50000, total_tokens: 150000 },
+        ],
+      },
+    });
+    render(<AccountUsageBar />);
+    fireEvent.click(screen.getByTestId('usage-bar-button'));
+
+    expect(screen.queryAllByTestId('project-usage-row')).toHaveLength(0);
+    const popover = screen.getByTestId('usage-popover');
+    expect(popover.textContent).not.toContain('By Project');
+  });
+
   it('falls back to counter when account usage has no limit', () => {
     useAppStore.setState({
       accountUsage: {

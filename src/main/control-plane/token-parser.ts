@@ -15,12 +15,24 @@ export interface ParsedTokenUsage {
 
 /**
  * Parse token usage from Claude CLI stream-json output.
- * Scans all lines for usage data and accumulates totals.
- * Returns the last session_id seen.
+ * Accumulates token usage across all API turns in a session.
+ *
+ * Each API call produces: message_start → content blocks → message_delta → result.
+ * The `result.usage` contains the token count for that single turn.
+ * We SUM all result messages to get the total for the entire session.
+ *
+ * For in-progress turns (message_start/delta seen but no result yet),
+ * we track the partial counts separately and add them to the total.
  */
 export function parseTokenUsage(output: string): ParsedTokenUsage {
-  let inputTokens = 0;
-  let outputTokens = 0;
+  // Accumulated totals from completed turns (result messages)
+  let resultInputTotal = 0;
+  let resultOutputTotal = 0;
+
+  // Partial counts from the current in-progress turn
+  let currentTurnInput = 0;
+  let currentTurnOutput = 0;
+
   let sessionId: string | null = null;
   let resolvedModel: string | null = null;
 
@@ -29,10 +41,13 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
     try {
       const parsed = JSON.parse(line);
 
-      // The final "result" message contains cumulative usage for the turn
+      // result messages: accumulate across all turns
       if (parsed.type === 'result' && parsed.usage) {
-        inputTokens = parsed.usage.input_tokens ?? inputTokens;
-        outputTokens = parsed.usage.output_tokens ?? outputTokens;
+        resultInputTotal += parsed.usage.input_tokens ?? 0;
+        resultOutputTotal += parsed.usage.output_tokens ?? 0;
+        // This result closes the current turn — reset partial tracking
+        currentTurnInput = 0;
+        currentTurnOutput = 0;
       }
 
       // Session ID appears on result messages
@@ -45,7 +60,7 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
       const event = parsed.type === 'stream_event' ? parsed.event : parsed;
       if (!event) continue;
 
-      // message_start contains input token count and model
+      // message_start: track current (possibly incomplete) turn
       if (event.type === 'message_start' && event.message) {
         if (event.message.model && !resolvedModel) {
           resolvedModel = event.message.model;
@@ -53,15 +68,17 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
         if (event.message.usage) {
           const msgUsage = event.message.usage;
           if (msgUsage.input_tokens) {
-            inputTokens = msgUsage.input_tokens;
+            currentTurnInput = msgUsage.input_tokens;
           }
+          // Reset output for this new turn
+          currentTurnOutput = 0;
         }
       }
 
-      // message_delta contains output token count at end of message
+      // message_delta: track output for current turn
       if (event.type === 'message_delta' && event.usage) {
         if (event.usage.output_tokens) {
-          outputTokens = event.usage.output_tokens;
+          currentTurnOutput = event.usage.output_tokens;
         }
       }
     } catch {
@@ -69,6 +86,11 @@ export function parseTokenUsage(output: string): ParsedTokenUsage {
     }
   }
 
-  return { input_tokens: inputTokens, output_tokens: outputTokens, session_id: sessionId, resolved_model: resolvedModel };
+  return {
+    input_tokens: resultInputTotal + currentTurnInput,
+    output_tokens: resultOutputTotal + currentTurnOutput,
+    session_id: sessionId,
+    resolved_model: resolvedModel,
+  };
 }
 
