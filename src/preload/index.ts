@@ -8,6 +8,20 @@ export interface SandstormAPI {
     browse: () => Promise<string | null>;
     checkInit: (directory: string) => Promise<boolean>;
     initialize: (directory: string) => Promise<{ success: boolean; error?: string }>;
+    checkMigration: (directory: string) => Promise<{
+      needsMigration: boolean;
+      missingVerifyScript?: boolean;
+      missingServiceLabels?: boolean;
+    }>;
+    autoDetectVerify: (directory: string) => Promise<{
+      verifyScript: string;
+      serviceDescriptions: Record<string, string>;
+    }>;
+    saveMigration: (
+      directory: string,
+      verifyScript: string,
+      serviceDescriptions: Record<string, string>,
+    ) => Promise<{ success: boolean; error?: string }>;
   };
   stacks: {
     list: () => Promise<unknown[]>;
@@ -81,6 +95,10 @@ const api: SandstormAPI = {
     browse: () => ipcRenderer.invoke('projects:browse'),
     checkInit: (directory) => ipcRenderer.invoke('projects:checkInit', directory),
     initialize: (directory) => ipcRenderer.invoke('projects:initialize', directory),
+    checkMigration: (directory) => ipcRenderer.invoke('projects:checkMigration', directory),
+    autoDetectVerify: (directory) => ipcRenderer.invoke('projects:autoDetectVerify', directory),
+    saveMigration: (directory: string, verifyScript: string, serviceDescriptions: Record<string, string>) =>
+      ipcRenderer.invoke('projects:saveMigration', directory, verifyScript, serviceDescriptions),
   },
   stacks: {
     list: () => ipcRenderer.invoke('stacks:list'),

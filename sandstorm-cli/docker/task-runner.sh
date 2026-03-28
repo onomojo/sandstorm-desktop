@@ -11,9 +11,10 @@
 #       If review fails → back to Execution Agent
 #       If review passes → exit inner loop
 #     VERIFY (runs ONCE after review passes, not on every review iteration):
-#       npm test, tsc --noEmit, npm run build
+#       Runs .sandstorm/verify.sh (project-configurable)
 #       If pass → done
 #       If fail → fix errors → back to outer loop (inner counter resets)
+#       If no verify.sh exists → skip verification, treat as pass
 #
 # Runs as PID 1 so all output goes to docker logs.
 #
@@ -203,56 +204,38 @@ is_infra_error_only() {
   return 1  # Unknown failure — treat as real
 }
 
-# Run verification: tests, type check, build.
-# Returns: 0 = all pass, 1 = test/type/build failure (retryable), 2 = infrastructure error (halt)
+# Run verification using the project's .sandstorm/verify.sh script.
+# Returns: 0 = all pass (or no verify.sh), 1 = failure (retryable), 2 = infrastructure error (halt)
 run_verify() {
+  local verify_script="/app/.sandstorm/verify.sh"
   local verify_log="/tmp/claude-verify.log"
   > "$verify_log"
 
-  log_loop "Running verification suite..."
-
-  local failed=0
-
-  # Step 1: Tests
-  log_loop "Verify: running npm test..."
-  (cd /app && npm test 2>&1) | tee -a "$verify_log"
-  if [ ${PIPESTATUS[0]} -ne 0 ]; then
-    # Check if this is an infrastructure error vs real test failure
-    if is_infra_error_only "$verify_log"; then
-      log_loop "Verify: tests passed but infrastructure errors detected (e.g. permission denied) — halting, not retrying"
-      return 2
-    fi
-    log_loop "Verify: tests FAILED"
-    failed=1
-  else
-    log_loop "Verify: tests PASSED"
+  # If no verify.sh exists, skip verification entirely
+  if [ ! -f "$verify_script" ]; then
+    log_loop "No .sandstorm/verify.sh found — skipping verification"
+    return 0
   fi
 
-  # Step 2: Type check (only if tests passed — fail fast)
-  if [ $failed -eq 0 ]; then
-    log_loop "Verify: running tsc --noEmit..."
-    (cd /app && npx tsc --noEmit 2>&1) | tee -a "$verify_log"
-    if [ ${PIPESTATUS[0]} -ne 0 ]; then
-      log_loop "Verify: type check FAILED"
-      failed=1
-    else
-      log_loop "Verify: type check PASSED"
-    fi
+  log_loop "Running verification suite (.sandstorm/verify.sh)..."
+
+  # Run the project's verify script with sandstorm-exec on PATH
+  (cd /app && bash "$verify_script" 2>&1) | tee -a "$verify_log"
+  local exit_code=${PIPESTATUS[0]}
+
+  if [ $exit_code -eq 0 ]; then
+    log_loop "Verify: ALL PASSED"
+    return 0
   fi
 
-  # Step 3: Build (only if types passed)
-  if [ $failed -eq 0 ]; then
-    log_loop "Verify: running npm run build..."
-    (cd /app && npm run build 2>&1) | tee -a "$verify_log"
-    if [ ${PIPESTATUS[0]} -ne 0 ]; then
-      log_loop "Verify: build FAILED"
-      failed=1
-    else
-      log_loop "Verify: build PASSED"
-    fi
+  # Check if this is an infrastructure error vs real failure
+  if is_infra_error_only "$verify_log"; then
+    log_loop "Verify: infrastructure errors detected (e.g. permission denied) — halting, not retrying"
+    return 2
   fi
 
-  return $failed
+  log_loop "Verify: FAILED (exit code $exit_code)"
+  return 1
 }
 
 # ─── Main Loop ──────────────────────────────────────────────────────────────

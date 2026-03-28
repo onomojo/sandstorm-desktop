@@ -1,0 +1,27 @@
+#!/bin/bash
+#
+# sandstorm-exec — run a command on a sibling service container.
+#
+# Usage: sandstorm-exec <service> <command> [args...]
+#
+# Translates to: docker exec ${SANDSTORM_PROJECT}-<service>-1 <command> [args...]
+#
+# Available inside the Claude container. Used by verify.sh and inner Claude.
+#
+
+if [ $# -lt 2 ]; then
+  echo "Usage: sandstorm-exec <service> <command> [args...]" >&2
+  exit 1
+fi
+
+SERVICE="$1"
+shift
+
+if [ -z "$SANDSTORM_PROJECT" ]; then
+  echo "Error: SANDSTORM_PROJECT is not set." >&2
+  exit 1
+fi
+
+CONTAINER="${SANDSTORM_PROJECT}-${SERVICE}-1"
+
+exec docker exec "$CONTAINER" "$@"

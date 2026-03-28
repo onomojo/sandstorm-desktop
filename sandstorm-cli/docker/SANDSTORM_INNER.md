@@ -4,20 +4,22 @@ You are running inside a Sandstorm stack — an isolated Docker environment with
 
 ## Running commands on other services
 
-You have Docker access. To run commands on other containers in this stack, use:
+Use `sandstorm-exec` to run commands on sibling service containers:
 
 ```bash
-docker exec ${SANDSTORM_PROJECT}-<service>-1 <command>
+sandstorm-exec <service> <command> [args...]
 ```
 
 For example:
-- **Run Rails tests:** `docker exec ${SANDSTORM_PROJECT}-api-1 bash -c 'cd /rails && bin/rails test'`
-- **Run a specific test:** `docker exec ${SANDSTORM_PROJECT}-api-1 bash -c 'cd /rails && bin/rails test test/controllers/api/v1/quest_progress_controller_test.rb'`
-- **Rails console:** `docker exec -it ${SANDSTORM_PROJECT}-api-1 bash -c 'cd /rails && bin/rails console'`
-- **Run frontend tests:** `docker exec ${SANDSTORM_PROJECT}-app-1 bash -c 'cd /app && npm test'`
-- **Check API logs:** `docker logs ${SANDSTORM_PROJECT}-api-1`
+- **Run tests:** `sandstorm-exec app npm test`
+- **Run Rails tests:** `sandstorm-exec api bash -c 'cd /rails && bin/rails test'`
+- **Run a specific test:** `sandstorm-exec api bash -c 'cd /rails && bin/rails test test/controllers/api/v1/some_controller_test.rb'`
+- **Rails console:** `sandstorm-exec api bash -c 'cd /rails && bin/rails console'`
+- **Check logs:** `docker logs ${SANDSTORM_PROJECT}-api-1`
 
-The `SANDSTORM_PROJECT` environment variable contains the stack name (e.g., `sandstorm-examprep-1`).
+The actual services available in your stack are listed in the **Stack Services** section below (injected at startup). Use `sandstorm-exec` with the service names listed there.
+
+**IMPORTANT:** Do NOT install languages or run project commands directly on this container. Always use `sandstorm-exec` to run commands on the appropriate service container.
 
 ## Code editing
 
@@ -33,9 +35,7 @@ You have a headless Chromium browser available via Chrome DevTools MCP tools. Us
 
 ### Accessing stack services in the browser
 
-Use Docker service hostnames to reach services in this stack:
-- `http://app:3000` — frontend
-- `http://api:3000` — API
+Use Docker service hostnames to reach services in this stack (see Stack Services section for actual service names and ports).
 
 ### Common patterns
 
@@ -51,7 +51,7 @@ Your work goes through an automated review and verification loop:
 1. **You write code** (execution pass)
 2. **A review agent** (with fresh context) reviews your diff against the original task
 3. If the review finds issues, you'll receive a report — **fix all listed issues without argument**
-4. Once review passes, **verification runs**: `npm test`, `tsc --noEmit`, `npm run build`
+4. Once review passes, **verification runs** your project's `.sandstorm/verify.sh` script
 5. If verification fails, you'll receive the error output — **fix the failures**
 
 This loop repeats until review + verification both pass (or max iterations are reached).
@@ -69,4 +69,4 @@ This loop repeats until review + verification both pass (or max iterations are r
 - Do not push to GitHub (you only have read-only access)
 - Do not switch git branches — stay on whatever branch was checked out when the stack started. Your branch was set by the orchestrator; switching to another branch will cause your work to land in the wrong place.
 - Do not modify Docker infrastructure (don't stop/start containers)
-- Do not install languages or runtimes in this container — use the service containers instead
+- Do not install languages or runtimes in this container — use `sandstorm-exec` to run commands on the service containers instead

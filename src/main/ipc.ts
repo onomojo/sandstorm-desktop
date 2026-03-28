@@ -66,6 +66,56 @@ function syncSkillsToProject(projectDir: string, sandstormCliDir: string): void 
 }
 
 
+/**
+ * Auto-detect verify script content based on project files.
+ * Shared by projects:initialize fallback and projects:autoDetectVerify.
+ */
+function autoDetectVerifyLines(directory: string): string[] {
+  const lines: string[] = [
+    '#!/bin/bash',
+    '#',
+    '# Sandstorm verify script — commands run during the verification step.',
+    '# Each command runs in sequence. If any fails, verification fails.',
+    '#',
+    "# Use 'sandstorm-exec <service> <command>' to run on service containers.",
+    "# Edit this file to match your project's test/lint/build commands.",
+    '#',
+    'set -e',
+    '',
+  ];
+
+  const pkgJsonPath = path.join(directory, 'package.json');
+  if (fs.existsSync(pkgJsonPath)) {
+    try {
+      const pkg = JSON.parse(fs.readFileSync(pkgJsonPath, 'utf-8'));
+      const scripts = pkg.scripts || {};
+      if (scripts.test) lines.push('npm test');
+      if (scripts.typecheck) {
+        lines.push('npm run typecheck');
+      } else if (fs.existsSync(path.join(directory, 'tsconfig.json'))) {
+        lines.push('npx tsc --noEmit');
+      }
+      if (scripts.build) lines.push('npm run build');
+    } catch { /* ignore parse errors */ }
+  }
+
+  if (fs.existsSync(path.join(directory, 'Gemfile'))) {
+    if (fs.existsSync(path.join(directory, 'bin', 'rails'))) {
+      lines.push("# sandstorm-exec api bash -c 'cd /rails && bin/rails test'");
+    }
+  }
+
+  if (fs.existsSync(path.join(directory, 'requirements.txt')) || fs.existsSync(path.join(directory, 'pyproject.toml'))) {
+    lines.push('# sandstorm-exec app pytest');
+  }
+
+  if (fs.existsSync(path.join(directory, 'go.mod'))) {
+    lines.push('# sandstorm-exec app go test ./...');
+  }
+
+  return lines;
+}
+
 export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   // Wire up stack update notifications to the renderer
   stackManager.setOnStackUpdate(() => {
@@ -254,12 +304,119 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         ].join('\n'),
       );
 
+      // Generate verify.sh based on project files (shared auto-detection)
+      const verifyLines = autoDetectVerifyLines(directory);
+      const verifyPath = path.join(sandstormDir, 'verify.sh');
+      fs.writeFileSync(verifyPath, verifyLines.join('\n') + '\n', { mode: 0o755 });
+
       return { success: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Failed to create .sandstorm config: ${msg}` };
     }
   });
+
+  // --- Migration Detection ---
+
+  ipcMain.handle('projects:checkMigration', async (_event, directory: string) => {
+    try {
+      const sandstormDir = path.join(directory, '.sandstorm');
+      if (!fs.existsSync(path.join(sandstormDir, 'config'))) {
+        return { needsMigration: false }; // not initialized at all
+      }
+
+      const hasVerifyScript = fs.existsSync(path.join(sandstormDir, 'verify.sh'));
+
+      let hasServiceLabels = false;
+      const composePath = path.join(sandstormDir, 'docker-compose.yml');
+      if (fs.existsSync(composePath)) {
+        const content = fs.readFileSync(composePath, 'utf-8');
+        hasServiceLabels = content.includes('sandstorm.description');
+      }
+
+      return {
+        needsMigration: !hasVerifyScript || !hasServiceLabels,
+        missingVerifyScript: !hasVerifyScript,
+        missingServiceLabels: !hasServiceLabels,
+      };
+    } catch {
+      return { needsMigration: false };
+    }
+  });
+
+  ipcMain.handle('projects:autoDetectVerify', async (_event, directory: string) => {
+    try {
+      const lines = autoDetectVerifyLines(directory);
+
+      // Also detect service labels from existing compose
+      const serviceDescriptions: Record<string, string> = {};
+      const composePath = path.join(directory, '.sandstorm', 'docker-compose.yml');
+      if (fs.existsSync(composePath)) {
+        const content = fs.readFileSync(composePath, 'utf-8');
+        // Simple YAML parsing for service names (lines matching "  <name>:")
+        const serviceRegex = /^  (\w[\w-]*):\s*$/gm;
+        let match;
+        while ((match = serviceRegex.exec(content)) !== null) {
+          const svcName = match[1];
+          if (svcName !== 'claude') {
+            serviceDescriptions[svcName] = 'Application service';
+          }
+        }
+      }
+
+      return {
+        verifyScript: lines.join('\n') + '\n',
+        serviceDescriptions,
+      };
+    } catch (err) {
+      return { verifyScript: '#!/bin/bash\nset -e\n', serviceDescriptions: {} };
+    }
+  });
+
+  ipcMain.handle(
+    'projects:saveMigration',
+    async (
+      _event,
+      directory: string,
+      verifyScript: string,
+      serviceDescriptions: Record<string, string>,
+    ) => {
+      try {
+        const sandstormDir = path.join(directory, '.sandstorm');
+
+        // Save verify.sh
+        const verifyPath = path.join(sandstormDir, 'verify.sh');
+        fs.writeFileSync(verifyPath, verifyScript, { mode: 0o755 });
+
+        // Update compose file with service labels if needed
+        const composePath = path.join(sandstormDir, 'docker-compose.yml');
+        if (fs.existsSync(composePath) && Object.keys(serviceDescriptions).length > 0) {
+          let content = fs.readFileSync(composePath, 'utf-8');
+
+          // Only add labels if they don't already exist
+          if (!content.includes('sandstorm.description')) {
+            for (const [svcName, desc] of Object.entries(serviceDescriptions)) {
+              // Find the service block and add labels after the service name line
+              const svcPattern = new RegExp(`(  ${svcName}:\\s*\\n)`, 'g');
+              if (svcPattern.test(content)) {
+                const safeDesc = desc.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+              content = content.replace(
+                  new RegExp(`(  ${svcName}:\\s*\\n)`),
+                  `$1    labels:\n      sandstorm.description: "${safeDesc}"\n`,
+                );
+              }
+            }
+            fs.writeFileSync(composePath, content);
+          }
+        }
+
+        return { success: true };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    },
+  );
 
   // --- Stacks ---
 

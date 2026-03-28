@@ -16,6 +16,9 @@ export function mockSandstormApi() {
       browse: vi.fn().mockResolvedValue(null),
       checkInit: vi.fn().mockResolvedValue(true),
       initialize: vi.fn().mockResolvedValue(true),
+      checkMigration: vi.fn().mockResolvedValue({ needsMigration: false }),
+      autoDetectVerify: vi.fn().mockResolvedValue({ verifyScript: '#!/bin/bash\nset -e\n', serviceDescriptions: {} }),
+      saveMigration: vi.fn().mockResolvedValue({ success: true }),
     },
     stacks: {
       list: vi.fn().mockResolvedValue([]),

@@ -60,12 +60,13 @@ ENV PATH="/home/claude/.local/bin:$PATH"
 # Pre-install Chrome DevTools MCP server (avoids npx cold-start)
 RUN npm install -g chrome-devtools-mcp@latest
 
-# Entrypoint, task runner, and inner Claude instructions
+# Entrypoint, task runner, helper scripts, and inner Claude instructions
 COPY docker/entrypoint.sh /usr/bin/sandstorm-entrypoint.sh
 COPY docker/task-runner.sh /usr/bin/sandstorm-task-runner.sh
+COPY docker/sandstorm-exec /usr/bin/sandstorm-exec
 COPY docker/SANDSTORM_INNER.md /usr/bin/SANDSTORM_INNER.md
 COPY docker/review-prompt.md /usr/bin/review-prompt.md
-RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh
+RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh /usr/bin/sandstorm-exec
 
 WORKDIR /app
 

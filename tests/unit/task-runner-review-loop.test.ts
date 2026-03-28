@@ -95,16 +95,16 @@ describe('task-runner.sh dual-loop workflow', () => {
       expect(taskRunner).toContain('run_verify()')
     })
 
-    it('runs npm test', () => {
-      expect(taskRunner).toContain('npm test')
+    it('uses .sandstorm/verify.sh script', () => {
+      expect(taskRunner).toContain('.sandstorm/verify.sh')
     })
 
-    it('runs tsc --noEmit', () => {
-      expect(taskRunner).toContain('tsc --noEmit')
+    it('skips verification when no verify.sh exists', () => {
+      expect(taskRunner).toContain('No .sandstorm/verify.sh found')
     })
 
-    it('runs npm run build', () => {
-      expect(taskRunner).toContain('npm run build')
+    it('runs the verify script with bash', () => {
+      expect(taskRunner).toContain('bash "$verify_script"')
     })
   })
 
@@ -112,11 +112,10 @@ describe('task-runner.sh dual-loop workflow', () => {
 
   describe('verify PIPESTATUS handling', () => {
     it('uses PIPESTATUS to capture real exit codes from tee pipelines', () => {
-      // All three verify steps must use PIPESTATUS[0] instead of relying on tee exit code
+      // run_claude has one, plus 1 in run_verify = at least 2
       const matches = taskRunner.match(/PIPESTATUS\[0\]/g)
-      // run_claude has one, plus 3 in run_verify = at least 4
       expect(matches).not.toBeNull()
-      expect(matches!.length).toBeGreaterThanOrEqual(4)
+      expect(matches!.length).toBeGreaterThanOrEqual(2)
     })
   })
 
@@ -612,10 +611,12 @@ describe('SANDSTORM_INNER.md workflow section', () => {
     expect(innerMd).toContain('Write tests')
   })
 
-  it('explains verification steps', () => {
-    expect(innerMd).toContain('npm test')
-    expect(innerMd).toContain('tsc --noEmit')
-    expect(innerMd).toContain('npm run build')
+  it('explains verification uses project verify script', () => {
+    expect(innerMd).toContain('.sandstorm/verify.sh')
+  })
+
+  it('documents sandstorm-exec usage', () => {
+    expect(innerMd).toContain('sandstorm-exec')
   })
 
   it('notes the review agent has no prior context', () => {

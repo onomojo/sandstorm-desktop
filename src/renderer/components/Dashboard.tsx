@@ -4,6 +4,7 @@ import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
 import { TicketView } from './TicketView';
 import { UninitializedProject } from './UninitializedProject';
+import { MigrationModal } from './MigrationModal';
 import { AgentSession } from './AgentSession';
 import { AuthIndicator } from './AuthIndicator';
 import { ProjectContext } from './ProjectContext';
@@ -150,6 +151,12 @@ export function Dashboard() {
 
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>('active');
   const [projectInitialized, setProjectInitialized] = useState<boolean | null>(null);
+  const [migrationState, setMigrationState] = useState<{
+    needsMigration: boolean;
+    missingVerifyScript: boolean;
+    missingServiceLabels: boolean;
+  } | null>(null);
+  const [showMigrationModal, setShowMigrationModal] = useState(false);
   const [showContext, setShowContext] = useState(false);
   const [viewMode, _setViewMode] = useState<'cards' | 'table'>(() => {
     const saved = localStorage.getItem('sandstorm-view-mode');
@@ -175,11 +182,28 @@ export function Dashboard() {
   useEffect(() => {
     if (!project) {
       setProjectInitialized(null);
+      setMigrationState(null);
       return;
     }
     let cancelled = false;
     window.sandstorm.projects.checkInit(project.directory).then((ok) => {
-      if (!cancelled) setProjectInitialized(ok);
+      if (cancelled) return;
+      setProjectInitialized(ok);
+      // If initialized, check if migration is needed
+      if (ok) {
+        window.sandstorm.projects.checkMigration(project.directory).then((migration) => {
+          if (!cancelled) {
+            setMigrationState(migration.needsMigration ? {
+              needsMigration: true,
+              missingVerifyScript: migration.missingVerifyScript ?? false,
+              missingServiceLabels: migration.missingServiceLabels ?? false,
+            } : null);
+            if (migration.needsMigration) {
+              setShowMigrationModal(true);
+            }
+          }
+        });
+      }
     });
     return () => { cancelled = true; };
   }, [project]);
@@ -485,6 +509,20 @@ export function Dashboard() {
         <ProjectContext
           projectDir={project.directory}
           onClose={() => setShowContext(false)}
+        />
+      )}
+
+      {/* Migration modal */}
+      {showMigrationModal && project && migrationState && (
+        <MigrationModal
+          projectDir={project.directory}
+          missingVerifyScript={migrationState.missingVerifyScript}
+          missingServiceLabels={migrationState.missingServiceLabels}
+          onComplete={() => {
+            setShowMigrationModal(false);
+            setMigrationState(null);
+          }}
+          onDismiss={() => setShowMigrationModal(false)}
         />
       )}
     </div>
