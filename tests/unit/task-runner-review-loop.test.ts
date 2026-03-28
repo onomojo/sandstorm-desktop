@@ -420,7 +420,7 @@ describe('task-runner.sh dual-loop workflow', () => {
     it('does not use `local` in the outer/inner while loops', () => {
       // Find all `local ` usages and verify they are inside function bodies.
       // Functions in the script: log_loop, run_claude, check_for_diff, run_review, run_verify
-      const functionNames = ['log_loop', 'run_claude', 'check_for_diff', 'run_review', 'run_verify']
+      const functionNames = ['log_loop', 'run_claude', 'check_for_diff', 'run_review', 'run_verify', 'is_infra_error_only']
 
       // Collect the line ranges of all function bodies
       const functionRanges: Array<{ start: number; end: number }> = []
@@ -468,6 +468,50 @@ describe('task-runner.sh dual-loop workflow', () => {
       // The verify_fix_exit variable should be assigned without `local`
       expect(taskRunner).toContain('verify_fix_exit=$?')
       expect(taskRunner).not.toMatch(/local\s+verify_fix_exit/)
+    })
+  })
+
+  // ── Infrastructure error detection ──────────────────────────────────
+
+  describe('infrastructure error detection', () => {
+    it('has an is_infra_error_only function', () => {
+      expect(taskRunner).toContain('is_infra_error_only()')
+    })
+
+    it('checks for EACCES permission denied errors', () => {
+      expect(taskRunner).toContain('EACCES: permission denied')
+    })
+
+    it('checks for Uncaught Exception errors', () => {
+      expect(taskRunner).toContain('Uncaught Exception')
+    })
+
+    it('checks for Unhandled Error errors', () => {
+      expect(taskRunner).toContain('Unhandled Error')
+    })
+
+    it('checks for actual test file failures before classifying as infra', () => {
+      expect(taskRunner).toContain('Test Files.*failed')
+    })
+
+    it('returns exit code 2 from run_verify for infrastructure errors', () => {
+      expect(taskRunner).toContain('return 2')
+    })
+
+    it('halts on infrastructure errors instead of retrying', () => {
+      expect(taskRunner).toContain('infrastructure error (not a code issue)')
+      expect(taskRunner).toContain('not retrying')
+    })
+
+    it('does not send infrastructure errors back to execution agent', () => {
+      // When verify_result is 2, the loop should break without sending to execution agent
+      // Find the infrastructure error handler and verify it breaks before the retry logic
+      const infraHandler = taskRunner.indexOf('infrastructure error (not a code issue)')
+      const breakAfterInfra = taskRunner.indexOf('break', infraHandler)
+      const sendVerifyFailure = taskRunner.indexOf('Sending verify failure to execution agent')
+      // The break must come before the retry/send-to-agent logic
+      expect(breakAfterInfra).toBeGreaterThan(infraHandler)
+      expect(breakAfterInfra).toBeLessThan(sendVerifyFailure)
     })
   })
 

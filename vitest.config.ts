@@ -9,12 +9,10 @@ export default defineConfig({
     include: ['tests/unit/**/*.test.{ts,tsx}'],
     environment: 'node',
     testTimeout: 10000,
+    cache: false,
     alias: {
       '@renderer': path.resolve(__dirname, 'src/renderer'),
       '@main': path.resolve(__dirname, 'src/main'),
-    },
-    cache: {
-      dir: '/tmp/vitest-cache',
     },
   },
 });

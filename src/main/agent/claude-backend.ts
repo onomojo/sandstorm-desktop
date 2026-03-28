@@ -79,9 +79,13 @@ export class ClaudeBackend implements AgentBackend {
         : os.tmpdir();
       const logPath = path.join(logDir, 'sandstorm-desktop-claude.log');
       this.logStream = fs.createWriteStream(logPath, { flags: 'a' });
+      this.logStream.on('error', () => {
+        // Silently disable logging if the file is not writable
+        this.logStream = null;
+      });
     } catch {
-      const logPath = path.join(os.tmpdir(), 'sandstorm-desktop-claude.log');
-      this.logStream = fs.createWriteStream(logPath, { flags: 'a' });
+      // If we can't create a log stream at all, disable logging
+      this.logStream = null;
     }
   }
 
