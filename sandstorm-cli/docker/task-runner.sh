@@ -219,21 +219,25 @@ run_verify() {
 
   log_loop "Running verification suite (.sandstorm/verify.sh)..."
 
-  # Run the project's verify script with sandstorm-exec on PATH
-  (cd /app && bash "$verify_script" 2>&1) | tee -a "$verify_log"
-  local exit_code=${PIPESTATUS[0]}
+  # Run the project's verify script, redirect all output to log only
+  (cd /app && bash "$verify_script" 2>&1) >> "$verify_log"
+  local exit_code=$?
 
   if [ $exit_code -eq 0 ]; then
-    log_loop "Verify: ALL PASSED"
+    echo "VERIFY_PASS"
     return 0
   fi
 
   # Check if this is an infrastructure error vs real failure
   if is_infra_error_only "$verify_log"; then
+    echo "VERIFY_FAIL"
+    tail -n 50 "$verify_log"
     log_loop "Verify: infrastructure errors detected (e.g. permission denied) — halting, not retrying"
     return 2
   fi
 
+  echo "VERIFY_FAIL"
+  tail -n 50 "$verify_log"
   log_loop "Verify: FAILED (exit code $exit_code)"
   return 1
 }
