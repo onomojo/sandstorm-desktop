@@ -90,6 +90,43 @@ if [ -f /usr/bin/SANDSTORM_INNER.md ]; then
   cp /usr/bin/SANDSTORM_INNER.md /home/claude/.claude/CLAUDE.md
 fi
 
+# Inject dynamic service descriptions from Docker labels
+if [ -n "$SANDSTORM_PROJECT" ] && [ -S /var/run/docker.sock ]; then
+  # Find sibling containers in the same compose project (excluding the claude container)
+  SERVICE_DESCRIPTIONS=""
+  CONTAINERS=$(docker ps --filter "label=com.docker.compose.project" --format '{{.Names}}' 2>/dev/null | grep "^${SANDSTORM_PROJECT}-" | grep -v -- "-claude-" | sort)
+
+  if [ -n "$CONTAINERS" ]; then
+    while IFS= read -r container_name; do
+      # Extract service name from container name (e.g., sandstorm-myproject-1-app-1 → app)
+      service_name=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.service"}}' "$container_name" 2>/dev/null)
+      description=$(docker inspect --format '{{index .Config.Labels "sandstorm.description"}}' "$container_name" 2>/dev/null)
+
+      if [ -n "$service_name" ] && [ "$service_name" != "claude" ]; then
+        if [ -n "$description" ] && [ "$description" != "<no value>" ]; then
+          SERVICE_DESCRIPTIONS="${SERVICE_DESCRIPTIONS}\n- **${service_name}** — ${description}"
+        else
+          SERVICE_DESCRIPTIONS="${SERVICE_DESCRIPTIONS}\n- **${service_name}**"
+        fi
+      fi
+    done <<< "$CONTAINERS"
+  fi
+
+  if [ -n "$SERVICE_DESCRIPTIONS" ]; then
+    {
+      echo ""
+      echo "## Stack Services"
+      echo ""
+      echo "Your stack has these services:"
+      echo -e "$SERVICE_DESCRIPTIONS"
+      echo ""
+      echo "Use \`sandstorm-exec <service> <command>\` to run commands on these services."
+      echo "Do NOT install languages or run project commands directly on this container."
+    } >> /home/claude/.claude/CLAUDE.md
+    echo "  Service descriptions injected from Docker labels"
+  fi
+fi
+
 # Append per-project context from .sandstorm/context/*.md (mounted read-only)
 if [ -d /sandstorm-context ] && ls /sandstorm-context/*.md 1>/dev/null 2>&1; then
   echo "" >> /home/claude/.claude/CLAUDE.md

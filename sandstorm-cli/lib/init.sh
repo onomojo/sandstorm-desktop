@@ -89,7 +89,7 @@ if [ -z "$COMPOSE_JSON" ]; then
   exit 1
 fi
 
-# Extract service names and ports
+# Extract service names, ports, and image info for label generation
 ANALYSIS=$(echo "$COMPOSE_JSON" | python3 -c "
 import json, sys
 
@@ -108,7 +108,8 @@ for name, svc in services.items():
         elif isinstance(p, str):
             port_entries.append(p)
     port_str = ','.join(port_entries) if port_entries else ''
-    print(f'{name}|{port_str}')
+    image = svc.get('image', '')
+    print(f'{name}|{port_str}|{image}')
 ")
 
 if [ -z "$ANALYSIS" ]; then
@@ -130,9 +131,40 @@ done <<< "$ANALYSIS"
 
 # Lookup ports for a service from ANALYSIS
 svc_ports() {
-  echo "$ANALYSIS" | while IFS='|' read -r name ports; do
+  echo "$ANALYSIS" | while IFS='|' read -r name ports image; do
     if [ "$name" = "$1" ]; then echo "$ports"; fi
   done
+}
+
+# Lookup image for a service from ANALYSIS
+svc_image() {
+  echo "$ANALYSIS" | while IFS='|' read -r name ports image; do
+    if [ "$name" = "$1" ]; then echo "$image"; fi
+  done
+}
+
+# Generate a basic description for a service based on its image name
+svc_auto_description() {
+  local svc_name="$1"
+  local image="$(svc_image "$svc_name")"
+
+  case "$image" in
+    *postgres*)  echo "PostgreSQL database" ;;
+    *mysql*)     echo "MySQL database" ;;
+    *redis*)     echo "Redis cache/store" ;;
+    *mongo*)     echo "MongoDB database" ;;
+    *nginx*)     echo "Nginx web server" ;;
+    *rabbitmq*)  echo "RabbitMQ message broker" ;;
+    *elasticsearch*|*opensearch*) echo "Search engine" ;;
+    *)
+      # For built services (no image), use the service name
+      if [ -z "$image" ]; then
+        echo "Application service"
+      else
+        echo "Service ($image)"
+      fi
+      ;;
+  esac
 }
 
 # Derive project name
@@ -248,30 +280,33 @@ HEADER
 
   echo "services:"
 
-  # Port remapping + shared image names for each service
+  # Port remapping + shared image names + service description labels
   while IFS= read -r svc; do
     [ -z "$svc" ] && continue
     local_ports="$(svc_ports "$svc")"
     is_built=$(echo "$BUILT_SERVICES" | grep -qx "$svc" && echo "yes" || echo "no")
+    description="$(svc_auto_description "$svc")"
 
-    # Only emit a service block if it has ports to remap or needs an image pin
-    if [ -n "$local_ports" ] || [ "$is_built" = "yes" ]; then
-      echo "  ${svc}:"
-      # Pin image name so all stacks share the same built image
-      if [ "$is_built" = "yes" ]; then
-        echo "    image: sandstorm-${PROJECT_NAME}-${svc}"
-      fi
-      if [ -n "$local_ports" ]; then
-        echo "    ports: !override"
-        IFS=',' read -ra PORT_PAIRS <<< "$local_ports"
-        idx=0
-        for pair in "${PORT_PAIRS[@]}"; do
-          container_port="${pair#*:}"
-          echo "      - \"\${SANDSTORM_PORT_${svc}_${idx}}:${container_port}\""
-          idx=$((idx + 1))
-        done
-      fi
+    # Emit a service block for services that need ports, image pins, or labels
+    echo "  ${svc}:"
+    # Pin image name so all stacks share the same built image
+    if [ "$is_built" = "yes" ]; then
+      echo "    image: sandstorm-${PROJECT_NAME}-${svc}"
     fi
+    if [ -n "$local_ports" ]; then
+      echo "    ports: !override"
+      IFS=',' read -ra PORT_PAIRS <<< "$local_ports"
+      idx=0
+      for pair in "${PORT_PAIRS[@]}"; do
+        container_port="${pair#*:}"
+        echo "      - \"\${SANDSTORM_PORT_${svc}_${idx}}:${container_port}\""
+        idx=$((idx + 1))
+      done
+    fi
+    # Escape double quotes in description to produce valid YAML
+    safe_description="${description//\"/\\\"}"
+    echo "    labels:"
+    echo "      sandstorm.description: \"${safe_description}\""
   done <<< "$ALL_SERVICES"
 
   # Claude workspace service (shared image across all stacks)
@@ -301,6 +336,62 @@ CLAUDE
 } > "$SANDSTORM_CONFIG_DIR/docker-compose.yml"
 
 echo "  Created .sandstorm/docker-compose.yml"
+
+# ---------------------------------------------------------------------------
+# Generate .sandstorm/verify.sh (project-configurable verification script)
+# ---------------------------------------------------------------------------
+VERIFY_SCRIPT="$SANDSTORM_CONFIG_DIR/verify.sh"
+
+# Auto-detect verify commands based on project files
+{
+  echo "#!/bin/bash"
+  echo "#"
+  echo "# Sandstorm verify script — commands run during the verification step."
+  echo "# Each command runs in sequence. If any fails, verification fails."
+  echo "#"
+  echo "# Use 'sandstorm-exec <service> <command>' to run on service containers."
+  echo "# Edit this file to match your project's test/lint/build commands."
+  echo "#"
+  echo "set -e"
+  echo ""
+
+  # Check for Node.js project indicators
+  if [ -f "$PROJECT_ROOT/package.json" ]; then
+    # Read package.json scripts to determine what's available
+    HAS_TEST=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'test' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
+    HAS_BUILD=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'build' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
+    HAS_TYPECHECK=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'typecheck' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
+    HAS_TSCONFIG=$([ -f "$PROJECT_ROOT/tsconfig.json" ] && echo "yes" || echo "no")
+
+    if [ "$HAS_TEST" = "yes" ]; then echo "npm test"; fi
+    if [ "$HAS_TYPECHECK" = "yes" ]; then
+      echo "npm run typecheck"
+    elif [ "$HAS_TSCONFIG" = "yes" ]; then
+      echo "npx tsc --noEmit"
+    fi
+    if [ "$HAS_BUILD" = "yes" ]; then echo "npm run build"; fi
+  fi
+
+  # Check for Ruby/Rails
+  if [ -f "$PROJECT_ROOT/Gemfile" ]; then
+    if [ -f "$PROJECT_ROOT/bin/rails" ]; then
+      echo "# sandstorm-exec api bash -c 'cd /rails && bin/rails test'"
+    fi
+  fi
+
+  # Check for Python
+  if [ -f "$PROJECT_ROOT/requirements.txt" ] || [ -f "$PROJECT_ROOT/pyproject.toml" ]; then
+    echo "# sandstorm-exec app pytest"
+  fi
+
+  # Check for Go
+  if [ -f "$PROJECT_ROOT/go.mod" ]; then
+    echo "# sandstorm-exec app go test ./..."
+  fi
+} > "$VERIFY_SCRIPT"
+
+chmod +x "$VERIFY_SCRIPT"
+echo "  Created .sandstorm/verify.sh"
 
 # ---------------------------------------------------------------------------
 # Install Claude skills into the project
