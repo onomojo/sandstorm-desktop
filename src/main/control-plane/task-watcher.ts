@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { Registry, Task } from './registry';
 import { ContainerRuntime } from '../runtime/types';
-import { parseTokenUsage } from './token-parser';
+import { parseTokenUsage, parsePhaseTokenTotals } from './token-parser';
 
 export interface TaskEvents {
   'task:started': { stackId: string; task: Task };
@@ -137,9 +137,9 @@ export class TaskWatcher extends EventEmitter {
   }
 
   /**
-   * Read token usage from the task log file inside the container.
-   * Status is derived exclusively from the task-runner.sh exit status —
-   * we do NOT parse the stream for HTTP errors.
+   * Read token usage from phase totals files and raw log inside the container.
+   * Phase totals files are written by token-counter.sh in the run_claude pipeline.
+   * The raw log is still read for session_id and resolved_model extraction.
    */
   private async readTaskTokens(
     taskId: number,
@@ -147,25 +147,43 @@ export class TaskWatcher extends EventEmitter {
     containerId: string
   ): Promise<void> {
     try {
-      const result = await this.runtime.exec(containerId, [
-        'cat', '/tmp/claude-raw.log',
+      // Read phase totals files and raw log in parallel
+      const [execResult, reviewResult, rawResult] = await Promise.all([
+        this.runtime.exec(containerId, ['cat', '/tmp/claude-tokens-execution']).catch(() => ({ stdout: '' })),
+        this.runtime.exec(containerId, ['cat', '/tmp/claude-tokens-review']).catch(() => ({ stdout: '' })),
+        this.runtime.exec(containerId, ['cat', '/tmp/claude-raw.log']).catch(() => ({ stdout: '' })),
       ]);
-      const output = result.stdout;
 
-      // Parse token usage
-      const usage = parseTokenUsage(output);
-      if (usage.input_tokens > 0 || usage.output_tokens > 0) {
-        this.registry.updateTaskTokens(taskId, usage.input_tokens, usage.output_tokens);
+      // Parse phase token totals
+      const execTokens = parsePhaseTokenTotals(execResult.stdout);
+      const reviewTokens = parsePhaseTokenTotals(reviewResult.stdout);
+
+      const totalInput = execTokens.input_tokens + reviewTokens.input_tokens;
+      const totalOutput = execTokens.output_tokens + reviewTokens.output_tokens;
+
+      if (totalInput > 0 || totalOutput > 0) {
+        this.registry.updateTaskTokens(taskId, totalInput, totalOutput, {
+          executionInput: execTokens.input_tokens,
+          executionOutput: execTokens.output_tokens,
+          reviewInput: reviewTokens.input_tokens,
+          reviewOutput: reviewTokens.output_tokens,
+        });
       }
 
-      // Store session ID for potential resume
-      if (usage.session_id) {
-        this.registry.setTaskSessionId(taskId, usage.session_id);
-      }
+      // Parse raw log for metadata (session ID, resolved model)
+      const rawOutput = rawResult.stdout;
+      if (rawOutput) {
+        const usage = parseTokenUsage(rawOutput);
 
-      // Store the actual model used (important when "auto" was selected)
-      if (usage.resolved_model) {
-        this.registry.updateTaskResolvedModel(taskId, usage.resolved_model);
+        // Store session ID for potential resume
+        if (usage.session_id) {
+          this.registry.setTaskSessionId(taskId, usage.session_id);
+        }
+
+        // Store the actual model used (important when "auto" was selected)
+        if (usage.resolved_model) {
+          this.registry.updateTaskResolvedModel(taskId, usage.resolved_model);
+        }
       }
     } catch {
       // Best effort — container may be unreachable

@@ -1,7 +1,7 @@
 import React from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 import { getStackDuration } from '../utils/duration';
-import { formatTokenCount } from '../utils/format';
+import { formatTokenCount, buildTokenTooltip } from '../utils/format';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -243,7 +243,7 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
                 </>
               )}
               {(stack.total_input_tokens > 0 || stack.total_output_tokens > 0) && (
-                <span className="tabular-nums" title={`Input: ${stack.total_input_tokens.toLocaleString()} / Output: ${stack.total_output_tokens.toLocaleString()}`}>
+                <span className="tabular-nums" title={buildTokenTooltip(stack)}>
                   {formatTokenCount(stack.total_input_tokens + stack.total_output_tokens)} tokens
                 </span>
               )}

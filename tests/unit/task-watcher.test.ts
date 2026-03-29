@@ -354,18 +354,24 @@ describe('TaskWatcher', () => {
 
   // --- Token parsing from raw log ---
 
-  it('reads token usage from claude-raw.log (not claude-task.log)', async () => {
+  it('reads token usage from phase totals files', async () => {
+    const executionTokens = '{"in":1500,"out":800}\n';
+    const reviewTokens = '{"in":500,"out":200}\n';
     const rawJsonOutput = [
-      '{"type":"content_block_delta","delta":{"text":"Hello"}}',
       '{"type":"result","usage":{"input_tokens":1500,"output_tokens":800},"session_id":"sess-abc"}',
     ].join('\n');
 
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
-    // Override exec to return raw JSON for claude-raw.log
     const origExec = runtime.exec as ReturnType<typeof vi.fn>;
     const execImpl = origExec.getMockImplementation()!;
     (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
       async (id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-tokens-execution')) {
+          return { exitCode: 0, stdout: executionTokens, stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-tokens-review')) {
+          return { exitCode: 0, stdout: reviewTokens, stderr: '' };
+        }
         if (cmd.includes('/tmp/claude-raw.log')) {
           return { exitCode: 0, stdout: rawJsonOutput, stderr: '' };
         }
@@ -381,18 +387,18 @@ describe('TaskWatcher', () => {
       watcher.watch('watch-stack', 'container-123');
     });
 
-    // Verify exec was called with claude-raw.log
-    const execCalls = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls;
-    const rawLogCalls = execCalls.filter(
-      (call: unknown[]) => Array.isArray(call[1]) && call[1].includes('/tmp/claude-raw.log')
-    );
-    expect(rawLogCalls.length).toBeGreaterThan(0);
+    // Give async token reading time to complete
+    await new Promise((r) => setTimeout(r, 200));
 
-    // Verify token data was stored
+    // Verify token data was stored with phase breakdown
     const tasks = registry.getTasksForStack('watch-stack');
     const task = tasks.find((t) => t.prompt === 'token test task');
-    expect(task!.input_tokens).toBe(1500);
-    expect(task!.output_tokens).toBe(800);
+    expect(task!.input_tokens).toBe(2000); // 1500 + 500
+    expect(task!.output_tokens).toBe(1000); // 800 + 200
+    expect(task!.execution_input_tokens).toBe(1500);
+    expect(task!.execution_output_tokens).toBe(800);
+    expect(task!.review_input_tokens).toBe(500);
+    expect(task!.review_output_tokens).toBe(200);
 
     watcher.unwatchAll();
   });
@@ -419,6 +425,12 @@ describe('TaskWatcher', () => {
         if (cmd.includes('/tmp/claude-raw.log')) {
           return { exitCode: 0, stdout: rawJsonOutput, stderr: '' };
         }
+        if (cmd.includes('/tmp/claude-tokens-execution')) {
+          return { exitCode: 0, stdout: '{"in":500,"out":200}\n', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-tokens-review')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
         return origExec(id, cmd);
       }
     );
@@ -444,16 +456,8 @@ describe('TaskWatcher', () => {
   // --- Real-time token polling while task is running ---
 
   it('polls tokens periodically while task is running', async () => {
-    const rawJsonOutput = [
-      JSON.stringify({
-        type: 'stream_event',
-        event: {
-          type: 'message_start',
-          message: { model: 'claude-sonnet-4-20250514', usage: { input_tokens: 500 } },
-        },
-      }),
-      '{"type":"result","usage":{"input_tokens":1000,"output_tokens":400},"session_id":"sess-rt"}',
-    ].join('\n');
+    const executionTokens = '{"in":1000,"out":400}\n';
+    const rawJsonOutput = '{"type":"result","usage":{"input_tokens":1000,"output_tokens":400},"session_id":"sess-rt"}\n';
 
     // Stay running for many polls, then complete
     let statusPollCount = 0;
@@ -473,6 +477,12 @@ describe('TaskWatcher', () => {
         }
         if (cmd.includes('/tmp/claude-task.exit')) {
           return { exitCode: 0, stdout: '0', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-tokens-execution')) {
+          return { exitCode: 0, stdout: executionTokens, stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-tokens-review')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
         }
         if (cmd.includes('/tmp/claude-raw.log')) {
           return { exitCode: 0, stdout: rawJsonOutput, stderr: '' };
@@ -500,13 +510,13 @@ describe('TaskWatcher', () => {
     // Give async operations time to settle
     await new Promise((r) => setTimeout(r, 100));
 
-    // Verify claude-raw.log was read BEFORE completion (during running polls)
+    // Verify phase token files were read during running polls
     const execCalls = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls;
-    const rawLogCalls = execCalls.filter(
-      (call: unknown[]) => Array.isArray(call[1]) && call[1].includes('/tmp/claude-raw.log')
+    const tokenFileCalls = execCalls.filter(
+      (call: unknown[]) => Array.isArray(call[1]) && (call[1].includes('/tmp/claude-tokens-execution') || call[1].includes('/tmp/claude-tokens-review'))
     );
     // Should have been read during running polls + on completion
-    expect(rawLogCalls.length).toBeGreaterThanOrEqual(2);
+    expect(tokenFileCalls.length).toBeGreaterThanOrEqual(2);
 
     // Verify tokens were stored
     const tasks = registry.getTasksForStack('watch-stack');
@@ -536,7 +546,7 @@ describe('TaskWatcher', () => {
         if (cmd.includes('/tmp/claude-task.exit')) {
           return { exitCode: 0, stdout: '0', stderr: '' };
         }
-        if (cmd.includes('/tmp/claude-raw.log')) {
+        if (cmd.includes('/tmp/claude-tokens-execution') || cmd.includes('/tmp/claude-tokens-review') || cmd.includes('/tmp/claude-raw.log')) {
           return { exitCode: 0, stdout: '', stderr: '' };
         }
         return { exitCode: 0, stdout: '', stderr: '' };
@@ -563,14 +573,14 @@ describe('TaskWatcher', () => {
     await new Promise((r) => setTimeout(r, 100));
 
     const execCalls = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls;
-    const rawLogCallsDuringRunning = execCalls.filter(
-      (call: unknown[]) => Array.isArray(call[1]) && call[1].includes('/tmp/claude-raw.log')
+    const tokenFileCalls = execCalls.filter(
+      (call: unknown[]) => Array.isArray(call[1]) && call[1].includes('/tmp/claude-tokens-execution')
     );
-    // With throttling, should have fewer raw log reads than status polls
+    // With throttling, should have fewer token file reads than status polls
     // At minimum: 1 during running (first poll triggers immediately) + 1 on completion
-    expect(rawLogCallsDuringRunning.length).toBeGreaterThanOrEqual(1);
+    expect(tokenFileCalls.length).toBeGreaterThanOrEqual(1);
     // But fewer than total status polls (6 running + 1 completed)
-    expect(rawLogCallsDuringRunning.length).toBeLessThan(7);
+    expect(tokenFileCalls.length).toBeLessThan(7);
 
     watcher.unwatchAll();
   });

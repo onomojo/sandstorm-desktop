@@ -17,6 +17,10 @@ export interface Stack {
   runtime: 'docker' | 'podman';
   total_input_tokens: number;
   total_output_tokens: number;
+  total_execution_input_tokens: number;
+  total_execution_output_tokens: number;
+  total_review_input_tokens: number;
+  total_review_output_tokens: number;
   rate_limit_reset_at: string | null;
   created_at: string;
   updated_at: string;
@@ -46,6 +50,10 @@ export interface Task {
   session_id: string | null;
   input_tokens: number;
   output_tokens: number;
+  execution_input_tokens: number;
+  execution_output_tokens: number;
+  review_input_tokens: number;
+  review_output_tokens: number;
   review_iterations: number;
   verify_retries: number;
   started_at: string;
@@ -273,8 +281,24 @@ export class Registry {
       this.setSchemaVersion(6);
     }
 
+    if (currentVersion < 7) {
+      // Add per-phase token breakdown columns to tasks
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN execution_input_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN execution_output_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN review_input_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN review_output_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+
+      // Add per-phase token breakdown columns to stacks
+      try { this.db.exec('ALTER TABLE stacks ADD COLUMN total_execution_input_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE stacks ADD COLUMN total_execution_output_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE stacks ADD COLUMN total_review_input_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE stacks ADD COLUMN total_review_output_tokens INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+
+      this.setSchemaVersion(7);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 7) { ... this.setSchemaVersion(7); }
+    // if (currentVersion < 8) { ... this.setSchemaVersion(8); }
   }
 
   // --- Projects ---
@@ -302,7 +326,7 @@ export class Registry {
 
   // --- Stacks ---
 
-  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'rate_limit_reset_at'>): Stack {
+  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'total_execution_input_tokens' | 'total_execution_output_tokens' | 'total_review_input_tokens' | 'total_review_output_tokens' | 'rate_limit_reset_at'>): Stack {
     const normalizedDir = path.resolve(stack.project_dir);
     this.db.prepare(
       `INSERT INTO stacks (id, project, project_dir, ticket, branch, description, status, runtime)
@@ -394,28 +418,77 @@ export class Registry {
 
   // --- Token Usage ---
 
-  updateTaskTokens(taskId: number, inputTokens: number, outputTokens: number): void {
+  updateTaskTokens(
+    taskId: number,
+    inputTokens: number,
+    outputTokens: number,
+    phaseBreakdown?: {
+      executionInput: number;
+      executionOutput: number;
+      reviewInput: number;
+      reviewOutput: number;
+    }
+  ): void {
     // Wrap in a transaction to prevent race conditions from concurrent task completions
     const updateFn = this.db.transaction(() => {
       // Read old values first so we can compute the delta for the stack aggregate
       const old = this.db.prepare(
-        'SELECT stack_id, input_tokens, output_tokens FROM tasks WHERE id = ?'
-      ).get(taskId) as { stack_id: string; input_tokens: number; output_tokens: number } | undefined;
+        'SELECT stack_id, input_tokens, output_tokens, execution_input_tokens, execution_output_tokens, review_input_tokens, review_output_tokens FROM tasks WHERE id = ?'
+      ).get(taskId) as {
+        stack_id: string;
+        input_tokens: number;
+        output_tokens: number;
+        execution_input_tokens: number;
+        execution_output_tokens: number;
+        review_input_tokens: number;
+        review_output_tokens: number;
+      } | undefined;
       if (!old) return;
 
       const inputDelta = inputTokens - old.input_tokens;
       const outputDelta = outputTokens - old.output_tokens;
 
-      // SET (not increment) — parseTokenUsage returns cumulative values
-      this.db.prepare(
-        'UPDATE tasks SET input_tokens = ?, output_tokens = ? WHERE id = ?'
-      ).run(inputTokens, outputTokens, taskId);
+      if (phaseBreakdown) {
+        const execInDelta = phaseBreakdown.executionInput - old.execution_input_tokens;
+        const execOutDelta = phaseBreakdown.executionOutput - old.execution_output_tokens;
+        const revInDelta = phaseBreakdown.reviewInput - old.review_input_tokens;
+        const revOutDelta = phaseBreakdown.reviewOutput - old.review_output_tokens;
 
-      // Update stack aggregate by the delta
-      if (inputDelta !== 0 || outputDelta !== 0) {
+        // SET (not increment) — phase totals are cumulative values
         this.db.prepare(
-          'UPDATE stacks SET total_input_tokens = total_input_tokens + ?, total_output_tokens = total_output_tokens + ? WHERE id = ?'
-        ).run(inputDelta, outputDelta, old.stack_id);
+          'UPDATE tasks SET input_tokens = ?, output_tokens = ?, execution_input_tokens = ?, execution_output_tokens = ?, review_input_tokens = ?, review_output_tokens = ? WHERE id = ?'
+        ).run(
+          inputTokens, outputTokens,
+          phaseBreakdown.executionInput, phaseBreakdown.executionOutput,
+          phaseBreakdown.reviewInput, phaseBreakdown.reviewOutput,
+          taskId
+        );
+
+        // Update stack aggregate by the delta
+        if (inputDelta !== 0 || outputDelta !== 0 || execInDelta !== 0 || execOutDelta !== 0 || revInDelta !== 0 || revOutDelta !== 0) {
+          this.db.prepare(
+            `UPDATE stacks SET
+              total_input_tokens = total_input_tokens + ?,
+              total_output_tokens = total_output_tokens + ?,
+              total_execution_input_tokens = total_execution_input_tokens + ?,
+              total_execution_output_tokens = total_execution_output_tokens + ?,
+              total_review_input_tokens = total_review_input_tokens + ?,
+              total_review_output_tokens = total_review_output_tokens + ?
+            WHERE id = ?`
+          ).run(inputDelta, outputDelta, execInDelta, execOutDelta, revInDelta, revOutDelta, old.stack_id);
+        }
+      } else {
+        // Legacy path — no phase breakdown
+        this.db.prepare(
+          'UPDATE tasks SET input_tokens = ?, output_tokens = ? WHERE id = ?'
+        ).run(inputTokens, outputTokens, taskId);
+
+        // Update stack aggregate by the delta
+        if (inputDelta !== 0 || outputDelta !== 0) {
+          this.db.prepare(
+            'UPDATE stacks SET total_input_tokens = total_input_tokens + ?, total_output_tokens = total_output_tokens + ? WHERE id = ?'
+          ).run(inputDelta, outputDelta, old.stack_id);
+        }
       }
     });
     updateFn();

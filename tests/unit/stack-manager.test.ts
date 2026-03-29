@@ -1359,6 +1359,10 @@ describe('StackManager', () => {
         status: 'rate_limited' as const,
         total_input_tokens: 0,
         total_output_tokens: 0,
+        total_execution_input_tokens: 0,
+        total_execution_output_tokens: 0,
+        total_review_input_tokens: 0,
+        total_review_output_tokens: 0,
         rate_limit_reset_at: reset_at,
         error,
         pr_url: null,
@@ -1437,7 +1441,7 @@ describe('StackManager', () => {
 
     it('ignores non-rate-limited stacks', () => {
       vi.spyOn(registry, 'listStacks').mockReturnValue([
-        { ...makeStack('up-stack'), total_input_tokens: 0, total_output_tokens: 0, rate_limit_reset_at: null, pr_url: null, pr_number: null, created_at: '', updated_at: '' },
+        { ...makeStack('up-stack'), total_input_tokens: 0, total_output_tokens: 0, total_execution_input_tokens: 0, total_execution_output_tokens: 0, total_review_input_tokens: 0, total_review_output_tokens: 0, rate_limit_reset_at: null, pr_url: null, pr_number: null, created_at: '', updated_at: '' },
         makeRateLimitedStack('rl-only', '2026-03-27T20:00:00.000Z', null),
       ]);
 

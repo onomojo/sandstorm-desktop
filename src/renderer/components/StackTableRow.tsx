@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 import { getStackDuration, isTerminalStatus, DURATION_UPDATE_INTERVAL } from '../utils/duration';
-import { formatTokenCount, formatBytes } from '../utils/format';
+import { formatTokenCount, formatBytes, buildTokenTooltip } from '../utils/format';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -121,7 +121,7 @@ export function StackTableRow({ stack, showProject, columnWidths }: { stack: Sta
             </>
           ) : null}
           {(stack.total_input_tokens > 0 || stack.total_output_tokens > 0) ? (
-            <span title={`In: ${stack.total_input_tokens.toLocaleString()} / Out: ${stack.total_output_tokens.toLocaleString()}`}>
+            <span title={buildTokenTooltip(stack)}>
               {formatTokenCount(stack.total_input_tokens + stack.total_output_tokens)} tok
             </span>
           ) : null}

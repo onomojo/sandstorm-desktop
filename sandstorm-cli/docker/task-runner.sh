@@ -29,19 +29,27 @@ log_loop() {
 }
 
 # Run the claude CLI with streaming output.
-# Args: $1 = prompt file path, $2 = raw log path, $3 = task log path, $4... = extra claude args
+# Args: $1 = prompt file path, $2 = raw log path, $3 = task log path, $4 = phase (execution|review), $5... = extra claude args
 run_claude() {
   local prompt_file="$1"
   local raw_log="${2:-/tmp/claude-raw.log}"
   local task_log="${3:-/tmp/claude-task.log}"
-  shift 3 2>/dev/null || shift $#
+  local phase="${4:-execution}"
+  shift 4 2>/dev/null || shift $#
   local extra_args=("$@")
+
+  local token_file="/tmp/claude-tokens-${phase}"
+  local counter_script="/usr/bin/token-counter.sh"
+  if [ ! -f "$counter_script" ]; then
+    counter_script="/app/sandstorm-cli/docker/token-counter.sh"
+  fi
 
   cat "$prompt_file" \
     | claude --dangerously-skip-permissions --verbose --output-format stream-json \
         "${extra_args[@]}" \
         --include-partial-messages --print -p - 2>&1 \
     | stdbuf -o0 tee -a "$raw_log" \
+    | stdbuf -o0 tee >(bash "$counter_script" "$token_file") \
     | jq -rj --unbuffered '
         if .type == "stream_event" then
           if .event.type == "content_block_delta" and .event.delta.type == "text_delta" then
@@ -141,7 +149,7 @@ run_review() {
   log_loop "Starting review agent with fresh context..."
 
   # Run claude with separate log files to preserve execution agent logs
-  run_claude "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log "${MODEL_ARGS[@]}"
+  run_claude "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log review "${MODEL_ARGS[@]}"
   local review_exit=$?
 
   rm -f "$review_prompt_file" /tmp/claude-review-diff.txt /tmp/claude-review-untracked.txt
@@ -274,13 +282,15 @@ while true; do
     echo "running" > /tmp/claude-task.status
     echo $$ > /tmp/claude-task.pid
 
-    # Truncate the raw log so token data starts fresh for this task
+    # Truncate the raw log and token files so data starts fresh for this task
     > /tmp/claude-raw.log
+    > /tmp/claude-tokens-execution
+    > /tmp/claude-tokens-review
 
     # ── Step 1: Initial execution pass ──────────────────────────────────
 
     log_loop "Starting initial execution pass..."
-    run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log "${MODEL_ARGS[@]}"
+    run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution "${MODEL_ARGS[@]}"
     EXIT_CODE=${PIPESTATUS[0]}
 
     if [ $EXIT_CODE -ne 0 ]; then
@@ -373,7 +383,7 @@ while true; do
             echo "Fix all listed issues. Do not introduce new problems."
           } > "$local_fix_prompt"
 
-          run_claude "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log "${MODEL_ARGS[@]}"
+          run_claude "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log execution "${MODEL_ARGS[@]}"
           fix_exit=$?
           rm -f "$local_fix_prompt"
 
@@ -431,7 +441,7 @@ while true; do
           echo "Fix the verification failures (test failures, type errors, or build errors). Do not introduce new problems."
         } > "$local_verify_fix"
 
-        run_claude "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log "${MODEL_ARGS[@]}"
+        run_claude "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log execution "${MODEL_ARGS[@]}"
         verify_fix_exit=$?
         rm -f "$local_verify_fix"
 

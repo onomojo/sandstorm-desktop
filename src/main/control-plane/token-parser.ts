@@ -13,6 +13,34 @@ export interface ParsedTokenUsage {
   resolved_model: string | null;
 }
 
+export interface PhaseTokenTotals {
+  input_tokens: number;
+  output_tokens: number;
+}
+
+/**
+ * Parse phase token totals from a file written by token-counter.sh.
+ * Each line is a JSON object: {"in":N,"out":N}
+ * Returns the sum of all lines.
+ */
+export function parsePhaseTokenTotals(output: string): PhaseTokenTotals {
+  let input_tokens = 0;
+  let output_tokens = 0;
+
+  for (const line of output.split('\n')) {
+    if (!line.trim()) continue;
+    try {
+      const parsed = JSON.parse(line);
+      input_tokens += parsed.in ?? 0;
+      output_tokens += parsed.out ?? 0;
+    } catch {
+      // Not JSON — skip
+    }
+  }
+
+  return { input_tokens, output_tokens };
+}
+
 /**
  * Parse token usage from Claude CLI stream-json output.
  * Accumulates token usage across all API turns in a session.
