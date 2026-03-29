@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTokenUsage } from '../../src/main/control-plane/token-parser';
+import { parseTokenUsage, parsePhaseTokenTotals } from '../../src/main/control-plane/token-parser';
 
 describe('parseTokenUsage', () => {
   it('returns zeros for empty input', () => {
@@ -255,5 +255,62 @@ describe('parseTokenUsage', () => {
     const result = parseTokenUsage(output);
     expect(result.resolved_model).toBeNull();
     expect(result.input_tokens).toBe(100);
+  });
+});
+
+describe('parsePhaseTokenTotals', () => {
+  it('returns zeros for empty input', () => {
+    const result = parsePhaseTokenTotals('');
+    expect(result.input_tokens).toBe(0);
+    expect(result.output_tokens).toBe(0);
+  });
+
+  it('returns zeros for non-JSON input', () => {
+    const result = parsePhaseTokenTotals('not json\nstill not json\n');
+    expect(result.input_tokens).toBe(0);
+    expect(result.output_tokens).toBe(0);
+  });
+
+  it('parses a single token line', () => {
+    const result = parsePhaseTokenTotals('{"in":1500,"out":800}\n');
+    expect(result.input_tokens).toBe(1500);
+    expect(result.output_tokens).toBe(800);
+  });
+
+  it('sums multiple token lines', () => {
+    const output = [
+      '{"in":1000,"out":500}',
+      '{"in":2000,"out":1000}',
+      '{"in":500,"out":200}',
+    ].join('\n');
+
+    const result = parsePhaseTokenTotals(output);
+    expect(result.input_tokens).toBe(3500);
+    expect(result.output_tokens).toBe(1700);
+  });
+
+  it('handles mixed valid and invalid lines', () => {
+    const output = [
+      '{"in":1000,"out":500}',
+      'not json',
+      '{"in":2000,"out":1000}',
+    ].join('\n');
+
+    const result = parsePhaseTokenTotals(output);
+    expect(result.input_tokens).toBe(3000);
+    expect(result.output_tokens).toBe(1500);
+  });
+
+  it('handles missing fields with defaults', () => {
+    const result = parsePhaseTokenTotals('{"in":1000}\n');
+    expect(result.input_tokens).toBe(1000);
+    expect(result.output_tokens).toBe(0);
+  });
+
+  it('handles empty lines gracefully', () => {
+    const output = '{"in":500,"out":200}\n\n\n{"in":300,"out":100}\n';
+    const result = parsePhaseTokenTotals(output);
+    expect(result.input_tokens).toBe(800);
+    expect(result.output_tokens).toBe(300);
   });
 });

@@ -691,6 +691,77 @@ describe('Registry', () => {
       expect(stack!.total_output_tokens).toBe(300);
     });
 
+    it('updateTaskTokens with phase breakdown stores per-phase data', () => {
+      const task = registry.createTask('token-stack', 'test');
+      registry.updateTaskTokens(task.id, 3000, 1500, {
+        executionInput: 2000,
+        executionOutput: 1000,
+        reviewInput: 1000,
+        reviewOutput: 500,
+      });
+
+      const tasks = registry.getTasksForStack('token-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.input_tokens).toBe(3000);
+      expect(updated.output_tokens).toBe(1500);
+      expect(updated.execution_input_tokens).toBe(2000);
+      expect(updated.execution_output_tokens).toBe(1000);
+      expect(updated.review_input_tokens).toBe(1000);
+      expect(updated.review_output_tokens).toBe(500);
+
+      const stack = registry.getStack('token-stack');
+      expect(stack!.total_input_tokens).toBe(3000);
+      expect(stack!.total_output_tokens).toBe(1500);
+      expect(stack!.total_execution_input_tokens).toBe(2000);
+      expect(stack!.total_execution_output_tokens).toBe(1000);
+      expect(stack!.total_review_input_tokens).toBe(1000);
+      expect(stack!.total_review_output_tokens).toBe(500);
+    });
+
+    it('phase breakdown uses SET semantics with correct deltas', () => {
+      const task = registry.createTask('token-stack', 'test');
+      registry.updateTaskTokens(task.id, 1000, 500, {
+        executionInput: 800,
+        executionOutput: 400,
+        reviewInput: 200,
+        reviewOutput: 100,
+      });
+      registry.updateTaskTokens(task.id, 3000, 1500, {
+        executionInput: 2000,
+        executionOutput: 1000,
+        reviewInput: 1000,
+        reviewOutput: 500,
+      });
+
+      const tasks = registry.getTasksForStack('token-stack');
+      const updated = tasks.find(t => t.id === task.id)!;
+      expect(updated.execution_input_tokens).toBe(2000);
+      expect(updated.review_input_tokens).toBe(1000);
+
+      // Stack aggregate should reflect only the final values
+      const stack = registry.getStack('token-stack');
+      expect(stack!.total_input_tokens).toBe(3000);
+      expect(stack!.total_output_tokens).toBe(1500);
+      expect(stack!.total_execution_input_tokens).toBe(2000);
+      expect(stack!.total_review_input_tokens).toBe(1000);
+    });
+
+    it('new stacks have zero per-phase token counts', () => {
+      const stack = registry.getStack('token-stack');
+      expect(stack!.total_execution_input_tokens).toBe(0);
+      expect(stack!.total_execution_output_tokens).toBe(0);
+      expect(stack!.total_review_input_tokens).toBe(0);
+      expect(stack!.total_review_output_tokens).toBe(0);
+    });
+
+    it('new tasks have zero per-phase token counts', () => {
+      const task = registry.createTask('token-stack', 'test');
+      expect(task.execution_input_tokens).toBe(0);
+      expect(task.execution_output_tokens).toBe(0);
+      expect(task.review_input_tokens).toBe(0);
+      expect(task.review_output_tokens).toBe(0);
+    });
+
     it('getStackTokenUsage returns aggregated tokens', () => {
       const task = registry.createTask('token-stack', 'test');
       registry.updateTaskTokens(task.id, 2000, 1000);

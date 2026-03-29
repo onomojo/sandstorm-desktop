@@ -21,6 +21,10 @@ export interface Stack {
   runtime: 'docker' | 'podman';
   total_input_tokens: number;
   total_output_tokens: number;
+  total_execution_input_tokens: number;
+  total_execution_output_tokens: number;
+  total_review_input_tokens: number;
+  total_review_output_tokens: number;
   rate_limit_reset_at: string | null;
   created_at: string;
   updated_at: string;
@@ -47,6 +51,10 @@ export interface Task {
   session_id: string | null;
   input_tokens: number;
   output_tokens: number;
+  execution_input_tokens: number;
+  execution_output_tokens: number;
+  review_input_tokens: number;
+  review_output_tokens: number;
   review_iterations: number;
   verify_retries: number;
   started_at: string;
