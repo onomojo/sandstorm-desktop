@@ -105,6 +105,7 @@ export function StackDetail({
   };
 
   const STATUS_DETAIL_LABELS: Record<string, string> = {
+    rebuilding: 'Rebuilding Image',
     completed: 'Needs Review',
     pushed: 'Pushed',
     pr_created: 'PR Open',

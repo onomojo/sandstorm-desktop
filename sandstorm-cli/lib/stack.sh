@@ -372,9 +372,12 @@ case "$COMMAND" in
     # Build and start in background — returns immediately.
     # Skip --build if all images referenced in the compose file already exist,
     # avoiding redundant rebuilds and orphaned dangling images (see #13).
+    # If the app version has changed since the Claude image was built, force a
+    # rebuild so embedded scripts (task-runner, entrypoint, etc.) are updated.
     (
       trap 'registry_write "$STACK_ID" "" "" "" "cancelled" ""; exit 1' INT TERM HUP
       BUILD_FLAG="--build"
+      VERSION_REBUILD=false
       EXISTING_IMAGES=$(run_compose config --images 2>/dev/null || true)
       if [ -n "$EXISTING_IMAGES" ]; then
         ALL_EXIST=true
@@ -389,6 +392,24 @@ case "$COMMAND" in
           BUILD_FLAG=""
         fi
       fi
+
+      # Version stamp check: compare the Claude image's sandstorm.app-version
+      # label against the current app version. If they differ, force a rebuild.
+      CLAUDE_IMAGE="sandstorm-${PROJECT_NAME}-claude"
+      if [ -n "${SANDSTORM_APP_VERSION:-}" ] && [ "$SANDSTORM_APP_VERSION" != "unknown" ]; then
+        IMAGE_VERSION=$(docker image inspect "$CLAUDE_IMAGE" --format '{{index .Config.Labels "sandstorm.app-version"}}' 2>/dev/null || true)
+        if [ -n "$IMAGE_VERSION" ] && [ "$IMAGE_VERSION" != "$SANDSTORM_APP_VERSION" ]; then
+          echo "App version changed (image: ${IMAGE_VERSION:0:8}... → current: ${SANDSTORM_APP_VERSION:0:8}...). Rebuilding base image..."
+          BUILD_FLAG="--build"
+          VERSION_REBUILD=true
+        elif [ -z "$IMAGE_VERSION" ] && docker image inspect "$CLAUDE_IMAGE" > /dev/null 2>&1; then
+          # Image exists but has no version label — rebuild to add it
+          echo "Base image missing version stamp. Rebuilding..."
+          BUILD_FLAG="--build"
+          VERSION_REBUILD=true
+        fi
+      fi
+
       if run_compose up -d $BUILD_FLAG > /tmp/sandstorm-build-${STACK_ID}.log 2>&1; then
         registry_write "$STACK_ID" "" "" "" "up" ""
       else

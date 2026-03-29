@@ -310,6 +310,14 @@ describe('TicketView', () => {
     expect(screen.queryByText('Tear Down')).toBeNull();
   });
 
+  it('does not show Tear Down for rebuilding stacks', () => {
+    const stacks = [makeStack({ id: 'rebuild-stack', ticket: 'T-1', status: 'rebuilding' })];
+    render(<TicketView stacks={stacks} />);
+    fireEvent.click(screen.getByText('T-1'));
+
+    expect(screen.queryByText('Tear Down')).toBeNull();
+  });
+
   // --- Action handlers ---
 
   it('calls teardown API when Tear Down is clicked and confirmed', async () => {
@@ -427,6 +435,7 @@ describe('TicketView', () => {
   it('renders correct status labels for all statuses', () => {
     const statuses: [string, string][] = [
       ['building', 'Building'],
+      ['rebuilding', 'Rebuilding Image'],
       ['up', 'Up'],
       ['running', 'Running'],
       ['completed', 'Needs Review'],

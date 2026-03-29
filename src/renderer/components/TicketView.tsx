@@ -4,6 +4,7 @@ import { getStackDuration } from '../utils/duration';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
+  rebuilding: 'bg-amber-400 animate-pulse',
   up: 'bg-emerald-400',
   running: 'bg-blue-400 animate-pulse',
   completed: 'bg-emerald-400',
@@ -14,6 +15,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
   building: { bg: 'bg-amber-500/10 border-amber-500/20', text: 'text-amber-400' },
+  rebuilding: { bg: 'bg-amber-500/10 border-amber-500/20', text: 'text-amber-400' },
   up: { bg: 'bg-emerald-500/10 border-emerald-500/20', text: 'text-emerald-400' },
   running: { bg: 'bg-blue-500/10 border-blue-500/20', text: 'text-blue-400' },
   completed: { bg: 'bg-emerald-500/10 border-emerald-500/20', text: 'text-emerald-400' },
@@ -24,6 +26,7 @@ const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
 
 const STATUS_LABELS: Record<string, string> = {
   building: 'Building',
+  rebuilding: 'Rebuilding Image',
   up: 'Up',
   running: 'Running',
   completed: 'Needs Review',
@@ -271,7 +274,7 @@ function TicketStackRow({ stack, showProject }: { stack: Stack; showProject?: bo
           {(stack.status === 'up' || stack.status === 'idle' || stack.status === 'running' || stack.status === 'completed') && (
             <ActionButton label="Stop" onClick={handleStop} />
           )}
-          {stack.status !== 'running' && stack.status !== 'building' && (
+          {stack.status !== 'running' && stack.status !== 'building' && stack.status !== 'rebuilding' && (
             <ActionButton label="Tear Down" onClick={handleTeardown} danger />
           )}
         </div>

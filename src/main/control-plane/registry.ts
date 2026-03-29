@@ -28,6 +28,7 @@ export interface Stack {
 
 export type StackStatus =
   | 'building'
+  | 'rebuilding'
   | 'up'
   | 'running'
   | 'completed'
