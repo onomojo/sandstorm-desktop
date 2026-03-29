@@ -64,9 +64,10 @@ RUN npm install -g chrome-devtools-mcp@latest
 COPY docker/entrypoint.sh /usr/bin/sandstorm-entrypoint.sh
 COPY docker/task-runner.sh /usr/bin/sandstorm-task-runner.sh
 COPY docker/sandstorm-exec /usr/bin/sandstorm-exec
+COPY docker/token-counter.sh /usr/bin/token-counter.sh
 COPY docker/SANDSTORM_INNER.md /usr/bin/SANDSTORM_INNER.md
 COPY docker/review-prompt.md /usr/bin/review-prompt.md
-RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh /usr/bin/sandstorm-exec
+RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh /usr/bin/sandstorm-exec /usr/bin/token-counter.sh
 
 ARG SANDSTORM_APP_VERSION=unknown
 LABEL sandstorm.app-version=${SANDSTORM_APP_VERSION}
