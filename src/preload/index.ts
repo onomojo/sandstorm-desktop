@@ -12,6 +12,7 @@ export interface SandstormAPI {
       needsMigration: boolean;
       missingVerifyScript?: boolean;
       missingServiceLabels?: boolean;
+      networksMigrated?: boolean;
     }>;
     autoDetectVerify: (directory: string) => Promise<{
       verifyScript: string;
