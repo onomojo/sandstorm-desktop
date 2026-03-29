@@ -24,6 +24,7 @@ import {
   getCustomSettings,
   saveCustomSettings,
 } from './custom-context';
+import { migrateNetworkOverrides } from './network-migration';
 
 /**
  * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
@@ -339,10 +340,19 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         hasServiceLabels = content.includes('sandstorm.description');
       }
 
+      // Auto-migrate network overrides (no user interaction needed)
+      let networksMigrated = false;
+      try {
+        networksMigrated = migrateNetworkOverrides(directory);
+      } catch {
+        // Non-critical — don't block migration check
+      }
+
       return {
         needsMigration: !hasVerifyScript || !hasServiceLabels,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
+        networksMigrated,
       };
     } catch {
       return { needsMigration: false };

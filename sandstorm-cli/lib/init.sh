@@ -117,6 +117,18 @@ if [ -z "$ANALYSIS" ]; then
   exit 1
 fi
 
+# Extract top-level named networks (networks with an explicit `name:` property)
+NAMED_NETWORKS=$(echo "$COMPOSE_JSON" | python3 -c "
+import json, sys
+
+config = json.load(sys.stdin)
+networks = config.get('networks', {})
+
+for key, net in networks.items():
+    if isinstance(net, dict) and net.get('name'):
+        print(f'{key}|{net[\"name\"]}')
+" 2>/dev/null || true)
+
 # Parse into arrays
 ALL_SERVICES=""
 while IFS='|' read -r name ports; do
@@ -335,6 +347,17 @@ HEADER
     tty: true
     stdin_open: true
 CLAUDE
+
+  # Network isolation — remap named networks to per-stack names
+  if [ -n "$NAMED_NETWORKS" ]; then
+    echo ""
+    echo "networks:"
+    while IFS='|' read -r net_key net_name; do
+      [ -z "$net_key" ] && continue
+      echo "  ${net_key}:"
+      echo "    name: \${SANDSTORM_PROJECT}-${net_key}"
+    done <<< "$NAMED_NETWORKS"
+  fi
 } > "$SANDSTORM_CONFIG_DIR/docker-compose.yml"
 
 echo "  Created .sandstorm/docker-compose.yml"
