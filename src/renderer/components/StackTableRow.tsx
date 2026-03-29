@@ -5,6 +5,7 @@ import { formatTokenCount, formatBytes } from '../utils/format';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
+  rebuilding: 'bg-amber-400 animate-pulse',
   up: 'bg-emerald-400',
   running: 'bg-blue-400 animate-pulse',
   completed: 'bg-emerald-400',
@@ -18,6 +19,7 @@ const STATUS_COLORS: Record<string, string> = {
 
 const STATUS_LABELS: Record<string, string> = {
   building: 'Building',
+  rebuilding: 'Rebuilding',
   up: 'Up',
   running: 'Running',
   completed: 'Review',

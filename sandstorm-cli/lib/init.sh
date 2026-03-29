@@ -316,6 +316,8 @@ HEADER
     build:
       context: \${SANDSTORM_DIR}
       dockerfile: docker/Dockerfile
+      args:
+        SANDSTORM_APP_VERSION: \${SANDSTORM_APP_VERSION:-unknown}
     environment:
       - GIT_USER_NAME
       - GIT_USER_EMAIL

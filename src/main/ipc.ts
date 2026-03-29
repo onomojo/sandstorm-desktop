@@ -11,6 +11,7 @@ import {
   agentBackend,
   dockerConnectionManager,
 } from './index';
+import { StackManager } from './control-plane/stack-manager';
 import { CreateStackOpts } from './control-plane/stack-manager';
 import { fetchAccountUsage } from './control-plane/account-usage';
 import {
@@ -203,6 +204,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         const extraPaths = ['/usr/local/bin', '/opt/homebrew/bin', '/usr/bin'];
         const currentPath = env.PATH || '';
         env.PATH = [...extraPaths, currentPath].join(':');
+        // Pass app version so init-generated compose includes the build arg
+        env.SANDSTORM_APP_VERSION = StackManager.resolveAppVersion();
 
         const child = spawn('bash', [cliBin, 'init', '-y'], {
           cwd: directory,
@@ -285,6 +288,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           '    build:',
           '      context: ${SANDSTORM_DIR}',
           '      dockerfile: docker/Dockerfile',
+          '      args:',
+          '        SANDSTORM_APP_VERSION: ${SANDSTORM_APP_VERSION:-unknown}',
           '    environment:',
           '      - GIT_USER_NAME',
           '      - GIT_USER_EMAIL',

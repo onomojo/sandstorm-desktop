@@ -1,4 +1,4 @@
-import { spawn } from 'child_process';
+import { spawn, execSync } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 import { Registry, Stack, StackHistoryRecord, Task, TokenUsage } from './registry';
@@ -7,6 +7,8 @@ import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
 import { fetchIssueContext } from './github-issue';
+
+declare const __GIT_COMMIT__: string;
 
 export interface CreateStackOpts {
   name: string;
@@ -115,6 +117,7 @@ interface CliResult {
 
 export class StackManager {
   private onStackUpdate?: () => void;
+  private appVersion: string;
 
   constructor(
     private registry: Registry,
@@ -125,6 +128,30 @@ export class StackManager {
   ) {
     // When the task watcher detects a status change, push a UI update
     this.taskWatcher.setOnStatusChange(() => this.notifyUpdate());
+    this.appVersion = StackManager.resolveAppVersion();
+  }
+
+  /**
+   * Resolve the app's git commit hash.
+   * Prefers the build-time define; falls back to git at runtime (dev mode).
+   */
+  static resolveAppVersion(): string {
+    try {
+      if (typeof __GIT_COMMIT__ !== 'undefined' && __GIT_COMMIT__ !== 'unknown') {
+        return __GIT_COMMIT__;
+      }
+    } catch {
+      // __GIT_COMMIT__ not defined (e.g. in tests)
+    }
+    try {
+      return execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+    } catch {
+      return 'unknown';
+    }
+  }
+
+  getAppVersion(): string {
+    return this.appVersion;
   }
 
   setOnStackUpdate(callback: () => void): void {
@@ -206,8 +233,56 @@ export class StackManager {
     return stack;
   }
 
+  /**
+   * Check whether the project's Claude base image needs rebuilding.
+   * Compares the image's sandstorm.app-version label to the current app version.
+   * Returns true if the image is outdated or missing a version stamp.
+   */
+  async checkImageNeedsRebuild(projectDir: string): Promise<boolean> {
+    if (this.appVersion === 'unknown') return false;
+
+    try {
+      const projectName = path.basename(projectDir).toLowerCase().replace(/[^a-z0-9]/g, '-');
+      const imageName = `sandstorm-${projectName}-claude`;
+
+      // Use docker CLI to inspect the image label (works with any runtime)
+      const result = await new Promise<{ stdout: string; exitCode: number }>((resolve) => {
+        const child = spawn('docker', [
+          'image', 'inspect', imageName,
+          '--format', '{{index .Config.Labels "sandstorm.app-version"}}',
+        ], { stdio: ['ignore', 'pipe', 'pipe'] });
+        let stdout = '';
+        child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+        child.on('close', (code) => resolve({ stdout: stdout.trim(), exitCode: code ?? 1 }));
+        child.on('error', () => resolve({ stdout: '', exitCode: 1 }));
+      });
+
+      if (result.exitCode !== 0) {
+        // Image doesn't exist — will be built from scratch, no rebuild needed
+        return false;
+      }
+
+      const imageVersion = result.stdout;
+      if (!imageVersion || imageVersion === '<no value>') {
+        // Image exists but has no version label — needs rebuild to stamp it
+        return true;
+      }
+
+      return imageVersion !== this.appVersion;
+    } catch {
+      return false;
+    }
+  }
+
   private async buildStackInBackground(opts: CreateStackOpts, _projectName: string): Promise<void> {
     try {
+      // Check if the base image needs rebuilding due to app version change
+      const needsRebuild = await this.checkImageNeedsRebuild(opts.projectDir);
+      if (needsRebuild) {
+        this.registry.updateStackStatus(opts.name, 'rebuilding');
+        this.notifyUpdate();
+      }
+
       // Allocate ports via PortAllocator (tracks in SQLite, finds free ports)
       const servicePorts = await this.discoverServicePorts(opts.projectDir);
       const portMap = await this.portAllocator.allocate(opts.name, servicePorts);
@@ -217,6 +292,9 @@ export class StackManager {
       for (const [serviceKey, hostPort] of portMap) {
         portEnv[`SANDSTORM_PORT_${serviceKey}`] = String(hostPort);
       }
+
+      // Pass the app version so the CLI can stamp the Docker image label
+      portEnv['SANDSTORM_APP_VERSION'] = this.appVersion;
 
       // Build CLI args
       const args = ['up', opts.name];

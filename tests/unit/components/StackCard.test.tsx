@@ -80,6 +80,7 @@ describe('StackCard', () => {
   it('renders correct status labels', () => {
     const statuses: [string, string][] = [
       ['building', 'Building'],
+      ['rebuilding', 'Rebuilding Image'],
       ['up', 'Up'],
       ['running', 'Running'],
       ['completed', 'Needs Review'],

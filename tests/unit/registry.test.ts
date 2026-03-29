@@ -221,7 +221,7 @@ describe('Registry', () => {
 
     it('cycles through all valid statuses', () => {
       registry.createStack(makeStack({ id: 'cycle' }));
-      const statuses = ['building', 'up', 'running', 'completed', 'failed', 'idle', 'stopped', 'pushed', 'pr_created', 'rate_limited'] as const;
+      const statuses = ['building', 'rebuilding', 'up', 'running', 'completed', 'failed', 'idle', 'stopped', 'pushed', 'pr_created', 'rate_limited'] as const;
       for (const s of statuses) {
         registry.updateStackStatus('cycle', s);
         expect(registry.getStack('cycle')!.status).toBe(s);
