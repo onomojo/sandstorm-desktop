@@ -275,7 +275,7 @@ describe('IPC Handlers', () => {
 
       const result = await invokeHandler('tasks:dispatch', 'stack-1', 'fix bug');
       expect(result).toEqual(task);
-      expect(mockStackManager.dispatchTask).toHaveBeenCalledWith('stack-1', 'fix bug', undefined);
+      expect(mockStackManager.dispatchTask).toHaveBeenCalledWith('stack-1', 'fix bug', undefined, undefined);
     });
 
     it('tasks:dispatch passes model parameter when provided', async () => {
@@ -284,7 +284,7 @@ describe('IPC Handlers', () => {
 
       const result = await invokeHandler('tasks:dispatch', 'stack-1', 'fix bug', 'opus');
       expect(result).toEqual(task);
-      expect(mockStackManager.dispatchTask).toHaveBeenCalledWith('stack-1', 'fix bug', 'opus');
+      expect(mockStackManager.dispatchTask).toHaveBeenCalledWith('stack-1', 'fix bug', 'opus', undefined);
     });
 
     it('tasks:list delegates to stackManager.getTasksForStack', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { StackManager, sanitizeComposeName } from '../../src/main/control-plane/stack-manager';
+import { StackManager, sanitizeComposeName, referencesGitHubIssue } from '../../src/main/control-plane/stack-manager';
 import { Registry } from '../../src/main/control-plane/registry';
 import { PortAllocator } from '../../src/main/control-plane/port-allocator';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
@@ -208,6 +208,7 @@ describe('StackManager', () => {
         ticket: 'JIRA-123',
         description: 'testing options',
         runtime: 'docker',
+        gateApproved: true,
       });
 
       expect(stack.ticket).toBe('JIRA-123');
@@ -247,6 +248,7 @@ describe('StackManager', () => {
         ticket: 'PROJ-1',
         branch: 'feature/test',
         runtime: 'docker',
+        gateApproved: true,
       });
 
       await vi.waitFor(() => {
@@ -1624,4 +1626,214 @@ describe('StackManager', () => {
     });
   });
 
+});
+
+describe('referencesGitHubIssue', () => {
+  it('detects standalone issue references like #123', () => {
+    expect(referencesGitHubIssue('Fix #123')).toBe(true);
+    expect(referencesGitHubIssue('#42 needs work')).toBe(true);
+    expect(referencesGitHubIssue('See issue #99 for details')).toBe(true);
+  });
+
+  it('detects owner/repo#123 references', () => {
+    expect(referencesGitHubIssue('See onomojo/sandstorm#27')).toBe(true);
+  });
+
+  it('detects GitHub issue URLs', () => {
+    expect(referencesGitHubIssue('https://github.com/onomojo/sandstorm/issues/27')).toBe(true);
+  });
+
+  it('returns false for plain text without issue references', () => {
+    expect(referencesGitHubIssue('Fix the auth bug')).toBe(false);
+    expect(referencesGitHubIssue('Refactor the login flow')).toBe(false);
+  });
+
+  it('returns false for hash in non-issue contexts', () => {
+    expect(referencesGitHubIssue('color: #fff')).toBe(false);
+  });
+});
+
+describe('spec quality gate enforcement', () => {
+  let registry: Registry;
+  let portAllocator: PortAllocator;
+  let taskWatcher: TaskWatcher;
+  let runtime: ContainerRuntime;
+  let manager: StackManager;
+  let dbPath: string;
+  let tmpDir: string;
+
+  beforeEach(async () => {
+    dbPath = makeTempDb();
+    registry = await Registry.create(dbPath);
+    runtime = createMockRuntime();
+    portAllocator = new PortAllocator(registry, [40000, 40099]);
+    taskWatcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 100 });
+    manager = new StackManager(registry, portAllocator, taskWatcher, runtime, runtime, '/fake/cli');
+
+    // Create a temp project dir with sandstorm config
+    const { execSync } = require('child_process');
+    const bareDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sandstorm-bare-'));
+    execSync('git init --bare', { cwd: bareDir, stdio: 'ignore' });
+    tmpDir = path.join(os.tmpdir(), `sandstorm-gate-${Date.now()}`);
+    execSync(`git clone "${bareDir}" "${tmpDir}"`, { stdio: 'ignore' });
+    const sandstormDir = path.join(tmpDir, '.sandstorm');
+    fs.mkdirSync(sandstormDir, { recursive: true });
+    fs.writeFileSync(path.join(sandstormDir, 'config'), '# no ports\n');
+    execSync('git add -A && git commit -m "init" && git push origin HEAD', {
+      cwd: tmpDir,
+      stdio: 'ignore',
+      env: { ...process.env, GIT_AUTHOR_NAME: 'test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'test', GIT_COMMITTER_EMAIL: 'test@test.com' },
+    });
+  });
+
+  afterEach(() => {
+    taskWatcher.unwatchAll();
+    registry.close();
+    cleanupDb(dbPath);
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  describe('createStack gate enforcement', () => {
+    it('throws GATE_CHECK_REQUIRED when ticket is set and gateApproved is not', () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      expect(() =>
+        manager.createStack({
+          name: 'gate-ticket',
+          projectDir: tmpDir,
+          ticket: '123',
+          runtime: 'docker',
+        })
+      ).toThrow('gateApproved was not set');
+    });
+
+    it('proceeds when ticket is set and gateApproved is true', () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const stack = manager.createStack({
+        name: 'gate-approved',
+        projectDir: tmpDir,
+        ticket: '123',
+        gateApproved: true,
+        runtime: 'docker',
+      });
+
+      expect(stack).toBeDefined();
+      expect(stack.id).toBe('gate-approved');
+    });
+
+    it('proceeds when ticket is set and forceBypass is true', () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const stack = manager.createStack({
+        name: 'gate-bypass',
+        projectDir: tmpDir,
+        ticket: '123',
+        forceBypass: true,
+        runtime: 'docker',
+      });
+
+      expect(stack).toBeDefined();
+      expect(stack.id).toBe('gate-bypass');
+    });
+
+    it('proceeds without gate check for ad-hoc prompts (no ticket, no issue reference)', () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const stack = manager.createStack({
+        name: 'adhoc-test',
+        projectDir: tmpDir,
+        task: 'Refactor the login flow',
+        runtime: 'docker',
+      });
+
+      expect(stack).toBeDefined();
+      expect(stack.id).toBe('adhoc-test');
+    });
+
+    it('throws GATE_CHECK_REQUIRED when task contains issue reference', () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      expect(() =>
+        manager.createStack({
+          name: 'gate-ref',
+          projectDir: tmpDir,
+          task: 'Fix the bug described in #42',
+          runtime: 'docker',
+        })
+      ).toThrow('gateApproved was not set');
+    });
+
+    it('GATE_CHECK_REQUIRED error message contains instruction to run /spec-check', () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      try {
+        manager.createStack({
+          name: 'gate-msg',
+          projectDir: tmpDir,
+          ticket: '99',
+          runtime: 'docker',
+        });
+        expect.unreachable('Should have thrown');
+      } catch (err: any) {
+        expect(err.code).toBe('GATE_CHECK_REQUIRED');
+        expect(err.message).toContain('/spec-check');
+        expect(err.message).toContain('gateApproved');
+      }
+    });
+  });
+
+  describe('dispatchTask gate enforcement', () => {
+    it('throws GATE_CHECK_REQUIRED when stack has ticket and gateApproved is not set', async () => {
+      const stackWithTicket = { ...makeStack('dispatch-gate'), ticket: '55' };
+      registry.createStack(stackWithTicket);
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      await expect(
+        manager.dispatchTask('dispatch-gate', 'Do the work')
+      ).rejects.toThrow('gateApproved was not set');
+    });
+
+    it('proceeds when stack has ticket and gateApproved is true', async () => {
+      const stackWithTicket = { ...makeStack('dispatch-approved'), ticket: '55' };
+      registry.createStack(stackWithTicket);
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const task = await manager.dispatchTask('dispatch-approved', 'Do the work', undefined, {
+        gateApproved: true,
+      });
+
+      expect(task).toBeDefined();
+      expect(task.prompt).toContain('Do the work');
+    });
+
+    it('throws GATE_CHECK_REQUIRED when prompt contains issue reference', async () => {
+      registry.createStack(makeStack('dispatch-ref'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      await expect(
+        manager.dispatchTask('dispatch-ref', 'Fix issue #42')
+      ).rejects.toThrow('gateApproved was not set');
+    });
+
+    it('allows ad-hoc dispatch without gate check', async () => {
+      registry.createStack(makeStack('dispatch-adhoc'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const task = await manager.dispatchTask('dispatch-adhoc', 'Refactor the login flow');
+      expect(task).toBeDefined();
+    });
+
+    it('allows dispatch with forceBypass', async () => {
+      const stackWithTicket = { ...makeStack('dispatch-force'), ticket: '55' };
+      registry.createStack(stackWithTicket);
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const task = await manager.dispatchTask('dispatch-force', 'Do the work', undefined, {
+        forceBypass: true,
+      });
+
+      expect(task).toBeDefined();
+    });
+  });
 });

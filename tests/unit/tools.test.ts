@@ -74,7 +74,8 @@ describe('MCP tools', () => {
       expect(stackManager.dispatchTask).toHaveBeenCalledWith(
         'test-stack',
         'Fix a typo',
-        'auto'
+        'auto',
+        { gateApproved: undefined, forceBypass: undefined }
       );
     });
 
@@ -88,7 +89,8 @@ describe('MCP tools', () => {
       expect(stackManager.dispatchTask).toHaveBeenCalledWith(
         'test-stack',
         'Refactor auth',
-        'sonnet'
+        'sonnet',
+        { gateApproved: undefined, forceBypass: undefined }
       );
     });
 
@@ -101,7 +103,8 @@ describe('MCP tools', () => {
       expect(stackManager.dispatchTask).toHaveBeenCalledWith(
         'test-stack',
         'Some task',
-        undefined
+        undefined,
+        { gateApproved: undefined, forceBypass: undefined }
       );
     });
   });

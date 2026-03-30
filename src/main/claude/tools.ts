@@ -16,7 +16,7 @@ export const tools: ToolDefinition[] = [
   {
     name: 'create_stack',
     description:
-      'Create a new Sandstorm stack with a name, project directory, and optional task',
+      'Create a new Sandstorm stack with a name, project directory, and optional task. When a ticket is specified or the task references a GitHub issue, gateApproved must be true (run /spec-check first) or forceBypass must be true.',
     inputSchema: {
       type: 'object',
       properties: {
@@ -27,6 +27,8 @@ export const tools: ToolDefinition[] = [
         description: { type: 'string', description: 'Short description of the work' },
         runtime: { type: 'string', enum: ['docker', 'podman'], description: 'Container runtime' },
         task: { type: 'string', description: 'Task to dispatch immediately after creation' },
+        gateApproved: { type: 'boolean', description: 'Set to true after running /spec-check and getting user approval. Required when a ticket is specified or the task references a GitHub issue.' },
+        forceBypass: { type: 'boolean', description: 'Set to true to bypass the spec quality gate. Only use when the user explicitly requests skipping the gate.' },
         model: {
           type: 'string',
           enum: ['auto', 'sonnet', 'opus'],
@@ -46,12 +48,14 @@ export const tools: ToolDefinition[] = [
   },
   {
     name: 'dispatch_task',
-    description: 'Dispatch a task to an existing stack',
+    description: 'Dispatch a task to an existing stack. When the stack has a ticket or the prompt references a GitHub issue, gateApproved must be true (run /spec-check first) or forceBypass must be true.',
     inputSchema: {
       type: 'object',
       properties: {
         stackId: { type: 'string', description: 'Stack ID to dispatch to' },
         prompt: { type: 'string', description: 'Task description for inner Claude' },
+        gateApproved: { type: 'boolean', description: 'Set to true after running /spec-check and getting user approval. Required when a ticket is specified or the prompt references a GitHub issue.' },
+        forceBypass: { type: 'boolean', description: 'Set to true to bypass the spec quality gate. Only use when the user explicitly requests skipping the gate.' },
         model: {
           type: 'string',
           enum: ['auto', 'sonnet', 'opus'],
@@ -172,6 +176,8 @@ export async function handleToolCall(
         runtime: (input.runtime as 'docker' | 'podman') ?? 'docker',
         task: input.task as string | undefined,
         model: input.model as string | undefined,
+        gateApproved: input.gateApproved as boolean | undefined,
+        forceBypass: input.forceBypass as boolean | undefined,
       });
 
     case 'list_stacks':
@@ -181,7 +187,11 @@ export async function handleToolCall(
       return stackManager.dispatchTask(
         input.stackId as string,
         input.prompt as string,
-        input.model as string | undefined
+        input.model as string | undefined,
+        {
+          gateApproved: input.gateApproved as boolean | undefined,
+          forceBypass: input.forceBypass as boolean | undefined,
+        }
       );
 
     case 'get_diff':
