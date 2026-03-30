@@ -19,6 +19,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtk-3-0 \
     libdbus-1-3 \
     xvfb \
+    xauth \
   && rm -rf /var/lib/apt/lists/*
 
 ENV DISPLAY=:99
