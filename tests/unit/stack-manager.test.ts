@@ -78,8 +78,12 @@ describe('sanitizeComposeName', () => {
     expect(sanitizeComposeName('stack#1$2%3')).toBe('stack123');
   });
 
-  it('handles names starting with numbers', () => {
-    expect(sanitizeComposeName('123stack')).toBe('s123stack');
+  it('passes through names starting with digits unchanged', () => {
+    // The "sandstorm-" prefix in compose project names ensures the full name
+    // starts with a letter, so individual segments don't need the "s" prefix.
+    // This matches the CLI behavior so container names stay consistent.
+    expect(sanitizeComposeName('123stack')).toBe('123stack');
+    expect(sanitizeComposeName('36-solid-queue')).toBe('36-solid-queue');
   });
 
   it('handles names starting with hyphens', () => {
@@ -1341,6 +1345,37 @@ describe('StackManager', () => {
         (c: unknown[]) => typeof c[0] === 'object' && (c[0] as any).name?.includes('claude')
       );
       expect(claudeFilter).toBeDefined();
+    });
+
+    it('uses raw stack ID for container lookup when ID starts with a digit', async () => {
+      // Regression test: stack IDs starting with a digit (e.g. "36-solid-queue")
+      // must NOT get an "s" prefix when constructing the compose project name.
+      // The CLI creates containers without the prefix, so adding one causes
+      // a naming mismatch that prevents container discovery.
+      registry.createStack({ ...makeStack('36-solid-queue') });
+
+      const capturedFilters: string[] = [];
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockImplementation(
+        async (filter?: { name?: string }) => {
+          if (filter?.name) capturedFilters.push(filter.name);
+          if (filter?.name?.includes('claude')) {
+            return [{
+              id: 'claude-digit', name: 'sandstorm-proj-36-solid-queue-claude-1',
+              image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+            }];
+          }
+          return [];
+        }
+      );
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
+
+      await manager.dispatchTask('36-solid-queue', 'do work');
+
+      const claudeFilter = capturedFilters.find(n => n.includes('claude'));
+      expect(claudeFilter).toBeDefined();
+      // Must NOT contain the "s" prefix — container names match what the CLI creates
+      expect(claudeFilter).toContain('sandstorm-proj-36-solid-queue-claude');
+      expect(claudeFilter).not.toContain('s36-solid-queue');
     });
 
     it('returns empty services when no containers found', async () => {
