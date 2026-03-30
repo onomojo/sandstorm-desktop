@@ -76,8 +76,8 @@ describe('Stack Lifecycle Integration', () => {
     registry = await Registry.create(dbPath);
     runtime = createMockRuntime();
     portAllocator = new PortAllocator(registry, [40000, 40099]);
-    taskWatcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
-    manager = new StackManager(registry, portAllocator, taskWatcher, runtime, '/fake/cli');
+    taskWatcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+    manager = new StackManager(registry, portAllocator, taskWatcher, runtime, runtime, '/fake/cli');
   });
 
   afterEach(() => {

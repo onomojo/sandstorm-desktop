@@ -126,7 +126,7 @@ describe('TaskWatcher', () => {
   it('emits task:completed when task finishes successfully', async () => {
     // Status transitions: running → completed
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
-    const watcher = new TaskWatcher(registry, runtime, {
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 50,
     });
 
@@ -149,7 +149,7 @@ describe('TaskWatcher', () => {
   it('emits task:failed when task exits with error', async () => {
     // Status transitions: running → failed
     const runtime = createSequencedRuntime(['running', 'failed'], '1');
-    const watcher = new TaskWatcher(registry, runtime, {
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 50,
     });
 
@@ -172,7 +172,7 @@ describe('TaskWatcher', () => {
   it('stops watching after task completes', async () => {
     // Status transitions: running → completed
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
-    const watcher = new TaskWatcher(registry, runtime, {
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 50,
     });
 
@@ -196,7 +196,7 @@ describe('TaskWatcher', () => {
 
   it('unwatchAll clears all watchers', () => {
     const runtime = createMockRuntime('running', '0');
-    const watcher = new TaskWatcher(registry, runtime, {
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 50,
     });
 
@@ -217,7 +217,7 @@ describe('TaskWatcher', () => {
 
     // Phase 1: Complete the first task normally (running → completed)
     const runtime1 = createSequencedRuntime(['running', 'completed'], '0');
-    const watcher = new TaskWatcher(registry, runtime1, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime1, runtime1, { pollInterval: 50 });
 
     registry.createTask('watch-stack', 'first task');
 
@@ -236,7 +236,7 @@ describe('TaskWatcher', () => {
       ['completed', 'completed', 'running', 'running', 'completed'],
       '0'
     );
-    const watcher2 = new TaskWatcher(registry, runtime2, { pollInterval: 50 });
+    const watcher2 = new TaskWatcher(registry, runtime2, runtime2, { pollInterval: 50 });
 
     const task2 = registry.createTask('watch-stack', 'second task');
 
@@ -266,7 +266,7 @@ describe('TaskWatcher', () => {
   it('flags suspicious fast completion with a warning', async () => {
     // Task completes in under 30s with exit 0 — should be flagged
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
     // Create a task — it gets started_at = now, so completion will be < 30s
     registry.createTask('watch-stack', 'suspicious task');
@@ -293,7 +293,7 @@ describe('TaskWatcher', () => {
   it('does not flag slow task completion as suspicious', async () => {
     // Simulate a task that started 2 minutes ago
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
     const task = registry.createTask('watch-stack', 'slow task');
 
@@ -314,7 +314,7 @@ describe('TaskWatcher', () => {
 
   it('does not flag failed tasks as suspicious', async () => {
     const runtime = createSequencedRuntime(['running', 'failed'], '1');
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
     registry.createTask('watch-stack', 'failing task');
 
@@ -336,7 +336,7 @@ describe('TaskWatcher', () => {
     // The task runner writes "running" first, then "completed".
     // This should work normally.
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
     registry.createTask('watch-stack', 'fresh task');
 
@@ -379,7 +379,7 @@ describe('TaskWatcher', () => {
       }
     );
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'token test task');
 
     await new Promise<void>((resolve) => {
@@ -435,7 +435,7 @@ describe('TaskWatcher', () => {
       }
     );
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'model detection task');
 
     await new Promise<void>((resolve) => {
@@ -495,7 +495,7 @@ describe('TaskWatcher', () => {
     };
 
     // Use very short poll interval and token poll interval to trigger real-time polling
-    const watcher = new TaskWatcher(registry, runtime, {
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 20,
       tokenPollInterval: 0, // poll tokens every status check
     });
@@ -558,7 +558,7 @@ describe('TaskWatcher', () => {
 
     // Token poll interval much longer than status poll interval
     // means tokens won't be polled every status check
-    const watcher = new TaskWatcher(registry, runtime, {
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 20,
       tokenPollInterval: 200, // much longer than poll interval
     });
@@ -590,7 +590,7 @@ describe('TaskWatcher', () => {
   it('applies exponential backoff on exec failures', async () => {
     // Fail 3 times, then succeed with "running" status
     const runtime = createFailingRuntime(3);
-    const watcher = new TaskWatcher(registry, runtime, {
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 50,
     });
 
@@ -624,7 +624,7 @@ describe('TaskWatcher', () => {
       containerStats: vi.fn(),
     };
 
-    const watcher = new TaskWatcher(registry, runtime, {
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 10,
     });
 
@@ -676,7 +676,7 @@ describe('TaskWatcher', () => {
       containerStats: vi.fn(),
     };
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'test task');
 
     const callback = vi.fn();
@@ -711,7 +711,7 @@ describe('TaskWatcher', () => {
       containerStats: vi.fn(),
     };
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'test task');
 
     // Start first stream
@@ -749,7 +749,7 @@ describe('TaskWatcher', () => {
       containerStats: vi.fn(),
     };
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'test task');
 
     const outputEvents: string[] = [];
@@ -789,7 +789,7 @@ describe('TaskWatcher', () => {
       containerStats: vi.fn(),
     };
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     await watcher.streamOutput('watch-stack', 'container-abc', vi.fn());
 
     expect(logsSpy).toHaveBeenCalledWith('container-abc', { follow: true, tail: 100 });
@@ -800,7 +800,7 @@ describe('TaskWatcher', () => {
 
   it('calls onStatusChange callback when task completes', async () => {
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
     const statusChangeFn = vi.fn();
     watcher.setOnStatusChange(statusChangeFn);
@@ -818,7 +818,7 @@ describe('TaskWatcher', () => {
 
   it('calls onStatusChange callback when task fails', async () => {
     const runtime = createSequencedRuntime(['running', 'failed'], '1');
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
     const statusChangeFn = vi.fn();
     watcher.setOnStatusChange(statusChangeFn);
@@ -888,7 +888,7 @@ describe('TaskWatcher', () => {
       containerStats: vi.fn(),
     };
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
     registry.createTask('watch-stack', 'task 1');
     registry.createTask('watch-stack-2', 'task 2');
@@ -914,7 +914,7 @@ describe('TaskWatcher', () => {
 
   it('re-watching a stack replaces the existing watcher', async () => {
     const runtime = createSequencedRuntime(['running', 'running', 'completed'], '0');
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
     registry.createTask('watch-stack', 'task');
 
@@ -960,7 +960,7 @@ describe('TaskWatcher', () => {
       }
     );
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'error in log task');
 
     let rateLimitEmitted = false;
@@ -990,7 +990,7 @@ describe('TaskWatcher', () => {
       }
     );
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'no stderr read task');
 
     await new Promise<void>((resolve) => {
@@ -1019,7 +1019,7 @@ describe('TaskWatcher', () => {
       }
     );
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'loop iteration task');
 
     await new Promise<void>((resolve) => {
@@ -1050,7 +1050,7 @@ describe('TaskWatcher', () => {
       }
     );
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'single-pass task');
 
     await new Promise<void>((resolve) => {
@@ -1094,7 +1094,7 @@ describe('TaskWatcher', () => {
       containerStats: vi.fn(),
     };
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 10 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 10 });
     registry.createTask('watch-stack', 'stale safety net task');
 
     const completed = new Promise<void>((resolve) => {

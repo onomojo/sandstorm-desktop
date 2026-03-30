@@ -119,8 +119,8 @@ describe('StackManager', () => {
     registry = await Registry.create(dbPath);
     runtime = createMockRuntime();
     portAllocator = new PortAllocator(registry, [40000, 40099]);
-    taskWatcher = new TaskWatcher(registry, runtime, { pollInterval: 100 });
-    manager = new StackManager(registry, portAllocator, taskWatcher, runtime, '/fake/cli');
+    taskWatcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 100 });
+    manager = new StackManager(registry, portAllocator, taskWatcher, runtime, runtime, '/fake/cli');
   });
 
   afterEach(() => {
@@ -383,7 +383,7 @@ describe('StackManager', () => {
       registry.createStack(makeStack('ready-test'));
       // Default mock exec returns exitCode: 0, so test -f succeeds
       await expect(
-        manager.waitForClaudeReady('claude-container-1', 5000, 100)
+        manager.waitForClaudeReady('claude-container-1', runtime, 5000, 100)
       ).resolves.toBeUndefined();
     });
 
@@ -407,7 +407,7 @@ describe('StackManager', () => {
       );
 
       await expect(
-        manager.waitForClaudeReady('claude-container-1', 5000, 50)
+        manager.waitForClaudeReady('claude-container-1', runtime, 5000, 50)
       ).resolves.toBeUndefined();
     });
 
@@ -419,7 +419,7 @@ describe('StackManager', () => {
       });
 
       await expect(
-        manager.waitForClaudeReady('claude-container-1', 200, 50)
+        manager.waitForClaudeReady('claude-container-1', runtime, 200, 50)
       ).rejects.toThrow('not ready after');
     });
 
@@ -432,7 +432,7 @@ describe('StackManager', () => {
       });
 
       await expect(
-        manager.waitForClaudeReady('claude-container-1', 5000, 50)
+        manager.waitForClaudeReady('claude-container-1', runtime, 5000, 50)
       ).resolves.toBeUndefined();
     });
   });
@@ -446,7 +446,7 @@ describe('StackManager', () => {
       });
 
       await manager.dispatchTask('ready-dispatch', 'do stuff');
-      expect(waitSpy).toHaveBeenCalledWith('claude-container-1');
+      expect(waitSpy).toHaveBeenCalledWith('claude-container-1', runtime);
     });
 
     it('fails task when readiness check times out', async () => {
@@ -1448,6 +1448,144 @@ describe('StackManager', () => {
       const state = manager.getRateLimitState();
       expect(state.active).toBe(true);
       expect(state.affected_stacks).toEqual(['rl-only']);
+    });
+  });
+
+  describe('getRuntimeForStack (per-stack runtime resolution)', () => {
+    it('returns docker runtime for stacks with runtime=docker', () => {
+      const dockerRt = createMockRuntime();
+      dockerRt.name = 'docker';
+      const podmanRt = createMockRuntime();
+      podmanRt.name = 'podman';
+
+      const mgr = new StackManager(registry, portAllocator, taskWatcher, dockerRt, podmanRt, '/fake/cli');
+
+      registry.createStack({
+        id: 'docker-stack',
+        project: 'proj',
+        project_dir: '/proj',
+        ticket: null,
+        branch: null,
+        description: null,
+        status: 'up',
+        runtime: 'docker',
+      });
+
+      const stack = registry.getStack('docker-stack')!;
+      const resolved = mgr.getRuntimeForStack(stack);
+      expect(resolved.name).toBe('docker');
+    });
+
+    it('returns podman runtime for stacks with runtime=podman', () => {
+      const dockerRt = createMockRuntime();
+      dockerRt.name = 'docker';
+      const podmanRt = createMockRuntime();
+      podmanRt.name = 'podman';
+
+      const mgr = new StackManager(registry, portAllocator, taskWatcher, dockerRt, podmanRt, '/fake/cli');
+
+      registry.createStack({
+        id: 'podman-stack',
+        project: 'proj',
+        project_dir: '/proj',
+        ticket: null,
+        branch: null,
+        description: null,
+        status: 'up',
+        runtime: 'podman',
+      });
+
+      const stack = registry.getStack('podman-stack')!;
+      const resolved = mgr.getRuntimeForStack(stack);
+      expect(resolved.name).toBe('podman');
+    });
+
+    it('uses per-stack runtime for getLogs instead of global default', async () => {
+      const dockerRt = createMockRuntime();
+      dockerRt.name = 'docker';
+      const podmanRt = createMockRuntime();
+      podmanRt.name = 'podman';
+
+      const mgr = new StackManager(registry, portAllocator, taskWatcher, dockerRt, podmanRt, '/fake/cli');
+
+      registry.createStack({
+        id: 'logs-stack',
+        project: 'proj',
+        project_dir: '/proj',
+        ticket: null,
+        branch: null,
+        description: null,
+        status: 'up',
+        runtime: 'docker',
+      });
+
+      // Docker runtime returns containers; podman should never be called
+      (dockerRt.listContainers as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          id: 'c1',
+          name: 'sandstorm-proj-logs-stack-app-1',
+          image: 'app',
+          status: 'running' as const,
+          state: 'running',
+          ports: [],
+          labels: {},
+          created: new Date().toISOString(),
+        },
+      ]);
+      (dockerRt.logs as ReturnType<typeof vi.fn>).mockReturnValue(
+        (async function* () { yield 'log line'; })()
+      );
+
+      await mgr.getLogs('logs-stack');
+
+      expect(dockerRt.listContainers).toHaveBeenCalled();
+      expect(podmanRt.listContainers).not.toHaveBeenCalled();
+    });
+
+    it('uses per-stack runtime for getTaskOutput instead of global default', async () => {
+      const dockerRt = createMockRuntime();
+      dockerRt.name = 'docker';
+      const podmanRt = createMockRuntime();
+      podmanRt.name = 'podman';
+
+      const mgr = new StackManager(registry, portAllocator, taskWatcher, dockerRt, podmanRt, '/fake/cli');
+
+      registry.createStack({
+        id: 'output-stack',
+        project: 'proj',
+        project_dir: '/proj',
+        ticket: null,
+        branch: null,
+        description: null,
+        status: 'up',
+        runtime: 'docker',
+      });
+
+      // findClaudeContainer needs to return a container
+      (dockerRt.listContainers as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          id: 'claude-1',
+          name: 'sandstorm-proj-output-stack-claude-1',
+          image: 'claude',
+          status: 'running' as const,
+          state: 'running',
+          ports: [],
+          labels: {},
+          created: new Date().toISOString(),
+        },
+      ]);
+      (dockerRt.exec as ReturnType<typeof vi.fn>).mockResolvedValue({
+        exitCode: 0,
+        stdout: 'task output',
+        stderr: '',
+      });
+
+      const output = await mgr.getTaskOutput('output-stack');
+
+      expect(output).toBe('task output');
+      expect(dockerRt.exec).toHaveBeenCalled();
+      expect(podmanRt.exec).not.toHaveBeenCalled();
+      expect(podmanRt.listContainers).not.toHaveBeenCalled();
     });
   });
 

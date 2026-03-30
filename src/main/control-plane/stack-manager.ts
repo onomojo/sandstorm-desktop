@@ -123,7 +123,8 @@ export class StackManager {
     private registry: Registry,
     private portAllocator: PortAllocator,
     private taskWatcher: TaskWatcher,
-    private runtime: ContainerRuntime,
+    private dockerRuntime: ContainerRuntime,
+    private podmanRuntime: ContainerRuntime,
     private cliDir: string = ''
   ) {
     // When the task watcher detects a status change, push a UI update
@@ -160,6 +161,14 @@ export class StackManager {
 
   private notifyUpdate(): void {
     this.onStackUpdate?.();
+  }
+
+  /**
+   * Resolve the correct container runtime for a stack based on its stored
+   * runtime preference, rather than relying on the global default.
+   */
+  getRuntimeForStack(stack: Stack): ContainerRuntime {
+    return stack.runtime === 'podman' ? this.podmanRuntime : this.dockerRuntime;
   }
 
   /**
@@ -419,6 +428,7 @@ export class StackManager {
    */
   async waitForClaudeReady(
     containerId: string,
+    runtime: ContainerRuntime,
     timeoutMs: number = 60000,
     intervalMs: number = 2000
   ): Promise<void> {
@@ -427,7 +437,7 @@ export class StackManager {
     while (Date.now() < deadline) {
       try {
         // Check for readiness file first (most reliable)
-        const readyResult = await this.runtime.exec(containerId, [
+        const readyResult = await runtime.exec(containerId, [
           'test', '-f', '/tmp/claude-ready',
         ]);
         if (readyResult.exitCode === 0) return;
@@ -437,7 +447,7 @@ export class StackManager {
 
       try {
         // Fallback: check if claude process is running
-        const psResult = await this.runtime.exec(containerId, [
+        const psResult = await runtime.exec(containerId, [
           'pgrep', '-f', 'claude',
         ]);
         if (psResult.exitCode === 0 && psResult.stdout.trim()) return;
@@ -473,14 +483,16 @@ export class StackManager {
 
     const task = this.registry.createTask(stackId, prompt, model);
 
+    const runtime = this.getRuntimeForStack(stack);
+
     try {
-      const claudeContainer = await this.findClaudeContainer(stack);
+      const claudeContainer = await this.findClaudeContainer(stack, runtime);
       if (!claudeContainer) {
         throw new SandstormError(ErrorCode.CONTAINER_UNREACHABLE, `Agent container not found for stack "${stackId}"`);
       }
 
       // Wait for the inner Claude agent to be ready before dispatching
-      await this.waitForClaudeReady(claudeContainer.id);
+      await this.waitForClaudeReady(claudeContainer.id, runtime);
 
       // Use the sandstorm CLI to dispatch the task. The CLI's `task` command
       // handles credential sync (OAuth), writes files as the correct user
@@ -587,13 +599,14 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    const claudeContainer = await this.findClaudeContainer(stack);
+    const runtime = this.getRuntimeForStack(stack);
+    const claudeContainer = await this.findClaudeContainer(stack, runtime);
     if (!claudeContainer) {
       throw new SandstormError(ErrorCode.CONTAINER_UNREACHABLE, `Agent container not found for stack "${stackId}"`);
     }
 
     try {
-      const result = await this.runtime.exec(claudeContainer.id, [
+      const result = await runtime.exec(claudeContainer.id, [
         'tail', '-n', String(lines), '/tmp/claude-task.log',
       ]);
       return result.stdout;
@@ -610,7 +623,8 @@ export class StackManager {
     const filterName = service
       ? `${composeProjectName}-${service}`
       : composeProjectName;
-    const containers = await this.runtime.listContainers({ name: filterName });
+    const runtime = this.getRuntimeForStack(stack);
+    const containers = await runtime.listContainers({ name: filterName });
 
     if (containers.length === 0) {
       throw new SandstormError(ErrorCode.CONTAINER_UNREACHABLE, `No containers found for stack "${stackId}"${service ? ` service "${service}"` : ''}`);
@@ -619,7 +633,7 @@ export class StackManager {
     const logParts: string[] = [];
     for (const c of containers) {
       const chunks: string[] = [];
-      for await (const chunk of this.runtime.logs(c.id, { tail: 100 })) {
+      for await (const chunk of runtime.logs(c.id, { tail: 100 })) {
         chunks.push(chunk);
       }
       const serviceName = this.extractServiceName(c.name, composeProjectName);
@@ -647,7 +661,8 @@ export class StackManager {
     if (!stack) return { stackId, totalMemory: 0, containers: [] };
 
     const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
-    const containers = await this.runtime.listContainers({ name: composeProjectName });
+    const runtime = this.getRuntimeForStack(stack);
+    const containers = await runtime.listContainers({ name: composeProjectName });
 
     const entries: ContainerStatsEntry[] = [];
     let totalMemory = 0;
@@ -655,7 +670,7 @@ export class StackManager {
     for (const c of containers) {
       if (c.status !== 'running') continue;
       try {
-        const stats = await this.runtime.containerStats(c.id);
+        const stats = await runtime.containerStats(c.id);
         const serviceName = this.extractServiceName(c.name, composeProjectName);
         entries.push({
           name: serviceName,
@@ -807,7 +822,8 @@ export class StackManager {
 
   private async getServices(stack: Stack): Promise<ServiceInfo[]> {
     const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
-    const containers = await this.runtime.listContainers({
+    const runtime = this.getRuntimeForStack(stack);
+    const containers = await runtime.listContainers({
       name: composeProjectName,
     });
 
@@ -829,9 +845,10 @@ export class StackManager {
     });
   }
 
-  private async findClaudeContainer(stack: Stack): Promise<Container | undefined> {
+  private async findClaudeContainer(stack: Stack, runtime?: ContainerRuntime): Promise<Container | undefined> {
+    const resolvedRuntime = runtime ?? this.getRuntimeForStack(stack);
     const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
-    const containers = await this.runtime.listContainers({
+    const containers = await resolvedRuntime.listContainers({
       name: `${composeProjectName}-claude`,
     });
     return containers[0];
