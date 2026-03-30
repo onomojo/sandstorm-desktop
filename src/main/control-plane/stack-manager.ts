@@ -88,23 +88,19 @@ export interface RateLimitState {
 }
 
 /**
- * Sanitize a string for use in Docker Compose project names.
- * Compose project names must consist only of lowercase alphanumeric characters,
- * hyphens, and underscores, and must start with a letter or underscore.
+ * Sanitize a string for use as a segment in a Docker Compose project name.
+ * The full project name is prefixed with "sandstorm-", so individual segments
+ * don't need to start with a letter — that constraint is satisfied by the prefix.
+ * Segments must consist only of lowercase alphanumeric characters, hyphens, and underscores.
  */
 export function sanitizeComposeName(input: string): string {
-  let name = input
+  const name = input
     .toLowerCase()
     .replace(/\s+/g, '-')       // spaces → hyphens
     .replace(/[^a-z0-9_-]/g, '') // strip invalid chars
     .replace(/-{2,}/g, '-')      // collapse repeated hyphens
     .replace(/^[-]+/, '')         // strip leading hyphens
     .replace(/[-]+$/, '');        // strip trailing hyphens
-
-  // Must start with a letter or underscore
-  if (name && !/^[a-z_]/.test(name)) {
-    name = `s${name}`;
-  }
 
   return name || 'stack';
 }
@@ -487,9 +483,6 @@ export class StackManager {
 
     try {
       const claudeContainer = await this.findClaudeContainer(stack, runtime);
-      if (!claudeContainer) {
-        throw new SandstormError(ErrorCode.CONTAINER_UNREACHABLE, `Agent container not found for stack "${stackId}"`);
-      }
 
       // Wait for the inner Claude agent to be ready before dispatching
       await this.waitForClaudeReady(claudeContainer.id, runtime);
@@ -601,9 +594,6 @@ export class StackManager {
 
     const runtime = this.getRuntimeForStack(stack);
     const claudeContainer = await this.findClaudeContainer(stack, runtime);
-    if (!claudeContainer) {
-      throw new SandstormError(ErrorCode.CONTAINER_UNREACHABLE, `Agent container not found for stack "${stackId}"`);
-    }
 
     try {
       const result = await runtime.exec(claudeContainer.id, [
@@ -845,12 +835,21 @@ export class StackManager {
     });
   }
 
-  private async findClaudeContainer(stack: Stack, runtime?: ContainerRuntime): Promise<Container | undefined> {
+  private async findClaudeContainer(stack: Stack, runtime?: ContainerRuntime): Promise<Container> {
     const resolvedRuntime = runtime ?? this.getRuntimeForStack(stack);
     const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
     const containers = await resolvedRuntime.listContainers({
       name: `${composeProjectName}-claude`,
     });
+    if (!containers[0]) {
+      // Surface the expected container name to help diagnose naming mismatches
+      // (e.g. stack ID starts with a digit but CLI used a different convention).
+      throw new SandstormError(
+        ErrorCode.CONTAINER_UNREACHABLE,
+        `Agent container not found for stack "${stack.id}". Expected container matching "${composeProjectName}-claude". ` +
+        `Check that Docker containers are running (docker ps) and that the compose project name matches.`
+      );
+    }
     return containers[0];
   }
 
