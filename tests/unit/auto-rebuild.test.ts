@@ -46,8 +46,8 @@ describe('Auto-rebuild mechanism', () => {
     registry = await Registry.create(dbPath);
     runtime = createMockRuntime();
     portAllocator = new PortAllocator(registry, [40000, 40099]);
-    taskWatcher = new TaskWatcher(registry, runtime, { pollInterval: 100 });
-    manager = new StackManager(registry, portAllocator, taskWatcher, runtime, '/fake/cli');
+    taskWatcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 100 });
+    manager = new StackManager(registry, portAllocator, taskWatcher, runtime, runtime, '/fake/cli');
   });
 
   afterEach(() => {
@@ -83,7 +83,7 @@ describe('Auto-rebuild mechanism', () => {
 
     it('returns false when appVersion is "unknown"', async () => {
       // Create a manager with 'unknown' version
-      const unknownManager = new StackManager(registry, portAllocator, taskWatcher, runtime, '/fake/cli');
+      const unknownManager = new StackManager(registry, portAllocator, taskWatcher, runtime, runtime, '/fake/cli');
       // Override private field for testing
       (unknownManager as unknown as { appVersion: string }).appVersion = 'unknown';
 

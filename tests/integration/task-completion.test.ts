@@ -64,7 +64,7 @@ describe('Task Completion (Integration)', () => {
       version: vi.fn().mockResolvedValue('Mock 1.0'),
     };
 
-    const watcher = new TaskWatcher(registry, runtime, { pollInterval: 50 });
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('int-task-stack', 'integration task');
 
     const result = await new Promise<{ stackId: string }>((resolve) => {

@@ -83,21 +83,19 @@ async function initializeApp(): Promise<void> {
   dockerRuntime = new DockerRuntime();
   podmanRuntime = new PodmanRuntime();
 
-  // Default to Docker, fall back to Podman
-  const defaultRuntime = (await dockerRuntime.isAvailable())
-    ? dockerRuntime
-    : podmanRuntime;
-
-  // Initialize control plane
+  // Initialize control plane — both runtimes are passed through so that
+  // each stack uses the runtime it was created with, rather than a single
+  // global default that may have been wrong at startup (see #152).
   cliDir = resolveCliDir();
   registry = await Registry.create();
   portAllocator = new PortAllocator(registry);
-  taskWatcher = new TaskWatcher(registry, defaultRuntime);
+  taskWatcher = new TaskWatcher(registry, dockerRuntime, podmanRuntime);
   stackManager = new StackManager(
     registry,
     portAllocator,
     taskWatcher,
-    defaultRuntime,
+    dockerRuntime,
+    podmanRuntime,
     cliDir
   );
 

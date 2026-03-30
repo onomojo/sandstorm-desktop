@@ -45,12 +45,23 @@ export class TaskWatcher extends EventEmitter {
 
   constructor(
     private registry: Registry,
-    private runtime: ContainerRuntime,
+    private dockerRuntime: ContainerRuntime,
+    private podmanRuntime: ContainerRuntime,
     options?: { pollInterval?: number; tokenPollInterval?: number }
   ) {
     super();
     this.pollInterval = options?.pollInterval ?? 2000;
     this.tokenPollInterval = options?.tokenPollInterval ?? 10_000;
+  }
+
+  /**
+   * Resolve the correct container runtime for a stack based on its stored
+   * runtime preference in the registry.
+   */
+  private getRuntimeForStack(stackId: string): ContainerRuntime {
+    const stack = this.registry.getStack(stackId);
+    if (stack?.runtime === 'podman') return this.podmanRuntime;
+    return this.dockerRuntime;
   }
 
   /** Register a callback invoked whenever a task status changes (for UI notifications) */
@@ -119,7 +130,7 @@ export class TaskWatcher extends EventEmitter {
     // Read token usage, session ID, and loop iterations from task log (async, best-effort)
     if (containerId) {
       this.readTaskTokens(task.id, stackId, containerId).catch(() => {});
-      this.readTaskIterations(task.id, containerId).catch(() => {});
+      this.readTaskIterations(task.id, stackId, containerId).catch(() => {});
     }
 
     const updatedTask = {
@@ -143,15 +154,16 @@ export class TaskWatcher extends EventEmitter {
    */
   private async readTaskTokens(
     taskId: number,
-    _stackId: string,
+    stackId: string,
     containerId: string
   ): Promise<void> {
+    const runtime = this.getRuntimeForStack(stackId);
     try {
       // Read phase totals files and raw log in parallel
       const [execResult, reviewResult, rawResult] = await Promise.all([
-        this.runtime.exec(containerId, ['cat', '/tmp/claude-tokens-execution']).catch(() => ({ stdout: '' })),
-        this.runtime.exec(containerId, ['cat', '/tmp/claude-tokens-review']).catch(() => ({ stdout: '' })),
-        this.runtime.exec(containerId, ['cat', '/tmp/claude-raw.log']).catch(() => ({ stdout: '' })),
+        runtime.exec(containerId, ['cat', '/tmp/claude-tokens-execution']).catch(() => ({ stdout: '' })),
+        runtime.exec(containerId, ['cat', '/tmp/claude-tokens-review']).catch(() => ({ stdout: '' })),
+        runtime.exec(containerId, ['cat', '/tmp/claude-raw.log']).catch(() => ({ stdout: '' })),
       ]);
 
       // Parse phase token totals
@@ -195,13 +207,15 @@ export class TaskWatcher extends EventEmitter {
    */
   private async readTaskIterations(
     taskId: number,
+    stackId: string,
     containerId: string
   ): Promise<void> {
+    const runtime = this.getRuntimeForStack(stackId);
     let reviewIterations = 0;
     let verifyRetries = 0;
 
     try {
-      const result = await this.runtime.exec(containerId, [
+      const result = await runtime.exec(containerId, [
         'cat', '/tmp/claude-task.review-iterations',
       ]);
       const parsed = parseInt(result.stdout.trim(), 10);
@@ -211,7 +225,7 @@ export class TaskWatcher extends EventEmitter {
     }
 
     try {
-      const result = await this.runtime.exec(containerId, [
+      const result = await runtime.exec(containerId, [
         'cat', '/tmp/claude-task.verify-retries',
       ]);
       const parsed = parseInt(result.stdout.trim(), 10);
@@ -246,8 +260,10 @@ export class TaskWatcher extends EventEmitter {
       return;
     }
 
+    const runtime = this.getRuntimeForStack(stackId);
+
     try {
-      const result = await this.runtime.exec(containerId, [
+      const result = await runtime.exec(containerId, [
         'cat',
         '/tmp/claude-task.status',
       ]);
@@ -288,7 +304,7 @@ export class TaskWatcher extends EventEmitter {
         }
         let exitCode: number;
         try {
-          const exitResult = await this.runtime.exec(containerId, [
+          const exitResult = await runtime.exec(containerId, [
             'cat',
             '/tmp/claude-task.exit',
           ]);
@@ -345,7 +361,8 @@ export class TaskWatcher extends EventEmitter {
     this.activeOutputStreams.set(stackId, controller);
 
     try {
-      for await (const chunk of this.runtime.logs(containerId, {
+      const runtime = this.getRuntimeForStack(stackId);
+      for await (const chunk of runtime.logs(containerId, {
         follow: true,
         tail: 100,
       })) {
