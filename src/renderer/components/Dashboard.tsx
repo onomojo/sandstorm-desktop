@@ -155,6 +155,7 @@ export function Dashboard() {
     needsMigration: boolean;
     missingVerifyScript: boolean;
     missingServiceLabels: boolean;
+    missingSpecQualityGate: boolean;
   } | null>(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
   const [showContext, setShowContext] = useState(false);
@@ -197,6 +198,7 @@ export function Dashboard() {
               needsMigration: true,
               missingVerifyScript: migration.missingVerifyScript ?? false,
               missingServiceLabels: migration.missingServiceLabels ?? false,
+              missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
             } : null);
             if (migration.needsMigration) {
               setShowMigrationModal(true);
@@ -518,6 +520,7 @@ export function Dashboard() {
           projectDir={project.directory}
           missingVerifyScript={migrationState.missingVerifyScript}
           missingServiceLabels={migrationState.missingServiceLabels}
+          missingSpecQualityGate={migrationState.missingSpecQualityGate}
           onComplete={() => {
             setShowMigrationModal(false);
             setMigrationState(null);

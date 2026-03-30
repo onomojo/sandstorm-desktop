@@ -12,6 +12,7 @@ export interface SandstormAPI {
       needsMigration: boolean;
       missingVerifyScript?: boolean;
       missingServiceLabels?: boolean;
+      missingSpecQualityGate?: boolean;
       networksMigrated?: boolean;
     }>;
     autoDetectVerify: (directory: string) => Promise<{
@@ -77,6 +78,12 @@ export interface SandstormAPI {
     deleteSkill: (projectDir: string, name: string) => Promise<void>;
     getSettings: (projectDir: string) => Promise<string>;
     saveSettings: (projectDir: string, content: string) => Promise<void>;
+  };
+  specGate: {
+    get: (projectDir: string) => Promise<string>;
+    save: (projectDir: string, content: string) => Promise<void>;
+    getDefault: () => Promise<string>;
+    ensure: (projectDir: string) => Promise<boolean>;
   };
   auth: {
     status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
@@ -166,6 +173,13 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('context:getSettings', projectDir),
     saveSettings: (projectDir, content) =>
       ipcRenderer.invoke('context:saveSettings', projectDir, content),
+  },
+  specGate: {
+    get: (projectDir) => ipcRenderer.invoke('specGate:get', projectDir),
+    save: (projectDir, content) =>
+      ipcRenderer.invoke('specGate:save', projectDir, content),
+    getDefault: () => ipcRenderer.invoke('specGate:getDefault'),
+    ensure: (projectDir) => ipcRenderer.invoke('specGate:ensure', projectDir),
   },
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),

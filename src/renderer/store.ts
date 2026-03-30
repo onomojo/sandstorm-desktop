@@ -219,6 +219,7 @@ declare global {
           needsMigration: boolean;
           missingVerifyScript?: boolean;
           missingServiceLabels?: boolean;
+          missingSpecQualityGate?: boolean;
         }>;
         autoDetectVerify: (directory: string) => Promise<{
           verifyScript: string;
@@ -283,6 +284,12 @@ declare global {
         deleteSkill: (projectDir: string, name: string) => Promise<void>;
         getSettings: (projectDir: string) => Promise<string>;
         saveSettings: (projectDir: string, content: string) => Promise<void>;
+      };
+      specGate: {
+        get: (projectDir: string) => Promise<string>;
+        save: (projectDir: string, content: string) => Promise<void>;
+        getDefault: () => Promise<string>;
+        ensure: (projectDir: string) => Promise<boolean>;
       };
       auth: {
         status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
