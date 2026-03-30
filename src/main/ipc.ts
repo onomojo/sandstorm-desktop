@@ -25,6 +25,13 @@ import {
   saveCustomSettings,
 } from './custom-context';
 import { migrateNetworkOverrides } from './network-migration';
+import {
+  getSpecQualityGate,
+  saveSpecQualityGate,
+  isSpecQualityGateMissing,
+  ensureSpecQualityGate,
+  getDefaultSpecQualityGate,
+} from './spec-quality-gate';
 
 /**
  * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
@@ -315,6 +322,9 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       const verifyPath = path.join(sandstormDir, 'verify.sh');
       fs.writeFileSync(verifyPath, verifyLines.join('\n') + '\n', { mode: 0o755 });
 
+      // Generate spec quality gate with default criteria
+      saveSpecQualityGate(directory, getDefaultSpecQualityGate());
+
       return { success: true };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -348,10 +358,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         // Non-critical — don't block migration check
       }
 
+      const missingSpecQualityGate = isSpecQualityGateMissing(directory);
+
       return {
-        needsMigration: !hasVerifyScript || !hasServiceLabels,
+        needsMigration: !hasVerifyScript || !hasServiceLabels || missingSpecQualityGate,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
+        missingSpecQualityGate,
         networksMigrated,
       };
     } catch {
@@ -402,6 +415,9 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         // Save verify.sh
         const verifyPath = path.join(sandstormDir, 'verify.sh');
         fs.writeFileSync(verifyPath, verifyScript, { mode: 0o755 });
+
+        // Ensure spec quality gate exists
+        ensureSpecQualityGate(directory);
 
         // Update compose file with service labels if needed
         const composePath = path.join(sandstormDir, 'docker-compose.yml');
@@ -596,6 +612,27 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       saveCustomSettings(projectDir, content);
     }
   );
+
+  // --- Spec Quality Gate ---
+
+  ipcMain.handle('specGate:get', async (_event, projectDir: string) => {
+    return getSpecQualityGate(projectDir);
+  });
+
+  ipcMain.handle(
+    'specGate:save',
+    async (_event, projectDir: string, content: string) => {
+      saveSpecQualityGate(projectDir, content);
+    }
+  );
+
+  ipcMain.handle('specGate:getDefault', async () => {
+    return getDefaultSpecQualityGate();
+  });
+
+  ipcMain.handle('specGate:ensure', async (_event, projectDir: string) => {
+    return ensureSpecQualityGate(projectDir);
+  });
 
   // --- Runtime ---
 

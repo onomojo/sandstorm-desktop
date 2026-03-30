@@ -4,6 +4,7 @@ interface MigrationModalProps {
   projectDir: string;
   missingVerifyScript: boolean;
   missingServiceLabels: boolean;
+  missingSpecQualityGate?: boolean;
   onComplete: () => void;
   onDismiss: () => void;
 }
@@ -12,25 +13,33 @@ export function MigrationModal({
   projectDir,
   missingVerifyScript,
   missingServiceLabels,
+  missingSpecQualityGate,
   onComplete,
   onDismiss,
 }: MigrationModalProps) {
   const [verifyScript, setVerifyScript] = useState('');
   const [serviceDescriptions, setServiceDescriptions] = useState<Record<string, string>>({});
+  const [specQualityGate, setSpecQualityGate] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    window.sandstorm.projects.autoDetectVerify(projectDir).then((result) => {
-      setVerifyScript(result.verifyScript);
-      setServiceDescriptions(result.serviceDescriptions);
+    const loadVerify = window.sandstorm.projects.autoDetectVerify(projectDir);
+    const loadGate = missingSpecQualityGate
+      ? window.sandstorm.specGate.getDefault()
+      : Promise.resolve('');
+
+    Promise.all([loadVerify, loadGate]).then(([verifyResult, gateContent]) => {
+      setVerifyScript(verifyResult.verifyScript);
+      setServiceDescriptions(verifyResult.serviceDescriptions);
+      setSpecQualityGate(gateContent);
       setLoading(false);
     }).catch((err) => {
       setError(String(err));
       setLoading(false);
     });
-  }, [projectDir]);
+  }, [projectDir, missingSpecQualityGate]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -41,11 +50,15 @@ export function MigrationModal({
         verifyScript,
         serviceDescriptions,
       );
-      if (result.success) {
-        onComplete();
-      } else {
+      if (!result.success) {
         setError(result.error || 'Failed to save migration');
+        return;
       }
+      // Save spec quality gate if it was missing
+      if (missingSpecQualityGate && specQualityGate) {
+        await window.sandstorm.specGate.save(projectDir, specQualityGate);
+      }
+      onComplete();
     } catch (err) {
       setError(String(err));
     } finally {
@@ -64,8 +77,13 @@ export function MigrationModal({
         <div className="px-6 py-4 border-b border-sandstorm-border">
           <h2 className="text-base font-semibold text-sandstorm-text">Project Migration Needed</h2>
           <p className="text-xs text-sandstorm-muted mt-1">
-            This project needs a verify script
-            {missingServiceLabels ? ' and service descriptions ' : ' '}
+            This project needs
+            {[
+              missingVerifyScript && 'a verify script',
+              missingServiceLabels && 'service descriptions',
+              missingSpecQualityGate && 'a spec quality gate',
+            ].filter(Boolean).join(', ')
+            .replace(/, ([^,]*)$/, ' and $1')}{' '}
             to work with the stack system.
           </p>
         </div>
@@ -122,6 +140,26 @@ export function MigrationModal({
                       </div>
                     ))}
                   </div>
+                </div>
+              )}
+
+              {/* Spec quality gate editor */}
+              {missingSpecQualityGate && (
+                <div>
+                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-1.5">
+                    Spec Quality Gate (.sandstorm/spec-quality-gate.md)
+                  </label>
+                  <p className="text-[11px] text-sandstorm-muted mb-2">
+                    Defines what a "ready" ticket looks like before agent dispatch. Customize the criteria to match your project.
+                  </p>
+                  <textarea
+                    value={specQualityGate}
+                    onChange={(e) => setSpecQualityGate(e.target.value)}
+                    rows={12}
+                    className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 text-xs font-mono text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent resize-y"
+                    spellCheck={false}
+                    data-testid="spec-quality-gate-editor"
+                  />
                 </div>
               )}
 
