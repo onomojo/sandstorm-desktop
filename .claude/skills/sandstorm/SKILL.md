@@ -32,14 +32,30 @@ Sandstorm manages isolated Docker agent stacks. Each stack is a full clone of th
 
 ## Workflows
 
+### Spec quality gate (mandatory for GitHub issues)
+
+Before calling `create_stack` or `dispatch_task` for a GitHub issue:
+
+1. Fetch the issue body (`gh issue view <N> --json body,title -q '.'`)
+2. Read the project's `.sandstorm/spec-quality-gate.md`
+3. Evaluate each criterion — PASS or FAIL
+4. If any FAIL → present specific gaps to the user, enter a refinement loop (do **NOT** dispatch)
+5. If all PASS → show your assumptions list, ask the user to approve
+6. On approval → call `create_stack` with `gateApproved: true`
+
+If you skip this step, the backend will reject the call with `GATE_CHECK_REQUIRED` and you will need to run the gate check anyway. Always run it proactively.
+
+If the user explicitly says to skip the gate (e.g., "just start it", "skip the gate"), use `forceBypass: true` instead.
+
 ### Typical flow: ticket to PR
 
-1. `create_stack` — name, projectDir, ticket (do NOT pass branch — it defaults to the stack name)
-2. `dispatch_task` — pass the **verbatim issue body** as the task prompt (see Verbatim Issue Dispatch below)
-3. `get_task_status` — check when done
-4. `get_diff` — review changes
-5. `push_stack` — commit and push to the feature branch
-6. `gh pr create` — create a pull request
+1. **Run spec quality gate** (see above) — required before dispatch
+2. `create_stack` — name, projectDir, ticket, `gateApproved: true` (do NOT pass branch — it defaults to the stack name)
+3. `dispatch_task` — pass the **verbatim issue body** as the task prompt (see Verbatim Issue Dispatch below)
+4. `get_task_status` — check when done
+5. `get_diff` — review changes
+6. `push_stack` — commit and push to the feature branch
+7. `gh pr create` — create a pull request
 
 Do NOT tear down stacks — only the user decides when to tear down.
 
@@ -71,6 +87,7 @@ mcp__sandstorm-tools__create_stack({
   name: "issue-28-fix-auth-bug",
   projectDir: "/path/to/project",
   ticket: "28",
+  gateApproved: true,
   task: <ISSUE_BODY — the full, unmodified issue text>
 })
 ```
@@ -109,6 +126,8 @@ gh pr create --title "Fix auth token expiry" --body "Fixes #28"
 | `description` | No | Short description of the work |
 | `runtime` | No | `docker` (default) or `podman` |
 | `task` | No | Task to dispatch immediately after creation. **When working on a GitHub issue, this MUST be the verbatim issue body — never a summary or rewrite.** |
+| `gateApproved` | No | Set to `true` after running `/spec-check` and getting user approval. **Required when `ticket` is set or task references a GitHub issue.** |
+| `forceBypass` | No | Set to `true` to skip the spec quality gate. **Only when the user explicitly requests it.** |
 
 The stack builds in the background. Use `get_task_status` or `list_stacks` to check when it's ready.
 
@@ -118,6 +137,8 @@ The stack builds in the background. Use `get_task_status` or `list_stacks` to ch
 |-----------|----------|-------------|
 | `stackId` | Yes | Target stack ID |
 | `prompt` | Yes | Task description for inner Claude. **When working on a GitHub issue, this MUST be the verbatim issue body.** |
+| `gateApproved` | No | Set to `true` after running `/spec-check` and getting user approval. **Required when the stack has a ticket or the prompt references a GitHub issue.** |
+| `forceBypass` | No | Set to `true` to skip the spec quality gate. **Only when the user explicitly requests it.** |
 
 **Write goal-oriented prompts.** Describe WHAT to achieve, not HOW. The inner Claude has the full repo context.
 
@@ -173,3 +194,4 @@ Stops containers, removes workspace, archives stack to history. **This is irreve
 - **NEVER use `main` as the branch.** Omit the branch parameter so stacks always work on feature branches.
 - **NEVER tear down stacks** unless the user explicitly requests it. No automatic cleanup.
 - **Always create PRs.** After `push_stack`, use `gh pr create` to open a pull request.
+- **Spec quality gate.** Always run `/spec-check` before dispatching work for a GitHub issue. The backend enforces this — calls without `gateApproved: true` will be rejected with `GATE_CHECK_REQUIRED`.

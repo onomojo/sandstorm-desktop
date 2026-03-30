@@ -19,6 +19,8 @@ export interface CreateStackOpts {
   runtime: 'docker' | 'podman';
   task?: string;
   model?: string;
+  gateApproved?: boolean;
+  forceBypass?: boolean;
 }
 
 export interface StackWithServices extends Stack {
@@ -103,6 +105,20 @@ export function sanitizeComposeName(input: string): string {
     .replace(/[-]+$/, '');        // strip trailing hyphens
 
   return name || 'stack';
+}
+
+/**
+ * Detect whether a task prompt references a GitHub issue.
+ * Matches patterns like #123, owner/repo#123, or GitHub issue URLs.
+ */
+export function referencesGitHubIssue(prompt: string): boolean {
+  // #123 (standalone issue number)
+  if (/(?:^|\s)#\d+/.test(prompt)) return true;
+  // owner/repo#123
+  if (/[\w.-]+\/[\w.-]+#\d+/.test(prompt)) return true;
+  // GitHub issue URL
+  if (/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/.test(prompt)) return true;
+  return false;
 }
 
 interface CliResult {
@@ -210,7 +226,33 @@ export class StackManager {
     });
   }
 
+  /**
+   * Check whether a create/dispatch call requires the spec quality gate.
+   * Throws GATE_CHECK_REQUIRED if the task references a GitHub issue
+   * but gateApproved and forceBypass are both falsy.
+   */
+  private enforceSpecGate(opts: { ticket?: string; task?: string; gateApproved?: boolean; forceBypass?: boolean }): void {
+    if (opts.gateApproved || opts.forceBypass) {
+      if (opts.forceBypass && !opts.gateApproved) {
+        console.warn('[sandstorm] Spec quality gate bypassed via forceBypass flag');
+      }
+      return;
+    }
+
+    const hasTicket = !!opts.ticket;
+    const hasIssueRef = opts.task ? referencesGitHubIssue(opts.task) : false;
+
+    if (hasTicket || hasIssueRef) {
+      throw new SandstormError(
+        ErrorCode.GATE_CHECK_REQUIRED,
+        'Task references a GitHub issue but gateApproved was not set. Run /spec-check on the issue first, then retry with gateApproved: true.'
+      );
+    }
+  }
+
   createStack(opts: CreateStackOpts): Stack {
+    this.enforceSpecGate(opts);
+
     const projectName = path.basename(opts.projectDir);
 
     // Resolve "auto" → undefined so the CLI never receives "--model auto"
@@ -459,7 +501,12 @@ export class StackManager {
     );
   }
 
-  async dispatchTask(stackId: string, prompt: string, model?: string): Promise<Task> {
+  async dispatchTask(
+    stackId: string,
+    prompt: string,
+    model?: string,
+    opts?: { gateApproved?: boolean; forceBypass?: boolean }
+  ): Promise<Task> {
     // Resolve "auto" → undefined so the CLI never receives "--model auto"
     if (model === 'auto') {
       model = undefined;
@@ -467,6 +514,15 @@ export class StackManager {
 
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    // Enforce spec quality gate when dispatching to a stack with a ticket
+    // or when the prompt references a GitHub issue
+    this.enforceSpecGate({
+      ticket: stack.ticket ?? undefined,
+      task: prompt,
+      gateApproved: opts?.gateApproved,
+      forceBypass: opts?.forceBypass,
+    });
 
     // If the stack has a ticket number, fetch the full issue context
     // (title, body, all comments) and prepend it to the prompt

@@ -16,6 +16,7 @@ export enum ErrorCode {
   COMPOSE_FAILED = 'COMPOSE_FAILED',
   INVALID_INPUT = 'INVALID_INPUT',
   INTERNAL_ERROR = 'INTERNAL_ERROR',
+  GATE_CHECK_REQUIRED = 'GATE_CHECK_REQUIRED',
 }
 
 export class SandstormError extends Error {
