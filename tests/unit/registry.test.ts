@@ -855,6 +855,88 @@ describe('Registry', () => {
   });
 
   // ===========================================
+  // Legacy JSON cleanup
+  // ===========================================
+  describe('cleanupLegacyStackJsonFiles', () => {
+    let tmpProjectDir: string;
+
+    beforeEach(() => {
+      tmpProjectDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sandstorm-test-proj-'));
+    });
+
+    afterEach(() => {
+      fs.rmSync(tmpProjectDir, { recursive: true, force: true });
+    });
+
+    it('is a no-op when .sandstorm/stacks/ does not exist', () => {
+      expect(() => registry.cleanupLegacyStackJsonFiles(tmpProjectDir)).not.toThrow();
+    });
+
+    it('removes JSON files from .sandstorm/stacks/', () => {
+      const stacksDir = path.join(tmpProjectDir, '.sandstorm', 'stacks');
+      fs.mkdirSync(stacksDir, { recursive: true });
+      fs.writeFileSync(path.join(stacksDir, '1.json'), '{"stack_id":"1"}');
+      fs.writeFileSync(path.join(stacksDir, '2.json'), '{"stack_id":"2"}');
+
+      registry.cleanupLegacyStackJsonFiles(tmpProjectDir);
+
+      expect(fs.existsSync(path.join(stacksDir, '1.json'))).toBe(false);
+      expect(fs.existsSync(path.join(stacksDir, '2.json'))).toBe(false);
+    });
+
+    it('removes the archive/ subdirectory', () => {
+      const stacksDir = path.join(tmpProjectDir, '.sandstorm', 'stacks');
+      const archiveDir = path.join(stacksDir, 'archive');
+      fs.mkdirSync(archiveDir, { recursive: true });
+      fs.writeFileSync(path.join(archiveDir, '1_20240101_120000.json'), '{}');
+
+      registry.cleanupLegacyStackJsonFiles(tmpProjectDir);
+
+      expect(fs.existsSync(archiveDir)).toBe(false);
+    });
+
+    it('removes the stacks/ directory itself when left empty', () => {
+      const stacksDir = path.join(tmpProjectDir, '.sandstorm', 'stacks');
+      fs.mkdirSync(stacksDir, { recursive: true });
+      fs.writeFileSync(path.join(stacksDir, '1.json'), '{}');
+
+      registry.cleanupLegacyStackJsonFiles(tmpProjectDir);
+
+      expect(fs.existsSync(stacksDir)).toBe(false);
+    });
+
+    it('leaves stacks/ in place when non-JSON files remain', () => {
+      const stacksDir = path.join(tmpProjectDir, '.sandstorm', 'stacks');
+      fs.mkdirSync(stacksDir, { recursive: true });
+      fs.writeFileSync(path.join(stacksDir, '1.json'), '{}');
+      fs.writeFileSync(path.join(stacksDir, 'notes.txt'), 'keep me');
+
+      registry.cleanupLegacyStackJsonFiles(tmpProjectDir);
+
+      expect(fs.existsSync(path.join(stacksDir, '1.json'))).toBe(false);
+      expect(fs.existsSync(path.join(stacksDir, 'notes.txt'))).toBe(true);
+      expect(fs.existsSync(stacksDir)).toBe(true);
+    });
+
+    it('handles an already empty stacks/ directory', () => {
+      const stacksDir = path.join(tmpProjectDir, '.sandstorm', 'stacks');
+      fs.mkdirSync(stacksDir, { recursive: true });
+
+      expect(() => registry.cleanupLegacyStackJsonFiles(tmpProjectDir)).not.toThrow();
+      expect(fs.existsSync(stacksDir)).toBe(false);
+    });
+
+    it('is idempotent — second call is a no-op', () => {
+      const stacksDir = path.join(tmpProjectDir, '.sandstorm', 'stacks');
+      fs.mkdirSync(stacksDir, { recursive: true });
+      fs.writeFileSync(path.join(stacksDir, '1.json'), '{}');
+
+      registry.cleanupLegacyStackJsonFiles(tmpProjectDir);
+      expect(() => registry.cleanupLegacyStackJsonFiles(tmpProjectDir)).not.toThrow();
+    });
+  });
+
+  // ===========================================
   // Database lifecycle
   // ===========================================
   describe('database lifecycle', () => {

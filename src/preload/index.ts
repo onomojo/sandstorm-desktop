@@ -34,6 +34,8 @@ export interface SandstormAPI {
     start: (id: string) => Promise<void>;
     history: () => Promise<unknown[]>;
     setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
+    detectStale: () => Promise<unknown[]>;
+    cleanupStale: (workspacePaths: string[]) => Promise<unknown[]>;
   };
   tasks: {
     dispatch: (stackId: string, prompt: string, model?: string) => Promise<unknown>;
@@ -118,6 +120,9 @@ const api: SandstormAPI = {
     history: () => ipcRenderer.invoke('stacks:history'),
     setPr: (id: string, prUrl: string, prNumber: number) =>
       ipcRenderer.invoke('stacks:setPr', id, prUrl, prNumber),
+    detectStale: () => ipcRenderer.invoke('stacks:detectStale'),
+    cleanupStale: (workspacePaths: string[]) =>
+      ipcRenderer.invoke('stacks:cleanupStale', workspacePaths),
   },
   tasks: {
     dispatch: (stackId, prompt, model?) =>

@@ -965,7 +965,258 @@ export class StackManager {
     }
   }
 
+  // --- Stale Workspace Detection & Cleanup ---
+
+  /**
+   * Detect stale/orphaned workspace directories by cross-referencing:
+   * 1. Workspace directories on disk (.sandstorm/workspaces/<id>/)
+   * 2. Active stacks in the SQLite registry
+   * 3. Running Docker containers
+   *
+   * A workspace is considered stale if:
+   * - It has no matching active stack in the registry, OR
+   * - Its matching stack has status "completed" or "failed"
+   * AND there are no running containers for it.
+   */
+  async detectStaleWorkspaces(): Promise<StaleWorkspace[]> {
+    const projects = this.registry.listProjects();
+    const activeStacks = this.registry.listStacks();
+    const activeStackIds = new Set(activeStacks.map((s) => s.id));
+    const staleWorkspaces: StaleWorkspace[] = [];
+
+    for (const project of projects) {
+      const workspacesDir = path.join(project.directory, '.sandstorm', 'workspaces');
+      if (!fs.existsSync(workspacesDir)) continue;
+
+      let entries: string[];
+      try {
+        entries = fs.readdirSync(workspacesDir);
+      } catch {
+        continue;
+      }
+
+      for (const entry of entries) {
+        const workspacePath = path.join(workspacesDir, entry);
+        let stat: fs.Stats;
+        try {
+          stat = fs.statSync(workspacePath);
+        } catch {
+          continue;
+        }
+        if (!stat.isDirectory()) continue;
+
+        const stackId = entry;
+        const matchingStack = activeStacks.find((s) => s.id === stackId);
+
+        // Skip if stack is in an active/transitional state
+        if (matchingStack) {
+          const activeStatuses = new Set([
+            'building', 'rebuilding', 'up', 'running', 'idle',
+            'stopped', 'pushed', 'pr_created', 'rate_limited',
+          ]);
+          if (activeStatuses.has(matchingStack.status)) continue;
+        }
+
+        // Check for running containers
+        let hasRunningContainers = false;
+        try {
+          const composeProjectName = `sandstorm-${sanitizeComposeName(project.name)}-${sanitizeComposeName(stackId)}`;
+          const containers = await this.dockerRuntime.listContainers({ name: composeProjectName });
+          hasRunningContainers = containers.some((c) => c.status === 'running');
+        } catch {
+          // Docker query failed — be conservative, don't flag as stale
+        }
+
+        if (hasRunningContainers) continue;
+
+        // Calculate directory size (best effort, top-level only for speed)
+        let sizeBytes = 0;
+        try {
+          sizeBytes = this.estimateDirectorySize(workspacePath);
+        } catch {
+          // Size estimation failed — proceed with 0
+        }
+
+        // Check for unpushed git changes
+        let hasUnpushedChanges = false;
+        try {
+          hasUnpushedChanges = this.checkUnpushedChanges(workspacePath);
+        } catch {
+          // Git check failed — be conservative, assume unpushed
+          hasUnpushedChanges = true;
+        }
+
+        const reason: StaleWorkspace['reason'] = !matchingStack && !activeStackIds.has(stackId)
+          ? 'orphaned'
+          : 'completed';
+
+        staleWorkspaces.push({
+          stackId,
+          project: project.name,
+          projectDir: project.directory,
+          workspacePath,
+          sizeBytes,
+          hasUnpushedChanges,
+          reason,
+          lastModified: stat.mtime.toISOString(),
+        });
+      }
+    }
+
+    return staleWorkspaces;
+  }
+
+  /**
+   * Clean up specific stale workspace directories.
+   * Uses a Docker container to handle files owned by container users.
+   */
+  async cleanupStaleWorkspaces(workspacePaths: string[]): Promise<CleanupResult[]> {
+    const results: CleanupResult[] = [];
+    const projects = this.registry.listProjects();
+
+    for (const workspacePath of workspacePaths) {
+      try {
+        // Validate path is within a registered project's .sandstorm/workspaces/ directory
+        const normalized = path.resolve(workspacePath);
+        const isValidPath = projects.some((project) => {
+          const allowedDir = path.resolve(path.join(project.directory, '.sandstorm', 'workspaces'));
+          return normalized.startsWith(allowedDir + path.sep) || normalized === allowedDir;
+        });
+
+        if (!isValidPath) {
+          results.push({ workspacePath, success: false, error: 'Path is not within a registered project workspace directory' });
+          continue;
+        }
+
+        // Use Docker to remove (handles files owned by container users)
+        const parentDir = path.dirname(normalized);
+        const dirName = path.basename(normalized);
+
+        try {
+          const child = spawn('docker', [
+            'run', '--rm',
+            '-v', `${parentDir}:/workspaces`,
+            'alpine',
+            'rm', '-rf', `/workspaces/${dirName}`,
+          ], { stdio: ['ignore', 'pipe', 'pipe'] });
+
+          await new Promise<void>((resolve, reject) => {
+            child.on('close', (code) => {
+              if (code === 0 || !fs.existsSync(workspacePath)) {
+                resolve();
+              } else {
+                reject(new Error(`Docker rm exited with code ${code}`));
+              }
+            });
+            child.on('error', reject);
+          });
+        } catch {
+          // Fallback: try direct rm
+          fs.rmSync(workspacePath, { recursive: true, force: true });
+        }
+
+        results.push({ workspacePath, success: true });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        results.push({ workspacePath, success: false, error: message });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Rough estimate of directory size by summing immediate children.
+   * Not recursive for performance — gives a lower bound.
+   */
+  private estimateDirectorySize(dirPath: string): number {
+    let totalSize = 0;
+    try {
+      const entries = fs.readdirSync(dirPath, { withFileTypes: true });
+      for (const entry of entries) {
+        try {
+          const entryPath = path.join(dirPath, entry.name);
+          const stat = fs.statSync(entryPath);
+          totalSize += stat.size;
+          // For directories, add a rough estimate based on the stat block size
+          if (entry.isDirectory()) {
+            totalSize += 4096; // minimum directory overhead
+          }
+        } catch {
+          // Skip inaccessible entries
+        }
+      }
+    } catch {
+      // Directory not readable
+    }
+    return totalSize;
+  }
+
+  /**
+   * Check if a workspace git repo has unpushed changes.
+   */
+  private checkUnpushedChanges(workspacePath: string): boolean {
+    try {
+      // Check for uncommitted changes
+      const statusResult = execSync('git status --porcelain', {
+        cwd: workspacePath,
+        encoding: 'utf-8',
+        timeout: 5000,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+      if (statusResult.trim().length > 0) return true;
+
+      // Check for commits ahead of remote
+      try {
+        const logResult = execSync('git log @{upstream}..HEAD --oneline 2>/dev/null', {
+          cwd: workspacePath,
+          encoding: 'utf-8',
+          timeout: 5000,
+          shell: '/bin/sh',
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        if (logResult.trim().length > 0) return true;
+      } catch {
+        // No upstream configured — check if there are any commits at all
+        try {
+          const logResult = execSync('git log --oneline -1', {
+            cwd: workspacePath,
+            encoding: 'utf-8',
+            timeout: 5000,
+            stdio: ['ignore', 'pipe', 'pipe'],
+          });
+          if (logResult.trim().length > 0) return true;
+        } catch {
+          // Empty repo or not a git repo
+        }
+      }
+
+      return false;
+    } catch {
+      return false;
+    }
+  }
+
   destroy(): void {
     // No-op: retained for API compatibility
   }
+}
+
+// --- Stale workspace types ---
+
+export interface StaleWorkspace {
+  stackId: string;
+  project: string;
+  projectDir: string;
+  workspacePath: string;
+  sizeBytes: number;
+  hasUnpushedChanges: boolean;
+  reason: 'orphaned' | 'completed';
+  lastModified: string;
+}
+
+export interface CleanupResult {
+  workspacePath: string;
+  success: boolean;
+  error?: string;
 }

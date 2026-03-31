@@ -9,6 +9,7 @@ import { AgentSession } from './AgentSession';
 import { AuthIndicator } from './AuthIndicator';
 import { ProjectContext } from './ProjectContext';
 import { ResizableTableHeader } from './ResizableTableHeader';
+import { StaleWorkspaces } from './StaleWorkspaces';
 import { useResizableColumns, ColumnDef } from '../hooks/useResizableColumns';
 import { formatTokenCount } from '../utils/format';
 
@@ -568,6 +569,7 @@ export function Dashboard() {
               </div>
             )}
           </div>
+          {dashboardTab === 'active' && <StaleWorkspaces />}
           <div className="flex-1 overflow-y-auto min-h-0">
           {dashboardTab === 'active' ? (
             stacks.length === 0 ? (
