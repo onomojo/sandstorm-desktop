@@ -515,7 +515,6 @@ if [ ! -f "$GITIGNORE" ] || ! grep -q "# Sandstorm" "$GITIGNORE" 2>/dev/null; th
   GITIGNORE_ADDED=true
 fi
 
-add_gitignore_entry ".sandstorm/stacks/" && GITIGNORE_ADDED=true
 add_gitignore_entry ".sandstorm/config" && GITIGNORE_ADDED=true
 add_gitignore_entry ".sandstorm/workspaces/" && GITIGNORE_ADDED=true
 

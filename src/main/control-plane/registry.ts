@@ -585,6 +585,43 @@ export class Registry {
     ).all() as StackHistoryRecord[];
   }
 
+  // --- Legacy Migration ---
+
+  /**
+   * Removes legacy JSON stack files left over from before the SQLite migration.
+   * Safe to call even if the directory does not exist — it is a no-op in that case.
+   */
+  cleanupLegacyStackJsonFiles(projectDir: string): void {
+    const stacksDir = path.join(projectDir, '.sandstorm', 'stacks');
+    if (!fs.existsSync(stacksDir)) return;
+
+    try {
+      const entries = fs.readdirSync(stacksDir);
+      for (const entry of entries) {
+        if (entry.endsWith('.json')) {
+          try {
+            fs.unlinkSync(path.join(stacksDir, entry));
+          } catch { /* best effort */ }
+        }
+      }
+    } catch { /* best effort */ }
+
+    const archiveDir = path.join(stacksDir, 'archive');
+    if (fs.existsSync(archiveDir)) {
+      try {
+        fs.rmSync(archiveDir, { recursive: true, force: true });
+      } catch { /* best effort */ }
+    }
+
+    // Remove the now-empty stacks directory itself
+    try {
+      const remaining = fs.readdirSync(stacksDir);
+      if (remaining.length === 0) {
+        fs.rmdirSync(stacksDir);
+      }
+    } catch { /* best effort */ }
+  }
+
   // --- Cleanup ---
 
   close(): void {
