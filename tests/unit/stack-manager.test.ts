@@ -627,11 +627,11 @@ describe('StackManager', () => {
   });
 
   describe('teardownStack', () => {
-    it('deletes stack from registry immediately', () => {
+    it('deletes stack from registry immediately', async () => {
       registry.createStack(makeStack('teardown-test'));
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
-      manager.teardownStack('teardown-test');
+      await manager.teardownStack('teardown-test');
       // Stack should be gone immediately (not just marked as stopped)
       expect(registry.getStack('teardown-test')).toBeUndefined();
     });
@@ -644,7 +644,7 @@ describe('StackManager', () => {
         exitCode: 0,
       });
 
-      manager.teardownStack('teardown-bg');
+      await manager.teardownStack('teardown-bg');
 
       await vi.waitFor(() => {
         expect(runCliSpy).toHaveBeenCalledWith(
@@ -654,8 +654,8 @@ describe('StackManager', () => {
       }, { timeout: 5000 });
     });
 
-    it('throws when tearing down non-existent stack', () => {
-      expect(() => manager.teardownStack('ghost')).toThrow('not found');
+    it('throws when tearing down non-existent stack', async () => {
+      await expect(manager.teardownStack('ghost')).rejects.toThrow('not found');
     });
 
     it('best-effort teardown even if CLI fails', async () => {
@@ -663,16 +663,16 @@ describe('StackManager', () => {
       vi.spyOn(manager, 'runCli').mockRejectedValueOnce(new Error('cli error'));
 
       // Should not throw — best effort
-      manager.teardownStack('compose-fail');
+      await manager.teardownStack('compose-fail');
       expect(registry.getStack('compose-fail')).toBeUndefined();
     });
 
-    it('archives stack to history before deleting', () => {
+    it('archives stack to history before deleting', async () => {
       registry.createStack(makeStack('archive-test'));
       registry.updateStackStatus('archive-test', 'completed');
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
-      manager.teardownStack('archive-test');
+      await manager.teardownStack('archive-test');
       expect(registry.getStack('archive-test')).toBeUndefined();
 
       const history = registry.listStackHistory();
@@ -681,12 +681,12 @@ describe('StackManager', () => {
       expect(history[0].final_status).toBe('completed');
     });
 
-    it('archives failed stack with failed status', () => {
+    it('archives failed stack with failed status', async () => {
       registry.createStack(makeStack('fail-archive'));
       registry.updateStackStatus('fail-archive', 'failed', 'build error');
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
-      manager.teardownStack('fail-archive');
+      await manager.teardownStack('fail-archive');
 
       const history = registry.listStackHistory();
       expect(history).toHaveLength(1);
@@ -694,25 +694,25 @@ describe('StackManager', () => {
       expect(history[0].error).toBe('build error');
     });
 
-    it('archives running stack as torn_down', () => {
+    it('archives running stack as torn_down', async () => {
       registry.createStack(makeStack('running-archive'));
       registry.updateStackStatus('running-archive', 'running');
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
-      manager.teardownStack('running-archive');
+      await manager.teardownStack('running-archive');
 
       const history = registry.listStackHistory();
       expect(history).toHaveLength(1);
       expect(history[0].final_status).toBe('torn_down');
     });
 
-    it('calls onStackUpdate callback during teardown', () => {
+    it('calls onStackUpdate callback during teardown', async () => {
       const updateCallback = vi.fn();
       manager.setOnStackUpdate(updateCallback);
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
       registry.createStack(makeStack('cb-teardown'));
-      manager.teardownStack('cb-teardown');
+      await manager.teardownStack('cb-teardown');
 
       // Should be called when stack is deleted
       expect(updateCallback).toHaveBeenCalled();

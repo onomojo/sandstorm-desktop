@@ -183,11 +183,14 @@ describe('TaskWatcher', () => {
       watcher.watch('watch-stack', 'container-123');
     });
 
+    // Wait for async metadata reads (tokens, iterations, metadata) to settle
+    await new Promise((r) => setTimeout(r, 200));
+
     // The exec should have been called a limited number of times
     const execFn = runtime.exec as ReturnType<typeof vi.fn>;
     const callCount = execFn.mock.calls.length;
 
-    // Wait a bit and verify no more calls
+    // Wait a bit and verify no more calls (no new polls)
     await new Promise((r) => setTimeout(r, 100));
     expect(execFn.mock.calls.length).toBe(callCount);
 

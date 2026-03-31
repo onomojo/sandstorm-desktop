@@ -137,7 +137,7 @@ describe('Stack Lifecycle Integration', () => {
 
       // 7. Teardown
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
-      manager.teardownStack('lifecycle-1');
+      await manager.teardownStack('lifecycle-1');
 
       // Stack should be deleted from active stacks
       expect(registry.getStack('lifecycle-1')).toBeUndefined();
@@ -367,8 +367,8 @@ describe('Stack Lifecycle Integration', () => {
       }));
     });
 
-    it('teardownStack on a nonexistent stack throws STACK_NOT_FOUND', () => {
-      expect(() => manager.teardownStack('no-such-stack')).toThrow(
+    it('teardownStack on a nonexistent stack throws STACK_NOT_FOUND', async () => {
+      await expect(manager.teardownStack('no-such-stack')).rejects.toThrow(
         expect.objectContaining({ code: ErrorCode.STACK_NOT_FOUND })
       );
     });
@@ -452,7 +452,7 @@ describe('Stack Lifecycle Integration', () => {
       registry.completeTask(taskA.id, 0);
 
       // Teardown A
-      manager.teardownStack('teardown-a');
+      await manager.teardownStack('teardown-a');
       expect(registry.getStack('teardown-a')).toBeUndefined();
 
       // B should be completely unaffected
@@ -686,7 +686,7 @@ describe('Stack Lifecycle Integration', () => {
       const callsAfterPR = updateCallback.mock.calls.length;
 
       // Teardown triggers callback
-      manager.teardownStack('cb-lifecycle');
+      await manager.teardownStack('cb-lifecycle');
       expect(updateCallback.mock.calls.length).toBeGreaterThan(callsAfterPR);
     });
   });

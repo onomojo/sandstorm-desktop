@@ -127,10 +127,11 @@ export class TaskWatcher extends EventEmitter {
       }
     }
 
-    // Read token usage, session ID, and loop iterations from task log (async, best-effort)
+    // Read token usage, session ID, loop iterations, and execution metadata (async, best-effort)
     if (containerId) {
       this.readTaskTokens(task.id, stackId, containerId).catch(() => {});
       this.readTaskIterations(task.id, stackId, containerId).catch(() => {});
+      this.readTaskMetadata(task.id, stackId, containerId).catch(() => {});
     }
 
     const updatedTask = {
@@ -237,6 +238,111 @@ export class TaskWatcher extends EventEmitter {
     if (reviewIterations > 0 || verifyRetries > 0) {
       this.registry.setTaskIterations(taskId, reviewIterations, verifyRetries);
     }
+  }
+
+  /**
+   * Read task execution metadata files (review verdicts, verify outputs,
+   * execution summary, phase timing) from the container.
+   */
+  private async readTaskMetadata(
+    taskId: number,
+    stackId: string,
+    containerId: string
+  ): Promise<void> {
+    const runtime = this.getRuntimeForStack(stackId);
+    const metadata: Record<string, string> = {};
+
+    // Read numbered review verdict files
+    try {
+      const lsResult = await runtime.exec(containerId, [
+        'sh', '-c', 'ls /tmp/claude-review-verdict-*.txt 2>/dev/null || true',
+      ]);
+      const files = lsResult.stdout.trim().split('\n').filter(Boolean);
+      if (files.length > 0) {
+        const verdicts: string[] = [];
+        for (const file of files.sort()) {
+          try {
+            const result = await runtime.exec(containerId, ['cat', file]);
+            verdicts.push(result.stdout);
+          } catch { /* skip unreadable files */ }
+        }
+        if (verdicts.length > 0) {
+          metadata.review_verdicts = JSON.stringify(verdicts);
+        }
+      }
+    } catch { /* best effort */ }
+
+    // Read numbered verify output files
+    try {
+      const lsResult = await runtime.exec(containerId, [
+        'sh', '-c', 'ls /tmp/claude-verify-output-*.txt 2>/dev/null || true',
+      ]);
+      const files = lsResult.stdout.trim().split('\n').filter(Boolean);
+      if (files.length > 0) {
+        const outputs: string[] = [];
+        for (const file of files.sort()) {
+          try {
+            const result = await runtime.exec(containerId, ['cat', file]);
+            outputs.push(result.stdout);
+          } catch { /* skip unreadable files */ }
+        }
+        if (outputs.length > 0) {
+          metadata.verify_outputs = JSON.stringify(outputs);
+        }
+      }
+    } catch { /* best effort */ }
+
+    // Read execution summary
+    try {
+      const result = await runtime.exec(containerId, [
+        'cat', '/tmp/claude-execution-summary.txt',
+      ]);
+      if (result.stdout.trim()) {
+        metadata.execution_summary = result.stdout;
+      }
+    } catch { /* best effort */ }
+
+    // Read phase timing
+    try {
+      const result = await runtime.exec(containerId, [
+        'cat', '/tmp/claude-phase-timing.txt',
+      ]);
+      const lines = result.stdout.trim().split('\n').filter(Boolean);
+      const timing: Record<string, string> = {};
+      for (const line of lines) {
+        const [key, value] = line.split('=', 2);
+        if (key && value) {
+          // Use last occurrence of each key (multiple iterations overwrite)
+          timing[key] = value;
+        }
+      }
+      if (timing.execution_started_at) metadata.execution_started_at = timing.execution_started_at;
+      if (timing.execution_finished_at) metadata.execution_finished_at = timing.execution_finished_at;
+      if (timing.review_started_at) metadata.review_started_at = timing.review_started_at;
+      if (timing.review_finished_at) metadata.review_finished_at = timing.review_finished_at;
+      if (timing.verify_started_at) metadata.verify_started_at = timing.verify_started_at;
+      if (timing.verify_finished_at) metadata.verify_finished_at = timing.verify_finished_at;
+    } catch { /* best effort */ }
+
+    if (Object.keys(metadata).length > 0) {
+      this.registry.updateTaskMetadata(taskId, metadata);
+    }
+  }
+
+  /**
+   * Read whatever metadata files exist for a task (used during teardown
+   * to capture partial data before the container is removed).
+   */
+  async capturePartialMetadata(
+    taskId: number,
+    stackId: string,
+    containerId: string
+  ): Promise<void> {
+    await Promise.all([
+      this.readTaskTokens(taskId, stackId, containerId).catch(() => {}),
+      this.readTaskIterations(taskId, stackId, containerId).catch(() => {}),
+      this.readTaskMetadata(taskId, stackId, containerId).catch(() => {}),
+    ]);
   }
 
   /**

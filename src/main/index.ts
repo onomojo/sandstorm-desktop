@@ -88,6 +88,8 @@ async function initializeApp(): Promise<void> {
   // global default that may have been wrong at startup (see #152).
   cliDir = resolveCliDir();
   registry = await Registry.create();
+  // Auto-purge archived stack history older than 14 days
+  registry.purgeOldHistory(14);
   portAllocator = new PortAllocator(registry);
   taskWatcher = new TaskWatcher(registry, dockerRuntime, podmanRuntime);
   stackManager = new StackManager(

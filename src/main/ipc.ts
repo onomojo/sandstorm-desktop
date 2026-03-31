@@ -463,8 +463,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return stackManager.createStack(opts);
   });
 
-  ipcMain.handle('stacks:teardown', (_event, stackId: string) => {
-    stackManager.teardownStack(stackId);
+  ipcMain.handle('stacks:teardown', async (_event, stackId: string) => {
+    await stackManager.teardownStack(stackId);
   });
 
   ipcMain.handle('stacks:stop', (_event, stackId: string) => {

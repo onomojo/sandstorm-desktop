@@ -291,11 +291,25 @@ while true; do
     > /tmp/claude-tokens-execution
     > /tmp/claude-tokens-review
 
+    # Clean up numbered metadata files from previous tasks
+    rm -f /tmp/claude-review-verdict-*.txt
+    rm -f /tmp/claude-verify-output-*.txt
+    rm -f /tmp/claude-execution-summary.txt
+    rm -f /tmp/claude-phase-timing.txt
+
+    # Initialize phase timing file
+    > /tmp/claude-phase-timing.txt
+
     # ── Step 1: Initial execution pass ──────────────────────────────────
 
     log_loop "Starting initial execution pass..."
+    echo "execution_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
     run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution "${MODEL_ARGS[@]}"
     EXIT_CODE=${PIPESTATUS[0]}
+    echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
+
+    # Capture execution summary (last 50 lines of task log)
+    tail -50 /tmp/claude-task.log 2>/dev/null > /tmp/claude-execution-summary.txt
 
     if [ $EXIT_CODE -ne 0 ]; then
       log_loop "Initial execution failed (exit $EXIT_CODE), skipping review loop"
@@ -360,11 +374,20 @@ while true; do
 
         log_loop "Review iteration $INNER_ITERATION/$MAX_INNER_ITERATIONS (outer $OUTER_ITERATION/$MAX_OUTER_ITERATIONS)"
 
+        # Record review phase start (overwrite each iteration — last one wins)
+        echo "review_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
+
         # Run the review agent
         if run_review "$ORIGINAL_PROMPT"; then
+          echo "review_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
+          # Save numbered review verdict
+          echo "REVIEW_PASS" > "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt"
           REVIEW_PASSED=1
           log_loop "Review passed at inner iteration $INNER_ITERATION"
         else
+          echo "review_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
+          # Save numbered review verdict (copy full review output)
+          cp /tmp/claude-review-output.txt "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt" 2>/dev/null || echo "REVIEW_FAIL" > "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt"
           log_loop "Review iteration $INNER_ITERATION/$MAX_INNER_ITERATIONS: FAIL"
 
           if [ $INNER_ITERATION -ge $MAX_INNER_ITERATIONS ]; then
@@ -375,6 +398,7 @@ while true; do
 
           # Feed review feedback back to execution agent
           log_loop "Sending review feedback to execution agent..."
+          echo "execution_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           local_fix_prompt="/tmp/claude-fix-prompt.txt"
           {
             echo "Your code changes were reviewed and issues were found. Please fix the following issues:"
@@ -389,6 +413,7 @@ while true; do
 
           run_claude "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log execution "${MODEL_ARGS[@]}"
           fix_exit=$?
+          echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           rm -f "$local_fix_prompt"
 
           if [ $fix_exit -ne 0 ]; then
@@ -407,8 +432,14 @@ while true; do
 
       log_loop "Review passed, running verification..."
 
+      echo "verify_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
       run_verify
       verify_result=$?
+      echo "verify_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
+
+      # Save numbered verify output
+      VERIFY_INDEX=$((TOTAL_VERIFY_RETRIES + 1))
+      cp /tmp/claude-verify.log "/tmp/claude-verify-output-${VERIFY_INDEX}.txt" 2>/dev/null
 
       if [ $verify_result -eq 0 ]; then
         log_loop "Verification PASSED"
@@ -433,6 +464,7 @@ while true; do
 
         # Feed verify errors back to execution agent for next outer iteration
         log_loop "Sending verify failure to execution agent..."
+        echo "execution_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
         local_verify_fix="/tmp/claude-verify-fix-prompt.txt"
         {
           echo "Your code changes passed review but failed verification. Please fix the following errors:"
@@ -447,6 +479,7 @@ while true; do
 
         run_claude "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log execution "${MODEL_ARGS[@]}"
         verify_fix_exit=$?
+        echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
         rm -f "$local_verify_fix"
 
         if [ $verify_fix_exit -ne 0 ]; then
@@ -464,6 +497,8 @@ while true; do
     rm -f /tmp/claude-review-raw.log
     rm -f /tmp/claude-review-task.log
     rm -f /tmp/claude-verify.log
+    # NOTE: Do NOT delete numbered verdict/verify/summary/timing files —
+    # they are read by the task-watcher for persistent metadata archival.
 
     # Write loop iteration counts for the task watcher to read
     echo "${TOTAL_REVIEW_ITERATIONS}" > /tmp/claude-task.review-iterations

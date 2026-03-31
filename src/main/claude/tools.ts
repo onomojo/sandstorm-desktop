@@ -214,7 +214,7 @@ export async function handleToolCall(
       );
 
     case 'teardown_stack':
-      stackManager.teardownStack(input.stackId as string);
+      await stackManager.teardownStack(input.stackId as string);
       return { success: true };
 
     case 'get_logs':

@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { useAppStore, StackHistoryRecord, GlobalTokenUsage } from '../store';
+import { useAppStore, StackHistoryRecord, GlobalTokenUsage, Task } from '../store';
 import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
 import { TicketView } from './TicketView';
@@ -55,8 +55,123 @@ const HISTORY_STATUS_BADGE: Record<string, { bg: string; text: string; label: st
   torn_down: { bg: 'bg-gray-500/10 border-gray-500/20', text: 'text-gray-400', label: 'Torn Down' },
 };
 
+function TaskMetadataSection({ task }: { task: Task }) {
+  const [expandedSection, setExpandedSection] = useState<string | null>(null);
+  const toggle = (section: string) => setExpandedSection(expandedSection === section ? null : section);
+
+  const reviewVerdicts: string[] = task.review_verdicts ? JSON.parse(task.review_verdicts) : [];
+  const verifyOutputs: string[] = task.verify_outputs ? JSON.parse(task.verify_outputs) : [];
+  const totalTokens = task.input_tokens + task.output_tokens;
+
+  const TASK_STATUS_BADGE: Record<string, { text: string; label: string }> = {
+    completed: { text: 'text-emerald-400', label: 'Completed' },
+    failed: { text: 'text-red-400', label: 'Failed' },
+    interrupted: { text: 'text-amber-400', label: 'Interrupted' },
+    running: { text: 'text-blue-400', label: 'Running' },
+  };
+  const statusBadge = TASK_STATUS_BADGE[task.status] ?? { text: 'text-gray-400', label: task.status };
+
+  return (
+    <div className="mt-2 space-y-1.5 text-xs" data-testid="task-metadata">
+      <div className="flex items-center gap-3 flex-wrap text-sandstorm-muted">
+        <span className={`font-medium ${statusBadge.text}`}>{statusBadge.label}</span>
+        {task.exit_code !== null && <span>Exit: {task.exit_code}</span>}
+        {task.review_iterations > 0 && <span>Reviews: {task.review_iterations}</span>}
+        {task.verify_retries > 0 && <span>Verify retries: {task.verify_retries}</span>}
+        {totalTokens > 0 && (
+          <span title={`Exec: ${(task.execution_input_tokens + task.execution_output_tokens).toLocaleString()} / Review: ${(task.review_input_tokens + task.review_output_tokens).toLocaleString()}`}>
+            Tokens: {totalTokens.toLocaleString()}
+          </span>
+        )}
+      </div>
+
+      {/* Phase timing */}
+      {task.execution_started_at && (
+        <div className="flex items-center gap-3 flex-wrap text-[10px] text-sandstorm-muted/70">
+          {task.execution_started_at && task.execution_finished_at && (
+            <span>Exec: {formatPhaseDuration(task.execution_started_at, task.execution_finished_at)}</span>
+          )}
+          {task.review_started_at && task.review_finished_at && (
+            <span>Review: {formatPhaseDuration(task.review_started_at, task.review_finished_at)}</span>
+          )}
+          {task.verify_started_at && task.verify_finished_at && (
+            <span>Verify: {formatPhaseDuration(task.verify_started_at, task.verify_finished_at)}</span>
+          )}
+        </div>
+      )}
+
+      {/* Expandable sections */}
+      {task.execution_summary && (
+        <ExpandableSection
+          title="Execution Summary"
+          content={task.execution_summary}
+          expanded={expandedSection === 'summary'}
+          onToggle={() => toggle('summary')}
+        />
+      )}
+
+      {reviewVerdicts.length > 0 && (
+        <ExpandableSection
+          title={`Review Verdicts (${reviewVerdicts.length})`}
+          content={reviewVerdicts.map((v, i) => `--- Iteration ${i + 1} ---\n${v}`).join('\n\n')}
+          expanded={expandedSection === 'verdicts'}
+          onToggle={() => toggle('verdicts')}
+        />
+      )}
+
+      {verifyOutputs.length > 0 && (
+        <ExpandableSection
+          title={`Verify Outputs (${verifyOutputs.length})`}
+          content={verifyOutputs.map((v, i) => `--- Attempt ${i + 1} ---\n${v}`).join('\n\n')}
+          expanded={expandedSection === 'verify'}
+          onToggle={() => toggle('verify')}
+        />
+      )}
+    </div>
+  );
+}
+
+function formatPhaseDuration(start: string, end: string): string {
+  const startMs = new Date(start).getTime();
+  const endMs = new Date(end).getTime();
+  const seconds = Math.max(0, Math.floor((endMs - startMs) / 1000));
+  return formatDuration(seconds);
+}
+
+function ExpandableSection({ title, content, expanded, onToggle }: {
+  title: string; content: string; expanded: boolean; onToggle: () => void;
+}) {
+  return (
+    <div className="border border-sandstorm-border rounded-md overflow-hidden">
+      <button
+        onClick={onToggle}
+        className="w-full flex items-center gap-1.5 px-2 py-1 text-[11px] font-medium text-sandstorm-text-secondary hover:bg-sandstorm-surface-hover transition-colors"
+        data-testid={`expand-${title.toLowerCase().replace(/[^a-z0-9]/g, '-')}`}
+      >
+        <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"
+          className={`transition-transform ${expanded ? 'rotate-90' : ''}`}>
+          <path d="M9 18l6-6-6-6"/>
+        </svg>
+        {title}
+      </button>
+      {expanded && (
+        <pre className="px-2 py-1.5 text-[10px] text-sandstorm-muted bg-sandstorm-bg max-h-48 overflow-auto whitespace-pre-wrap break-words border-t border-sandstorm-border">
+          {content}
+        </pre>
+      )}
+    </div>
+  );
+}
+
 function HistoryCard({ record, showProject }: { record: StackHistoryRecord; showProject?: boolean }) {
+  const [expanded, setExpanded] = useState(false);
   const badge = HISTORY_STATUS_BADGE[record.final_status] ?? HISTORY_STATUS_BADGE.torn_down;
+
+  // Parse task_history JSON blob
+  const tasks: Task[] = useMemo(() => {
+    if (!record.task_history) return [];
+    try { return JSON.parse(record.task_history); } catch { return []; }
+  }, [record.task_history]);
 
   return (
     <div className="bg-sandstorm-surface border border-sandstorm-border rounded-xl p-4 opacity-80 hover:opacity-100 transition-all duration-150">
@@ -104,7 +219,12 @@ function HistoryCard({ record, showProject }: { record: StackHistoryRecord; show
           )}
 
           {record.task_prompt && (
-            <div className="mt-1.5 ml-5 text-xs text-sandstorm-muted truncate" title={record.task_prompt}>
+            <div
+              className={`mt-1.5 ml-5 text-xs text-sandstorm-muted cursor-pointer ${expanded ? '' : 'truncate'}`}
+              title={expanded ? undefined : record.task_prompt}
+              onClick={() => setExpanded(!expanded)}
+              data-testid="task-prompt"
+            >
               Task: {record.task_prompt}
             </div>
           )}
@@ -119,6 +239,22 @@ function HistoryCard({ record, showProject }: { record: StackHistoryRecord; show
             <span>Duration: {formatDuration(record.duration_seconds)}</span>
             <span>Started: {new Date(record.created_at + (record.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString()}</span>
           </div>
+
+          {/* Task metadata from archived tasks */}
+          {tasks.length > 0 && (
+            <div className="mt-3 ml-5 space-y-2">
+              {tasks.map((task) => (
+                <TaskMetadataSection key={task.id} task={task} />
+              ))}
+            </div>
+          )}
+
+          {/* No metadata available for pre-existing stacks */}
+          {!record.task_history && record.task_prompt && (
+            <div className="mt-2 ml-5 text-[10px] text-sandstorm-muted/50 italic">
+              No detailed metadata available
+            </div>
+          )}
         </div>
       </div>
     </div>

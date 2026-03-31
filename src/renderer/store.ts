@@ -57,6 +57,15 @@ export interface Task {
   review_output_tokens: number;
   review_iterations: number;
   verify_retries: number;
+  review_verdicts: string | null;
+  verify_outputs: string | null;
+  execution_summary: string | null;
+  execution_started_at: string | null;
+  execution_finished_at: string | null;
+  review_started_at: string | null;
+  review_finished_at: string | null;
+  verify_started_at: string | null;
+  verify_finished_at: string | null;
   started_at: string;
   finished_at: string | null;
 }
@@ -143,6 +152,7 @@ export interface StackHistoryRecord {
   error: string | null;
   runtime: 'docker' | 'podman';
   task_prompt: string | null;
+  task_history: string | null;
   created_at: string;
   finished_at: string;
   duration_seconds: number;

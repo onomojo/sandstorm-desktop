@@ -427,11 +427,29 @@ export class StackManager {
     }
   }
 
-  teardownStack(stackId: string): void {
+  async teardownStack(stackId: string): Promise<void> {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     this.taskWatcher.unwatch(stackId);
+
+    // Mark any running tasks as interrupted and capture partial metadata
+    const runningTask = this.registry.getRunningTask(stackId);
+    if (runningTask) {
+      // Try to capture whatever metadata exists before teardown
+      try {
+        const runtime = this.getRuntimeForStack(stack);
+        const claudeContainer = await this.findClaudeContainer(stack, runtime).catch(() => null);
+        if (claudeContainer) {
+          await this.taskWatcher.capturePartialMetadata(
+            runningTask.id, stackId, claudeContainer.id
+          ).catch(() => {});
+        }
+      } catch {
+        // Best effort — container may already be gone
+      }
+      this.registry.interruptTask(runningTask.id);
+    }
 
     // Archive to history before deleting
     const finalStatus =
