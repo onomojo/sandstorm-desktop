@@ -90,6 +90,11 @@ export function StackTableRow({ stack, showProject, columnWidths }: { stack: Sta
           {stack.description || <span className="text-sandstorm-muted">—</span>}
         </span>
       </td>
+      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.model ? { width: `${columnWidths.model}px` } : undefined}>
+        <span className="text-sandstorm-text-secondary">
+          {stack.current_model ? stack.current_model.charAt(0).toUpperCase() + stack.current_model.slice(1) : <span className="text-sandstorm-muted">—</span>}
+        </span>
+      </td>
       <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.services ? { width: `${columnWidths.services}px` } : undefined}>
         {totalCount > 0 ? (
           <div className="flex items-center gap-1.5">

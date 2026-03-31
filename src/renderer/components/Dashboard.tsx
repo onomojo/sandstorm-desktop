@@ -17,6 +17,7 @@ const TABLE_COLUMNS: (ColumnDef & { label: string; align?: 'left' | 'right' })[]
   { key: 'status', label: 'Status', minWidth: 60, defaultWidth: 90 },
   { key: 'name', label: 'Name', minWidth: 80, defaultWidth: 140 },
   { key: 'description', label: 'Description', minWidth: 80, defaultWidth: 200 },
+  { key: 'model', label: 'Model', minWidth: 50, defaultWidth: 70 },
   { key: 'services', label: 'Services', minWidth: 60, defaultWidth: 100 },
   { key: 'resources', label: 'Resources', minWidth: 60, defaultWidth: 120 },
   { key: 'duration', label: 'Duration', minWidth: 50, defaultWidth: 80 },

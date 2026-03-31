@@ -24,6 +24,7 @@ export interface Stack {
   rate_limit_reset_at: string | null;
   created_at: string;
   updated_at: string;
+  current_model: string | null;
 }
 
 export type StackStatus =
@@ -337,11 +338,17 @@ export class Registry {
   }
 
   getStack(id: string): Stack | undefined {
-    return this.db.prepare('SELECT * FROM stacks WHERE id = ?').get(id) as Stack | undefined;
+    return this.db.prepare(
+      `SELECT s.*, (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model
+       FROM stacks s WHERE s.id = ?`
+    ).get(id) as Stack | undefined;
   }
 
   listStacks(): Stack[] {
-    return this.db.prepare('SELECT * FROM stacks ORDER BY created_at DESC').all() as Stack[];
+    return this.db.prepare(
+      `SELECT s.*, (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model
+       FROM stacks s ORDER BY s.created_at DESC`
+    ).all() as Stack[];
   }
 
   updateStackStatus(id: string, status: StackStatus, error?: string): void {
