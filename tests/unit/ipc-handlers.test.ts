@@ -38,6 +38,8 @@ const {
     stopStack: vi.fn(),
     startStack: vi.fn(),
     listStackHistory: vi.fn(),
+    detectStaleWorkspaces: vi.fn(),
+    cleanupStaleWorkspaces: vi.fn(),
     dispatchTask: vi.fn(),
     getTasksForStack: vi.fn(),
     getDiff: vi.fn(),
@@ -253,6 +255,26 @@ describe('IPC Handlers', () => {
 
       const result = await invokeHandler('stacks:history');
       expect(result).toEqual(history);
+    });
+
+    it('stacks:detectStale delegates to stackManager.detectStaleWorkspaces', async () => {
+      const staleWorkspaces = [
+        { stackId: 'old-stack', project: 'proj', reason: 'orphaned' },
+      ];
+      mockStackManager.detectStaleWorkspaces.mockResolvedValue(staleWorkspaces);
+
+      const result = await invokeHandler('stacks:detectStale');
+      expect(result).toEqual(staleWorkspaces);
+      expect(mockStackManager.detectStaleWorkspaces).toHaveBeenCalledOnce();
+    });
+
+    it('stacks:cleanupStale delegates to stackManager.cleanupStaleWorkspaces', async () => {
+      const cleanupResults = [{ workspacePath: '/path/to/ws', success: true }];
+      mockStackManager.cleanupStaleWorkspaces.mockResolvedValue(cleanupResults);
+
+      const result = await invokeHandler('stacks:cleanupStale', ['/path/to/ws']);
+      expect(result).toEqual(cleanupResults);
+      expect(mockStackManager.cleanupStaleWorkspaces).toHaveBeenCalledWith(['/path/to/ws']);
     });
 
     it('stacks:setPr delegates to stackManager.setPullRequest', async () => {
@@ -836,6 +858,8 @@ describe('IPC Handlers', () => {
       'stacks:start',
       'stacks:history',
       'stacks:setPr',
+      'stacks:detectStale',
+      'stacks:cleanupStale',
       'tasks:dispatch',
       'tasks:list',
       'diff:get',
