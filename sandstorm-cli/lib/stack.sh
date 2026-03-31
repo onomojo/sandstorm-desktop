@@ -53,55 +53,8 @@ GIT_AUTHOR_NAME=$(git config user.name 2>/dev/null || echo "Developer")
 GIT_AUTHOR_EMAIL=$(git config user.email 2>/dev/null || echo "developer@localhost")
 export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL
 
-# ---------------------------------------------------------------------------
-# Stack registry
-# ---------------------------------------------------------------------------
-STACKS_DIR="$PROJECT_ROOT/.sandstorm/stacks"
-
-ensure_stacks_dir() {
-  mkdir -p "$STACKS_DIR"
-}
-
-registry_write() {
-  local id="$1" ticket="$2" branch="$3" description="$4" status="$5" last_task="$6"
-  ensure_stacks_dir
-  python3 -c "
-import json, sys, os
-from datetime import datetime, timezone
-
-path, sid = sys.argv[1], sys.argv[2]
-ticket, branch, desc, status = sys.argv[3], sys.argv[4], sys.argv[5], sys.argv[6]
-last_task = sys.argv[7] if len(sys.argv) > 7 else ''
-
-existing = {}
-if os.path.exists(path):
-    with open(path) as f:
-        existing = json.load(f)
-
-if 'created_at' not in existing:
-    existing['created_at'] = datetime.now(timezone.utc).isoformat()
-
-existing['stack_id'] = sid
-if ticket:   existing['ticket'] = ticket
-if branch:   existing['branch'] = branch
-if desc:     existing['description'] = desc
-if status:   existing['status'] = status
-if last_task:
-    existing['last_task'] = last_task[:200]
-    existing['last_task_at'] = datetime.now(timezone.utc).isoformat()
-
-with open(path, 'w') as f:
-    json.dump(existing, f, indent=2)
-" "$STACKS_DIR/${id}.json" "$id" "$ticket" "$branch" "$description" "$status" "$last_task"
-}
-
-registry_read() {
-  local id="$1" field="$2"
-  local path="$STACKS_DIR/${id}.json"
-  if [ -f "$path" ]; then
-    python3 -c "import json,sys; print(json.load(open(sys.argv[1])).get(sys.argv[2],''))" "$path" "$field"
-  fi
-}
+# Stack metadata is stored in SQLite by the Sandstorm Desktop app (registry.ts).
+# Legacy JSON-based registry functions were removed — see issue #166.
 
 # ---------------------------------------------------------------------------
 # Dashboard
@@ -132,12 +85,10 @@ render_dashboard() {
     fi
 
     local REG_TICKET REG_BRANCH REG_DESC
-    REG_TICKET=$(registry_read "$SID" "ticket")
-    REG_BRANCH=$(registry_read "$SID" "branch")
-    REG_DESC=$(registry_read "$SID" "description")
-    [ -z "$REG_TICKET" ] && REG_TICKET="—"
+    REG_TICKET="—"
+    REG_BRANCH=$(docker exec -u claude -w /app "$CNAME" git branch --show-current 2>/dev/null || echo "—")
     [ -z "$REG_BRANCH" ] && REG_BRANCH="—"
-    [ -z "$REG_DESC" ] && REG_DESC="—"
+    REG_DESC="—"
 
     printf "│ %-5s │ %-9s │ %-12s │ %-28s │ %-28s │\n" \
       "$SID" "$TSTATUS" "${REG_TICKET:0:12}" "${REG_BRANCH:0:28}" "${REG_DESC:0:28}" >&2
@@ -272,31 +223,6 @@ run_compose() {
     "$@"
 }
 
-# ---------------------------------------------------------------------------
-# Ticket safety check
-# ---------------------------------------------------------------------------
-check_ticket_match() {
-  local branch="$1" force="$2"
-  if [ -z "$TICKET_PREFIX" ]; then return 0; fi
-
-  local REG_TICKET
-  REG_TICKET=$(registry_read "$STACK_ID" "ticket")
-  if [ -z "$REG_TICKET" ]; then return 0; fi
-
-  local BRANCH_TICKET
-  BRANCH_TICKET=$(echo "$branch" | grep -oE "${TICKET_PREFIX}-[0-9]+" || true)
-  if [ -n "$BRANCH_TICKET" ] && [ "$BRANCH_TICKET" != "$REG_TICKET" ]; then
-    echo "ERROR: Ticket mismatch!"
-    echo "  Registry ticket:  ${REG_TICKET}"
-    echo "  Branch ticket:    ${BRANCH_TICKET} (from ${branch})"
-    echo ""
-    echo "Use --force to override."
-    if [ "$force" != true ]; then
-      exit 1
-    fi
-    echo "WARNING: --force used, proceeding despite mismatch."
-  fi
-}
 
 # ---------------------------------------------------------------------------
 # Commands
@@ -327,8 +253,7 @@ case "$COMMAND" in
     echo "  Branch: ${GIT_BRANCH}"
     print_port_map
 
-    trap 'echo ""; echo "Cancelled."; registry_write "$STACK_ID" "" "" "" "cancelled" ""; exit 1' INT TERM
-    registry_write "$STACK_ID" "$TICKET" "$GIT_BRANCH" "" "building" ""
+    trap 'echo ""; echo "Cancelled."; exit 1' INT TERM
 
     # Clone workspace if it doesn't exist
     if [ ! -d "$WORKSPACE/.git" ]; then
@@ -375,7 +300,7 @@ case "$COMMAND" in
     # If the app version has changed since the Claude image was built, force a
     # rebuild so embedded scripts (task-runner, entrypoint, etc.) are updated.
     (
-      trap 'registry_write "$STACK_ID" "" "" "" "cancelled" ""; exit 1' INT TERM HUP
+      trap 'exit 1' INT TERM HUP
       BUILD_FLAG="--build"
       VERSION_REBUILD=false
       EXISTING_IMAGES=$(run_compose config --images 2>/dev/null || true)
@@ -410,11 +335,7 @@ case "$COMMAND" in
         fi
       fi
 
-      if run_compose up -d $BUILD_FLAG > /tmp/sandstorm-build-${STACK_ID}.log 2>&1; then
-        registry_write "$STACK_ID" "" "" "" "up" ""
-      else
-        registry_write "$STACK_ID" "" "" "" "failed" ""
-      fi
+      run_compose up -d $BUILD_FLAG > /tmp/sandstorm-build-${STACK_ID}.log 2>&1 || true
     ) &
 
     echo ""
@@ -434,9 +355,7 @@ case "$COMMAND" in
         *) shift ;;
       esac
     done
-    registry_write "$STACK_ID" "$TICKET" "$BRANCH" "$DESC" "" ""
-    echo "Stack ${STACK_ID} registered:"
-    cat "$STACKS_DIR/${STACK_ID}.json"
+    echo "Stack ${STACK_ID} registered (metadata is stored in SQLite by Sandstorm Desktop)."
     ;;
 
   # -----------------------------------------------------------------
@@ -455,13 +374,6 @@ case "$COMMAND" in
         rm -rf "/workspaces/$(basename "$WORKSPACE")" 2>/dev/null \
         || rm -rf "$WORKSPACE" 2>/dev/null || true
       echo "Workspace cleaned up."
-    fi
-
-    if [ -f "$STACKS_DIR/${STACK_ID}.json" ]; then
-      mkdir -p "$STACKS_DIR/archive"
-      TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-      mv "$STACKS_DIR/${STACK_ID}.json" "$STACKS_DIR/archive/${STACK_ID}_${TIMESTAMP}.json"
-      echo "Registry archived."
     fi
 
     echo "Stack ${STACK_ID} removed."
@@ -518,9 +430,6 @@ case "$COMMAND" in
     sync_oauth_to_container "$CONTAINER_NAME"
 
     if [ "$SYNC_MODE" = true ]; then
-      TASK_LABEL=$(echo "$TASK_CONTENT" | head -1 | cut -c1-80)
-      registry_write "$STACK_ID" "$TICKET" "" "$TASK_LABEL" "running" "$TASK_CONTENT"
-
       echo "Sending task to Claude in stack ${STACK_ID} (synchronous)..."
       TTY_FLAG=()
       if [ -t 0 ]; then
@@ -533,8 +442,6 @@ case "$COMMAND" in
       docker exec "${TTY_FLAG[@]}" -u claude "$CONTAINER_NAME" \
         claude --dangerously-skip-permissions "${MODEL_ARG[@]}" --print -p "$TASK_CONTENT"
 
-      FINAL_BRANCH=$(docker exec -u claude -w /app "$CONTAINER_NAME" git branch --show-current 2>/dev/null || echo "")
-      registry_write "$STACK_ID" "" "$FINAL_BRANCH" "" "completed" ""
     else
       echo "Dispatching task to Claude in stack ${STACK_ID}..."
 
@@ -554,18 +461,6 @@ case "$COMMAND" in
 
       # Trigger the task runner (runs as the container's main process, output goes to docker logs)
       docker exec -u claude "$CONTAINER_NAME" touch /tmp/claude-task-trigger
-
-      registry_write "$STACK_ID" "$TICKET" "" "$TASK_LABEL" "running" "$TASK_CONTENT"
-
-      (
-        trap 'registry_write "$STACK_ID" "" "" "" "cancelled" ""; exit 1' INT TERM HUP
-        while docker exec -u claude "$CONTAINER_NAME" test -f /tmp/claude-task.pid 2>/dev/null; do
-          sleep 10
-        done
-        FINAL_STATUS=$(docker exec -u claude "$CONTAINER_NAME" cat /tmp/claude-task.status 2>/dev/null || echo "unknown")
-        FINAL_BRANCH=$(docker exec -u claude -w /app "$CONTAINER_NAME" git branch --show-current 2>/dev/null || echo "")
-        registry_write "$STACK_ID" "" "$FINAL_BRANCH" "" "$FINAL_STATUS" ""
-      ) &
 
       echo "Task dispatched. Inner Claude is working autonomously."
       echo ""
@@ -591,12 +486,6 @@ case "$COMMAND" in
       echo "Stack ${STACK_ID}: NO TASK"
     fi
 
-    REG_TICKET=$(registry_read "$STACK_ID" "ticket")
-    REG_BRANCH=$(registry_read "$STACK_ID" "branch")
-    REG_DESC=$(registry_read "$STACK_ID" "description")
-    [ -n "$REG_TICKET" ] && echo "  Ticket:      ${REG_TICKET}"
-    [ -n "$REG_BRANCH" ] && echo "  Branch:      ${REG_BRANCH}"
-    [ -n "$REG_DESC" ]   && echo "  Description: ${REG_DESC}"
     ;;
 
   # -----------------------------------------------------------------
@@ -625,28 +514,10 @@ case "$COMMAND" in
     resolve_github_token
 
     CURRENT_BRANCH=$(docker exec -u claude -w /app "$CONTAINER_NAME" git branch --show-current)
-    check_ticket_match "$CURRENT_BRANCH" "$FORCE"
-
-    # Safety check: warn if the inner agent switched branches
-    EXPECTED_BRANCH=$(registry_read "$STACK_ID" "branch")
-    if [ -n "$EXPECTED_BRANCH" ] && [ "$CURRENT_BRANCH" != "$EXPECTED_BRANCH" ]; then
-      echo "WARNING: Branch drift detected!"
-      echo "  Expected: ${EXPECTED_BRANCH}"
-      echo "  Actual:   ${CURRENT_BRANCH}"
-      echo "  The inner agent appears to have switched branches."
-      if [ "$FORCE" != "true" ]; then
-        echo "  Use --force to push anyway, or fix the branch first."
-        exit 1
-      fi
-      echo "  --force specified, pushing anyway..."
-    fi
-
-    REG_TICKET=$(registry_read "$STACK_ID" "ticket")
 
     echo "Pushing from stack ${STACK_ID}..."
     echo "  Branch: ${CURRENT_BRANCH}"
     echo "  Commit: ${COMMIT_MSG}"
-    [ -n "$REG_TICKET" ] && echo "  Ticket: ${REG_TICKET}"
 
     docker exec \
       -u claude \
@@ -674,27 +545,21 @@ case "$COMMAND" in
         git remote set-url origin "https://github.com/'"${GIT_REPO}"'.git"
       '
 
-    registry_write "$STACK_ID" "" "$CURRENT_BRANCH" "" "pr-created" ""
-
     echo ""
     echo "Done! Changes pushed to ${CURRENT_BRANCH} and PR created."
     ;;
 
   # -----------------------------------------------------------------
   status)
-    ensure_stacks_dir
-
     RUNNING_IDS=$(docker ps --filter "name=sandstorm-${PROJECT_NAME}-" --format "{{.Names}}" 2>/dev/null \
       | grep -- "-claude-" | sed -E "s/sandstorm-${PROJECT_NAME}-([0-9]+)-claude-1/\1/" | sort -n)
-    REGISTERED_IDS=$(ls "$STACKS_DIR"/*.json 2>/dev/null | xargs -I{} basename {} .json | sort -n || true)
-    ALL_IDS=$(printf '%s\n%s\n' "$RUNNING_IDS" "$REGISTERED_IDS" | sort -nu | grep -v '^$' || true)
 
-    if [ -z "$ALL_IDS" ]; then
-      echo "No Sandstorm stacks known."
+    if [ -z "$RUNNING_IDS" ]; then
+      echo "No Sandstorm stacks running."
       exit 0
     fi
 
-    render_dashboard "$ALL_IDS" "$RUNNING_IDS" > /dev/null
+    render_dashboard "$RUNNING_IDS" "$RUNNING_IDS" > /dev/null
     ;;
 
   # -----------------------------------------------------------------
