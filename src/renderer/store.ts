@@ -148,6 +148,23 @@ export interface StackHistoryRecord {
   duration_seconds: number;
 }
 
+export interface StaleWorkspace {
+  stackId: string;
+  project: string;
+  projectDir: string;
+  workspacePath: string;
+  sizeBytes: number;
+  hasUnpushedChanges: boolean;
+  reason: 'orphaned' | 'completed';
+  lastModified: string;
+}
+
+export interface CleanupResult {
+  workspacePath: string;
+  success: boolean;
+  error?: string;
+}
+
 interface AppState {
   // Projects
   projects: Project[];
@@ -170,6 +187,12 @@ interface AppState {
   globalTokenUsage: GlobalTokenUsage | null;
   rateLimitState: RateLimitState | null;
   accountUsage: AccountUsage | null;
+
+  // Stale workspaces
+  staleWorkspaces: StaleWorkspace[];
+  staleWorkspacesLoading: boolean;
+  refreshStaleWorkspaces: () => Promise<void>;
+  cleanupStaleWorkspaces: (workspacePaths: string[]) => Promise<CleanupResult[]>;
 
   // Account usage budget (persisted in localStorage)
   tokenBudget: number; // 0 means no budget set
@@ -240,6 +263,8 @@ declare global {
         start: (id: string) => Promise<void>;
         history: () => Promise<StackHistoryRecord[]>;
         setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
+        detectStale: () => Promise<StaleWorkspace[]>;
+        cleanupStale: (workspacePaths: string[]) => Promise<CleanupResult[]>;
       };
       tasks: {
         dispatch: (stackId: string, prompt: string, model?: string) => Promise<Task>;
@@ -308,6 +333,31 @@ export const useAppStore = create<AppState>((set, get) => ({
   projects: [],
   activeProjectId: null,
   showOpenProjectDialog: false,
+
+  // Stale workspaces
+  staleWorkspaces: [],
+  staleWorkspacesLoading: false,
+
+  refreshStaleWorkspaces: async () => {
+    try {
+      set({ staleWorkspacesLoading: true });
+      const staleWorkspaces = await window.sandstorm.stacks.detectStale();
+      set({ staleWorkspaces, staleWorkspacesLoading: false });
+    } catch {
+      set({ staleWorkspacesLoading: false });
+    }
+  },
+
+  cleanupStaleWorkspaces: async (workspacePaths: string[]) => {
+    const results = await window.sandstorm.stacks.cleanupStale(workspacePaths);
+    // Refresh after cleanup — don't let refresh failure mask cleanup results
+    try {
+      await get().refreshStaleWorkspaces();
+    } catch {
+      // Refresh failure is non-critical; cleanup results are returned regardless
+    }
+    return results;
+  },
 
   // Docker connection
   dockerConnected: true, // assume connected initially

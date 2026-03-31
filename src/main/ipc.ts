@@ -640,6 +640,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return ensureSpecQualityGate(projectDir);
   });
 
+  // --- Stale Workspace Detection & Cleanup ---
+
+  ipcMain.handle('stacks:detectStale', async () => {
+    return stackManager.detectStaleWorkspaces();
+  });
+
+  ipcMain.handle('stacks:cleanupStale', async (_event, workspacePaths: string[]) => {
+    return stackManager.cleanupStaleWorkspaces(workspacePaths);
+  });
+
   // --- Runtime ---
 
   ipcMain.handle('runtime:available', async () => {
