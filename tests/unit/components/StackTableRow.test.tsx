@@ -30,6 +30,7 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     total_review_input_tokens: 0,
     total_review_output_tokens: 0,
     rate_limit_reset_at: null,
+    current_model: null,
     services: [],
     ...overrides,
   };
@@ -130,5 +131,37 @@ describe('StackTableRow duration', () => {
     // Duration should still be 45m, not 4h
     expect(screen.getByText('45m')).toBeDefined();
     setIntervalSpy.mockRestore();
+  });
+});
+
+describe('StackTableRow model column', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows capitalized model name when current_model is set', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ current_model: 'sonnet' }));
+    expect(screen.getByText('Sonnet')).toBeDefined();
+  });
+
+  it('shows capitalized Opus when model is opus', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ current_model: 'opus' }));
+    expect(screen.getByText('Opus')).toBeDefined();
+  });
+
+  it('shows dash when current_model is null', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ current_model: null }));
+    // The dash is rendered as a span with text content "—"
+    const dashes = screen.getAllByText('—');
+    expect(dashes.length).toBeGreaterThan(0);
   });
 });

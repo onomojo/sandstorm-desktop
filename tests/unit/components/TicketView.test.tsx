@@ -23,6 +23,14 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     runtime: 'docker',
     created_at: new Date().toISOString(),
     updated_at: new Date().toISOString(),
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_execution_input_tokens: 0,
+    total_execution_output_tokens: 0,
+    total_review_input_tokens: 0,
+    total_review_output_tokens: 0,
+    rate_limit_reset_at: null,
+    current_model: null,
     services: [],
     ...overrides,
   };
@@ -453,5 +461,28 @@ describe('TicketView', () => {
       expect(screen.getByText(label)).toBeDefined();
       unmount();
     }
+  });
+
+  // --- Model display ---
+
+  it('shows model label when current_model is set', () => {
+    const stacks = [makeStack({ id: 'model-stack', ticket: 'T-1', current_model: 'sonnet' })];
+    render(<TicketView stacks={stacks} />);
+    fireEvent.click(screen.getByText('T-1'));
+    expect(screen.getByTestId('ticket-stack-model-model-stack').textContent).toBe('Sonnet');
+  });
+
+  it('shows Opus when model is opus', () => {
+    const stacks = [makeStack({ id: 'opus-stack', ticket: 'T-1', current_model: 'opus' })];
+    render(<TicketView stacks={stacks} />);
+    fireEvent.click(screen.getByText('T-1'));
+    expect(screen.getByTestId('ticket-stack-model-opus-stack').textContent).toBe('Opus');
+  });
+
+  it('does not show model label when current_model is null', () => {
+    const stacks = [makeStack({ id: 'no-model-stack', ticket: 'T-1', current_model: null })];
+    render(<TicketView stacks={stacks} />);
+    fireEvent.click(screen.getByText('T-1'));
+    expect(screen.queryByTestId('ticket-stack-model-no-model-stack')).toBeNull();
   });
 });

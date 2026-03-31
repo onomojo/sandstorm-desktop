@@ -28,6 +28,7 @@ export interface Stack {
   rate_limit_reset_at: string | null;
   created_at: string;
   updated_at: string;
+  current_model: string | null;
   services: ServiceInfo[];
 }
 

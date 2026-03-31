@@ -144,8 +144,8 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
             </span>
           </div>
 
-          {/* Ticket and branch */}
-          {(stack.ticket || stack.branch) && (
+          {/* Ticket, branch, and model */}
+          {(stack.ticket || stack.branch || stack.current_model) && (
             <div className="mt-2 ml-5 flex items-center gap-1.5 text-xs text-sandstorm-muted">
               {stack.ticket && (
                 <span className="bg-sandstorm-bg px-2 py-0.5 rounded-md font-mono text-[11px] border border-sandstorm-border">
@@ -158,6 +158,11 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
                     <path d="M6 3v12M18 9a3 3 0 01-3 3H9M18 9a3 3 0 10-3-3"/>
                   </svg>
                   {stack.branch}
+                </span>
+              )}
+              {stack.current_model && (
+                <span className="bg-sandstorm-bg px-2 py-0.5 rounded-md text-[11px] border border-sandstorm-border" data-testid={`stack-model-${stack.id}`}>
+                  {stack.current_model.charAt(0).toUpperCase() + stack.current_model.slice(1)}
                 </span>
               )}
             </div>

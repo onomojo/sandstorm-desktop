@@ -244,6 +244,12 @@ function TicketStackRow({ stack, showProject }: { stack: Stack; showProject?: bo
           {statusLabel}
         </span>
 
+        {stack.current_model && (
+          <span className="text-[10px] text-sandstorm-muted px-1.5 py-0.5 rounded border border-sandstorm-border bg-sandstorm-bg" data-testid={`ticket-stack-model-${stack.id}`}>
+            {stack.current_model.charAt(0).toUpperCase() + stack.current_model.slice(1)}
+          </span>
+        )}
+
         {stack.description && (
           <span className="text-[11px] text-sandstorm-text-secondary truncate hidden xl:inline">
             {stack.description}

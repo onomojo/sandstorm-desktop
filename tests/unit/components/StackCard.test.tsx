@@ -30,6 +30,7 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     total_review_input_tokens: 0,
     total_review_output_tokens: 0,
     rate_limit_reset_at: null,
+    current_model: null,
     services: [],
     ...overrides,
   };
@@ -183,5 +184,24 @@ describe('StackCard', () => {
       />
     );
     expect(screen.getByText('2/3 up')).toBeDefined();
+  });
+
+  it('shows model label when current_model is set', () => {
+    render(
+      <StackCard stack={makeStack({ id: 'model-stack', current_model: 'sonnet' })} />
+    );
+    expect(screen.getByTestId('stack-model-model-stack').textContent).toBe('Sonnet');
+  });
+
+  it('shows Opus when model is opus', () => {
+    render(
+      <StackCard stack={makeStack({ id: 'opus-stack', current_model: 'opus' })} />
+    );
+    expect(screen.getByTestId('stack-model-opus-stack').textContent).toBe('Opus');
+  });
+
+  it('does not show model label when current_model is null', () => {
+    render(<StackCard stack={makeStack({ id: 'no-model', current_model: null })} />);
+    expect(screen.queryByTestId('stack-model-no-model')).toBeNull();
   });
 });
