@@ -88,11 +88,14 @@ async function initializeApp(): Promise<void> {
   // global default that may have been wrong at startup (see #152).
   cliDir = resolveCliDir();
   registry = await Registry.create();
+  // Auto-purge archived stack history older than 14 days
+  registry.purgeOldHistory(14);
 
   // Remove legacy JSON stack files left over from before the SQLite migration
   for (const project of registry.listProjects()) {
     registry.cleanupLegacyStackJsonFiles(project.directory);
   }
+
 
   portAllocator = new PortAllocator(registry);
   taskWatcher = new TaskWatcher(registry, dockerRuntime, podmanRuntime);

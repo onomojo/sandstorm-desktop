@@ -46,7 +46,7 @@ export interface Task {
   prompt: string;
   model: string | null;
   resolved_model: string | null;
-  status: 'running' | 'completed' | 'failed';
+  status: 'running' | 'completed' | 'failed' | 'interrupted';
   exit_code: number | null;
   warnings: string | null;
   session_id: string | null;
@@ -58,6 +58,15 @@ export interface Task {
   review_output_tokens: number;
   review_iterations: number;
   verify_retries: number;
+  review_verdicts: string | null;
+  verify_outputs: string | null;
+  execution_summary: string | null;
+  execution_started_at: string | null;
+  execution_finished_at: string | null;
+  review_started_at: string | null;
+  review_finished_at: string | null;
+  verify_started_at: string | null;
+  verify_finished_at: string | null;
   started_at: string;
   finished_at: string | null;
 }
@@ -88,6 +97,7 @@ export interface StackHistoryRecord {
   error: string | null;
   runtime: 'docker' | 'podman';
   task_prompt: string | null;
+  task_history: string | null;
   created_at: string;
   finished_at: string;
   duration_seconds: number;
@@ -299,8 +309,26 @@ export class Registry {
       this.setSchemaVersion(7);
     }
 
+    if (currentVersion < 8) {
+      // Add task execution metadata columns
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN review_verdicts TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN verify_outputs TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN execution_summary TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN execution_started_at TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN execution_finished_at TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN review_started_at TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN review_finished_at TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN verify_started_at TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN verify_finished_at TEXT'); } catch { /* exists */ }
+
+      // Add task_history JSON blob to stack_history for archival
+      try { this.db.exec('ALTER TABLE stack_history ADD COLUMN task_history TEXT'); } catch { /* exists */ }
+
+      this.setSchemaVersion(8);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 8) { ... this.setSchemaVersion(8); }
+    // if (currentVersion < 9) { ... this.setSchemaVersion(9); }
   }
 
   // --- Projects ---
@@ -512,6 +540,36 @@ export class Registry {
     ).run(reviewIterations, verifyRetries, taskId);
   }
 
+  updateTaskMetadata(taskId: number, metadata: {
+    review_verdicts?: string;
+    verify_outputs?: string;
+    execution_summary?: string;
+    execution_started_at?: string;
+    execution_finished_at?: string;
+    review_started_at?: string;
+    review_finished_at?: string;
+    verify_started_at?: string;
+    verify_finished_at?: string;
+  }): void {
+    const sets: string[] = [];
+    const values: unknown[] = [];
+    for (const [key, value] of Object.entries(metadata)) {
+      if (value !== undefined) {
+        sets.push(`${key} = ?`);
+        values.push(value);
+      }
+    }
+    if (sets.length === 0) return;
+    values.push(taskId);
+    this.db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  interruptTask(taskId: number): void {
+    this.db.prepare(
+      "UPDATE tasks SET status = 'interrupted', finished_at = datetime('now') WHERE id = ? AND status = 'running'"
+    ).run(taskId);
+  }
+
   getStackTokenUsage(stackId: string): TokenUsage {
     const row = this.db.prepare(
       'SELECT total_input_tokens, total_output_tokens FROM stacks WHERE id = ?'
@@ -562,14 +620,18 @@ export class Registry {
       'SELECT prompt FROM tasks WHERE stack_id = ? ORDER BY started_at DESC LIMIT 1'
     ).get(id) as { prompt: string } | undefined;
 
+    // Archive all task data as JSON before CASCADE deletion removes them
+    const tasks = this.getTasksForStack(id);
+    const taskHistory = tasks.length > 0 ? JSON.stringify(tasks) : null;
+
     const createdMs = new Date(stack.created_at + 'Z').getTime();
     const nowMs = Date.now();
     const durationSeconds = Math.max(0, Math.floor((nowMs - createdMs) / 1000));
 
     this.db.prepare(
       `INSERT INTO stack_history
-        (stack_id, project, project_dir, ticket, branch, description, final_status, error, runtime, task_prompt, created_at, duration_seconds)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (stack_id, project, project_dir, ticket, branch, description, final_status, error, runtime, task_prompt, task_history, created_at, duration_seconds)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       stack.id,
       stack.project,
@@ -581,6 +643,7 @@ export class Registry {
       stack.error,
       stack.runtime,
       latestTask?.prompt ?? null,
+      taskHistory,
       stack.created_at,
       durationSeconds,
     );
@@ -590,6 +653,13 @@ export class Registry {
     return this.db.prepare(
       'SELECT * FROM stack_history ORDER BY finished_at DESC'
     ).all() as StackHistoryRecord[];
+  }
+
+  purgeOldHistory(retentionDays: number = 14): number {
+    const result = this.db.prepare(
+      "DELETE FROM stack_history WHERE finished_at < datetime('now', ? || ' days')"
+    ).run(`-${retentionDays}`);
+    return result.changes;
   }
 
   // --- Legacy Migration ---
