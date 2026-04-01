@@ -148,10 +148,25 @@ describe('NewStackDialog', () => {
     expect(screen.getByTestId('model-opus')).toBeDefined();
   });
 
-  it('defaults to auto model', () => {
+  it('defaults to sonnet model when no project is active', () => {
     render(<NewStackDialog />);
-    const autoBtn = screen.getByTestId('model-auto');
-    expect(autoBtn.className).toContain('border-sandstorm-accent');
+    const sonnetBtn = screen.getByTestId('model-sonnet');
+    expect(sonnetBtn.className).toContain('border-sandstorm-accent');
+  });
+
+  it('initializes model from effective project settings', async () => {
+    useAppStore.setState({
+      projects: [{ id: 1, name: 'proj', directory: '/proj', added_at: '' }],
+      activeProjectId: 1,
+    });
+    api.modelSettings.getEffective.mockResolvedValue({ inner_model: 'opus', outer_model: 'opus' });
+
+    render(<NewStackDialog />);
+
+    await waitFor(() => {
+      const opusBtn = screen.getByTestId('model-opus');
+      expect(opusBtn.className).toContain('border-sandstorm-accent');
+    });
   });
 
   it('passes model to stacks.create', async () => {
@@ -182,28 +197,35 @@ describe('NewStackDialog', () => {
     });
   });
 
-  it('passes auto model by default when no override selected', async () => {
+  it('passes effective default model when no override selected', async () => {
     const user = userEvent.setup();
     useAppStore.setState({
       projects: [{ id: 1, name: 'proj', directory: '/proj', added_at: '' }],
       activeProjectId: 1,
     });
 
+    api.modelSettings.getEffective.mockResolvedValue({ inner_model: 'sonnet', outer_model: 'opus' });
     api.stacks.create.mockResolvedValue({
-      id: 'auto-stack', project: 'proj', status: 'building', services: [],
+      id: 'default-stack', project: 'proj', status: 'building', services: [],
     });
     api.stacks.list.mockResolvedValue([]);
 
     render(<NewStackDialog />);
 
-    await user.type(screen.getByTestId('stack-name'), 'auto-stack');
+    // Wait for model to be loaded from settings
+    await waitFor(() => {
+      const sonnetBtn = screen.getByTestId('model-sonnet');
+      expect(sonnetBtn.className).toContain('border-sandstorm-accent');
+    });
+
+    await user.type(screen.getByTestId('stack-name'), 'default-stack');
     fireEvent.click(screen.getByTestId('launch-btn'));
 
     await waitFor(() => {
       expect(api.stacks.create).toHaveBeenCalledWith(
         expect.objectContaining({
-          name: 'auto-stack',
-          model: 'auto',
+          name: 'default-stack',
+          model: 'sonnet',
         })
       );
     });

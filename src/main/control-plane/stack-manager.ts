@@ -245,6 +245,12 @@ export class StackManager {
 
     const projectName = path.basename(opts.projectDir);
 
+    // If no model specified, use project's effective default
+    if (!opts.model) {
+      const effective = this.registry.getEffectiveModels(opts.projectDir);
+      opts = { ...opts, model: effective.inner_model };
+    }
+
     // Resolve "auto" → undefined so the CLI never receives "--model auto"
     if (opts.model === 'auto') {
       opts = { ...opts, model: undefined };
@@ -515,13 +521,19 @@ export class StackManager {
     model?: string,
     opts?: { gateApproved?: boolean; forceBypass?: boolean }
   ): Promise<Task> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    // If no model specified, use project's effective default
+    if (!model) {
+      const effective = this.registry.getEffectiveModels(stack.project_dir);
+      model = effective.inner_model;
+    }
+
     // Resolve "auto" → undefined so the CLI never receives "--model auto"
     if (model === 'auto') {
       model = undefined;
     }
-
-    const stack = this.registry.getStack(stackId);
-    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     // Enforce spec quality gate when dispatching to a stack with a ticket
     // or when the prompt references a GitHub issue

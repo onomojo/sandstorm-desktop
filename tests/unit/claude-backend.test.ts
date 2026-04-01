@@ -307,6 +307,60 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
     });
   });
 
+  describe('outer model wiring', () => {
+    it('passes --model flag when modelResolver is provided', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      const resolvedBackend = new ClaudeBackend(1000, () => 'opus');
+      resolvedBackend.setMainWindow(mockWindow as never);
+      await resolvedBackend.initialize();
+
+      resolvedBackend.sendMessage('tab-model', 'hello', '/some/project');
+
+      const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+      const spawnedArgs: string[] = callArgs[1];
+      const modelIdx = spawnedArgs.indexOf('--model');
+      expect(modelIdx).toBeGreaterThan(-1);
+      expect(spawnedArgs[modelIdx + 1]).toBe('opus');
+
+      resolvedBackend.destroy();
+    });
+
+    it('does not pass --model flag when no modelResolver', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      // backend is the one from beforeEach (no resolver)
+      backend.sendMessage('tab-nomodel', 'hello', '/some/project');
+
+      const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+      const spawnedArgs: string[] = callArgs[1];
+      expect(spawnedArgs.includes('--model')).toBe(false);
+    });
+
+    it('does not pass --model flag when no projectDir is given', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      const resolvedBackend = new ClaudeBackend(1000, () => 'opus');
+      resolvedBackend.setMainWindow(mockWindow as never);
+      await resolvedBackend.initialize();
+
+      // No projectDir passed
+      resolvedBackend.sendMessage('tab-noproj', 'hello');
+
+      const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+      const spawnedArgs: string[] = callArgs[1];
+      expect(spawnedArgs.includes('--model')).toBe(false);
+
+      resolvedBackend.destroy();
+    });
+  });
+
   describe('initLogger error handling', () => {
     it('does not throw when createWriteStream fails', () => {
       // The fs.createWriteStream mock is already in place. Verify that

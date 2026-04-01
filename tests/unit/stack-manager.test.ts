@@ -299,9 +299,10 @@ describe('StackManager', () => {
       expect(task.status).toBe('running');
 
       // Should delegate to CLI `task` command (handles cred sync + user perms)
+      // When no model is specified, the effective default (sonnet) is used
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
-        ['task', 'dispatch-test', 'Fix the bug']
+        ['task', 'dispatch-test', '--model', 'sonnet', 'Fix the bug']
       );
     });
 
@@ -367,7 +368,7 @@ describe('StackManager', () => {
       );
     });
 
-    it('omits model from CLI args when not provided', async () => {
+    it('uses effective default model when not provided', async () => {
       registry.createStack(makeStack('no-model'));
       const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
         stdout: 'Task dispatched.',
@@ -376,10 +377,11 @@ describe('StackManager', () => {
       });
 
       const task = await manager.dispatchTask('no-model', 'Simple task');
-      expect(task.model).toBeNull();
+      // Effective default is 'sonnet' from global model settings
+      expect(task.model).toBe('sonnet');
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
-        ['task', 'no-model', 'Simple task']
+        ['task', 'no-model', '--model', 'sonnet', 'Simple task']
       );
     });
   });

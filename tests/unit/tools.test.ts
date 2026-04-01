@@ -35,7 +35,7 @@ describe('MCP tools', () => {
       const modelProp = (createStack.inputSchema.properties as Record<string, { description?: string }>).model;
       expect(modelProp.description).toContain('triage');
       expect(modelProp.description).toContain('architectural');
-      expect(modelProp.description).toContain('security');
+      expect(modelProp.description).toContain('Security');
     });
   });
 

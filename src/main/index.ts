@@ -114,7 +114,10 @@ async function initializeApp(): Promise<void> {
   }
 
   // Initialize agent backend (currently Claude — swappable in future)
-  agentBackend = new ClaudeBackend();
+  agentBackend = new ClaudeBackend(
+    undefined,
+    (projectDir) => registry.getEffectiveModels(projectDir).outer_model
+  );
   await agentBackend.initialize();
 
   // Listen for task events to send to renderer

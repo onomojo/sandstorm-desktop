@@ -660,6 +660,32 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return { docker: dockerAvail, podman: podmanAvail };
   });
 
+  // --- Model Settings ---
+
+  ipcMain.handle('modelSettings:getGlobal', () => {
+    return registry.getGlobalModelSettings();
+  });
+
+  ipcMain.handle('modelSettings:setGlobal', (_event, settings: { inner_model?: string; outer_model?: string }) => {
+    registry.setGlobalModelSettings(settings);
+  });
+
+  ipcMain.handle('modelSettings:getProject', (_event, projectDir: string) => {
+    return registry.getProjectModelSettings(projectDir);
+  });
+
+  ipcMain.handle('modelSettings:setProject', (_event, projectDir: string, settings: { inner_model?: string; outer_model?: string }) => {
+    registry.setProjectModelSettings(projectDir, settings);
+  });
+
+  ipcMain.handle('modelSettings:removeProject', (_event, projectDir: string) => {
+    registry.removeProjectModelSettings(projectDir);
+  });
+
+  ipcMain.handle('modelSettings:getEffective', (_event, projectDir: string) => {
+    return registry.getEffectiveModels(projectDir);
+  });
+
   ipcMain.handle('docker:status', () => {
     return {
       connected: dockerConnectionManager?.isConnected ?? false,
