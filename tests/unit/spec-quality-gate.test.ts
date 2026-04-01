@@ -231,7 +231,7 @@ describe('skill files for spec quality gate', () => {
     const content = fs.readFileSync(skillPath, 'utf-8');
     expect(content).toContain('spec-refine');
     expect(content).toContain('spec-quality-gate.md');
-    expect(content).toContain('gh issue edit');
+    expect(content).toContain('update-ticket');
   });
 
   it('spec-check skill is user-invocable', () => {

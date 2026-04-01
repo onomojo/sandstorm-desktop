@@ -209,6 +209,30 @@ if [ "$SKIP_PROMPT" != "true" ]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Ticket provider selection
+# ---------------------------------------------------------------------------
+TICKET_PROVIDER="github"
+
+if [ "$SKIP_PROMPT" != "true" ]; then
+  echo ""
+  echo "Ticket provider:"
+  echo "  1. GitHub Issues (uses gh CLI)"
+  echo "  2. Jira (uses Atlassian MCP)"
+  echo "  3. Custom (create your own scripts later)"
+  echo ""
+  read -rp "Which ticket system does this project use? [1/2/3] " PROVIDER_CHOICE
+  PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
+  case "$PROVIDER_CHOICE" in
+    1) TICKET_PROVIDER="github" ;;
+    2) TICKET_PROVIDER="jira" ;;
+    3) TICKET_PROVIDER="skeleton" ;;
+    *) TICKET_PROVIDER="github" ;;
+  esac
+else
+  echo "  Ticket provider: GitHub Issues (default for non-interactive mode)"
+fi
+
+# ---------------------------------------------------------------------------
 # Create directory structure
 # ---------------------------------------------------------------------------
 mkdir -p "$SANDSTORM_CONFIG_DIR/stacks"
@@ -486,6 +510,36 @@ if [ -d "$SKILLS_SRC" ]; then
   mkdir -p "$SKILLS_DEST"
   cp "$SKILLS_SRC"/sandstorm-*.md "$SKILLS_DEST/"
   echo "  Installed Claude skills to .claude/skills/"
+fi
+
+# ---------------------------------------------------------------------------
+# Install ticket provider scripts and skills
+# ---------------------------------------------------------------------------
+TEMPLATES_SRC="$SANDSTORM_DIR/templates/${TICKET_PROVIDER}"
+
+if [ -d "$TEMPLATES_SRC" ]; then
+  # Copy scripts (only if project doesn't already have them)
+  SCRIPTS_DEST="$SANDSTORM_CONFIG_DIR/scripts"
+  if [ ! -d "$SCRIPTS_DEST" ] || [ -z "$(ls -A "$SCRIPTS_DEST" 2>/dev/null)" ]; then
+    mkdir -p "$SCRIPTS_DEST"
+    cp "$TEMPLATES_SRC"/scripts/*.sh "$SCRIPTS_DEST/"
+    chmod +x "$SCRIPTS_DEST"/*.sh
+    echo "  Installed ticket scripts to .sandstorm/scripts/ (${TICKET_PROVIDER})"
+  else
+    echo "  Skipped ticket scripts — .sandstorm/scripts/ already exists"
+  fi
+
+  # Copy skills (only if project doesn't already have them)
+  TICKET_SKILLS_DEST="$SANDSTORM_CONFIG_DIR/skills"
+  if [ ! -d "$TICKET_SKILLS_DEST" ] || [ -z "$(ls -A "$TICKET_SKILLS_DEST" 2>/dev/null)" ]; then
+    mkdir -p "$TICKET_SKILLS_DEST"
+    cp "$TEMPLATES_SRC"/skills/*.md "$TICKET_SKILLS_DEST/"
+    echo "  Installed ticket skills to .sandstorm/skills/ (${TICKET_PROVIDER})"
+  else
+    echo "  Skipped ticket skills — .sandstorm/skills/ already exists"
+  fi
+else
+  echo "  Warning: No templates found for provider '${TICKET_PROVIDER}' at ${TEMPLATES_SRC}"
 fi
 
 # ---------------------------------------------------------------------------

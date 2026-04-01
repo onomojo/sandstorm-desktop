@@ -1,6 +1,6 @@
 ---
 name: spec-check
-description: Run the spec quality gate against a GitHub issue to check readiness for agent dispatch
+description: Run the spec quality gate against a ticket to check readiness for agent dispatch
 user_invocable: true
 ---
 
@@ -10,7 +10,13 @@ Run the spec quality gate against a ticket. Returns pass/fail with specific gaps
 
 ## Instructions
 
-1. **Fetch the ticket**: Use `gh issue view <number>` to get the issue body. If a URL is given, extract the issue number.
+1. **Fetch the ticket**: Run the project's fetch-ticket script to get the ticket content:
+
+   ```bash
+   .sandstorm/scripts/fetch-ticket.sh <ticket-id>
+   ```
+
+   If the script doesn't exist, inform the user: "No fetch-ticket script configured. Run `sandstorm init` to set up a ticket provider, or create `.sandstorm/scripts/fetch-ticket.sh` manually."
 
 2. **Load the quality gate**: Read `.sandstorm/spec-quality-gate.md` from the project directory. If it doesn't exist, inform the user they need to run `sandstorm init` or open the project in Sandstorm Desktop first.
 
