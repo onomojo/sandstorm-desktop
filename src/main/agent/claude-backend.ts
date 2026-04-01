@@ -65,10 +65,15 @@ export class ClaudeBackend implements AgentBackend {
   private mainWindow: BrowserWindow | null = null;
   private logStream: fs.WriteStream | null = null;
   private timeoutMs: number;
+  private modelResolver?: (projectDir: string) => string;
 
-  constructor(timeoutMs: number = DEFAULT_TIMEOUT_MS) {
+  constructor(
+    timeoutMs?: number,
+    modelResolver?: (projectDir: string) => string
+  ) {
     this.bridgeToken = randomUUID();
-    this.timeoutMs = timeoutMs;
+    this.timeoutMs = timeoutMs ?? DEFAULT_TIMEOUT_MS;
+    this.modelResolver = modelResolver;
     this.initLogger();
   }
 
@@ -464,6 +469,11 @@ rl.on('line', async (line) => {
 
     if (this.mcpConfigPath) {
       args.push('--mcp-config', this.mcpConfigPath);
+    }
+
+    if (this.modelResolver && projectDir) {
+      const outerModel = this.modelResolver(projectDir);
+      args.push('--model', outerModel);
     }
 
     args.push('--dangerously-skip-permissions');

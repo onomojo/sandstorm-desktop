@@ -87,6 +87,14 @@ export interface SandstormAPI {
     getDefault: () => Promise<string>;
     ensure: (projectDir: string) => Promise<boolean>;
   };
+  modelSettings: {
+    getGlobal: () => Promise<{ inner_model: string; outer_model: string }>;
+    setGlobal: (settings: { inner_model?: string; outer_model?: string }) => Promise<void>;
+    getProject: (projectDir: string) => Promise<{ inner_model: string; outer_model: string } | null>;
+    setProject: (projectDir: string, settings: { inner_model?: string; outer_model?: string }) => Promise<void>;
+    removeProject: (projectDir: string) => Promise<void>;
+    getEffective: (projectDir: string) => Promise<{ inner_model: string; outer_model: string }>;
+  };
   auth: {
     status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
     login: () => Promise<{ success: boolean; error?: string }>;
@@ -185,6 +193,14 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('specGate:save', projectDir, content),
     getDefault: () => ipcRenderer.invoke('specGate:getDefault'),
     ensure: (projectDir) => ipcRenderer.invoke('specGate:ensure', projectDir),
+  },
+  modelSettings: {
+    getGlobal: () => ipcRenderer.invoke('modelSettings:getGlobal'),
+    setGlobal: (settings) => ipcRenderer.invoke('modelSettings:setGlobal', settings),
+    getProject: (projectDir) => ipcRenderer.invoke('modelSettings:getProject', projectDir),
+    setProject: (projectDir, settings) => ipcRenderer.invoke('modelSettings:setProject', projectDir, settings),
+    removeProject: (projectDir) => ipcRenderer.invoke('modelSettings:removeProject', projectDir),
+    getEffective: (projectDir) => ipcRenderer.invoke('modelSettings:getEffective', projectDir),
   },
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),

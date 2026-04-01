@@ -8,6 +8,7 @@ import { MigrationModal } from './MigrationModal';
 import { AgentSession } from './AgentSession';
 import { AuthIndicator } from './AuthIndicator';
 import { ProjectContext } from './ProjectContext';
+import { ModelSettingsModal } from './ModelSettings';
 import { ResizableTableHeader } from './ResizableTableHeader';
 import { StaleWorkspaces } from './StaleWorkspaces';
 import { useResizableColumns, ColumnDef } from '../hooks/useResizableColumns';
@@ -282,7 +283,7 @@ function TokenUsageSummary({ usage }: { usage: GlobalTokenUsage }) {
 }
 
 export function Dashboard() {
-  const { setShowNewStackDialog, filteredStacks, filteredStackHistory, activeProject, globalTokenUsage } = useAppStore();
+  const { setShowNewStackDialog, setShowModelSettings, showModelSettings, filteredStacks, filteredStackHistory, activeProject, globalTokenUsage } = useAppStore();
   const stacks = filteredStacks();
   const history = filteredStackHistory();
   const project = activeProject();
@@ -423,6 +424,17 @@ export function Dashboard() {
           <p className="text-xs text-sandstorm-muted mt-0.5">{subtitle}</p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowModelSettings(true)}
+            className="flex items-center gap-1.5 px-3 py-2 bg-sandstorm-surface-hover hover:bg-sandstorm-border text-sandstorm-text-secondary rounded-lg transition-all text-sm font-medium active:scale-[0.98]"
+            data-testid="model-settings-btn"
+            title="Model settings"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="3"/>
+              <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/>
+            </svg>
+          </button>
           {project && (
             <button
               onClick={() => setShowContext(true)}
@@ -644,6 +656,9 @@ export function Dashboard() {
           </div>
         </div>
       </div>
+
+      {/* Model settings dialog */}
+      {showModelSettings && <ModelSettingsModal />}
 
       {/* Custom context dialog */}
       {showContext && project && (

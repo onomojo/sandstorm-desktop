@@ -32,7 +32,7 @@ export function StackDetail({
   const [diff, setDiff] = useState('');
   const [selectedLogContainer, setSelectedLogContainer] = useState<string | null>(null);
   const [dispatching, setDispatching] = useState(false);
-  const [taskModel, setTaskModel] = useState<string>('auto');
+  const [taskModel, setTaskModel] = useState<string>('sonnet');
 
   const loadTasks = useCallback(async () => {
     const taskList = await window.sandstorm.tasks.list(stackId);
@@ -48,6 +48,16 @@ export function StackDetail({
     loadTasks();
     loadDiff();
   }, [loadTasks, loadDiff]);
+
+  useEffect(() => {
+    if (stack?.project_dir) {
+      window.sandstorm.modelSettings.getEffective(stack.project_dir).then((settings) => {
+        setTaskModel(settings.inner_model);
+      }).catch(() => {
+        setTaskModel('sonnet');
+      });
+    }
+  }, [stack?.project_dir]);
 
   useEffect(() => {
     if (activeTab === 'history') loadTasks();

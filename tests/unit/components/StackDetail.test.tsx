@@ -119,14 +119,14 @@ describe('StackDetail', () => {
     expect(dispatchBtn.hasAttribute('disabled')).toBe(true);
   });
 
-  it('renders model selector buttons for dispatch with auto default', () => {
+  it('renders model selector buttons for dispatch with sonnet default', () => {
     render(<StackDetail stackId="detail-stack" onBack={onBack} />);
     expect(screen.getByTestId('dispatch-model-auto')).toBeDefined();
     expect(screen.getByTestId('dispatch-model-sonnet')).toBeDefined();
     expect(screen.getByTestId('dispatch-model-opus')).toBeDefined();
-    // Auto should be selected by default
-    const autoBtn = screen.getByTestId('dispatch-model-auto');
-    expect(autoBtn.className).toContain('border-sandstorm-accent');
+    // Sonnet should be selected by default
+    const sonnetBtn = screen.getByTestId('dispatch-model-sonnet');
+    expect(sonnetBtn.className).toContain('border-sandstorm-accent');
   });
 
   it('shows model badge in task history', async () => {

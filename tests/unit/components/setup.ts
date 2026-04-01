@@ -69,6 +69,34 @@ export function mockSandstormApi() {
       reset: vi.fn().mockResolvedValue(undefined),
       history: vi.fn().mockResolvedValue({ messages: [], processing: false }),
     },
+    context: {
+      get: vi.fn().mockResolvedValue({ instructions: '', skills: [], settings: '' }),
+      saveInstructions: vi.fn().mockResolvedValue(undefined),
+      listSkills: vi.fn().mockResolvedValue([]),
+      getSkill: vi.fn().mockResolvedValue(''),
+      saveSkill: vi.fn().mockResolvedValue(undefined),
+      deleteSkill: vi.fn().mockResolvedValue(undefined),
+      getSettings: vi.fn().mockResolvedValue(''),
+      saveSettings: vi.fn().mockResolvedValue(undefined),
+    },
+    specGate: {
+      get: vi.fn().mockResolvedValue(''),
+      save: vi.fn().mockResolvedValue(undefined),
+      getDefault: vi.fn().mockResolvedValue(''),
+      ensure: vi.fn().mockResolvedValue(true),
+    },
+    modelSettings: {
+      getGlobal: vi.fn().mockResolvedValue({ inner_model: 'sonnet', outer_model: 'opus' }),
+      setGlobal: vi.fn().mockResolvedValue(undefined),
+      getProject: vi.fn().mockResolvedValue(null),
+      setProject: vi.fn().mockResolvedValue(undefined),
+      removeProject: vi.fn().mockResolvedValue(undefined),
+      getEffective: vi.fn().mockResolvedValue({ inner_model: 'sonnet', outer_model: 'opus' }),
+    },
+    auth: {
+      status: vi.fn().mockResolvedValue({ loggedIn: false, expired: false }),
+      login: vi.fn().mockResolvedValue({ success: true }),
+    },
     on: vi.fn().mockReturnValue(() => {}),
   };
 

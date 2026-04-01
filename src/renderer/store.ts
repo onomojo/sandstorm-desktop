@@ -159,6 +159,11 @@ export interface StackHistoryRecord {
   duration_seconds: number;
 }
 
+export interface ModelSettings {
+  inner_model: string;
+  outer_model: string;
+}
+
 export interface StaleWorkspace {
   stackId: string;
   project: string;
@@ -204,6 +209,17 @@ interface AppState {
   staleWorkspacesLoading: boolean;
   refreshStaleWorkspaces: () => Promise<void>;
   cleanupStaleWorkspaces: (workspacePaths: string[]) => Promise<CleanupResult[]>;
+
+  // Model settings
+  globalModelSettings: ModelSettings;
+  showModelSettings: boolean;
+  setShowModelSettings: (show: boolean) => void;
+  refreshGlobalModelSettings: () => Promise<void>;
+  setGlobalModelSettings: (settings: Partial<ModelSettings>) => Promise<void>;
+  getEffectiveModels: (projectDir: string) => Promise<ModelSettings>;
+  getProjectModelSettings: (projectDir: string) => Promise<ModelSettings | null>;
+  setProjectModelSettings: (projectDir: string, settings: Partial<ModelSettings>) => Promise<void>;
+  removeProjectModelSettings: (projectDir: string) => Promise<void>;
 
   // Account usage budget (persisted in localStorage)
   tokenBudget: number; // 0 means no budget set
@@ -327,6 +343,14 @@ declare global {
         getDefault: () => Promise<string>;
         ensure: (projectDir: string) => Promise<boolean>;
       };
+      modelSettings: {
+        getGlobal: () => Promise<ModelSettings>;
+        setGlobal: (settings: Partial<ModelSettings>) => Promise<void>;
+        getProject: (projectDir: string) => Promise<ModelSettings | null>;
+        setProject: (projectDir: string, settings: Partial<ModelSettings>) => Promise<void>;
+        removeProject: (projectDir: string) => Promise<void>;
+        getEffective: (projectDir: string) => Promise<ModelSettings>;
+      };
       auth: {
         status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
         login: () => Promise<{ success: boolean; error?: string }>;
@@ -387,6 +411,41 @@ export const useAppStore = create<AppState>((set, get) => ({
   globalTokenUsage: null,
   rateLimitState: null,
   accountUsage: null,
+
+  // Model settings
+  globalModelSettings: { inner_model: 'sonnet', outer_model: 'opus' },
+  showModelSettings: false,
+  setShowModelSettings: (show) => set({ showModelSettings: show }),
+
+  refreshGlobalModelSettings: async () => {
+    try {
+      const globalModelSettings = await window.sandstorm.modelSettings.getGlobal();
+      set({ globalModelSettings });
+    } catch {
+      // Non-fatal
+    }
+  },
+
+  setGlobalModelSettings: async (settings) => {
+    await window.sandstorm.modelSettings.setGlobal(settings);
+    await get().refreshGlobalModelSettings();
+  },
+
+  getEffectiveModels: async (projectDir) => {
+    return window.sandstorm.modelSettings.getEffective(projectDir);
+  },
+
+  getProjectModelSettings: async (projectDir) => {
+    return window.sandstorm.modelSettings.getProject(projectDir);
+  },
+
+  setProjectModelSettings: async (projectDir, settings) => {
+    await window.sandstorm.modelSettings.setProject(projectDir, settings);
+  },
+
+  removeProjectModelSettings: async (projectDir) => {
+    await window.sandstorm.modelSettings.removeProject(projectDir);
+  },
 
   // Account usage budget
   tokenBudget: (() => {

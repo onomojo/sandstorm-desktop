@@ -110,6 +110,11 @@ export interface Project {
   added_at: string;
 }
 
+export interface ModelSettings {
+  inner_model: string;
+  outer_model: string;
+}
+
 export class Registry {
   private db: Database.Database;
   private dbPath: string;
@@ -327,8 +332,25 @@ export class Registry {
       this.setSchemaVersion(8);
     }
 
+    if (currentVersion < 9) {
+      // Model settings: global defaults + per-project overrides
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS model_settings (
+          key         TEXT PRIMARY KEY,
+          inner_model TEXT NOT NULL DEFAULT 'sonnet',
+          outer_model TEXT NOT NULL DEFAULT 'opus'
+        );
+      `);
+      // Seed global defaults row
+      this.db.exec(`
+        INSERT OR IGNORE INTO model_settings (key, inner_model, outer_model)
+        VALUES ('global', 'sonnet', 'opus');
+      `);
+      this.setSchemaVersion(9);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 9) { ... this.setSchemaVersion(9); }
+    // if (currentVersion < 10) { ... this.setSchemaVersion(10); }
   }
 
   // --- Projects ---
@@ -356,7 +378,7 @@ export class Registry {
 
   // --- Stacks ---
 
-  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'total_execution_input_tokens' | 'total_execution_output_tokens' | 'total_review_input_tokens' | 'total_review_output_tokens' | 'rate_limit_reset_at'>): Stack {
+  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'total_execution_input_tokens' | 'total_execution_output_tokens' | 'total_review_input_tokens' | 'total_review_output_tokens' | 'rate_limit_reset_at' | 'current_model'>): Stack {
     const normalizedDir = path.resolve(stack.project_dir);
     this.db.prepare(
       `INSERT INTO stacks (id, project, project_dir, ticket, branch, description, status, runtime)
@@ -697,6 +719,64 @@ export class Registry {
         fs.rmdirSync(stacksDir);
       }
     } catch { /* best effort */ }
+  }
+
+  // --- Model Settings ---
+
+  getGlobalModelSettings(): ModelSettings {
+    const row = this.db.prepare(
+      "SELECT inner_model, outer_model FROM model_settings WHERE key = 'global'"
+    ).get() as ModelSettings | undefined;
+    return row ?? { inner_model: 'sonnet', outer_model: 'opus' };
+  }
+
+  setGlobalModelSettings(settings: Partial<ModelSettings>): void {
+    const current = this.getGlobalModelSettings();
+    this.db.prepare(
+      "INSERT OR REPLACE INTO model_settings (key, inner_model, outer_model) VALUES ('global', ?, ?)"
+    ).run(
+      settings.inner_model ?? current.inner_model,
+      settings.outer_model ?? current.outer_model,
+    );
+  }
+
+  getProjectModelSettings(projectDir: string): ModelSettings | null {
+    const key = `project:${path.resolve(projectDir)}`;
+    const row = this.db.prepare(
+      'SELECT inner_model, outer_model FROM model_settings WHERE key = ?'
+    ).get(key) as ModelSettings | undefined;
+    return row ?? null;
+  }
+
+  setProjectModelSettings(projectDir: string, settings: Partial<ModelSettings>): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    const existing = this.getProjectModelSettings(projectDir);
+    const inner = settings.inner_model ?? existing?.inner_model ?? 'global';
+    const outer = settings.outer_model ?? existing?.outer_model ?? 'global';
+    this.db.prepare(
+      'INSERT OR REPLACE INTO model_settings (key, inner_model, outer_model) VALUES (?, ?, ?)'
+    ).run(key, inner, outer);
+  }
+
+  removeProjectModelSettings(projectDir: string): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    this.db.prepare('DELETE FROM model_settings WHERE key = ?').run(key);
+  }
+
+  /**
+   * Resolve the effective model for a project.
+   * Resolution order: per-project override > global default > hardcoded fallback
+   */
+  getEffectiveModels(projectDir: string): ModelSettings {
+    const global = this.getGlobalModelSettings();
+    const project = this.getProjectModelSettings(projectDir);
+
+    if (!project) return global;
+
+    return {
+      inner_model: project.inner_model === 'global' ? global.inner_model : project.inner_model,
+      outer_model: project.outer_model === 'global' ? global.outer_model : project.outer_model,
+    };
   }
 
   // --- Cleanup ---

@@ -22,7 +22,7 @@ export function NewStackDialog() {
   const [projectDir, setProjectDir] = useState(project?.directory ?? '');
   const [runtime, setRuntime] = useState<'docker' | 'podman'>('docker');
   const [task, setTask] = useState('');
-  const [model, setModel] = useState<string>('auto');
+  const [model, setModel] = useState<string>('sonnet');
   const [error, setError] = useState<string | null>(null);
   const nameValidationError = useMemo(() => validateStackName(name.trim()), [name]);
   const [runtimes, setRuntimes] = useState({ docker: false, podman: false });
@@ -30,6 +30,16 @@ export function NewStackDialog() {
   useEffect(() => {
     window.sandstorm.runtime.available().then(setRuntimes);
   }, []);
+
+  useEffect(() => {
+    const dir = project?.directory;
+    if (!dir) return;
+    window.sandstorm.modelSettings.getEffective(dir).then((settings) => {
+      setModel(settings.inner_model);
+    }).catch(() => {
+      setModel('sonnet');
+    });
+  }, [project?.directory]);
 
   const handleCreate = async () => {
     const dir = project?.directory ?? projectDir.trim();
