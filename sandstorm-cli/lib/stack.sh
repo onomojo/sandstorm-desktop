@@ -534,13 +534,18 @@ case "$COMMAND" in
         git add -A
         git diff --cached --quiet || git commit -m "'"${COMMIT_MSG}"'"
         git push -u origin "'"${CURRENT_BRANCH}"'"
-        # Create PR back to main
+        # Create PR back to main using the project create-pr script if available
         if git log origin/main.."'"${CURRENT_BRANCH}"'" --oneline | head -1 | grep -q .; then
-          gh pr create \
-            --title "'"${COMMIT_MSG}"'" \
-            --body "Changes from Sandstorm stack '"${STACK_ID}"'" \
-            --base main \
-            --head "'"${CURRENT_BRANCH}"'" 2>/dev/null || echo "PR already exists or could not be created"
+          if [ -x /app/.sandstorm/scripts/create-pr.sh ]; then
+            /app/.sandstorm/scripts/create-pr.sh \
+              --title "'"${COMMIT_MSG}"'" \
+              --body "Changes from Sandstorm stack '"${STACK_ID}"'" \
+              --base main \
+              --head "'"${CURRENT_BRANCH}"'" 2>/dev/null || echo "PR already exists or could not be created"
+          else
+            echo "No create-pr script found at .sandstorm/scripts/create-pr.sh — skipping PR creation."
+            echo "Run sandstorm init to configure a ticket provider, or create the script manually."
+          fi
         fi
         git remote set-url origin "https://github.com/'"${GIT_REPO}"'.git"
       '

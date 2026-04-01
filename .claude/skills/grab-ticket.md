@@ -1,29 +1,43 @@
 ---
 name: grab-ticket
-description: Fetch a GitHub issue by number, read it, create a stack, and dispatch the work.
+description: Fetch a ticket by number, read it, create a stack, and dispatch the work.
 trigger: when the user says to grab a ticket, start an issue, work on issue #N, or pick up a ticket
 user_invocable: true
 ---
 
 # Grab Ticket
 
-Fetch a GitHub issue, spin up a Sandstorm stack for it, and dispatch the task.
+Fetch a ticket, spin up a Sandstorm stack for it, and dispatch the task.
 
-## Step 1: Fetch the issue
+## Step 1: Fetch the ticket
+
+Run the project's fetch-ticket script:
 
 ```bash
-gh issue view <NUMBER> -R onomojo/sandstorm-desktop
+.sandstorm/scripts/fetch-ticket.sh <TICKET_ID>
 ```
 
-Read the issue title, body, labels, and any comments. Understand what needs to be done.
+If the script doesn't exist, inform the user: "No fetch-ticket script configured. Run `sandstorm init` to set up a ticket provider, or create `.sandstorm/scripts/fetch-ticket.sh` manually."
 
-## Step 2: Derive a stack ID
+Read the ticket title, body, labels, and any comments. Understand what needs to be done.
 
-Turn the issue title into a short kebab-case identifier prefixed with the issue number, suitable for a branch name. Examples:
+## Step 2: Mark ticket as started
+
+Run the project's start-ticket script:
+
+```bash
+.sandstorm/scripts/start-ticket.sh <TICKET_ID>
+```
+
+If the script doesn't exist or fails, skip this step silently — it's optional.
+
+## Step 3: Derive a stack ID
+
+Turn the ticket title into a short kebab-case identifier prefixed with the ticket ID, suitable for a branch name. Examples:
 - "Fix auth token refresh" → `issue-42-fix-auth-token-refresh`
 - "Add dark mode toggle" → `issue-15-add-dark-mode-toggle`
 
-## Step 3: Create the stack
+## Step 4: Create the stack
 
 Use the MCP tool to create the stack. Do NOT pass a `branch` parameter — it defaults to the stack name, which becomes the feature branch.
 
@@ -33,42 +47,44 @@ Use the MCP tool to create the stack. Do NOT pass a `branch` parameter — it de
 mcp__sandstorm-tools__create_stack({
   name: "<stack_id>",
   projectDir: "/path/to/project",
-  ticket: "<NUMBER>"
+  ticket: "<TICKET_ID>"
 })
 ```
 
 Use `mcp__sandstorm-tools__get_task_status` to check when the stack is ready.
 
-## Step 4: Dispatch the task
+## Step 5: Dispatch the task
 
-Use the MCP tool to send the issue description as the task prompt. Include key details from the issue body so the inner Claude has full context.
+Use the MCP tool to send the ticket description as the task prompt. Include key details from the ticket body so the inner Claude has full context.
 
 ```
 mcp__sandstorm-tools__dispatch_task({
   stackId: "<stack_id>",
-  prompt: "<goal-oriented task description based on the issue>"
+  prompt: "<goal-oriented task description based on the ticket>"
 })
 ```
 
-## Step 5: Confirm
+## Step 6: Confirm
 
 Report back to the user:
-- Issue number and title
+- Ticket ID and title
 - Stack ID created
 - Task dispatched
 
-## Step 6: After push, create a PR
+## Step 7: After push, create a PR
 
-After the work is done and pushed, create a pull request:
+After the work is done and pushed, create a pull request using the project's create-pr script:
 
 ```bash
-gh pr create --title "<short title>" --body "Fixes #<NUMBER>"
+.sandstorm/scripts/create-pr.sh --title "<short title>" --body "Fixes #<TICKET_ID>"
 ```
+
+If the script doesn't exist, inform the user: "No create-pr script configured. Run `sandstorm init` to set up a ticket provider, or create `.sandstorm/scripts/create-pr.sh` manually."
 
 ## Notes
 
-- If the user says "grab tickets #1 through #5", repeat steps 1-4 for each issue in parallel (one stack per issue).
-- If the issue lacks enough detail to dispatch, ask the user for clarification before dispatching.
-- Always fetch the issue fresh — don't rely on cached or remembered issue content.
+- If the user says "grab tickets #1 through #5", repeat steps 1-5 for each ticket in parallel (one stack per ticket).
+- If the ticket lacks enough detail to dispatch, ask the user for clarification before dispatching.
+- Always fetch the ticket fresh — don't rely on cached or remembered ticket content.
 - **NEVER pass `branch: "main"`.** Omit the branch parameter so stacks always work on feature branches.
 - **NEVER tear down stacks** unless the user explicitly requests it.

@@ -11,7 +11,11 @@ Enter the interactive refinement loop for a ticket. Runs the quality gate, prese
 ## Instructions
 
 ### Step 1: Fetch and check
-1. Use `gh issue view <number>` to get the current issue body
+1. Run the project's fetch-ticket script to get the current ticket content:
+   ```bash
+   .sandstorm/scripts/fetch-ticket.sh <ticket-id>
+   ```
+   If the script doesn't exist, inform the user: "No fetch-ticket script configured. Run `sandstorm init` to set up a ticket provider, or create `.sandstorm/scripts/fetch-ticket.sh` manually."
 2. Read `.sandstorm/spec-quality-gate.md` for the quality gate criteria
 3. Evaluate each criterion (same as `/spec-check`)
 
@@ -28,8 +32,12 @@ Enter the interactive refinement loop for a ticket. Runs the quality gate, prese
 
 ### Step 4: Update the ticket
 After the user answers:
-1. Incorporate their answers into the issue body
-2. Use `gh issue edit <number> --body "..."` to update the ticket with the clarifications
+1. Incorporate their answers into the ticket body
+2. Run the project's update-ticket script to save the changes:
+   ```bash
+   .sandstorm/scripts/update-ticket.sh <ticket-id> "<updated body>"
+   ```
+   If the script doesn't exist or fails, show the updated body to the user and ask them to update the ticket manually.
 3. Preserve the original content — add clarifications inline or in new sections, don't delete existing content
 
 ### Step 5: Re-check

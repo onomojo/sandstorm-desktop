@@ -6,7 +6,7 @@ import { PortAllocator, ServicePort } from './port-allocator';
 import { TaskWatcher } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
-import { fetchIssueContext } from './github-issue';
+import { fetchTicketContext, referencesTicket } from './ticket-fetcher';
 
 declare const __GIT_COMMIT__: string;
 
@@ -107,19 +107,9 @@ export function sanitizeComposeName(input: string): string {
   return name || 'stack';
 }
 
-/**
- * Detect whether a task prompt references a GitHub issue.
- * Matches patterns like #123, owner/repo#123, or GitHub issue URLs.
- */
-export function referencesGitHubIssue(prompt: string): boolean {
-  // #123 (standalone issue number)
-  if (/(?:^|\s)#\d+/.test(prompt)) return true;
-  // owner/repo#123
-  if (/[\w.-]+\/[\w.-]+#\d+/.test(prompt)) return true;
-  // GitHub issue URL
-  if (/github\.com\/[\w.-]+\/[\w.-]+\/issues\/\d+/.test(prompt)) return true;
-  return false;
-}
+// referencesGitHubIssue is removed — use referencesTicket from ticket-fetcher.ts instead.
+// Re-export for backwards compatibility with any external callers.
+export { referencesTicket, referencesTicket as referencesGitHubIssue } from './ticket-fetcher';
 
 interface CliResult {
   stdout: string;
@@ -228,7 +218,7 @@ export class StackManager {
 
   /**
    * Check whether a create/dispatch call requires the spec quality gate.
-   * Throws GATE_CHECK_REQUIRED if the task references a GitHub issue
+   * Throws GATE_CHECK_REQUIRED if the task references a ticket
    * but gateApproved and forceBypass are both falsy.
    */
   private enforceSpecGate(opts: { ticket?: string; task?: string; gateApproved?: boolean; forceBypass?: boolean }): void {
@@ -240,12 +230,12 @@ export class StackManager {
     }
 
     const hasTicket = !!opts.ticket;
-    const hasIssueRef = opts.task ? referencesGitHubIssue(opts.task) : false;
+    const hasTicketRef = opts.task ? referencesTicket(opts.task) : false;
 
-    if (hasTicket || hasIssueRef) {
+    if (hasTicket || hasTicketRef) {
       throw new SandstormError(
         ErrorCode.GATE_CHECK_REQUIRED,
-        'Task references a GitHub issue but gateApproved was not set. Run /spec-check on the issue first, then retry with gateApproved: true.'
+        'Task references a ticket but gateApproved was not set. Run /spec-check on the ticket first, then retry with gateApproved: true.'
       );
     }
   }
@@ -542,12 +532,12 @@ export class StackManager {
       forceBypass: opts?.forceBypass,
     });
 
-    // If the stack has a ticket number, fetch the full issue context
-    // (title, body, all comments) and prepend it to the prompt
+    // If the stack has a ticket number, fetch the full ticket context
+    // via the project's fetch-ticket script and prepend it to the prompt
     if (stack.ticket) {
-      const issueContext = await fetchIssueContext(stack.ticket, stack.project_dir);
-      if (issueContext) {
-        prompt = `${issueContext}\n\n---\n\n## Task\n\n${prompt}`;
+      const ticketContext = await fetchTicketContext(stack.ticket, stack.project_dir);
+      if (ticketContext) {
+        prompt = `${ticketContext}\n\n---\n\n## Task\n\n${prompt}`;
       }
     }
 
