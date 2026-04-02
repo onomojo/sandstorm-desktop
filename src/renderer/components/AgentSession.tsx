@@ -160,14 +160,32 @@ export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
             Agent
           </span>
         </div>
-        {isLoading && (
+        <div className="flex items-center gap-2">
+          {isLoading && (
+            <button
+              onClick={() => window.sandstorm.agent.cancel(tabId)}
+              className="text-[10px] px-2 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+            >
+              Cancel
+            </button>
+          )}
           <button
-            onClick={() => window.sandstorm.agent.cancel(tabId)}
-            className="text-[10px] px-2 py-0.5 rounded bg-red-500/10 text-red-400 hover:bg-red-500/20 transition-colors"
+            onClick={async () => {
+              if (isLoading) {
+                window.sandstorm.agent.cancel(tabId);
+              }
+              await window.sandstorm.agent.reset(tabId);
+              setMessages([]);
+              setStreamingContent('');
+              setIsLoading(false);
+              setIsQueued(false);
+            }}
+            title="Start a new session (clears conversation history to reduce token usage)"
+            className="text-[10px] px-2 py-0.5 rounded bg-sandstorm-surface text-sandstorm-muted hover:text-sandstorm-text hover:bg-sandstorm-border transition-colors border border-sandstorm-border"
           >
-            Cancel
+            New Session
           </button>
-        )}
+        </div>
       </div>
 
       {/* Messages */}

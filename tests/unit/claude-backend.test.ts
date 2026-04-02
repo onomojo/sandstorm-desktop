@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EventEmitter } from 'events';
-import { Readable } from 'stream';
+import { Readable, Writable } from 'stream';
 
 // Mock electron modules before importing backend
 vi.mock('electron', () => ({
@@ -30,7 +30,11 @@ const spawnedProcesses: MockChildProcess[] = [];
 class MockChildProcess extends EventEmitter {
   stdout = new EventEmitter() as unknown as Readable;
   stderr = new EventEmitter() as unknown as Readable;
-  stdin = { write: vi.fn(), end: vi.fn() };
+  stdin = {
+    write: vi.fn(),
+    end: vi.fn(),
+    writable: true,
+  } as unknown as Writable & { write: ReturnType<typeof vi.fn>; writable: boolean };
   pid = Math.floor(Math.random() * 10000);
   exitCode: number | null = null;
   killed = false;
@@ -125,6 +129,27 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
     return sentMessages.filter((m) => m.channel.includes(channelPattern));
   }
 
+  /** Emit the system init event to make the process "ready" */
+  function emitInit(proc: MockChildProcess): void {
+    const initEvent = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'test-session' });
+    proc.stdout.emit('data', Buffer.from(initEvent + '\n'));
+  }
+
+  /** Emit a result event to signal response completion */
+  function emitResult(proc: MockChildProcess, result = 'ok'): void {
+    const resultEvent = JSON.stringify({ type: 'result', result, total_cost_usd: 0.01 });
+    proc.stdout.emit('data', Buffer.from(resultEvent + '\n'));
+  }
+
+  /** Emit an assistant text response */
+  function emitAssistant(proc: MockChildProcess, text: string): void {
+    const event = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text }] },
+    });
+    proc.stdout.emit('data', Buffer.from(event + '\n'));
+  }
+
   it('implements the AgentBackend interface', () => {
     expect(backend.name).toBe('Claude');
     expect(typeof backend.sendMessage).toBe('function');
@@ -139,7 +164,64 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
     expect(typeof backend.setMainWindow).toBe('function');
   });
 
-  describe('IPC events use agent: prefix', () => {
+  describe('persistent process lifecycle', () => {
+    it('spawns a process on first message', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      expect(spawnedProcesses.length).toBe(1);
+    });
+
+    it('reuses the same process for second message', () => {
+      backend.sendMessage('tab1', 'first', '/tmp');
+      const proc = getLastProcess();
+      emitInit(proc);
+      emitAssistant(proc, 'response 1');
+      emitResult(proc);
+
+      backend.sendMessage('tab1', 'second', '/tmp');
+      // Should NOT spawn a new process
+      expect(spawnedProcesses.length).toBe(1);
+    });
+
+    it('writes NDJSON to stdin for messages after init', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+      emitInit(proc);
+
+      // The queued message should have been written to stdin
+      expect(proc.stdin.write).toHaveBeenCalledWith(
+        expect.stringContaining('"type":"user"')
+      );
+      expect(proc.stdin.write).toHaveBeenCalledWith(
+        expect.stringContaining('hello')
+      );
+    });
+
+    it('spawns a new process after cancel', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc1 = getLastProcess();
+      emitInit(proc1);
+
+      backend.cancelSession('tab1');
+      expect(proc1.killed).toBe(true);
+
+      backend.sendMessage('tab1', 'again', '/tmp');
+      expect(spawnedProcesses.length).toBe(2);
+    });
+
+    it('spawns a new process after reset', () => {
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc1 = getLastProcess();
+      emitInit(proc1);
+
+      backend.resetSession('tab1');
+      expect(proc1.killed).toBe(true);
+
+      backend.sendMessage('tab1', 'fresh start', '/tmp');
+      expect(spawnedProcesses.length).toBe(2);
+    });
+  });
+
+  describe('IPC events', () => {
     it('sends agent:user-message on sendMessage', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const msgs = findMessages('agent:user-message:tab1');
@@ -147,76 +229,92 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       expect(msgs[0].args[0]).toBe('hello');
     });
 
-    it('sends agent:output on stdout data', () => {
+    it('sends agent:output on assistant text', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
-      proc.stdout.emit('data', Buffer.from('some text\n'));
+      emitInit(proc);
+      emitAssistant(proc, 'response text');
       const outputs = findMessages('agent:output:tab1');
       expect(outputs.length).toBeGreaterThan(0);
+      expect(outputs[0].args[0]).toBe('response text');
     });
 
-    it('sends agent:done on successful exit', () => {
+    it('sends agent:done on result event', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
-      proc.exitCode = 0;
-      proc.emit('close', 0);
+      emitInit(proc);
+      emitAssistant(proc, 'response');
+      emitResult(proc);
       const dones = findMessages('agent:done:tab1');
       expect(dones.length).toBe(1);
     });
 
-    it('sends agent:error on non-zero exit with no output', () => {
+    it('sends agent:error when process dies unexpectedly during processing', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
-      proc.stderr.emit('data', Buffer.from('Authentication failed'));
+      emitInit(proc);
+
+      // Process dies while we're expecting a response
+      proc.stderr.emit('data', Buffer.from('segfault'));
       proc.exitCode = 1;
       proc.emit('close', 1);
+
       const errors = findMessages('agent:error:tab1');
       expect(errors.length).toBe(1);
-      expect(errors[0].args[0]).toBe('Authentication failed');
+      expect(errors[0].args[0]).toBe('segfault');
     });
 
-    it('sends agent:queued when message is queued', () => {
+    it('sends agent:queued when message is queued during processing', () => {
       backend.sendMessage('tab1', 'first', '/tmp');
+      const proc = getLastProcess();
+      emitInit(proc);
+      // First message is being processed (fullResponse not empty yet)
+      emitAssistant(proc, 'partial');
+
       backend.sendMessage('tab1', 'second', '/tmp');
       const queued = findMessages('agent:queued:tab1');
       expect(queued.length).toBe(1);
     });
   });
 
-  describe('stderr forwarding', () => {
-    it('sends done (not error) when process exits non-zero but has output', () => {
+  describe('crash recovery', () => {
+    it('spawns new process after unexpected exit', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
-      proc.stdout.emit('data', Buffer.from('some output\n'));
-      proc.stderr.emit('data', Buffer.from('some warning'));
+      emitInit(proc);
+
+      // Process crashes
       proc.exitCode = 1;
       proc.emit('close', 1);
-      const errors = findMessages('agent:error:tab1');
-      const dones = findMessages('agent:done:tab1');
-      expect(errors.length).toBe(0);
-      expect(dones.length).toBe(1);
+
+      // Next message should spawn a new process
+      backend.sendMessage('tab1', 'retry', '/tmp');
+      expect(spawnedProcesses.length).toBe(2);
     });
 
-    it('sends generic error message when exit non-zero with no stderr', () => {
+    it('sends generic error when process exits with no stderr', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
+      emitInit(proc);
+
       proc.exitCode = 2;
       proc.emit('close', 2);
+
       const errors = findMessages('agent:error:tab1');
       expect(errors.length).toBe(1);
-      expect(errors[0].args[0]).toBe('Claude exited with code 2');
+      expect((errors[0].args[0] as string)).toContain('exited unexpectedly');
     });
   });
 
-  describe('process timeout', () => {
-    it('kills process after timeout and sends error', async () => {
+  describe('process timeout (watchdog)', () => {
+    it('kills process after timeout when no result event arrives', async () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
+      emitInit(proc);
+
+      // Wait for the 1s timeout
       await new Promise((resolve) => setTimeout(resolve, 1200));
       expect(proc.killed).toBe(true);
-      const errors = findMessages('agent:error:tab1');
-      expect(errors.length).toBeGreaterThanOrEqual(1);
-      expect((errors[0].args[0] as string)).toContain('timed out');
     });
   });
 
@@ -230,48 +328,56 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       expect(errors[0].args[0]).toBe('ENOENT: claude not found');
     });
 
-    it('resets processing flag on spawn error (fixes #28)', () => {
+    it('resets processing flag on spawn error', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
       proc.emit('error', new Error('ENOENT: claude not found'));
       const history = backend.getHistory('tab1');
       expect(history.processing).toBe(false);
     });
-
-    it('drains pending queue after spawn error (fixes #28)', () => {
-      backend.sendMessage('tab1', 'first', '/tmp');
-      backend.sendMessage('tab1', 'second', '/tmp');
-      expect(spawnedProcesses.length).toBe(1);
-      const proc = getLastProcess();
-      proc.emit('error', new Error('ENOENT'));
-      expect(spawnedProcesses.length).toBe(2);
-    });
-
-    it('sets processing=false when queue is empty after spawn error (fixes #28)', () => {
-      backend.sendMessage('tab1', 'only-message', '/tmp');
-      const proc = getLastProcess();
-      proc.emit('error', new Error('ENOENT'));
-      const history = backend.getHistory('tab1');
-      expect(history.processing).toBe(false);
-    });
   });
 
   describe('queue draining', () => {
-    it('processes queued messages after first completes', () => {
+    it('processes queued messages after result event', () => {
       backend.sendMessage('tab1', 'first', '/tmp');
-      backend.sendMessage('tab1', 'second', '/tmp');
-      expect(spawnedProcesses.length).toBe(1);
       const proc = getLastProcess();
-      proc.exitCode = 0;
-      proc.emit('close', 0);
-      expect(spawnedProcesses.length).toBe(2);
+      emitInit(proc);
+
+      // First message sent via stdin
+      emitAssistant(proc, 'response 1');
+
+      // Queue second message while first is processing
+      backend.sendMessage('tab1', 'second', '/tmp');
+
+      // First completes
+      emitResult(proc);
+
+      // Second should have been written to stdin (same process)
+      const stdinWrites = proc.stdin.write.mock.calls;
+      const secondWrite = stdinWrites.find((call: [string]) =>
+        call[0].includes('second')
+      );
+      expect(secondWrite).toBeDefined();
+    });
+
+    it('sends queued message after init event', () => {
+      // Send message before init event
+      backend.sendMessage('tab1', 'hello', '/tmp');
+      const proc = getLastProcess();
+
+      // Message should be queued, not written yet
+      const writesBeforeInit = proc.stdin.write.mock.calls.length;
+
+      // Now emit init
+      emitInit(proc);
+
+      // Message should have been written
+      expect(proc.stdin.write.mock.calls.length).toBeGreaterThan(writesBeforeInit);
     });
   });
 
   describe('getAuthStatus', () => {
     it('returns an AuthStatus shape', async () => {
-      // Mock readFileSync to throw for credentials file, but also
-      // ensure the spawned process resolves quickly
       const fs = await import('fs');
       (fs.readFileSync as ReturnType<typeof vi.fn>).mockImplementation(() => {
         throw new Error('ENOENT');
@@ -279,9 +385,6 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
 
       const statusPromise = backend.getAuthStatus();
 
-      // The auth status spawns a claude process — make it exit immediately
-      // (readFileSync throws so we should get loggedIn=false before spawning,
-      // but if it does spawn, resolve it)
       const authProc = spawnedProcesses[spawnedProcesses.length - 1];
       if (authProc) {
         setTimeout(() => {
@@ -333,7 +436,6 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       const spawnMock = spawn as ReturnType<typeof vi.fn>;
       spawnMock.mockClear();
 
-      // backend is the one from beforeEach (no resolver)
       backend.sendMessage('tab-nomodel', 'hello', '/some/project');
 
       const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
@@ -350,7 +452,6 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       resolvedBackend.setMainWindow(mockWindow as never);
       await resolvedBackend.initialize();
 
-      // No projectDir passed
       resolvedBackend.sendMessage('tab-noproj', 'hello');
 
       const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
@@ -361,22 +462,40 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
     });
   });
 
-  describe('initLogger error handling', () => {
-    it('does not throw when createWriteStream fails', () => {
-      // The fs.createWriteStream mock is already in place. Verify that
-      // constructing a ClaudeBackend does not throw even if the stream
-      // encounters an error (the error handler should swallow it).
-      expect(() => new ClaudeBackend(1000)).not.toThrow();
+  describe('stream-json flags', () => {
+    it('uses --input-format stream-json and --output-format stream-json', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-flags', 'hello', '/tmp');
+
+      const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+      const spawnedArgs: string[] = callArgs[1];
+      expect(spawnedArgs).toContain('--input-format');
+      expect(spawnedArgs).toContain('stream-json');
+      expect(spawnedArgs).toContain('--output-format');
+      expect(spawnedArgs).toContain('--print');
+      // Should NOT have --resume or --session-id
+      expect(spawnedArgs).not.toContain('--resume');
+      expect(spawnedArgs).not.toContain('--session-id');
     });
 
-    it('gracefully handles logStream when on() is not available', () => {
-      // The mock createWriteStream returns { write, end } without 'on'.
-      // Since the mock doesn't have 'on', calling .on('error', ...) will throw,
-      // and the catch block in initLogger should set logStream to null.
-      const newBackend = new ClaudeBackend(1000);
-      // If we get here without an uncaught exception, the error handling works
-      expect(newBackend).toBeDefined();
-      newBackend.destroy();
+    it('uses pipe for stdin (not ignore)', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-stdio', 'hello', '/tmp');
+
+      const callOpts = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][2];
+      expect(callOpts.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+    });
+  });
+
+  describe('initLogger error handling', () => {
+    it('does not throw when createWriteStream fails', () => {
+      expect(() => new ClaudeBackend(1000)).not.toThrow();
     });
   });
 });

@@ -28,6 +28,7 @@
     "better-sqlite3": "^12.8.0",
     "detect-port": "^2.0.0",
     "dockerode": "^4.0.4",
+    "node-pty": "^1.1.0",
     "react": "^18.3.1",
     "react-diff-viewer-continued": "^4.0.5",
     "react-dom": "^18.3.1",

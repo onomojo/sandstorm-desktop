@@ -61,6 +61,11 @@ export interface AgentBackend {
   /** Reset (delete) the session for a tab */
   resetSession(tabId: string): void;
 
+  // --- Ephemeral agents ---
+
+  /** Spawn a one-shot agent process that evaluates a prompt and returns the text result */
+  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs?: number): Promise<string>;
+
   // --- Authentication ---
 
   /** Check the current authentication status */

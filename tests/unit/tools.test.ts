@@ -1,16 +1,29 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tools, handleToolCall } from '../../src/main/claude/tools';
 
-// Mock the stackManager import
+// Mock the stackManager and agentBackend imports
 vi.mock('../../src/main/index', () => ({
   stackManager: {
     createStack: vi.fn().mockResolvedValue({ id: 'test', status: 'building', services: [] }),
     dispatchTask: vi.fn().mockResolvedValue({ id: 1, status: 'running' }),
     listStacksWithServices: vi.fn().mockResolvedValue([]),
   },
+  agentBackend: {
+    runEphemeralAgent: vi.fn().mockResolvedValue(''),
+  },
 }));
 
-import { stackManager } from '../../src/main/index';
+vi.mock('../../src/main/control-plane/ticket-fetcher', () => ({
+  fetchTicketContext: vi.fn().mockResolvedValue(null),
+}));
+
+vi.mock('../../src/main/spec-quality-gate', () => ({
+  getSpecQualityGate: vi.fn().mockReturnValue(''),
+}));
+
+import { stackManager, agentBackend } from '../../src/main/index';
+import { fetchTicketContext } from '../../src/main/control-plane/ticket-fetcher';
+import { getSpecQualityGate } from '../../src/main/spec-quality-gate';
 
 describe('MCP tools', () => {
   beforeEach(() => {
@@ -106,6 +119,130 @@ describe('MCP tools', () => {
         undefined,
         { gateApproved: undefined, forceBypass: undefined }
       );
+    });
+  });
+
+  describe('tool definitions — spec tools', () => {
+    it('spec_check tool is defined with required ticketId and projectDir', () => {
+      const specCheck = tools.find((t) => t.name === 'spec_check');
+      expect(specCheck).toBeDefined();
+      expect(specCheck!.inputSchema.required).toEqual(['ticketId', 'projectDir']);
+    });
+
+    it('spec_refine tool is defined with required ticketId and projectDir', () => {
+      const specRefine = tools.find((t) => t.name === 'spec_refine');
+      expect(specRefine).toBeDefined();
+      expect(specRefine!.inputSchema.required).toEqual(['ticketId', 'projectDir']);
+    });
+  });
+
+  describe('handleToolCall — spec_check', () => {
+    it('returns error when ticket cannot be fetched', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue(null);
+      const result = await handleToolCall('spec_check', {
+        ticketId: '999',
+        projectDir: '/proj',
+      });
+      expect(result).toEqual(
+        expect.objectContaining({ error: expect.stringContaining('Could not fetch ticket') })
+      );
+    });
+
+    it('returns error when quality gate is not configured', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Test\nSome body');
+      vi.mocked(getSpecQualityGate).mockReturnValue('');
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/proj',
+      });
+      expect(result).toEqual(
+        expect.objectContaining({ error: expect.stringContaining('No quality gate') })
+      );
+    });
+
+    it('spawns ephemeral agent and returns passed=true when report says PASS', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Fix bug\nDetailed description');
+      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: PASS\n\n### Results\n| Criterion | Result |\n|---|---|\n| Problem Statement | PASS |'
+      );
+
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/proj',
+      }) as { passed: boolean; report: string };
+
+      expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        expect.stringContaining('Fix bug'),
+        '/proj'
+      );
+      expect(result.passed).toBe(true);
+      expect(result.report).toContain('PASS');
+    });
+
+    it('returns passed=false when report says FAIL', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Vague task');
+      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: FAIL\n\n### Gaps\n- [ ] Missing problem statement'
+      );
+
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/proj',
+      }) as { passed: boolean; report: string };
+
+      expect(result.passed).toBe(false);
+    });
+  });
+
+  describe('handleToolCall — spec_refine', () => {
+    it('returns error when ticket cannot be fetched', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue(null);
+      const result = await handleToolCall('spec_refine', {
+        ticketId: '999',
+        projectDir: '/proj',
+      });
+      expect(result).toEqual(
+        expect.objectContaining({ error: expect.stringContaining('Could not fetch ticket') })
+      );
+    });
+
+    it('returns initial gaps when called without userAnswers', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Incomplete spec');
+      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: FAIL\n\n### Questions to Resolve Gaps\n1. What problem does this solve?'
+      );
+
+      const result = await handleToolCall('spec_refine', {
+        ticketId: '42',
+        projectDir: '/proj',
+      }) as { passed: boolean; report: string };
+
+      expect(result.passed).toBe(false);
+      expect(result.report).toContain('What problem does this solve');
+    });
+
+    it('incorporates user answers and re-evaluates when called with userAnswers', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Incomplete spec');
+      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Updated Ticket Body\n\n# Issue: Better spec\nThe problem is X.\n\n## Spec Quality Gate: PASS\n\n### Results\n| Criterion | Result |\n|---|---|\n| Problem Statement | PASS |'
+      );
+
+      const result = await handleToolCall('spec_refine', {
+        ticketId: '42',
+        projectDir: '/proj',
+        userAnswers: 'The problem is that auth tokens expire silently.',
+      }) as { passed: boolean; report: string; updatedBody: string | null };
+
+      expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        expect.stringContaining('auth tokens expire silently'),
+        '/proj'
+      );
+      expect(result.passed).toBe(true);
+      expect(result.updatedBody).toContain('Better spec');
     });
   });
 });

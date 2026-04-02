@@ -83,6 +83,28 @@ These commands inject the GitHub token automatically.
 
 ---
 
+## Spec Quality Gate — Use Tools, Not Skills
+
+When checking or refining ticket specs before dispatch, **always use the `spec_check` and `spec_refine` MCP tools** instead of running `/spec-check` or `/spec-refine` skills in-session.
+
+**Why:** Skills execute inside your session, adding many heavy evaluation turns that inflate context and compound token costs. The tools spawn ephemeral one-shot agents — the evaluation happens outside your session and only the result comes back.
+
+### spec_check workflow
+1. Call `spec_check` with `ticketId` and `projectDir`
+2. Read the report — if `passed: true`, proceed with `gateApproved: true`
+3. If `passed: false`, present the gaps to the user and ask if they want to refine
+
+### spec_refine workflow (interactive)
+1. Call `spec_refine` with `ticketId` and `projectDir` (no `userAnswers`) to get initial gaps and questions
+2. Present the questions to the user
+3. Once the user answers, call `spec_refine` again with `userAnswers` containing their responses
+4. If still failing, repeat steps 2-3
+5. If the tool returns `updatedBody`, that's the refined ticket text ready for dispatch
+
+Each call is a fresh ephemeral process — no token accumulation between rounds.
+
+---
+
 ## Critical Rules
 
 - **NEVER block the conversation waiting for a task.** The entire purpose of Sandstorm is parallelization. Always use `sandstorm task <id> "prompt"` (async) — NEVER use `sandstorm task <id> --sync`. After dispatching a task, immediately respond to the user and be ready for their next instruction. Check results later with `sandstorm task-status` and `sandstorm task-output` only when the user asks or when you need the result for a follow-up.
