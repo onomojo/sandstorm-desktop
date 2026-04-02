@@ -182,12 +182,11 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       expect(spawnedProcesses.length).toBe(1);
     });
 
-    it('writes NDJSON to stdin for messages after init', () => {
+    it('writes NDJSON to stdin immediately on first message (no init wait)', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
-      emitInit(proc);
 
-      // The queued message should have been written to stdin
+      // Message should be written to stdin immediately — NOT queued waiting for init
       expect(proc.stdin.write).toHaveBeenCalledWith(
         expect.stringContaining('"type":"user"')
       );
@@ -360,19 +359,70 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       expect(secondWrite).toBeDefined();
     });
 
-    it('sends queued message after init event', () => {
-      // Send message before init event
+    it('writes first message to stdin immediately without waiting for init', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc = getLastProcess();
 
-      // Message should be queued, not written yet
-      const writesBeforeInit = proc.stdin.write.mock.calls.length;
+      // Message should be written to stdin immediately — no init event needed
+      expect(proc.stdin.write).toHaveBeenCalledTimes(1);
+      expect(proc.stdin.write).toHaveBeenCalledWith(
+        expect.stringContaining('hello')
+      );
 
-      // Now emit init
+      // Init event arrives later (as it does in real Claude CLI)
       emitInit(proc);
 
-      // Message should have been written
-      expect(proc.stdin.write.mock.calls.length).toBeGreaterThan(writesBeforeInit);
+      // No additional writes from init — the message was already sent
+      expect(proc.stdin.write).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe('no init-gate deadlock', () => {
+    it('does not deadlock when init event requires input first', () => {
+      // This test verifies the fix for issue #181:
+      // Claude CLI with --input-format stream-json does NOT emit the
+      // system init event until it receives input on stdin. The old code
+      // waited for init before sending the first message, causing a deadlock.
+      backend.sendMessage('tab1', 'count to ten', '/tmp');
+      const proc = getLastProcess();
+
+      // Message must be written to stdin BEFORE any init event
+      expect(proc.stdin.write).toHaveBeenCalledTimes(1);
+      const written = proc.stdin.write.mock.calls[0][0] as string;
+      expect(written).toContain('count to ten');
+      expect(written).toContain('"type":"user"');
+
+      // Now init arrives (triggered by the input we just sent)
+      emitInit(proc);
+      expect(proc.stdin.write).toHaveBeenCalledTimes(1); // no extra writes
+
+      // Process responds normally
+      emitAssistant(proc, '1 2 3 4 5 6 7 8 9 10');
+      emitResult(proc);
+
+      const history = backend.getHistory('tab1');
+      expect(history.messages).toHaveLength(2);
+      expect(history.messages[1].content).toBe('1 2 3 4 5 6 7 8 9 10');
+      expect(history.processing).toBe(false);
+    });
+
+    it('still queues messages when a response is in progress', () => {
+      backend.sendMessage('tab1', 'first', '/tmp');
+      const proc = getLastProcess();
+      emitInit(proc);
+      emitAssistant(proc, 'partial response');
+
+      // Second message while first is processing (fullResponse is non-empty)
+      backend.sendMessage('tab1', 'second', '/tmp');
+      const queued = findMessages('agent:queued:tab1');
+      expect(queued.length).toBe(1);
+
+      // Complete first response — second should be dequeued
+      emitResult(proc);
+      const secondWrite = proc.stdin.write.mock.calls.find((call: [string]) =>
+        call[0].includes('second')
+      );
+      expect(secondWrite).toBeDefined();
     });
   });
 
