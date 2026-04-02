@@ -78,6 +78,74 @@ describe('AgentSession', () => {
     expect(screen.getByText('Thinking...')).toBeDefined();
   });
 
+  it('renders the New Session button', async () => {
+    await act(async () => {
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
+    });
+
+    const btn = screen.getByText('New Session');
+    expect(btn).toBeDefined();
+    expect(btn.tagName).toBe('BUTTON');
+  });
+
+  it('calls agent.reset and clears messages when New Session is clicked', async () => {
+    // Start with some existing messages
+    api.agent.history.mockResolvedValue({
+      messages: [
+        { role: 'user', content: 'hello' },
+        { role: 'assistant', content: 'hi' },
+      ],
+      processing: false,
+    });
+
+    await act(async () => {
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
+    });
+
+    // Messages should be visible
+    expect(screen.getByText('hello')).toBeDefined();
+    expect(screen.getByText('hi')).toBeDefined();
+
+    // Click New Session
+    const btn = screen.getByText('New Session');
+    await act(async () => {
+      btn.click();
+      await Promise.resolve();
+    });
+
+    // agent.reset should have been called
+    expect(api.agent.reset).toHaveBeenCalledWith('test-tab');
+    // Messages should be cleared
+    expect(screen.queryByText('hello')).toBeNull();
+    expect(screen.queryByText('hi')).toBeNull();
+  });
+
+  it('cancels running process before resetting when New Session is clicked during loading', async () => {
+    await act(async () => {
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
+    });
+
+    // Set isLoading=true via user-message event
+    const userMsgHandler = eventHandlers['agent:user-message:test-tab'];
+    act(() => {
+      userMsgHandler('hello');
+    });
+    expect(screen.getByText('Thinking...')).toBeDefined();
+
+    // Click New Session while loading
+    const btn = screen.getByText('New Session');
+    await act(async () => {
+      btn.click();
+      await Promise.resolve();
+    });
+
+    // Should have cancelled first, then reset
+    expect(api.agent.cancel).toHaveBeenCalledWith('test-tab');
+    expect(api.agent.reset).toHaveBeenCalledWith('test-tab');
+    // Thinking indicator should be gone
+    expect(screen.queryByText('Thinking...')).toBeNull();
+  });
+
   it('clears isLoading on agent:error (fixes #28)', async () => {
     await act(async () => {
       render(<AgentSession tabId="test-tab" projectDir="/test" />);

@@ -25,14 +25,17 @@ import {
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
 interface ClaudeSession {
-  id: string;
   tabId: string;
   process: ChildProcess | null;
-  messageCount: number;
+  ready: boolean;           // true after the system init event is received
   pendingMessages: string[];
   messages: ChatMessage[];
   processing: boolean;
   projectDir?: string;
+  watchdog: ReturnType<typeof setTimeout> | null;
+  outputBuffer: string;     // partial line buffer for stdout parsing
+  fullResponse: string;     // accumulated response text for current turn
+  stderrBuffer: string;
 }
 
 function getClaudeBin(): string {
@@ -261,16 +264,23 @@ rl.on('line', async (line) => {
 
     if (!session) {
       session = {
-        id: randomUUID(),
         tabId,
         process: null,
-        messageCount: 0,
+        ready: false,
         pendingMessages: [],
         messages: [],
         processing: false,
         projectDir,
+        watchdog: null,
+        outputBuffer: '',
+        fullResponse: '',
+        stderrBuffer: '',
       };
       this.sessions.set(tabId, session);
+    }
+
+    if (projectDir) {
+      session.projectDir = projectDir;
     }
 
     session.messages.push({ role: 'user', content: message });
@@ -278,18 +288,23 @@ rl.on('line', async (line) => {
     this.mainWindow?.webContents.send(`agent:user-message:${tabId}`, message);
     this.log(`Message received for tab=${tabId}`);
 
-    if (session.process) {
+    // If process is alive and currently processing a response, queue the message
+    if (session.process && session.fullResponse !== '' || (session.process && !session.ready)) {
       session.pendingMessages.push(message);
       this.log(`Message queued for tab=${tabId} (queue size: ${session.pendingMessages.length})`);
       this.mainWindow?.webContents.send(`agent:queued:${tabId}`);
       return;
     }
 
-    if (projectDir) {
-      session.projectDir = projectDir;
-    }
+    // Ensure persistent process exists, then send the message
+    this.ensureProcess(tabId);
 
-    this.spawnClaude(tabId, message, session.projectDir);
+    if (session.process && session.ready) {
+      this.writeMessage(tabId, message);
+    } else {
+      // Process is starting up — queue and it'll be sent after init
+      session.pendingMessages.push(message);
+    }
   }
 
   getHistory(tabId: string): AgentSessionHistory {
@@ -302,15 +317,107 @@ rl.on('line', async (line) => {
 
   cancelSession(tabId: string): void {
     const session = this.sessions.get(tabId);
-    if (session?.process) {
+    if (!session) return;
+    if (session.watchdog) clearTimeout(session.watchdog);
+    session.watchdog = null;
+    if (session.process) {
       session.process.kill();
       session.process = null;
     }
+    session.ready = false;
+    session.fullResponse = '';
+    session.outputBuffer = '';
+    session.stderrBuffer = '';
+    session.pendingMessages = [];
   }
 
   resetSession(tabId: string): void {
     this.cancelSession(tabId);
     this.sessions.delete(tabId);
+  }
+
+  // --- Ephemeral agent (one-shot Claude process) ---
+
+  /**
+   * Spawn a one-shot Claude process that evaluates a prompt and returns the text result.
+   * Uses -p (pipe/print) mode — no session persistence, no MCP tools.
+   * Used for spec quality gate evaluation to avoid inflating the outer session.
+   */
+  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs = 120_000): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const claudeBin = getClaudeBin();
+      const args = [
+        '-p', prompt,
+        '--output-format', 'stream-json',
+        '--dangerously-skip-permissions',
+        '--verbose',
+      ];
+
+      const child = spawn(claudeBin, args, {
+        cwd: projectDir,
+        env: getClaudeEnv(),
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+
+      let outputBuffer = '';
+      let fullText = '';
+      let stderrBuffer = '';
+
+      const timer = setTimeout(() => {
+        if (child.exitCode === null) {
+          child.kill();
+          reject(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`));
+        }
+      }, timeoutMs);
+
+      child.stdout?.on('data', (data: Buffer) => {
+        outputBuffer += data.toString();
+        const lines = outputBuffer.split('\n');
+        outputBuffer = lines.pop() || '';
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          try {
+            const parsed = JSON.parse(line);
+            const text = this.extractText(parsed);
+            if (text) fullText += text;
+          } catch {
+            // Skip non-JSON lines
+          }
+        }
+      });
+
+      child.stderr?.on('data', (data: Buffer) => {
+        stderrBuffer += data.toString();
+      });
+
+      child.on('close', (code) => {
+        clearTimeout(timer);
+        // Process any remaining buffer
+        if (outputBuffer.trim()) {
+          try {
+            const parsed = JSON.parse(outputBuffer);
+            const text = this.extractText(parsed);
+            if (text) fullText += text;
+          } catch {
+            // Skip
+          }
+        }
+
+        if (code !== 0 && !fullText.trim()) {
+          reject(new Error(
+            `Ephemeral agent exited with code ${code}: ${stderrBuffer.trim() || 'unknown error'}`
+          ));
+        } else {
+          resolve(fullText);
+        }
+      });
+
+      child.on('error', (err) => {
+        clearTimeout(timer);
+        reject(err);
+      });
+    });
   }
 
   // --- Auth (AgentBackend interface) ---
@@ -445,173 +552,193 @@ rl.on('line', async (line) => {
     }
   }
 
-  // --- Private: Claude CLI spawning ---
+  // --- Private: persistent Claude process management ---
 
-  private spawnClaude(tabId: string, message: string, projectDir?: string): void {
+  /**
+   * Write an NDJSON user message to the persistent process's stdin.
+   */
+  private writeMessage(tabId: string, message: string): void {
+    const session = this.sessions.get(tabId);
+    if (!session?.process?.stdin?.writable) return;
+
+    // Reset response state for the new turn
+    session.fullResponse = '';
+
+    const ndjson = JSON.stringify({
+      type: 'user',
+      message: { role: 'user', content: message },
+    });
+    session.process.stdin.write(ndjson + '\n');
+    this.log(`Wrote message to stdin for tab=${tabId} (${message.length} chars)`);
+
+    // Start watchdog timer for this turn
+    this.resetWatchdog(tabId);
+  }
+
+  private resetWatchdog(tabId: string): void {
     const session = this.sessions.get(tabId);
     if (!session) return;
+    if (session.watchdog) clearTimeout(session.watchdog);
+    session.watchdog = setTimeout(() => {
+      this.log(`Watchdog timeout for tab=${tabId} after ${this.timeoutMs}ms — killing process`);
+      if (session.process) {
+        session.process.kill();
+      }
+    }, this.timeoutMs);
+  }
+
+  /**
+   * Ensure a persistent Claude process is running for the given tab.
+   * Spawns one if none exists. The process stays alive across messages.
+   */
+  private ensureProcess(tabId: string): void {
+    const session = this.sessions.get(tabId);
+    if (!session || session.process) return;
 
     const systemPromptFile = path.join(cliDir, 'SANDSTORM_OUTER.md');
+    const claudeBin = getClaudeBin();
 
     const args: string[] = [
-      '-p', message,
+      '--print',
+      '--input-format', 'stream-json',
       '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
     ];
 
-    if (session.messageCount === 0) {
-      args.push('--session-id', session.id);
-      if (fs.existsSync(systemPromptFile)) {
-        args.push('--system-prompt-file', systemPromptFile);
-      }
-    } else {
-      args.push('--resume', session.id);
+    if (fs.existsSync(systemPromptFile)) {
+      args.push('--system-prompt-file', systemPromptFile);
     }
 
     if (this.mcpConfigPath) {
       args.push('--mcp-config', this.mcpConfigPath);
     }
 
-    if (this.modelResolver && projectDir) {
-      const outerModel = this.modelResolver(projectDir);
+    if (this.modelResolver && session.projectDir) {
+      const outerModel = this.modelResolver(session.projectDir);
       args.push('--model', outerModel);
     }
 
-    args.push('--dangerously-skip-permissions');
-
-    const cwd = projectDir || process.cwd();
-
-    let claudeBin = 'claude';
-    const pathExtras: string[] = [
-      '/opt/homebrew/bin',
-      '/usr/local/bin',
-      '/usr/local/sbin',
-    ];
-    if (process.env.HOME) {
-      const homeLocalBin = path.join(process.env.HOME, '.local', 'bin');
-      const homeClaudePath = path.join(homeLocalBin, 'claude');
-      try {
-        if (fs.existsSync(homeClaudePath)) {
-          claudeBin = homeClaudePath;
-          pathExtras.unshift(homeLocalBin);
-        }
-      } catch {
-        // Home directory not accessible
-      }
-    }
+    const cwd = session.projectDir || process.cwd();
 
     const child = spawn(claudeBin, args, {
       cwd,
-      env: {
-        ...process.env,
-        PATH: [...pathExtras, process.env.PATH].filter(Boolean).join(':'),
-      },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      env: getClaudeEnv(),
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     session.process = child;
-    session.messageCount++;
+    session.ready = false;
+    session.outputBuffer = '';
+    session.fullResponse = '';
+    session.stderrBuffer = '';
 
-    this.log(`Claude CLI spawned for tab=${tabId} pid=${child.pid} args=[${args.join(', ')}]`);
+    this.log(`Persistent Claude process spawned for tab=${tabId} pid=${child.pid}`);
 
     const send = (channel: string, ...data: unknown[]): void => {
       this.mainWindow?.webContents.send(channel, ...data);
     };
 
-    let outputBuffer = '';
-    let fullResponse = '';
-    let stderrBuffer = '';
-
-    const timeout = setTimeout(() => {
-      if (child.exitCode === null) {
-        this.log(`Timeout reached for tab=${tabId} pid=${child.pid} after ${this.timeoutMs}ms`);
-        child.kill();
-        send(`agent:error:${tabId}`, `Claude process timed out after ${Math.round(this.timeoutMs / 1000)} seconds`);
-      }
-    }, this.timeoutMs);
-
     child.stdout?.on('data', (data: Buffer) => {
       const text = data.toString();
-      outputBuffer += text;
+      session.outputBuffer += text;
 
-      const lines = outputBuffer.split('\n');
-      outputBuffer = lines.pop() || '';
+      const lines = session.outputBuffer.split('\n');
+      session.outputBuffer = lines.pop() || '';
 
       for (const line of lines) {
         if (!line.trim()) continue;
         try {
           const parsed = JSON.parse(line);
+
+          // Detect init event — process is ready to accept messages
+          if (parsed.type === 'system' && parsed.subtype === 'init' && !session.ready) {
+            session.ready = true;
+            this.log(`Claude process ready for tab=${tabId}`);
+            // Send any queued messages
+            if (session.pendingMessages.length > 0) {
+              const next = session.pendingMessages.shift()!;
+              this.log(`Dequeuing message after init for tab=${tabId} (remaining: ${session.pendingMessages.length})`);
+              this.writeMessage(tabId, next);
+            }
+            continue;
+          }
+
+          // Detect result event — response complete for this turn
+          if (parsed.type === 'result') {
+            if (session.watchdog) clearTimeout(session.watchdog);
+            session.watchdog = null;
+
+            if (session.fullResponse) {
+              session.messages.push({ role: 'assistant', content: session.fullResponse });
+            }
+            send(`agent:done:${tabId}`);
+
+            // Dequeue next pending message
+            if (session.pendingMessages.length > 0) {
+              const next = session.pendingMessages.shift()!;
+              this.log(`Dequeuing message after result for tab=${tabId} (remaining: ${session.pendingMessages.length})`);
+              this.writeMessage(tabId, next);
+            } else {
+              session.processing = false;
+              session.fullResponse = '';
+            }
+            continue;
+          }
+
+          // Detect error events
+          if (parsed.type === 'error') {
+            const errorMsg = (parsed as { error?: { message?: string } }).error?.message || 'Unknown error';
+            this.log(`Claude error for tab=${tabId}: ${errorMsg}`);
+            // Don't kill the process on API errors — it may recover
+            continue;
+          }
+
+          // Extract text for streaming output
           const extracted = this.extractText(parsed);
           if (extracted) {
-            fullResponse += extracted;
+            session.fullResponse += extracted;
             send(`agent:output:${tabId}`, extracted);
           }
         } catch {
-          if (line.trim()) {
-            fullResponse += line;
-            send(`agent:output:${tabId}`, line);
-          }
+          // Non-JSON line — skip
         }
       }
     });
 
     child.stderr?.on('data', (data: Buffer) => {
       const text = data.toString();
-      stderrBuffer += text;
+      session.stderrBuffer += text;
       this.log(`stderr [tab=${tabId}]: ${text.trimEnd()}`);
     });
 
     child.on('close', (code) => {
-      clearTimeout(timeout);
-      if (session) session.process = null;
-      this.log(`Claude CLI exited for tab=${tabId} code=${code}`);
+      if (session.watchdog) clearTimeout(session.watchdog);
+      session.watchdog = null;
+      session.process = null;
+      session.ready = false;
+      this.log(`Persistent Claude process exited for tab=${tabId} code=${code}`);
 
-      if (outputBuffer.trim()) {
-        try {
-          const parsed = JSON.parse(outputBuffer);
-          const extracted = this.extractText(parsed);
-          if (extracted) {
-            fullResponse += extracted;
-            send(`agent:output:${tabId}`, extracted);
-          }
-        } catch {
-          fullResponse += outputBuffer;
-          send(`agent:output:${tabId}`, outputBuffer);
-        }
-      }
-
-      if (code !== 0 && !fullResponse.trim()) {
-        const errorMsg = stderrBuffer.trim()
-          || `Claude exited with code ${code}`;
-        this.log(`Sending error for tab=${tabId}: ${errorMsg}`);
+      if (session.processing) {
+        // Process died while we were expecting a response
+        const errorMsg = session.stderrBuffer.trim()
+          || `Claude process exited unexpectedly (code ${code})`;
         send(`agent:error:${tabId}`, errorMsg);
-      } else {
-        if (session && fullResponse) {
-          session.messages.push({ role: 'assistant', content: fullResponse });
-        }
-        send(`agent:done:${tabId}`);
+        session.processing = false;
+        session.pendingMessages = [];
       }
 
-      if (session && session.pendingMessages.length > 0) {
-        const next = session.pendingMessages.shift()!;
-        this.log(`Dequeuing message for tab=${tabId} (remaining: ${session.pendingMessages.length})`);
-        this.spawnClaude(tabId, next, session.projectDir);
-      } else if (session) {
-        session.processing = false;
-      }
+      session.outputBuffer = '';
+      session.fullResponse = '';
+      session.stderrBuffer = '';
     });
 
     child.on('error', (err) => {
-      clearTimeout(timeout);
-      if (session) {
-        session.process = null;
-        if (session.pendingMessages.length > 0) {
-          const next = session.pendingMessages.shift()!;
-          this.log(`Dequeuing message after error for tab=${tabId} (remaining: ${session.pendingMessages.length})`);
-          this.spawnClaude(tabId, next, session.projectDir);
-        } else {
-          session.processing = false;
-        }
-      }
+      if (session.watchdog) clearTimeout(session.watchdog);
+      session.watchdog = null;
+      session.process = null;
+      session.ready = false;
+      session.processing = false;
+      session.pendingMessages = [];
       this.log(`Spawn error for tab=${tabId}: ${err.message}`);
       send(`agent:error:${tabId}`, err.message);
     });

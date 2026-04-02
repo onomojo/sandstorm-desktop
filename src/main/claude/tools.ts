@@ -4,7 +4,9 @@
  * dispatch tasks, and manage the lifecycle programmatically.
  */
 
-import { stackManager } from '../index';
+import { stackManager, agentBackend } from '../index';
+import { fetchTicketContext } from '../control-plane/ticket-fetcher';
+import { getSpecQualityGate } from '../spec-quality-gate';
 
 export interface ToolDefinition {
   name: string;
@@ -159,6 +161,33 @@ export const tools: ToolDefinition[] = [
       required: ['stackId', 'prUrl', 'prNumber'],
     },
   },
+  {
+    name: 'spec_check',
+    description:
+      'Run the spec quality gate against a ticket. Spawns an ephemeral agent to evaluate the ticket against the project\'s quality gate criteria. Returns a structured pass/fail report with gaps and assumptions. Use this instead of running /spec-check in-session to avoid inflating the outer session with evaluation tokens.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticketId: { type: 'string', description: 'Ticket ID (e.g., "178", "#178", "PROJ-123")' },
+        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
+      },
+      required: ['ticketId', 'projectDir'],
+    },
+  },
+  {
+    name: 'spec_refine',
+    description:
+      'Refine a ticket that failed the spec quality gate. Spawns an ephemeral agent to incorporate user answers into the ticket and re-evaluate. Call without userAnswers to get the initial gaps and questions. Call with userAnswers to update the ticket and re-check. The outer Claude shuttles questions/answers between the user and this tool — each call is a fresh ephemeral process.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        ticketId: { type: 'string', description: 'Ticket ID (e.g., "178", "#178")' },
+        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
+        userAnswers: { type: 'string', description: 'User answers to the gap questions from the previous spec_check or spec_refine call. Omit on the first call to get the initial gaps.' },
+      },
+      required: ['ticketId', 'projectDir'],
+    },
+  },
 ];
 
 export async function handleToolCall(
@@ -231,7 +260,193 @@ export async function handleToolCall(
       );
       return { success: true };
 
+    case 'spec_check':
+      return handleSpecCheck(
+        input.ticketId as string,
+        input.projectDir as string
+      );
+
+    case 'spec_refine':
+      return handleSpecRefine(
+        input.ticketId as string,
+        input.projectDir as string,
+        input.userAnswers as string | undefined
+      );
+
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
+}
+
+async function handleSpecCheck(
+  ticketId: string,
+  projectDir: string
+): Promise<unknown> {
+  const ticketBody = await fetchTicketContext(ticketId, projectDir);
+  if (!ticketBody) {
+    return {
+      error: `Could not fetch ticket "${ticketId}". Ensure .sandstorm/scripts/fetch-ticket.sh exists and is executable.`,
+    };
+  }
+
+  const gate = getSpecQualityGate(projectDir);
+  if (!gate) {
+    return {
+      error: 'No quality gate configured. Run sandstorm init or create .sandstorm/spec-quality-gate.md.',
+    };
+  }
+
+  const prompt = `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict — if you'd have to guess, it's a FAIL.
+
+## Quality Gate Criteria
+
+${gate}
+
+## Ticket
+
+${ticketBody}
+
+## Instructions
+
+For each criterion, determine PASS or FAIL. If FAIL, explain specifically what's missing.
+
+Then list every assumption you would make if you started this task right now.
+
+Respond in EXACTLY this format (no other text before or after):
+
+## Spec Quality Gate: [PASS or FAIL]
+
+### Results
+| Criterion | Result | Notes |
+|-----------|--------|-------|
+| <criterion name> | PASS/FAIL | <notes> |
+...
+
+### Gaps (if any)
+- [ ] Specific gap 1 — what needs to be clarified
+...
+
+### Assumptions
+- Assumption 1
+...`;
+
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
+  const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
+
+  return {
+    passed,
+    report: result,
+  };
+}
+
+async function handleSpecRefine(
+  ticketId: string,
+  projectDir: string,
+  userAnswers?: string
+): Promise<unknown> {
+  const ticketBody = await fetchTicketContext(ticketId, projectDir);
+  if (!ticketBody) {
+    return {
+      error: `Could not fetch ticket "${ticketId}". Ensure .sandstorm/scripts/fetch-ticket.sh exists and is executable.`,
+    };
+  }
+
+  const gate = getSpecQualityGate(projectDir);
+  if (!gate) {
+    return {
+      error: 'No quality gate configured. Run sandstorm init or create .sandstorm/spec-quality-gate.md.',
+    };
+  }
+
+  if (!userAnswers) {
+    // First call — evaluate and return gaps/questions
+    const prompt = `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict.
+
+## Quality Gate Criteria
+
+${gate}
+
+## Ticket
+
+${ticketBody}
+
+## Instructions
+
+For each criterion that FAILS, ask a specific, answerable question that would resolve the gap. Don't ask vague questions — ask exactly what you need to know. Group related gaps into a single question when possible.
+
+Respond in EXACTLY this format:
+
+## Spec Quality Gate: [PASS or FAIL]
+
+### Results
+| Criterion | Result | Notes |
+|-----------|--------|-------|
+| <criterion name> | PASS/FAIL | <notes> |
+...
+
+### Questions to Resolve Gaps
+1. <specific question>
+2. <specific question>
+...`;
+
+    const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
+    const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
+
+    return {
+      passed,
+      report: result,
+    };
+  }
+
+  // Subsequent call — incorporate answers and re-evaluate
+  const prompt = `You are a spec quality gate evaluator performing a refinement step.
+
+## Quality Gate Criteria
+
+${gate}
+
+## Current Ticket
+
+${ticketBody}
+
+## User's Answers to Gap Questions
+
+${userAnswers}
+
+## Instructions
+
+1. Incorporate the user's answers into the ticket body. Preserve existing content — add clarifications inline or in new sections, don't delete anything.
+2. Re-evaluate the updated ticket against the quality gate.
+3. If it still FAILs, ask new specific questions for the remaining gaps.
+
+Respond in EXACTLY this format:
+
+## Updated Ticket Body
+
+<the full updated ticket body with answers incorporated>
+
+## Spec Quality Gate: [PASS or FAIL]
+
+### Results
+| Criterion | Result | Notes |
+|-----------|--------|-------|
+| <criterion name> | PASS/FAIL | <notes> |
+...
+
+### Questions to Resolve Remaining Gaps (if any)
+1. <specific question>
+...`;
+
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
+  const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
+
+  // Extract updated ticket body if present
+  const bodyMatch = result.match(/## Updated Ticket Body\s*\n([\s\S]*?)(?=\n## Spec Quality Gate)/);
+  const updatedBody = bodyMatch ? bodyMatch[1].trim() : null;
+
+  return {
+    passed,
+    report: result,
+    updatedBody,
+  };
 }
