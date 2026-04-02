@@ -289,22 +289,19 @@ rl.on('line', async (line) => {
     this.log(`Message received for tab=${tabId}`);
 
     // If process is alive and currently processing a response, queue the message
-    if (session.process && session.fullResponse !== '' || (session.process && !session.ready)) {
+    if (session.process && session.fullResponse !== '') {
       session.pendingMessages.push(message);
       this.log(`Message queued for tab=${tabId} (queue size: ${session.pendingMessages.length})`);
       this.mainWindow?.webContents.send(`agent:queued:${tabId}`);
       return;
     }
 
-    // Ensure persistent process exists, then send the message
+    // Ensure persistent process exists, then send the message immediately.
+    // Note: Claude CLI with --input-format stream-json does NOT emit the
+    // system init event until it receives input on stdin, so we must write
+    // the message first — not wait for init.
     this.ensureProcess(tabId);
-
-    if (session.process && session.ready) {
-      this.writeMessage(tabId, message);
-    } else {
-      // Process is starting up — queue and it'll be sent after init
-      session.pendingMessages.push(message);
-    }
+    this.writeMessage(tabId, message);
   }
 
   getHistory(tabId: string): AgentSessionHistory {
@@ -650,16 +647,10 @@ rl.on('line', async (line) => {
         try {
           const parsed = JSON.parse(line);
 
-          // Detect init event — process is ready to accept messages
+          // Detect init event — process confirmed ready
           if (parsed.type === 'system' && parsed.subtype === 'init' && !session.ready) {
             session.ready = true;
             this.log(`Claude process ready for tab=${tabId}`);
-            // Send any queued messages
-            if (session.pendingMessages.length > 0) {
-              const next = session.pendingMessages.shift()!;
-              this.log(`Dequeuing message after init for tab=${tabId} (remaining: ${session.pendingMessages.length})`);
-              this.writeMessage(tabId, next);
-            }
             continue;
           }
 
