@@ -528,6 +528,54 @@ describe('StackManager', () => {
         expect(stack!.error).toContain('Task dispatch failed after retry');
       }, { timeout: 25000 });
     }, 30000);
+
+    it('propagates forceBypass to internal dispatchTask call (regression #186)', async () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const dispatchSpy = vi.spyOn(manager, 'dispatchTask').mockResolvedValue({
+        id: 1, stack_id: 'bypass-prop', prompt: 'Fix issue #99', model: null,
+        status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null,
+      });
+
+      manager.createStack({
+        name: 'bypass-prop',
+        projectDir: tmpDir,
+        runtime: 'docker',
+        task: 'Fix issue #99',
+        forceBypass: true,
+      });
+
+      await vi.waitFor(() => {
+        expect(dispatchSpy).toHaveBeenCalled();
+      }, { timeout: 5000 });
+
+      const [, , , opts] = dispatchSpy.mock.calls[0];
+      expect(opts?.forceBypass).toBe(true);
+    });
+
+    it('propagates gateApproved to internal dispatchTask call', async () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const dispatchSpy = vi.spyOn(manager, 'dispatchTask').mockResolvedValue({
+        id: 1, stack_id: 'gate-prop', prompt: 'Fix issue #99', model: null,
+        status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null,
+      });
+
+      manager.createStack({
+        name: 'gate-prop',
+        projectDir: tmpDir,
+        runtime: 'docker',
+        task: 'Fix issue #99',
+        gateApproved: true,
+      });
+
+      await vi.waitFor(() => {
+        expect(dispatchSpy).toHaveBeenCalled();
+      }, { timeout: 5000 });
+
+      const [, , , opts] = dispatchSpy.mock.calls[0];
+      expect(opts?.gateApproved).toBe(true);
+    });
   });
 
   describe('stopStack', () => {
