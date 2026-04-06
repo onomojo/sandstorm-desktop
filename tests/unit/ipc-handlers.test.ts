@@ -513,13 +513,16 @@ describe('IPC Handlers', () => {
         expect(result).toBe(false);
       });
 
-      it('returns false when docker-compose.yml is missing', async () => {
+      it('returns true when .sandstorm/config exists without docker-compose.yml (regression #187)', async () => {
+        // Projects initialized via CLI may only have .sandstorm/config; the compose
+        // file lives at the project root. The config file alone is sufficient proof
+        // of initialization.
         const sandstormDir = path.join(tmpDir, '.sandstorm');
         fs.mkdirSync(sandstormDir, { recursive: true });
-        fs.writeFileSync(path.join(sandstormDir, 'config'), 'PROJECT_NAME=test');
+        fs.writeFileSync(path.join(sandstormDir, 'config'), 'PROJECT_NAME=test\nCOMPOSE_FILE=docker-compose.yml');
 
         const result = await invokeHandler('projects:checkInit', tmpDir);
-        expect(result).toBe(false);
+        expect(result).toBe(true);
       });
 
       it('returns false for non-existent directory', async () => {

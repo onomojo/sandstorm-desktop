@@ -181,7 +181,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       const sandstormDir = path.join(directory, '.sandstorm');
       const configPath = path.join(sandstormDir, 'config');
       const composePath = path.join(sandstormDir, 'docker-compose.yml');
-      const isInitialized = fs.existsSync(configPath) && fs.existsSync(composePath);
+      const isInitialized = fs.existsSync(configPath);
 
       // Auto-sync skills if project is initialized but skills are missing
       if (isInitialized) {
