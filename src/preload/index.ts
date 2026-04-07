@@ -120,6 +120,7 @@ export interface SandstormAPI {
     resumeAll: () => Promise<string[]>;
     resumeStack: (stackId: string) => Promise<void>;
     forcePoll: () => Promise<unknown>;
+    reportActivity: () => void;
   };
   auth: {
     status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
@@ -243,6 +244,7 @@ const api: SandstormAPI = {
     resumeAll: () => ipcRenderer.invoke('session:resumeAll'),
     resumeStack: (stackId) => ipcRenderer.invoke('session:resumeStack', stackId),
     forcePoll: () => ipcRenderer.invoke('session:forcePoll'),
+    reportActivity: () => { ipcRenderer.send('session:activity'); },
   },
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),

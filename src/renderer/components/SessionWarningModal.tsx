@@ -1,10 +1,9 @@
 import React from 'react';
-import { useAppStore, ThresholdLevel, AccountUsage } from '../store';
-import { formatTokenCount } from '../utils/format';
+import { useAppStore, ThresholdLevel, UsageSnapshot } from '../store';
 
 interface Props {
   level: ThresholdLevel;
-  usage: AccountUsage | null;
+  usage: UsageSnapshot | null;
   onClose: () => void;
 }
 
@@ -16,10 +15,8 @@ export function SessionWarningModal({ level, usage, onClose }: Props) {
     refreshStacks,
   } = useAppStore();
 
-  const resetIn = usage?.reset_in ?? 'unknown';
-  const resetAt = usage?.reset_at
-    ? new Date(usage.reset_at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-    : null;
+  const sessionPercent = usage?.session?.percent ?? 0;
+  const resetsAt = usage?.session?.resetsAt ?? null;
 
   const handleHaltAll = async () => {
     await sessionHaltAll();
@@ -51,17 +48,16 @@ export function SessionWarningModal({ level, usage, onClose }: Props) {
             </div>
             <div>
               <h2 className="text-base font-semibold text-sandstorm-text">Approaching Session Limit</h2>
-              <p className="text-xs text-amber-400 font-medium">{Math.round(usage?.percent ?? 95)}% of session tokens used</p>
+              <p className="text-xs text-amber-400 font-medium">{Math.round(sessionPercent)}% of session tokens used</p>
             </div>
           </div>
 
           <p className="text-sm text-sandstorm-text-secondary mb-1">
             You're about to hit your session token limit. Extra usage will be <span className="text-amber-400 font-medium">significantly more expensive</span>.
           </p>
-          {usage && usage.limit_tokens > 0 && (
+          {resetsAt && (
             <p className="text-xs text-sandstorm-muted mb-4">
-              {formatTokenCount(usage.used_tokens)} / {formatTokenCount(usage.limit_tokens)} tokens used
-              {resetAt && <> &middot; Resets at {resetAt}</>}
+              Resets {resetsAt}
             </p>
           )}
 
@@ -115,7 +111,7 @@ export function SessionWarningModal({ level, usage, onClose }: Props) {
             All running stacks have been halted to prevent extra usage charges.
           </p>
           <p className="text-xs text-sandstorm-muted mb-4">
-            Your session resets {resetAt ? `at ${resetAt}` : `in ${resetIn}`}.
+            {resetsAt ? `Your session resets ${resetsAt}.` : 'Session reset time unknown.'}
           </p>
 
           <div className="flex flex-col gap-2">

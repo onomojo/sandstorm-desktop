@@ -16,8 +16,8 @@ const STACK_POLL_INTERVAL = 3000;
 const STACK_POLL_INTERVAL_DISCONNECTED = 10_000;
 /** Metrics polling interval (ms) */
 const METRICS_POLL_INTERVAL = 15_000;
-/** Account usage polling interval (ms) — polls independently of Docker status */
-const ACCOUNT_USAGE_POLL_INTERVAL = 30_000;
+/** Throttle for activity reporting (ms) */
+const ACTIVITY_REPORT_THROTTLE = 10_000;
 
 export default function App() {
   const {
@@ -29,7 +29,6 @@ export default function App() {
     refreshProjects,
     refreshStackHistory,
     refreshMetrics,
-    refreshAccountUsage,
     refreshSessionState,
     selectStack,
     setDockerConnected,
@@ -63,12 +62,27 @@ export default function App() {
     };
   }, [setDockerConnected, refreshStacks, refreshMetrics]);
 
-  // Poll account usage independently of Docker — it's account-level, not stack-level
+  // Report user activity to session monitor for idle gating
   useEffect(() => {
-    refreshAccountUsage();
-    const interval = setInterval(refreshAccountUsage, ACCOUNT_USAGE_POLL_INTERVAL);
-    return () => clearInterval(interval);
-  }, [refreshAccountUsage]);
+    let lastReport = 0;
+    const report = () => {
+      const now = Date.now();
+      if (now - lastReport > ACTIVITY_REPORT_THROTTLE) {
+        lastReport = now;
+        window.sandstorm.session.reportActivity();
+      }
+    };
+    window.addEventListener('mousedown', report);
+    window.addEventListener('keydown', report);
+    window.addEventListener('scroll', report, true);
+    window.addEventListener('focus', report);
+    return () => {
+      window.removeEventListener('mousedown', report);
+      window.removeEventListener('keydown', report);
+      window.removeEventListener('scroll', report, true);
+      window.removeEventListener('focus', report);
+    };
+  }, []);
 
   // Session monitor: listen for threshold/halt/reset IPC events from main process
   useEffect(() => {
@@ -211,7 +225,7 @@ export default function App() {
             <line x1="12" y1="9" x2="12" y2="13" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
             <line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
           </svg>
-          You've used {Math.round(sessionMonitorState.usage.percent)}% of your session token limit. Consider pausing non-critical stacks.
+          You've used {Math.round(sessionMonitorState.usage.session?.percent ?? 0)}% of your session token limit. Consider pausing non-critical stacks.
         </div>
       )}
 

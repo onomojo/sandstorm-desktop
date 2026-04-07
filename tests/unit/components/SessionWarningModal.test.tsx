@@ -5,18 +5,18 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { SessionWarningModal } from '../../../src/renderer/components/SessionWarningModal';
-import { useAppStore, AccountUsage } from '../../../src/renderer/store';
+import { useAppStore } from '../../../src/renderer/store';
+import type { UsageSnapshot } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
 
-function makeUsage(overrides: Partial<AccountUsage> = {}): AccountUsage {
+function makeSnapshot(overrides: Partial<UsageSnapshot> = {}): UsageSnapshot {
   return {
-    used_tokens: 950_000,
-    limit_tokens: 1_000_000,
-    percent: 95,
-    reset_at: '2026-04-07T20:00:00.000Z',
-    reset_in: '2h 30m',
-    subscription_type: 'max',
-    rate_limit_tier: null,
+    session: { percent: 95, resetsAt: '6pm (America/New_York)' },
+    weekAll: null,
+    weekSonnet: null,
+    extraUsage: { enabled: false },
+    capturedAt: new Date().toISOString(),
+    status: 'ok',
     ...overrides,
   };
 }
@@ -33,29 +33,28 @@ describe('SessionWarningModal', () => {
     });
   });
 
-  describe('critical threshold (95%)', () => {
+  describe('critical threshold (90%)', () => {
     it('renders the critical warning modal', () => {
       const onClose = vi.fn();
-      render(<SessionWarningModal level="critical" usage={makeUsage()} onClose={onClose} />);
+      render(<SessionWarningModal level="critical" usage={makeSnapshot()} onClose={onClose} />);
 
       expect(screen.getByTestId('session-warning-modal')).toBeDefined();
       expect(screen.getByText('Approaching Session Limit')).toBeDefined();
       expect(screen.getByText(/95% of session tokens used/)).toBeDefined();
     });
 
-    it('shows usage details', () => {
-      render(<SessionWarningModal level="critical" usage={makeUsage()} onClose={vi.fn()} />);
+    it('shows reset time', () => {
+      render(<SessionWarningModal level="critical" usage={makeSnapshot()} onClose={vi.fn()} />);
 
       const modal = screen.getByTestId('session-warning-modal');
-      expect(modal.textContent).toContain('950.0k');
-      expect(modal.textContent).toContain('1.00M');
+      expect(modal.textContent).toContain('Resets 6pm (America/New_York)');
     });
 
     it('has Halt All Stacks button that calls sessionHaltAll', async () => {
       const onClose = vi.fn();
       api.session.haltAll.mockResolvedValue(['stack-1']);
       api.stacks.list.mockResolvedValue([]);
-      render(<SessionWarningModal level="critical" usage={makeUsage()} onClose={onClose} />);
+      render(<SessionWarningModal level="critical" usage={makeSnapshot()} onClose={onClose} />);
 
       fireEvent.click(screen.getByTestId('halt-all-button'));
 
@@ -67,7 +66,7 @@ describe('SessionWarningModal', () => {
 
     it('has Continue button that calls sessionAcknowledgeCritical', async () => {
       const onClose = vi.fn();
-      render(<SessionWarningModal level="critical" usage={makeUsage()} onClose={onClose} />);
+      render(<SessionWarningModal level="critical" usage={makeSnapshot()} onClose={onClose} />);
 
       fireEvent.click(screen.getByTestId('continue-button'));
 
@@ -79,23 +78,22 @@ describe('SessionWarningModal', () => {
 
     it('has Remind me at 100% button that just closes', () => {
       const onClose = vi.fn();
-      render(<SessionWarningModal level="critical" usage={makeUsage()} onClose={onClose} />);
+      render(<SessionWarningModal level="critical" usage={makeSnapshot()} onClose={onClose} />);
 
       fireEvent.click(screen.getByTestId('remind-later-button'));
       expect(onClose).toHaveBeenCalled();
     });
-
-    it('shows reset time when available', () => {
-      render(<SessionWarningModal level="critical" usage={makeUsage()} onClose={vi.fn()} />);
-      const modal = screen.getByTestId('session-warning-modal');
-      // Should show formatted reset time
-      expect(modal.textContent).toContain('Resets at');
-    });
   });
 
-  describe('limit threshold (100%)', () => {
+  describe('limit threshold (95%+)', () => {
     it('renders the limit reached modal', () => {
-      render(<SessionWarningModal level="limit" usage={makeUsage({ percent: 100 })} onClose={vi.fn()} />);
+      render(
+        <SessionWarningModal
+          level="limit"
+          usage={makeSnapshot({ session: { percent: 100, resetsAt: '8pm (America/New_York)' } })}
+          onClose={vi.fn()}
+        />
+      );
 
       expect(screen.getByTestId('session-warning-modal')).toBeDefined();
       expect(screen.getByText('Session Token Limit Reached')).toBeDefined();
@@ -104,7 +102,9 @@ describe('SessionWarningModal', () => {
 
     it('has dismiss button', () => {
       const onClose = vi.fn();
-      render(<SessionWarningModal level="limit" usage={makeUsage({ percent: 100 })} onClose={onClose} />);
+      render(
+        <SessionWarningModal level="limit" usage={makeSnapshot()} onClose={onClose} />
+      );
 
       fireEvent.click(screen.getByTestId('dismiss-button'));
       expect(onClose).toHaveBeenCalled();
@@ -114,7 +114,7 @@ describe('SessionWarningModal', () => {
       const onClose = vi.fn();
       api.session.resumeAll.mockResolvedValue(['stack-1']);
       api.stacks.list.mockResolvedValue([]);
-      render(<SessionWarningModal level="limit" usage={makeUsage({ percent: 100 })} onClose={onClose} />);
+      render(<SessionWarningModal level="limit" usage={makeSnapshot()} onClose={onClose} />);
 
       fireEvent.click(screen.getByTestId('resume-override-button'));
 
@@ -128,19 +128,21 @@ describe('SessionWarningModal', () => {
       render(
         <SessionWarningModal
           level="limit"
-          usage={makeUsage({ percent: 100, reset_in: '1h 15m' })}
+          usage={makeSnapshot({ session: { percent: 95, resetsAt: '8pm (America/New_York)' } })}
           onClose={vi.fn()}
         />
       );
 
       const modal = screen.getByTestId('session-warning-modal');
-      expect(modal.textContent).toContain('resets');
+      expect(modal.textContent).toContain('resets 8pm (America/New_York)');
     });
   });
 
   describe('over_limit threshold', () => {
     it('renders same as limit modal', () => {
-      render(<SessionWarningModal level="over_limit" usage={makeUsage({ percent: 120 })} onClose={vi.fn()} />);
+      render(
+        <SessionWarningModal level="over_limit" usage={makeSnapshot()} onClose={vi.fn()} />
+      );
 
       expect(screen.getByTestId('session-warning-modal')).toBeDefined();
       expect(screen.getByText('Session Token Limit Reached')).toBeDefined();
@@ -150,14 +152,14 @@ describe('SessionWarningModal', () => {
   describe('other levels', () => {
     it('renders nothing for warning level', () => {
       const { container } = render(
-        <SessionWarningModal level="warning" usage={makeUsage({ percent: 80 })} onClose={vi.fn()} />
+        <SessionWarningModal level="warning" usage={makeSnapshot()} onClose={vi.fn()} />
       );
       expect(container.innerHTML).toBe('');
     });
 
     it('renders nothing for normal level', () => {
       const { container } = render(
-        <SessionWarningModal level="normal" usage={makeUsage({ percent: 50 })} onClose={vi.fn()} />
+        <SessionWarningModal level="normal" usage={makeSnapshot()} onClose={vi.fn()} />
       );
       expect(container.innerHTML).toBe('');
     });
@@ -172,7 +174,7 @@ describe('SessionWarningModal', () => {
     it('handles null usage gracefully in limit modal', () => {
       render(<SessionWarningModal level="limit" usage={null} onClose={vi.fn()} />);
       expect(screen.getByTestId('session-warning-modal')).toBeDefined();
-      expect(screen.getByText(/resets/i)).toBeDefined();
+      expect(screen.getByText(/reset time unknown/i)).toBeDefined();
     });
   });
 });

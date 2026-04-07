@@ -101,10 +101,12 @@ export function mockSandstormApi() {
       getState: vi.fn().mockResolvedValue({
         usage: null, level: 'normal', stale: false, halted: false,
         lastPollAt: null, consecutiveFailures: 0,
+        pollMode: 'normal', nextPollAt: null, idle: false, tmuxAvailable: null,
       }),
       getSettings: vi.fn().mockResolvedValue({
-        warningThreshold: 80, criticalThreshold: 95, autoHaltThreshold: 100,
-        autoHaltEnabled: true, autoResumeAfterReset: false, pollIntervalMs: 60000,
+        warningThreshold: 80, criticalThreshold: 90, autoHaltThreshold: 95,
+        autoHaltEnabled: true, autoResumeAfterReset: false, pollIntervalMs: 120000,
+        idleTimeoutMs: 300000, pollingDisabled: false,
       }),
       updateSettings: vi.fn().mockResolvedValue(undefined),
       acknowledgeCritical: vi.fn().mockResolvedValue(undefined),
@@ -114,7 +116,9 @@ export function mockSandstormApi() {
       forcePoll: vi.fn().mockResolvedValue({
         usage: null, level: 'normal', stale: false, halted: false,
         lastPollAt: null, consecutiveFailures: 0,
+        pollMode: 'normal', nextPollAt: null, idle: false, tmuxAvailable: null,
       }),
+      reportActivity: vi.fn(),
     },
     auth: {
       status: vi.fn().mockResolvedValue({ loggedIn: false, expired: false }),

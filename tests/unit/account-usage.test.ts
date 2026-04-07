@@ -2,222 +2,190 @@
  * @vitest-environment node
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import fs from 'fs';
-import https from 'https';
-import { EventEmitter } from 'events';
+import { parseUsageOutput, parseUsageBlock, resetTmuxCheck } from '../../src/main/control-plane/account-usage';
 
-// Mock fs and https before importing the module
-vi.mock('fs');
-vi.mock('https');
+// ---------------------------------------------------------------------------
+// Parser tests — these don't need mocks, they just test string parsing
+// ---------------------------------------------------------------------------
 
-// Import after mocks are set up
-import { fetchAccountUsage, readAccountInfo } from '../../src/main/control-plane/account-usage';
+const SAMPLE_PANE = `
+  ╭─────────────────────────────────────────────────────────────────────────╮
+  │                                                                         │
+  │ Current session                                                         │
+  │   ███████████████████████▌                           47% used           │
+  │   Resets 6pm (America/New_York)                                        │
+  │                                                                         │
+  │ Current week (all models)                                               │
+  │   ███████                                            14% used           │
+  │   Resets Apr 10, 10am (America/New_York)                               │
+  │                                                                         │
+  │ Current week (Sonnet only)                                              │
+  │   █                                                  2% used            │
+  │   Resets Apr 13, 7pm (America/New_York)                                │
+  │                                                                         │
+  │ Extra usage                                                             │
+  │   Extra usage not enabled · /extra-usage to enable                     │
+  │                                                                         │
+  ╰─────────────────────────────────────────────────────────────────────────╯
+`;
 
-const CREDS_PATH = `${process.env.HOME}/.claude/.credentials.json`;
+const EXTRA_USAGE_ENABLED_PANE = `
+  Current session
+    ███████████████████████████████████████████████████  99% used
+    Resets 8pm (America/New_York)
 
-function mockCredentials(overrides: Record<string, unknown> = {}) {
-  const creds = {
-    claudeAiOauth: {
-      accessToken: 'test-token-123',
-      refreshToken: 'refresh-token',
-      expiresAt: Date.now() + 3600000,
-      subscriptionType: 'max',
-      rateLimitTier: 'default_claude_max_5x',
-      ...overrides,
-    },
-  };
-  vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify(creds));
-}
+  Extra usage
+    Enabled · /extra-usage to disable
+`;
 
-function mockHttpsResponse(statusCode: number, body: unknown) {
-  const mockRes = new EventEmitter() as EventEmitter & { statusCode: number };
-  mockRes.statusCode = statusCode;
+const RATE_LIMITED_PANE = `
+  You are being rate limited. Please try again in a few minutes.
+`;
 
-  vi.mocked(https.request).mockImplementation((_opts: unknown, callback: unknown) => {
-    const cb = callback as (res: typeof mockRes) => void;
-    setTimeout(() => {
-      cb(mockRes);
-      mockRes.emit('data', Buffer.from(JSON.stringify(body)));
-      mockRes.emit('end');
-    }, 0);
-    const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
-    req.end = vi.fn();
-    req.destroy = vi.fn();
-    return req as ReturnType<typeof https.request>;
-  });
-}
+const AUTH_EXPIRED_PANE = `
+  Your session has expired. Please authenticate again.
+`;
 
-function mockHttpsError(errorMessage: string) {
-  vi.mocked(https.request).mockImplementation(() => {
-    const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
-    req.end = vi.fn();
-    req.destroy = vi.fn();
-    setTimeout(() => {
-      req.emit('error', new Error(errorMessage));
-    }, 0);
-    return req as ReturnType<typeof https.request>;
-  });
-}
+const EMPTY_PANE = `
+  Welcome to Claude Code! Press ? for shortcuts.
+`;
 
-describe('account-usage', () => {
+describe('account-usage parser', () => {
   beforeEach(() => {
-    vi.resetAllMocks();
+    resetTmuxCheck();
   });
 
-  afterEach(() => {
-    vi.restoreAllMocks();
+  describe('parseUsageBlock', () => {
+    it('parses session block from sample pane', () => {
+      const block = parseUsageBlock(SAMPLE_PANE, 'Current session');
+      expect(block).not.toBeNull();
+      expect(block!.percent).toBe(47);
+      expect(block!.resetsAt).toBe('6pm (America/New_York)');
+    });
+
+    it('parses week (all models) block', () => {
+      const block = parseUsageBlock(SAMPLE_PANE, 'Current week \\(all models\\)');
+      expect(block).not.toBeNull();
+      expect(block!.percent).toBe(14);
+      expect(block!.resetsAt).toBe('Apr 10, 10am (America/New_York)');
+    });
+
+    it('parses week (Sonnet only) block', () => {
+      const block = parseUsageBlock(SAMPLE_PANE, 'Current week \\(Sonnet only\\)');
+      expect(block).not.toBeNull();
+      expect(block!.percent).toBe(2);
+      expect(block!.resetsAt).toBe('Apr 13, 7pm (America/New_York)');
+    });
+
+    it('returns null for non-existent label', () => {
+      const block = parseUsageBlock(SAMPLE_PANE, 'Nonexistent block');
+      expect(block).toBeNull();
+    });
+
+    it('parses 99% usage', () => {
+      const block = parseUsageBlock(EXTRA_USAGE_ENABLED_PANE, 'Current session');
+      expect(block).not.toBeNull();
+      expect(block!.percent).toBe(99);
+    });
   });
 
-  describe('readAccountInfo', () => {
-    it('returns subscription type and rate limit tier from credentials', () => {
-      mockCredentials();
-      const info = readAccountInfo();
-      expect(info.subscription_type).toBe('max');
-      expect(info.rate_limit_tier).toBe('default_claude_max_5x');
+  describe('parseUsageOutput', () => {
+    it('parses a normal usage pane into a complete snapshot', () => {
+      const snapshot = parseUsageOutput(SAMPLE_PANE);
+      expect(snapshot.status).toBe('ok');
+      expect(snapshot.session).not.toBeNull();
+      expect(snapshot.session!.percent).toBe(47);
+      expect(snapshot.session!.resetsAt).toBe('6pm (America/New_York)');
+      expect(snapshot.weekAll).not.toBeNull();
+      expect(snapshot.weekAll!.percent).toBe(14);
+      expect(snapshot.weekSonnet).not.toBeNull();
+      expect(snapshot.weekSonnet!.percent).toBe(2);
+      expect(snapshot.extraUsage.enabled).toBe(false);
+      expect(snapshot.capturedAt).toBeDefined();
     });
 
-    it('returns nulls when credentials file is missing', () => {
-      vi.mocked(fs.readFileSync).mockImplementation(() => {
-        throw new Error('ENOENT');
-      });
-      const info = readAccountInfo();
-      expect(info.subscription_type).toBeNull();
-      expect(info.rate_limit_tier).toBeNull();
+    it('detects extra usage enabled', () => {
+      const snapshot = parseUsageOutput(EXTRA_USAGE_ENABLED_PANE);
+      expect(snapshot.extraUsage.enabled).toBe(true);
     });
 
-    it('returns nulls when credentials have no OAuth data', () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(JSON.stringify({}));
-      const info = readAccountInfo();
-      expect(info.subscription_type).toBeNull();
-      expect(info.rate_limit_tier).toBeNull();
-    });
-  });
-
-  describe('fetchAccountUsage', () => {
-    it('returns null when no credentials exist', async () => {
-      vi.mocked(fs.readFileSync).mockImplementation(() => {
-        throw new Error('ENOENT');
-      });
-      const result = await fetchAccountUsage();
-      expect(result).toBeNull();
+    it('sets status to at_limit when session >= 95%', () => {
+      const snapshot = parseUsageOutput(EXTRA_USAGE_ENABLED_PANE);
+      expect(snapshot.status).toBe('at_limit');
     });
 
-    it('returns null when credentials have no access token', async () => {
-      vi.mocked(fs.readFileSync).mockReturnValue(
-        JSON.stringify({ claudeAiOauth: { subscriptionType: 'max' } })
-      );
-      const result = await fetchAccountUsage();
-      expect(result).toBeNull();
+    it('detects rate-limited pane', () => {
+      const snapshot = parseUsageOutput(RATE_LIMITED_PANE);
+      expect(snapshot.status).toBe('rate_limited');
+      expect(snapshot.session).toBeNull();
     });
 
-    it('parses usage from bootstrap API with top-level usage object', async () => {
-      mockCredentials();
-      mockHttpsResponse(200, {
-        usage: {
-          tokens_used: 500000,
-          tokens_limit: 1000000,
-          reset_at: '2026-03-27T20:00:00Z',
-        },
-      });
-
-      const result = await fetchAccountUsage();
-      expect(result).not.toBeNull();
-      expect(result!.used_tokens).toBe(500000);
-      expect(result!.limit_tokens).toBe(1000000);
-      expect(result!.percent).toBe(50);
-      expect(result!.subscription_type).toBe('max');
-      expect(result!.rate_limit_tier).toBe('default_claude_max_5x');
-      expect(result!.reset_at).toBe('2026-03-27T20:00:00.000Z');
+    it('detects auth expired pane', () => {
+      const snapshot = parseUsageOutput(AUTH_EXPIRED_PANE);
+      expect(snapshot.status).toBe('auth_expired');
+      expect(snapshot.session).toBeNull();
     });
 
-    it('parses usage from nested account.usage object', async () => {
-      mockCredentials();
-      mockHttpsResponse(200, {
-        account: {
-          usage: {
-            used_tokens: 250000,
-            limit_tokens: 500000,
-          },
-        },
-      });
-
-      const result = await fetchAccountUsage();
-      expect(result).not.toBeNull();
-      expect(result!.used_tokens).toBe(250000);
-      expect(result!.limit_tokens).toBe(500000);
-      expect(result!.percent).toBe(50);
+    it('returns parse_error for unrecognized pane', () => {
+      const snapshot = parseUsageOutput(EMPTY_PANE);
+      expect(snapshot.status).toBe('parse_error');
+      expect(snapshot.session).toBeNull();
     });
 
-    it('returns credential-only info when API returns no usage data', async () => {
-      mockCredentials();
-      // Both API calls return non-usage data
-      let callCount = 0;
-      vi.mocked(https.request).mockImplementation((_opts: unknown, callback: unknown) => {
-        callCount++;
-        const mockRes = new EventEmitter() as EventEmitter & { statusCode: number };
-        mockRes.statusCode = 200;
-        const cb = callback as (res: typeof mockRes) => void;
-        setTimeout(() => {
-          cb(mockRes);
-          mockRes.emit('data', Buffer.from(JSON.stringify({ some: 'other_data' })));
-          mockRes.emit('end');
-        }, 0);
-        const req = new EventEmitter() as EventEmitter & { end: () => void; destroy: () => void };
-        req.end = vi.fn();
-        req.destroy = vi.fn();
-        return req as ReturnType<typeof https.request>;
-      });
-
-      const result = await fetchAccountUsage();
-      expect(result).not.toBeNull();
-      expect(result!.used_tokens).toBe(0);
-      expect(result!.limit_tokens).toBe(0);
-      expect(result!.subscription_type).toBe('max');
+    it('handles completely empty string', () => {
+      const snapshot = parseUsageOutput('');
+      expect(snapshot.status).toBe('parse_error');
+      expect(snapshot.session).toBeNull();
     });
 
-    it('returns credential-only info when API is unreachable', async () => {
-      mockCredentials();
-      mockHttpsError('ECONNREFUSED');
+    it('handles pane with only session block (no week blocks)', () => {
+      const pane = `
+        Current session
+          ██████████                                         20% used
+          Resets 3pm (America/Chicago)
 
-      const result = await fetchAccountUsage();
-      expect(result).not.toBeNull();
-      expect(result!.used_tokens).toBe(0);
-      expect(result!.limit_tokens).toBe(0);
-      expect(result!.subscription_type).toBe('max');
-      expect(result!.rate_limit_tier).toBe('default_claude_max_5x');
+        Extra usage
+          Extra usage not enabled
+      `;
+      const snapshot = parseUsageOutput(pane);
+      expect(snapshot.status).toBe('ok');
+      expect(snapshot.session!.percent).toBe(20);
+      expect(snapshot.weekAll).toBeNull();
+      expect(snapshot.weekSonnet).toBeNull();
     });
 
-    it('computes reset_in from reset_at timestamp', async () => {
-      mockCredentials();
-      // Set reset to 2 hours from now
-      const resetAt = new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString();
-      mockHttpsResponse(200, {
-        usage: {
-          tokens_used: 100000,
-          tokens_limit: 500000,
-          reset_at: resetAt,
-        },
-      });
+    it('handles 0% usage', () => {
+      const pane = `
+        Current session
+                                                             0% used
+          Resets 6pm (America/New_York)
 
-      const result = await fetchAccountUsage();
-      expect(result).not.toBeNull();
-      expect(result!.reset_in).toMatch(/^(1h 5\d|2h)/); // approximately 2h
-      expect(result!.reset_at).toBeDefined();
+        Extra usage
+          Extra usage not enabled
+      `;
+      const snapshot = parseUsageOutput(pane);
+      expect(snapshot.status).toBe('ok');
+      expect(snapshot.session!.percent).toBe(0);
     });
 
-    it('handles percent_used field from API', async () => {
-      mockCredentials();
-      mockHttpsResponse(200, {
-        usage: {
-          tokens_used: 300000,
-          tokens_limit: 1000000,
-          percent_used: 30,
-        },
-      });
+    it('handles 100% usage', () => {
+      const pane = `
+        Current session
+          ██████████████████████████████████████████████████ 100% used
+          Resets 6pm (America/New_York)
 
-      const result = await fetchAccountUsage();
-      expect(result).not.toBeNull();
-      expect(result!.percent).toBe(30);
+        Extra usage
+          Extra usage not enabled
+      `;
+      const snapshot = parseUsageOutput(pane);
+      expect(snapshot.status).toBe('at_limit');
+      expect(snapshot.session!.percent).toBe(100);
+    });
+
+    it('detects rate-limit keywords in various forms', () => {
+      expect(parseUsageOutput('rate limit exceeded').status).toBe('rate_limited');
+      expect(parseUsageOutput('Too many requests, try again later').status).toBe('rate_limited');
+      expect(parseUsageOutput('You are requesting too frequently').status).toBe('rate_limited');
     });
   });
 });

@@ -762,6 +762,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       autoHaltEnabled: boolean;
       autoResumeAfterReset: boolean;
       pollIntervalMs: number;
+      idleTimeoutMs: number;
+      pollingDisabled: boolean;
     }>);
     sessionMonitor.updateSettings(registry.getSessionMonitorSettings());
   });
@@ -785,6 +787,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('session:forcePoll', async () => {
     return sessionMonitor.forcePoll();
+  });
+
+  ipcMain.on('session:activity', () => {
+    sessionMonitor.reportActivity();
   });
 
   ipcMain.handle('docker:status', () => {

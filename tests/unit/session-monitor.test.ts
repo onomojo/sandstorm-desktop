@@ -3,32 +3,32 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mock the account-usage module before importing SessionMonitor
 vi.mock('../../src/main/control-plane/account-usage', () => ({
   fetchAccountUsage: vi.fn(),
+  checkTmuxInstalled: vi.fn().mockResolvedValue(true),
 }));
 
 import { SessionMonitor, DEFAULT_SESSION_MONITOR_SETTINGS } from '../../src/main/control-plane/session-monitor';
-import { fetchAccountUsage } from '../../src/main/control-plane/account-usage';
+import { fetchAccountUsage, checkTmuxInstalled } from '../../src/main/control-plane/account-usage';
+import type { UsageSnapshot } from '../../src/main/control-plane/account-usage';
 
 const mockFetchAccountUsage = fetchAccountUsage as ReturnType<typeof vi.fn>;
 
-function makeUsage(overrides: Partial<{
-  used_tokens: number;
-  limit_tokens: number;
-  percent: number;
-  reset_at: string | null;
-  reset_in: string | null;
-  subscription_type: string | null;
-  rate_limit_tier: string | null;
-}> = {}) {
+function makeSnapshot(overrides: Partial<UsageSnapshot> = {}): UsageSnapshot {
   return {
-    used_tokens: 0,
-    limit_tokens: 1_000_000,
-    percent: 0,
-    reset_at: null,
-    reset_in: null,
-    subscription_type: 'max',
-    rate_limit_tier: null,
+    session: { percent: 0, resetsAt: '6pm (America/New_York)' },
+    weekAll: null,
+    weekSonnet: null,
+    extraUsage: { enabled: false },
+    capturedAt: new Date().toISOString(),
+    status: 'ok',
     ...overrides,
   };
+}
+
+function makeSnapshotWithPercent(percent: number): UsageSnapshot {
+  return makeSnapshot({
+    session: { percent, resetsAt: '6pm (America/New_York)' },
+    status: percent >= 95 ? 'at_limit' : 'ok',
+  });
 }
 
 describe('SessionMonitor', () => {
@@ -53,7 +53,7 @@ describe('SessionMonitor', () => {
     it('merges partial settings with defaults', () => {
       monitor = new SessionMonitor({ warningThreshold: 70 });
       expect(monitor.getSettings().warningThreshold).toBe(70);
-      expect(monitor.getSettings().criticalThreshold).toBe(95);
+      expect(monitor.getSettings().criticalThreshold).toBe(90);
     });
 
     it('starts with normal state', () => {
@@ -63,6 +63,8 @@ describe('SessionMonitor', () => {
       expect(state.usage).toBeNull();
       expect(state.halted).toBe(false);
       expect(state.stale).toBe(false);
+      expect(state.pollMode).toBe('normal');
+      expect(state.idle).toBe(false);
     });
   });
 
@@ -77,18 +79,19 @@ describe('SessionMonitor', () => {
     it('returns warning at warning threshold', () => {
       monitor = new SessionMonitor();
       expect(monitor.computeLevel(80)).toBe('warning');
-      expect(monitor.computeLevel(90)).toBe('warning');
-      expect(monitor.computeLevel(94)).toBe('warning');
+      expect(monitor.computeLevel(85)).toBe('warning');
+      expect(monitor.computeLevel(89)).toBe('warning');
     });
 
-    it('returns critical at critical threshold', () => {
+    it('returns critical at critical threshold (90%)', () => {
       monitor = new SessionMonitor();
-      expect(monitor.computeLevel(95)).toBe('critical');
-      expect(monitor.computeLevel(99)).toBe('critical');
+      expect(monitor.computeLevel(90)).toBe('critical');
+      expect(monitor.computeLevel(94)).toBe('critical');
     });
 
-    it('returns limit at auto-halt threshold', () => {
+    it('returns limit at auto-halt threshold (95%)', () => {
       monitor = new SessionMonitor();
+      expect(monitor.computeLevel(95)).toBe('limit');
       expect(monitor.computeLevel(100)).toBe('limit');
     });
 
@@ -108,15 +111,13 @@ describe('SessionMonitor', () => {
       expect(monitor.computeLevel(60)).toBe('warning');
       expect(monitor.computeLevel(80)).toBe('critical');
       expect(monitor.computeLevel(90)).toBe('limit');
-      expect(monitor.computeLevel(91)).toBe('limit');
-      // over_limit requires both >= autoHaltThreshold AND > 100
       expect(monitor.computeLevel(101)).toBe('over_limit');
     });
   });
 
   describe('polling and threshold events', () => {
     it('polls immediately on start and emits state:changed', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 50, used_tokens: 500000 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(50));
       monitor = new SessionMonitor();
       const stateChanged = vi.fn();
       monitor.on('state:changed', stateChanged);
@@ -127,11 +128,11 @@ describe('SessionMonitor', () => {
       expect(mockFetchAccountUsage).toHaveBeenCalledTimes(1);
       expect(stateChanged).toHaveBeenCalled();
       expect(monitor.getState().level).toBe('normal');
-      expect(monitor.getState().usage?.percent).toBe(50);
+      expect(monitor.getState().usage?.session?.percent).toBe(50);
     });
 
     it('emits threshold:warning when crossing warning threshold', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 85 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(85));
       monitor = new SessionMonitor();
       const warningFn = vi.fn();
       monitor.on('threshold:warning', warningFn);
@@ -144,7 +145,7 @@ describe('SessionMonitor', () => {
     });
 
     it('emits threshold:critical when crossing critical threshold', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 96 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(92));
       monitor = new SessionMonitor();
       const criticalFn = vi.fn();
       monitor.on('threshold:critical', criticalFn);
@@ -157,7 +158,7 @@ describe('SessionMonitor', () => {
     });
 
     it('emits threshold:limit and halt:triggered when hitting auto-halt threshold', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 100 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(95));
       monitor = new SessionMonitor();
       const limitFn = vi.fn();
       const haltFn = vi.fn();
@@ -173,7 +174,7 @@ describe('SessionMonitor', () => {
     });
 
     it('does not emit halt:triggered when autoHaltEnabled is false', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 100 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(95));
       monitor = new SessionMonitor({ autoHaltEnabled: false });
       const haltFn = vi.fn();
       monitor.on('halt:triggered', haltFn);
@@ -186,7 +187,7 @@ describe('SessionMonitor', () => {
     });
 
     it('does not fire duplicate threshold events for the same level', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 85 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(85));
       monitor = new SessionMonitor({ pollIntervalMs: 1000 });
       const warningFn = vi.fn();
       monitor.on('threshold:warning', warningFn);
@@ -196,12 +197,12 @@ describe('SessionMonitor', () => {
       expect(warningFn).toHaveBeenCalledTimes(1);
 
       // Second poll at same level — should not fire again
-      await vi.advanceTimersByTimeAsync(1000);
+      await vi.advanceTimersByTimeAsync(12_000);
       expect(warningFn).toHaveBeenCalledTimes(1);
     });
 
     it('emits threshold:cleared when usage drops back to normal', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 85 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(85));
       monitor = new SessionMonitor({ pollIntervalMs: 1000 });
       const clearedFn = vi.fn();
       monitor.on('threshold:cleared', clearedFn);
@@ -210,34 +211,87 @@ describe('SessionMonitor', () => {
       await vi.advanceTimersByTimeAsync(0);
       expect(monitor.getState().level).toBe('warning');
 
-      // Usage drops
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 50 }));
-      await vi.advanceTimersByTimeAsync(1000);
+      // Usage drops — advance past poll interval + max jitter
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(50));
+      await vi.advanceTimersByTimeAsync(12_000);
 
       expect(clearedFn).toHaveBeenCalledTimes(1);
       expect(monitor.getState().level).toBe('normal');
     });
+  });
 
-    it('polls at configured interval', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 10 }));
-      monitor = new SessionMonitor({ pollIntervalMs: 5000 });
+  describe('three-mode state machine', () => {
+    it('enters at_limit mode when session percent >= autoHaltThreshold', async () => {
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(96));
+      monitor = new SessionMonitor();
 
       monitor.start();
-      await vi.advanceTimersByTimeAsync(0); // immediate poll
-      expect(mockFetchAccountUsage).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(0);
 
-      await vi.advanceTimersByTimeAsync(5000); // second poll
-      expect(mockFetchAccountUsage).toHaveBeenCalledTimes(2);
+      expect(monitor.getState().pollMode).toBe('at_limit');
+    });
 
-      await vi.advanceTimersByTimeAsync(5000); // third poll
-      expect(mockFetchAccountUsage).toHaveBeenCalledTimes(3);
+    it('stays in normal mode when below threshold', async () => {
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(50));
+      monitor = new SessionMonitor();
+
+      monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(monitor.getState().pollMode).toBe('normal');
+    });
+
+    it('enters rate_limited mode on rate-limit response', async () => {
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshot({
+        session: null,
+        status: 'rate_limited',
+      }));
+      monitor = new SessionMonitor();
+
+      monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(monitor.getState().pollMode).toBe('rate_limited');
+    });
+
+    it('enters error mode on parse errors', async () => {
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshot({
+        session: null,
+        status: 'parse_error',
+      }));
+      monitor = new SessionMonitor();
+
+      monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(monitor.getState().pollMode).toBe('error');
+    });
+
+    it('returns to normal mode after successful poll from rate_limited', async () => {
+      // First poll: rate limited. Use long idle timeout to avoid idle gating.
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshot({
+        session: null,
+        status: 'rate_limited',
+      }));
+      monitor = new SessionMonitor({ idleTimeoutMs: 600_000 });
+
+      monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(monitor.getState().pollMode).toBe('rate_limited');
+
+      // Second poll: success (after first rate limit backoff of 5 min)
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(50));
+      await vi.advanceTimersByTimeAsync(5 * 60_000 + 5_000);
+
+      expect(monitor.getState().pollMode).toBe('normal');
     });
   });
 
   describe('stale data handling', () => {
     it('marks data as stale after 3 consecutive failures', async () => {
       mockFetchAccountUsage.mockResolvedValue(null);
-      monitor = new SessionMonitor({ pollIntervalMs: 1000 });
+      // Use long idle timeout to avoid idle gating during error backoff
+      monitor = new SessionMonitor({ pollIntervalMs: 1000, idleTimeoutMs: 600_000 });
       const staleFn = vi.fn();
       monitor.on('stale', staleFn);
 
@@ -245,26 +299,29 @@ describe('SessionMonitor', () => {
       await vi.advanceTimersByTimeAsync(0); // failure 1
       expect(monitor.getState().stale).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(1000); // failure 2
+      // Error backoff: 30s
+      await vi.advanceTimersByTimeAsync(31_000); // failure 2
       expect(monitor.getState().stale).toBe(false);
 
-      await vi.advanceTimersByTimeAsync(1000); // failure 3
+      // Error backoff: 60s
+      await vi.advanceTimersByTimeAsync(61_000); // failure 3
       expect(monitor.getState().stale).toBe(true);
       expect(staleFn).toHaveBeenCalledTimes(1);
     });
 
     it('clears stale flag on successful poll', async () => {
       mockFetchAccountUsage.mockResolvedValue(null);
-      monitor = new SessionMonitor({ pollIntervalMs: 1000 });
+      monitor = new SessionMonitor({ pollIntervalMs: 1000, idleTimeoutMs: 600_000 });
 
       monitor.start();
-      await vi.advanceTimersByTimeAsync(0);
-      await vi.advanceTimersByTimeAsync(1000);
-      await vi.advanceTimersByTimeAsync(1000); // now stale
+      await vi.advanceTimersByTimeAsync(0); // failure 1
+      await vi.advanceTimersByTimeAsync(31_000); // failure 2 (30s backoff)
+      await vi.advanceTimersByTimeAsync(61_000); // failure 3 (60s backoff)
       expect(monitor.getState().stale).toBe(true);
 
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 30 }));
-      await vi.advanceTimersByTimeAsync(1000);
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(30));
+      // Error backoff: 2 min
+      await vi.advanceTimersByTimeAsync(121_000);
       expect(monitor.getState().stale).toBe(false);
       expect(monitor.getState().consecutiveFailures).toBe(0);
     });
@@ -272,7 +329,7 @@ describe('SessionMonitor', () => {
 
   describe('session reset detection', () => {
     it('emits session:reset when usage drops significantly', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 85 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(85));
       monitor = new SessionMonitor({ pollIntervalMs: 1000 });
       const resetFn = vi.fn();
       monitor.on('session:reset', resetFn);
@@ -282,15 +339,15 @@ describe('SessionMonitor', () => {
       expect(monitor.getState().level).toBe('warning');
 
       // Simulate session reset — usage drops to near zero
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 2 }));
-      await vi.advanceTimersByTimeAsync(1000);
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(2));
+      await vi.advanceTimersByTimeAsync(12_000);
 
       expect(resetFn).toHaveBeenCalledTimes(1);
       expect(monitor.getState().halted).toBe(false);
     });
 
     it('clears fired thresholds on session reset', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 85 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(85));
       monitor = new SessionMonitor({ pollIntervalMs: 1000 });
       const warningFn = vi.fn();
       monitor.on('threshold:warning', warningFn);
@@ -300,13 +357,60 @@ describe('SessionMonitor', () => {
       expect(warningFn).toHaveBeenCalledTimes(1);
 
       // Session reset
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 2 }));
-      await vi.advanceTimersByTimeAsync(1000);
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(2));
+      await vi.advanceTimersByTimeAsync(12_000);
 
       // Usage climbs back up — warning should fire again
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 85 }));
-      await vi.advanceTimersByTimeAsync(1000);
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(85));
+      await vi.advanceTimersByTimeAsync(12_000);
       expect(warningFn).toHaveBeenCalledTimes(2);
+    });
+  });
+
+  describe('idle gating', () => {
+    it('enters idle after timeout when below warning', async () => {
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(50));
+      monitor = new SessionMonitor({ idleTimeoutMs: 5000, pollIntervalMs: 1000 });
+
+      monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(monitor.getState().idle).toBe(false);
+
+      // Advance past idle timeout — idle check runs every 30s
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(monitor.getState().idle).toBe(true);
+    });
+
+    it('does NOT enter idle when usage is at or above warning threshold', async () => {
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(85));
+      monitor = new SessionMonitor({ idleTimeoutMs: 5000, pollIntervalMs: 1000 });
+
+      monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Advance past idle timeout
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(monitor.getState().idle).toBe(false);
+    });
+
+    it('exits idle on reportActivity and triggers poll', async () => {
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(50));
+      monitor = new SessionMonitor({ idleTimeoutMs: 5000, pollIntervalMs: 1000 });
+
+      monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+
+      // Go idle
+      await vi.advanceTimersByTimeAsync(30_000);
+      expect(monitor.getState().idle).toBe(true);
+
+      // Report activity
+      const callCount = mockFetchAccountUsage.mock.calls.length;
+      monitor.reportActivity();
+      await vi.advanceTimersByTimeAsync(0);
+
+      expect(monitor.getState().idle).toBe(false);
+      expect(mockFetchAccountUsage.mock.calls.length).toBeGreaterThan(callCount);
     });
   });
 
@@ -319,7 +423,7 @@ describe('SessionMonitor', () => {
 
   describe('markResumed', () => {
     it('clears halted state', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 100 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(95));
       monitor = new SessionMonitor();
 
       monitor.start();
@@ -333,12 +437,29 @@ describe('SessionMonitor', () => {
 
   describe('forcePoll', () => {
     it('performs an immediate poll and returns state', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 42 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(42));
       monitor = new SessionMonitor();
 
       const state = await monitor.forcePoll();
-      expect(state.usage?.percent).toBe(42);
+      expect(state.usage?.session?.percent).toBe(42);
       expect(state.level).toBe('normal');
+    });
+
+    it('does not force poll when rate limited', async () => {
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshot({
+        session: null,
+        status: 'rate_limited',
+      }));
+      monitor = new SessionMonitor();
+
+      monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(monitor.getState().pollMode).toBe('rate_limited');
+
+      const callCount = mockFetchAccountUsage.mock.calls.length;
+      await monitor.forcePoll();
+      // Should NOT have made another call
+      expect(mockFetchAccountUsage.mock.calls.length).toBe(callCount);
     });
   });
 
@@ -348,23 +469,11 @@ describe('SessionMonitor', () => {
       monitor.updateSettings({ warningThreshold: 60 });
       expect(monitor.getSettings().warningThreshold).toBe(60);
     });
-
-    it('restarts polling when interval changes', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 10 }));
-      monitor = new SessionMonitor({ pollIntervalMs: 5000 });
-      monitor.start();
-      await vi.advanceTimersByTimeAsync(0);
-
-      monitor.updateSettings({ pollIntervalMs: 2000 });
-      // Should have restarted — immediate poll on restart
-      await vi.advanceTimersByTimeAsync(0);
-      expect(mockFetchAccountUsage).toHaveBeenCalledTimes(2);
-    });
   });
 
   describe('start/stop', () => {
     it('does not double-start', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 10 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(10));
       monitor = new SessionMonitor({ pollIntervalMs: 5000 });
       monitor.start();
       monitor.start(); // second call should be no-op
@@ -373,14 +482,14 @@ describe('SessionMonitor', () => {
     });
 
     it('stops polling on stop()', async () => {
-      mockFetchAccountUsage.mockResolvedValue(makeUsage({ percent: 10 }));
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(10));
       monitor = new SessionMonitor({ pollIntervalMs: 1000 });
       monitor.start();
       await vi.advanceTimersByTimeAsync(0);
       expect(mockFetchAccountUsage).toHaveBeenCalledTimes(1);
 
       monitor.stop();
-      await vi.advanceTimersByTimeAsync(5000);
+      await vi.advanceTimersByTimeAsync(120_000);
       expect(mockFetchAccountUsage).toHaveBeenCalledTimes(1);
     });
 
@@ -391,6 +500,15 @@ describe('SessionMonitor', () => {
       monitor.destroy();
       monitor.emit('state:changed', {});
       expect(fn).not.toHaveBeenCalled();
+    });
+
+    it('does not poll when pollingDisabled is true', async () => {
+      mockFetchAccountUsage.mockResolvedValue(makeSnapshotWithPercent(50));
+      monitor = new SessionMonitor({ pollingDisabled: true });
+
+      monitor.start();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(mockFetchAccountUsage).not.toHaveBeenCalled();
     });
   });
 });

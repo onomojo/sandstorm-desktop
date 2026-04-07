@@ -116,25 +116,35 @@ export interface RateLimitState {
   reason: string | null;
 }
 
-export interface AccountUsage {
-  used_tokens: number;
-  limit_tokens: number;
+export interface UsageBlock {
   percent: number;
-  reset_at: string | null;
-  reset_in: string | null;
-  subscription_type: string | null;
-  rate_limit_tier: string | null;
+  resetsAt: string;
+}
+
+export interface UsageSnapshot {
+  session: UsageBlock | null;
+  weekAll: UsageBlock | null;
+  weekSonnet: UsageBlock | null;
+  extraUsage: { enabled: boolean };
+  capturedAt: string;
+  status: 'ok' | 'rate_limited' | 'at_limit' | 'auth_expired' | 'parse_error';
 }
 
 export type ThresholdLevel = 'normal' | 'warning' | 'critical' | 'limit' | 'over_limit';
 
+export type PollMode = 'normal' | 'at_limit' | 'rate_limited' | 'error';
+
 export interface SessionMonitorState {
-  usage: AccountUsage | null;
+  usage: UsageSnapshot | null;
   level: ThresholdLevel;
   stale: boolean;
   halted: boolean;
   lastPollAt: string | null;
   consecutiveFailures: number;
+  pollMode: PollMode;
+  nextPollAt: string | null;
+  idle: boolean;
+  tmuxAvailable: boolean | null;
 }
 
 export interface SessionMonitorSettings {
@@ -144,6 +154,8 @@ export interface SessionMonitorSettings {
   autoHaltEnabled: boolean;
   autoResumeAfterReset: boolean;
   pollIntervalMs: number;
+  idleTimeoutMs: number;
+  pollingDisabled: boolean;
 }
 
 export interface PortMapping {
@@ -237,7 +249,7 @@ interface AppState {
   // Token usage
   globalTokenUsage: GlobalTokenUsage | null;
   rateLimitState: RateLimitState | null;
-  accountUsage: AccountUsage | null;
+  accountUsage: UsageSnapshot | null;
 
   // Stale workspaces
   staleWorkspaces: StaleWorkspace[];
@@ -381,7 +393,7 @@ declare global {
         tokenUsage: (stackId: string) => Promise<TokenUsageStats>;
         globalTokenUsage: () => Promise<GlobalTokenUsage>;
         rateLimit: () => Promise<RateLimitState>;
-        accountUsage: () => Promise<AccountUsage | null>;
+        accountUsage: () => Promise<UsageSnapshot | null>;
         outerClaudeTokens: () => Promise<OuterClaudeTokenUsage[]>;
       };
       runtime: {
@@ -664,11 +676,11 @@ export const useAppStore = create<AppState>((set, get) => ({
 
       set({ stackMetrics: metrics });
 
-      // Also refresh token usage, rate limit state, and account usage in parallel
+      // Also refresh token usage and rate limit state in parallel
+      // (account usage is now handled by the session monitor's polling state machine)
       await Promise.all([
         get().refreshTokenUsage(),
         get().refreshRateLimitState(),
-        get().refreshAccountUsage(),
       ]);
     } catch {
       // Metrics refresh failure is non-fatal
