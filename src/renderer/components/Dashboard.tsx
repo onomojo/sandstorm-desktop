@@ -5,6 +5,7 @@ import { StackTableRow } from './StackTableRow';
 import { TicketView } from './TicketView';
 import { UninitializedProject } from './UninitializedProject';
 import { MigrationModal } from './MigrationModal';
+import { ComposeSetupModal } from './ComposeSetupModal';
 import { AgentSession } from './AgentSession';
 import { AuthIndicator } from './AuthIndicator';
 import { ProjectContext } from './ProjectContext';
@@ -289,7 +290,7 @@ export function Dashboard() {
   const project = activeProject();
 
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>('active');
-  const [projectInitialized, setProjectInitialized] = useState<boolean | null>(null);
+  const [projectInitState, setProjectInitState] = useState<'uninitialized' | 'partial' | 'full' | null>(null);
   const [migrationState, setMigrationState] = useState<{
     needsMigration: boolean;
     missingVerifyScript: boolean;
@@ -297,6 +298,7 @@ export function Dashboard() {
     missingSpecQualityGate: boolean;
   } | null>(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
+  const [showComposeSetup, setShowComposeSetup] = useState(false);
   const [showContext, setShowContext] = useState(false);
   const [viewMode, _setViewMode] = useState<'cards' | 'table'>(() => {
     const saved = localStorage.getItem('sandstorm-view-mode');
@@ -321,16 +323,23 @@ export function Dashboard() {
 
   useEffect(() => {
     if (!project) {
-      setProjectInitialized(null);
+      setProjectInitState(null);
       setMigrationState(null);
       return;
     }
     let cancelled = false;
-    window.sandstorm.projects.checkInit(project.directory).then((ok) => {
+    window.sandstorm.projects.checkInit(project.directory).then((result) => {
       if (cancelled) return;
-      setProjectInitialized(ok);
-      // If initialized, check if migration is needed
-      if (ok) {
+      setProjectInitState(result.state);
+
+      // Partially initialized — show compose setup modal
+      if (result.state === 'partial') {
+        setShowComposeSetup(true);
+        return;
+      }
+
+      // Fully initialized — check if migration is needed
+      if (result.state === 'full') {
         window.sandstorm.projects.checkMigration(project.directory).then((migration) => {
           if (!cancelled) {
             setMigrationState(migration.needsMigration ? {
@@ -388,7 +397,7 @@ export function Dashboard() {
   const claudeTabId = project ? `project-${project.id}` : 'all';
 
   // If we have a selected project that isn't initialized, show that state
-  if (project && projectInitialized === false) {
+  if (project && projectInitState === 'uninitialized') {
     return (
       <div className="h-full flex flex-col">
         <div className="flex items-center justify-between px-6 py-5 border-b border-sandstorm-border shrink-0">
@@ -583,6 +592,21 @@ export function Dashboard() {
             )}
           </div>
           {dashboardTab === 'active' && <StaleWorkspaces />}
+          {/* Partial init banner */}
+          {projectInitState === 'partial' && project && (
+            <div className="mx-4 mt-2 mb-1 flex items-center justify-between bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2" data-testid="partial-init-banner">
+              <span className="text-xs text-amber-400">
+                Compose setup incomplete — stacks cannot spin up until configured.
+              </span>
+              <button
+                onClick={() => setShowComposeSetup(true)}
+                className="text-xs font-medium text-sandstorm-accent hover:text-sandstorm-accent-hover transition-colors ml-3 shrink-0"
+                data-testid="compose-setup-btn"
+              >
+                Set Up
+              </button>
+            </div>
+          )}
           <div className="flex-1 overflow-y-auto min-h-0">
           {dashboardTab === 'active' ? (
             stacks.length === 0 ? (
@@ -680,6 +704,30 @@ export function Dashboard() {
             setMigrationState(null);
           }}
           onDismiss={() => setShowMigrationModal(false)}
+        />
+      )}
+
+      {/* Compose setup modal */}
+      {showComposeSetup && project && (
+        <ComposeSetupModal
+          projectDir={project.directory}
+          onComplete={() => {
+            setShowComposeSetup(false);
+            setProjectInitState('full');
+            // Now check for migration needs
+            window.sandstorm.projects.checkMigration(project.directory).then((migration) => {
+              if (migration.needsMigration) {
+                setMigrationState({
+                  needsMigration: true,
+                  missingVerifyScript: migration.missingVerifyScript ?? false,
+                  missingServiceLabels: migration.missingServiceLabels ?? false,
+                  missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
+                });
+                setShowMigrationModal(true);
+              }
+            });
+          }}
+          onDismiss={() => setShowComposeSetup(false)}
         />
       )}
     </div>

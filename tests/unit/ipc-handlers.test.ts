@@ -494,40 +494,40 @@ describe('IPC Handlers', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       });
 
-      it('returns true when .sandstorm/config and docker-compose.yml exist', async () => {
+      it('returns full when .sandstorm/config and docker-compose.yml exist', async () => {
         const sandstormDir = path.join(tmpDir, '.sandstorm');
         fs.mkdirSync(sandstormDir, { recursive: true });
         fs.writeFileSync(path.join(sandstormDir, 'config'), 'PROJECT_NAME=test');
         fs.writeFileSync(path.join(sandstormDir, 'docker-compose.yml'), 'services: {}');
 
         const result = await invokeHandler('projects:checkInit', tmpDir);
-        expect(result).toBe(true);
+        expect(result).toEqual({ state: 'full' });
       });
 
-      it('returns false when .sandstorm/config is missing', async () => {
+      it('returns uninitialized when .sandstorm/config is missing', async () => {
         const sandstormDir = path.join(tmpDir, '.sandstorm');
         fs.mkdirSync(sandstormDir, { recursive: true });
         fs.writeFileSync(path.join(sandstormDir, 'docker-compose.yml'), 'services: {}');
 
         const result = await invokeHandler('projects:checkInit', tmpDir);
-        expect(result).toBe(false);
+        expect(result).toEqual({ state: 'uninitialized' });
       });
 
-      it('returns true when .sandstorm/config exists without docker-compose.yml (regression #187)', async () => {
+      it('returns partial when .sandstorm/config exists without docker-compose.yml (#192)', async () => {
         // Projects initialized via CLI may only have .sandstorm/config; the compose
-        // file lives at the project root. The config file alone is sufficient proof
-        // of initialization.
+        // file lives at the project root. This is now detected as a partially
+        // initialized state that needs compose setup.
         const sandstormDir = path.join(tmpDir, '.sandstorm');
         fs.mkdirSync(sandstormDir, { recursive: true });
         fs.writeFileSync(path.join(sandstormDir, 'config'), 'PROJECT_NAME=test\nCOMPOSE_FILE=docker-compose.yml');
 
         const result = await invokeHandler('projects:checkInit', tmpDir);
-        expect(result).toBe(true);
+        expect(result).toEqual({ state: 'partial' });
       });
 
-      it('returns false for non-existent directory', async () => {
+      it('returns uninitialized for non-existent directory', async () => {
         const result = await invokeHandler('projects:checkInit', '/nonexistent/path');
-        expect(result).toBe(false);
+        expect(result).toEqual({ state: 'uninitialized' });
       });
     });
 
@@ -853,6 +853,8 @@ describe('IPC Handlers', () => {
       'projects:checkMigration',
       'projects:autoDetectVerify',
       'projects:saveMigration',
+      'projects:generateCompose',
+      'projects:saveComposeSetup',
       'stacks:list',
       'stacks:get',
       'stacks:create',

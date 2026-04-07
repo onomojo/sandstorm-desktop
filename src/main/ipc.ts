@@ -26,6 +26,14 @@ import {
 } from './custom-context';
 import { migrateNetworkOverrides } from './network-migration';
 import {
+  checkInitState,
+  findProjectComposeFile,
+  readComposeFileFromConfig,
+  generateSandstormCompose,
+  saveComposeSetup,
+  validateComposeYaml,
+} from './compose-generator';
+import {
   getSpecQualityGate,
   saveSpecQualityGate,
   isSpecQualityGateMissing,
@@ -178,20 +186,17 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('projects:checkInit', async (_event, directory: string) => {
     try {
-      const sandstormDir = path.join(directory, '.sandstorm');
-      const configPath = path.join(sandstormDir, 'config');
-      const composePath = path.join(sandstormDir, 'docker-compose.yml');
-      const isInitialized = fs.existsSync(configPath);
+      const state = checkInitState(directory);
 
-      // Auto-sync skills if project is initialized but skills are missing
-      if (isInitialized) {
+      // Auto-sync skills if project is at least partially initialized
+      if (state !== 'uninitialized') {
         syncSkillsToProject(directory, cliDir);
       }
 
-      return isInitialized;
+      return { state };
     } catch {
       // Directory not accessible - treat as uninitialized
-      return false;
+      return { state: 'uninitialized' as const };
     }
   });
 
@@ -446,6 +451,50 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         const msg = err instanceof Error ? err.message : String(err);
         return { success: false, error: msg };
       }
+    },
+  );
+
+  // --- Compose Setup ---
+
+  ipcMain.handle('projects:generateCompose', async (_event, directory: string) => {
+    try {
+      const configComposeFile = readComposeFileFromConfig(directory);
+      const composeFile = findProjectComposeFile(directory, configComposeFile);
+
+      if (!composeFile) {
+        return {
+          success: false,
+          error: 'This project requires a docker-compose.yml file. Sandstorm cannot manage stacks without one.',
+          noProjectCompose: true,
+        };
+      }
+
+      const result = generateSandstormCompose(directory, composeFile);
+      return {
+        success: true,
+        yaml: result.yaml,
+        config: result.config,
+        composeFile: result.analysis.composeFile,
+        services: result.analysis.services.map((s) => ({
+          name: s.name,
+          description: s.description,
+          ports: s.ports,
+        })),
+      };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { success: false, error: msg };
+    }
+  });
+
+  ipcMain.handle(
+    'projects:saveComposeSetup',
+    async (_event, directory: string, composeYaml: string, composeFile: string) => {
+      const validation = validateComposeYaml(composeYaml);
+      if (!validation.valid) {
+        return { success: false, error: validation.error };
+      }
+      return saveComposeSetup(directory, composeYaml, true, composeFile);
     },
   );
 
