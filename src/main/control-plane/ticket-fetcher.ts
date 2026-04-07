@@ -2,6 +2,22 @@ import { execFile } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 
+export type ScriptStatus = 'ok' | 'missing' | 'not_executable';
+
+/**
+ * Check whether the project's fetch-ticket.sh script exists and is executable.
+ */
+export function getScriptStatus(projectDir: string): ScriptStatus {
+  const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
+  if (!fs.existsSync(scriptPath)) return 'missing';
+  try {
+    fs.accessSync(scriptPath, fs.constants.X_OK);
+    return 'ok';
+  } catch {
+    return 'not_executable';
+  }
+}
+
 /**
  * Fetch ticket context by running the project's `.sandstorm/scripts/fetch-ticket.sh` script.
  * Returns the script's stdout (standardized markdown), or null if the script

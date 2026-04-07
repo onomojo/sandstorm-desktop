@@ -5,7 +5,7 @@
  */
 
 import { stackManager, agentBackend } from '../index';
-import { fetchTicketContext } from '../control-plane/ticket-fetcher';
+import { fetchTicketContext, getScriptStatus } from '../control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../spec-quality-gate';
 
 export interface ToolDefinition {
@@ -282,10 +282,30 @@ async function handleSpecCheck(
   ticketId: string,
   projectDir: string
 ): Promise<unknown> {
+  const scriptStatus = getScriptStatus(projectDir);
+  if (scriptStatus === 'missing') {
+    return {
+      passed: false,
+      reason:
+        "fetch-ticket.sh not found at .sandstorm/scripts/fetch-ticket.sh. " +
+        "Run 'sandstorm init' to auto-generate it for your ticket system (Jira or GitHub Issues), " +
+        "or create it manually: the script receives a ticket ID as $1 and must output the ticket body to stdout.",
+    };
+  }
+  if (scriptStatus === 'not_executable') {
+    return {
+      passed: false,
+      reason:
+        "fetch-ticket.sh exists but is not executable. " +
+        "Fix with: chmod +x .sandstorm/scripts/fetch-ticket.sh",
+    };
+  }
+
   const ticketBody = await fetchTicketContext(ticketId, projectDir);
   if (!ticketBody) {
     return {
-      error: `Could not fetch ticket "${ticketId}". Ensure .sandstorm/scripts/fetch-ticket.sh exists and is executable.`,
+      passed: false,
+      reason: `fetch-ticket.sh ran but returned no output for ticket "${ticketId}". Check the script's implementation and that the ticket ID is correct.`,
     };
   }
 
@@ -344,10 +364,30 @@ async function handleSpecRefine(
   projectDir: string,
   userAnswers?: string
 ): Promise<unknown> {
+  const scriptStatus = getScriptStatus(projectDir);
+  if (scriptStatus === 'missing') {
+    return {
+      passed: false,
+      reason:
+        "fetch-ticket.sh not found at .sandstorm/scripts/fetch-ticket.sh. " +
+        "Run 'sandstorm init' to auto-generate it for your ticket system (Jira or GitHub Issues), " +
+        "or create it manually: the script receives a ticket ID as $1 and must output the ticket body to stdout.",
+    };
+  }
+  if (scriptStatus === 'not_executable') {
+    return {
+      passed: false,
+      reason:
+        "fetch-ticket.sh exists but is not executable. " +
+        "Fix with: chmod +x .sandstorm/scripts/fetch-ticket.sh",
+    };
+  }
+
   const ticketBody = await fetchTicketContext(ticketId, projectDir);
   if (!ticketBody) {
     return {
-      error: `Could not fetch ticket "${ticketId}". Ensure .sandstorm/scripts/fetch-ticket.sh exists and is executable.`,
+      passed: false,
+      reason: `fetch-ticket.sh ran but returned no output for ticket "${ticketId}". Check the script's implementation and that the ticket ID is correct.`,
     };
   }
 

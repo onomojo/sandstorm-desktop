@@ -528,6 +528,55 @@ describe('StackManager', () => {
         expect(stack!.error).toContain('Task dispatch failed after retry');
       }, { timeout: 25000 });
     }, 30000);
+
+    it('propagates forceBypass to dispatchTask when forceBypass is true', async () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const capturedOpts: Array<{ gateApproved?: boolean; forceBypass?: boolean }> = [];
+      vi.spyOn(manager, 'dispatchTask').mockImplementation(async (_stackId, _prompt, _model, opts) => {
+        capturedOpts.push(opts ?? {});
+        return { id: 1, stack_id: 'bypass-prop', prompt: 'task', model: null, status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null };
+      });
+
+      manager.createStack({
+        name: 'bypass-prop',
+        projectDir: tmpDir,
+        runtime: 'docker',
+        task: 'Fix issue #42',
+        forceBypass: true,
+      });
+
+      await vi.waitFor(() => {
+        expect(capturedOpts.length).toBeGreaterThan(0);
+      }, { timeout: 20000 });
+
+      expect(capturedOpts[0].forceBypass).toBe(true);
+    }, 25000);
+
+    it('propagates gateApproved to dispatchTask when gateApproved is true', async () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const capturedOpts: Array<{ gateApproved?: boolean; forceBypass?: boolean }> = [];
+      vi.spyOn(manager, 'dispatchTask').mockImplementation(async (_stackId, _prompt, _model, opts) => {
+        capturedOpts.push(opts ?? {});
+        return { id: 1, stack_id: 'gate-prop', prompt: 'task', model: null, status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null };
+      });
+
+      manager.createStack({
+        name: 'gate-prop',
+        projectDir: tmpDir,
+        runtime: 'docker',
+        task: 'do work',
+        ticket: 'PROJ-123',
+        gateApproved: true,
+      });
+
+      await vi.waitFor(() => {
+        expect(capturedOpts.length).toBeGreaterThan(0);
+      }, { timeout: 20000 });
+
+      expect(capturedOpts[0].gateApproved).toBe(true);
+    }, 25000);
   });
 
   describe('stopStack', () => {

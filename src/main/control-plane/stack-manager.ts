@@ -353,15 +353,18 @@ export class StackManager {
       this.registry.updateStackStatus(opts.name, 'up');
       this.notifyUpdate();
 
-      // If a task was provided, dispatch it (with one retry on failure)
+      // If a task was provided, dispatch it (with one retry on failure).
+      // Propagate forceBypass/gateApproved so the inner dispatchTask call
+      // doesn't re-run the spec gate check that already passed in createStack.
       if (opts.task) {
+        const gateOpts = { gateApproved: opts.gateApproved, forceBypass: opts.forceBypass };
         try {
-          await this.dispatchTask(opts.name, opts.task, opts.model);
+          await this.dispatchTask(opts.name, opts.task, opts.model, gateOpts);
         } catch (firstErr) {
           // Wait and retry once — the container may need more time
           await new Promise((resolve) => setTimeout(resolve, 10000));
           try {
-            await this.dispatchTask(opts.name, opts.task, opts.model);
+            await this.dispatchTask(opts.name, opts.task, opts.model, gateOpts);
           } catch (retryErr) {
             const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
             this.registry.updateStackStatus(opts.name, 'failed', `Task dispatch failed after retry: ${msg}`);
