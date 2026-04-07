@@ -65,6 +65,7 @@ List every assumption the agent would make if it started now.
  */
 export function getSpecQualityGate(projectDir: string): string {
   const filePath = path.join(projectDir, '.sandstorm', QUALITY_GATE_FILE);
+  console.log(`[sandstorm] getSpecQualityGate: checking "${filePath}"`);
   if (!fs.existsSync(filePath)) return '';
   return fs.readFileSync(filePath, 'utf-8');
 }
