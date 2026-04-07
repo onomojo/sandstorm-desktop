@@ -258,6 +258,37 @@ describe('Dashboard', () => {
     expect(document.body.style.userSelect).toBe('');
   });
 
+  it('shows outer Claude token usage when project is selected', async () => {
+    api.stats.outerClaudeTokens.mockResolvedValue([
+      { project_dir: '/a', input_tokens: 10000, output_tokens: 5000 },
+    ]);
+    api.projects.checkInit.mockResolvedValue({ state: 'full' });
+
+    useAppStore.setState({
+      projects: [{ id: 1, name: 'proj-a', directory: '/a', added_at: '' }],
+      activeProjectId: 1,
+      stacks: [],
+    });
+
+    render(<Dashboard />);
+    // Wait for async fetch
+    const el = await screen.findByTestId('outer-claude-tokens');
+    expect(el).toBeDefined();
+    expect(el.textContent).toContain('Orchestrator');
+    expect(el.textContent).toContain('15.0k');
+  });
+
+  it('does not show outer Claude tokens when no project selected', () => {
+    useAppStore.setState({
+      projects: [],
+      activeProjectId: null,
+      stacks: [],
+    });
+
+    render(<Dashboard />);
+    expect(screen.queryByTestId('outer-claude-tokens')).toBeNull();
+  });
+
   it('filters stacks by active project', () => {
     useAppStore.setState({
       projects: [

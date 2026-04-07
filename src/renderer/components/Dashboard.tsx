@@ -1,5 +1,5 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { useAppStore, StackHistoryRecord, GlobalTokenUsage, Task } from '../store';
+import { useAppStore, StackHistoryRecord, GlobalTokenUsage, Task, OuterClaudeTokenUsage } from '../store';
 import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
 import { TicketView } from './TicketView';
@@ -283,6 +283,37 @@ function TokenUsageSummary({ usage }: { usage: GlobalTokenUsage }) {
   );
 }
 
+function OuterClaudeTokensSummary({ projectDir }: { projectDir: string }) {
+  const [usage, setUsage] = useState<OuterClaudeTokenUsage | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    window.sandstorm.stats.outerClaudeTokens().then((all) => {
+      if (cancelled) return;
+      const match = all.find((u: OuterClaudeTokenUsage) => u.project_dir === projectDir);
+      setUsage(match ?? null);
+    }).catch(() => {});
+    return () => { cancelled = true; };
+  }, [projectDir]);
+
+  if (!usage || (usage.input_tokens === 0 && usage.output_tokens === 0)) return null;
+
+  const total = usage.input_tokens + usage.output_tokens;
+  return (
+    <div className="flex items-center gap-2 text-[11px] text-sandstorm-muted" data-testid="outer-claude-tokens">
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
+        <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"/>
+      </svg>
+      <span className="tabular-nums" title={`Orchestrator — Input: ${usage.input_tokens.toLocaleString()} / Output: ${usage.output_tokens.toLocaleString()}`}>
+        Orchestrator: {formatTokenCount(total)}
+      </span>
+      <span className="text-sandstorm-muted/50">
+        ({formatTokenCount(usage.input_tokens)} in / {formatTokenCount(usage.output_tokens)} out)
+      </span>
+    </div>
+  );
+}
+
 export function Dashboard() {
   const { setShowNewStackDialog, setShowModelSettings, showModelSettings, filteredStacks, filteredStackHistory, activeProject, globalTokenUsage } = useAppStore();
   const stacks = filteredStacks();
@@ -538,6 +569,7 @@ export function Dashboard() {
               </span>
             )}
             {globalTokenUsage && <TokenUsageSummary usage={globalTokenUsage} />}
+            {project && <OuterClaudeTokensSummary projectDir={project.directory} />}
             {dashboardTab === 'active' && (
               <div className="ml-auto flex items-center gap-2">
                 {/* Stack View / Ticket View toggle */}

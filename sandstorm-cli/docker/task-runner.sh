@@ -29,13 +29,14 @@ log_loop() {
 }
 
 # Run the claude CLI with streaming output.
-# Args: $1 = prompt file path, $2 = raw log path, $3 = task log path, $4 = phase (execution|review), $5... = extra claude args
+# Args: $1 = prompt file path, $2 = raw log path, $3 = task log path, $4 = phase (execution|review|verify), $5 = iteration (1-based), $6... = extra claude args
 run_claude() {
   local prompt_file="$1"
   local raw_log="${2:-/tmp/claude-raw.log}"
   local task_log="${3:-/tmp/claude-task.log}"
   local phase="${4:-execution}"
-  shift 4 2>/dev/null || shift $#
+  local iteration="${5:-1}"
+  shift 5 2>/dev/null || shift $#
   local extra_args=("$@")
 
   local token_file="/tmp/claude-tokens-${phase}"
@@ -49,7 +50,7 @@ run_claude() {
         "${extra_args[@]}" \
         --include-partial-messages --print -p - 2>&1 \
     | stdbuf -o0 tee -a "$raw_log" \
-    | stdbuf -o0 tee >(bash "$counter_script" "$token_file") \
+    | stdbuf -o0 tee >(bash "$counter_script" "$token_file" "$iteration" "$phase") \
     | jq -rj --unbuffered '
         if .type == "stream_event" then
           if .event.type == "content_block_delta" and .event.delta.type == "text_delta" then
@@ -110,8 +111,10 @@ check_for_diff() {
 # Run the review agent with a fresh context.
 # Writes review output to /tmp/claude-review-output.txt
 # Returns 0 if review passed, 1 if review failed.
+# Args: $1 = original prompt, $2 = iteration number (1-based)
 run_review() {
   local original_prompt="$1"
+  local iteration="${2:-1}"
 
   # Capture diffs to files to avoid bash variable size limits and special char mangling
   (cd /app && git diff HEAD 2>/dev/null) > /tmp/claude-review-diff.txt
@@ -149,7 +152,7 @@ run_review() {
   log_loop "Starting review agent with fresh context..."
 
   # Run claude with separate log files to preserve execution agent logs
-  run_claude "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log review "${MODEL_ARGS[@]}"
+  run_claude "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log review "$iteration" "${MODEL_ARGS[@]}"
   local review_exit=$?
 
   rm -f "$review_prompt_file" /tmp/claude-review-diff.txt /tmp/claude-review-untracked.txt
@@ -304,7 +307,7 @@ while true; do
 
     log_loop "Starting initial execution pass..."
     echo "execution_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
-    run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution "${MODEL_ARGS[@]}"
+    run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${MODEL_ARGS[@]}"
     EXIT_CODE=${PIPESTATUS[0]}
     echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
 
@@ -378,7 +381,7 @@ while true; do
         echo "review_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
 
         # Run the review agent
-        if run_review "$ORIGINAL_PROMPT"; then
+        if run_review "$ORIGINAL_PROMPT" "$TOTAL_REVIEW_ITERATIONS"; then
           echo "review_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           # Save numbered review verdict
           echo "REVIEW_PASS" > "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt"
@@ -411,7 +414,7 @@ while true; do
             echo "Fix all listed issues. Do not introduce new problems."
           } > "$local_fix_prompt"
 
-          run_claude "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log execution "${MODEL_ARGS[@]}"
+          run_claude "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log execution "$TOTAL_REVIEW_ITERATIONS" "${MODEL_ARGS[@]}"
           fix_exit=$?
           echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           rm -f "$local_fix_prompt"
@@ -477,7 +480,7 @@ while true; do
           echo "Fix the verification failures (test failures, type errors, or build errors). Do not introduce new problems."
         } > "$local_verify_fix"
 
-        run_claude "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log execution "${MODEL_ARGS[@]}"
+        run_claude "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log execution "$((TOTAL_REVIEW_ITERATIONS + 1))" "${MODEL_ARGS[@]}"
         verify_fix_exit=$?
         echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
         rm -f "$local_verify_fix"

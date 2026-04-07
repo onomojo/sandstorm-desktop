@@ -18,6 +18,13 @@ export interface PhaseTokenTotals {
   output_tokens: number;
 }
 
+export interface TokenStep {
+  iteration: number;
+  phase: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
 /**
  * Parse phase token totals from a file written by token-counter.sh.
  * Each line is a JSON object: {"in":N,"out":N}
@@ -39,6 +46,58 @@ export function parsePhaseTokenTotals(output: string): PhaseTokenTotals {
   }
 
   return { input_tokens, output_tokens };
+}
+
+/**
+ * Parse per-step token data from files written by token-counter.sh.
+ * Each line may include iteration and phase metadata:
+ *   {"in":N,"out":N,"iter":I,"phase":"P"}
+ * Lines without metadata are treated as iteration 1 with the given default phase.
+ *
+ * Returns individual steps (one per API turn) grouped by iteration and phase.
+ * Multiple API turns within the same iteration+phase are summed into one step.
+ */
+export function parsePhaseTokenSteps(
+  executionOutput: string,
+  reviewOutput: string
+): TokenStep[] {
+  const stepMap = new Map<string, TokenStep>();
+
+  function processLines(output: string, defaultPhase: string): void {
+    for (const line of output.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        const parsed = JSON.parse(line);
+        const iteration = parsed.iter ?? 1;
+        const phase = parsed.phase ?? defaultPhase;
+        const inTokens = parsed.in ?? 0;
+        const outTokens = parsed.out ?? 0;
+
+        if (inTokens === 0 && outTokens === 0) continue;
+
+        const key = `${iteration}:${phase}`;
+        const existing = stepMap.get(key);
+        if (existing) {
+          existing.input_tokens += inTokens;
+          existing.output_tokens += outTokens;
+        } else {
+          stepMap.set(key, { iteration, phase, input_tokens: inTokens, output_tokens: outTokens });
+        }
+      } catch {
+        // Not JSON — skip
+      }
+    }
+  }
+
+  processLines(executionOutput, 'execution');
+  processLines(reviewOutput, 'review');
+
+  // Sort by iteration then phase order (execution < review < verify)
+  const phaseOrder: Record<string, number> = { execution: 0, review: 1, verify: 2 };
+  return Array.from(stepMap.values()).sort((a, b) => {
+    if (a.iteration !== b.iteration) return a.iteration - b.iteration;
+    return (phaseOrder[a.phase] ?? 99) - (phaseOrder[b.phase] ?? 99);
+  });
 }
 
 /**

@@ -24,6 +24,9 @@ import {
 
 const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
+/** Callback for reporting outer Claude token usage per project */
+export type TokenUsageCallback = (projectDir: string, inputTokens: number, outputTokens: number) => void;
+
 interface ClaudeSession {
   tabId: string;
   process: ChildProcess | null;
@@ -69,6 +72,7 @@ export class ClaudeBackend implements AgentBackend {
   private logStream: fs.WriteStream | null = null;
   private timeoutMs: number;
   private modelResolver?: (projectDir: string) => string;
+  private tokenUsageCallback?: TokenUsageCallback;
 
   constructor(
     timeoutMs?: number,
@@ -78,6 +82,11 @@ export class ClaudeBackend implements AgentBackend {
     this.timeoutMs = timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.modelResolver = modelResolver;
     this.initLogger();
+  }
+
+  /** Register a callback to receive outer Claude token usage reports per project */
+  setTokenUsageCallback(callback: TokenUsageCallback): void {
+    this.tokenUsageCallback = callback;
   }
 
   private initLogger(): void {
@@ -658,6 +667,15 @@ rl.on('line', async (line) => {
           if (parsed.type === 'result') {
             if (session.watchdog) clearTimeout(session.watchdog);
             session.watchdog = null;
+
+            // Report token usage for this turn
+            if (parsed.usage && session.projectDir && this.tokenUsageCallback) {
+              const inTokens = parsed.usage.input_tokens ?? 0;
+              const outTokens = parsed.usage.output_tokens ?? 0;
+              if (inTokens > 0 || outTokens > 0) {
+                this.tokenUsageCallback(session.projectDir, inTokens, outTokens);
+              }
+            }
 
             if (session.fullResponse) {
               session.messages.push({ role: 'assistant', content: session.fullResponse });

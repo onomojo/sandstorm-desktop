@@ -118,6 +118,9 @@ async function initializeApp(): Promise<void> {
     undefined,
     (projectDir) => registry.getEffectiveModels(projectDir).outer_model
   );
+  agentBackend.setTokenUsageCallback?.((projectDir: string, inputTokens: number, outputTokens: number) => {
+    registry.addProjectTokenUsage(projectDir, inputTokens, outputTokens);
+  });
   await agentBackend.initialize();
 
   // Listen for task events to send to renderer

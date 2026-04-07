@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAppStore, Task, StackMetrics } from '../store';
+import { useAppStore, Task, TaskTokenStep, StackMetrics } from '../store';
 import { ServiceList } from './ServiceList';
 import { TaskOutput } from './TaskOutput';
 import { DiffViewer } from './DiffViewer';
@@ -302,55 +302,7 @@ export function StackDetail({
             ) : (
               <div className="space-y-2">
                 {tasks.map((task) => (
-                  <div
-                    key={task.id}
-                    className="bg-sandstorm-surface border border-sandstorm-border rounded-lg p-3 animate-fade-in"
-                  >
-                    <div className="flex items-center gap-2 text-xs">
-                      <span
-                        className={`w-1.5 h-1.5 rounded-full shrink-0 ${
-                          task.status === 'completed'
-                            ? 'bg-emerald-400'
-                            : task.status === 'failed'
-                              ? 'bg-red-400'
-                              : 'bg-blue-400 animate-pulse'
-                        }`}
-                      />
-                      <span className={
-                        task.status === 'completed'
-                          ? 'text-emerald-400'
-                          : task.status === 'failed'
-                            ? 'text-red-400'
-                            : 'text-blue-400'
-                      }>
-                        {task.status === 'completed'
-                          ? `Completed (exit ${task.exit_code})`
-                          : task.status === 'failed'
-                            ? `Failed (exit ${task.exit_code})`
-                            : 'Running...'}
-                      </span>
-                      {(task.resolved_model || task.model) && (
-                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-sandstorm-muted">
-                          {task.resolved_model
-                            ? task.model
-                              ? task.resolved_model
-                              : `auto \u2192 ${task.resolved_model}`
-                            : task.model}
-                        </span>
-                      )}
-                      {task.status !== 'running' && (task.review_iterations > 0 || task.verify_retries > 0) && (
-                        <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-sandstorm-muted tabular-nums" title="Review iterations / Verify retries">
-                          {task.review_iterations} review{task.review_iterations !== 1 ? 's' : ''}, {task.verify_retries} retr{task.verify_retries !== 1 ? 'ies' : 'y'}
-                        </span>
-                      )}
-                      <span className="text-sandstorm-muted text-[10px] ml-auto tabular-nums">
-                        {new Date(task.started_at).toLocaleString()}
-                      </span>
-                    </div>
-                    <p className="mt-1.5 text-xs text-sandstorm-text-secondary leading-relaxed">
-                      {task.prompt}
-                    </p>
-                  </div>
+                  <TaskHistoryCard key={task.id} task={task} />
                 ))}
               </div>
             )}
@@ -417,6 +369,127 @@ export function StackDetail({
           </FooterButton>
         </div>
       </div>
+    </div>
+  );
+}
+
+function TaskHistoryCard({ task }: { task: Task }) {
+  const [expanded, setExpanded] = useState(false);
+  const [tokenSteps, setTokenSteps] = useState<TaskTokenStep[]>([]);
+  const [stepsLoaded, setStepsLoaded] = useState(false);
+
+  const hasTokens = task.input_tokens > 0 || task.output_tokens > 0;
+
+  const handleToggle = async () => {
+    if (!expanded && !stepsLoaded) {
+      try {
+        const steps = await window.sandstorm.tasks.tokenSteps(task.id);
+        setTokenSteps(steps);
+      } catch {
+        // Best effort
+      }
+      setStepsLoaded(true);
+    }
+    setExpanded(!expanded);
+  };
+
+  // Group steps by iteration
+  const byIteration = new Map<number, TaskTokenStep[]>();
+  for (const step of tokenSteps) {
+    const existing = byIteration.get(step.iteration) || [];
+    existing.push(step);
+    byIteration.set(step.iteration, existing);
+  }
+
+  return (
+    <div className="bg-sandstorm-surface border border-sandstorm-border rounded-lg p-3 animate-fade-in">
+      <div className="flex items-center gap-2 text-xs">
+        <span
+          className={`w-1.5 h-1.5 rounded-full shrink-0 ${
+            task.status === 'completed'
+              ? 'bg-emerald-400'
+              : task.status === 'failed'
+                ? 'bg-red-400'
+                : 'bg-blue-400 animate-pulse'
+          }`}
+        />
+        <span className={
+          task.status === 'completed'
+            ? 'text-emerald-400'
+            : task.status === 'failed'
+              ? 'text-red-400'
+              : 'text-blue-400'
+        }>
+          {task.status === 'completed'
+            ? `Completed (exit ${task.exit_code})`
+            : task.status === 'failed'
+              ? `Failed (exit ${task.exit_code})`
+              : 'Running...'}
+        </span>
+        {(task.resolved_model || task.model) && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-sandstorm-muted">
+            {task.resolved_model
+              ? task.model
+                ? task.resolved_model
+                : `auto \u2192 ${task.resolved_model}`
+              : task.model}
+          </span>
+        )}
+        {task.status !== 'running' && (task.review_iterations > 0 || task.verify_retries > 0) && (
+          <span className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-sandstorm-muted tabular-nums" title="Review iterations / Verify retries">
+            {task.review_iterations} review{task.review_iterations !== 1 ? 's' : ''}, {task.verify_retries} retr{task.verify_retries !== 1 ? 'ies' : 'y'}
+          </span>
+        )}
+        {hasTokens && (
+          <button
+            onClick={handleToggle}
+            className="text-[10px] font-medium px-1.5 py-0.5 rounded bg-sandstorm-bg border border-sandstorm-border text-sandstorm-muted hover:text-sandstorm-text-secondary hover:border-sandstorm-border-light transition-colors tabular-nums"
+            title="Click to see per-iteration token breakdown"
+            data-testid="token-breakdown-toggle"
+          >
+            {formatTokenCount(task.input_tokens + task.output_tokens)} tokens {expanded ? '\u25B4' : '\u25BE'}
+          </button>
+        )}
+        <span className="text-sandstorm-muted text-[10px] ml-auto tabular-nums">
+          {new Date(task.started_at).toLocaleString()}
+        </span>
+      </div>
+      <p className="mt-1.5 text-xs text-sandstorm-text-secondary leading-relaxed">
+        {task.prompt}
+      </p>
+      {expanded && hasTokens && (
+        <div className="mt-2 p-2 bg-sandstorm-bg rounded border border-sandstorm-border text-[10px] font-mono tabular-nums" data-testid="token-breakdown-detail">
+          {tokenSteps.length > 0 ? (
+            <div className="space-y-1.5">
+              {Array.from(byIteration.entries()).sort((a, b) => a[0] - b[0]).map(([iteration, iterSteps]) => (
+                <div key={iteration}>
+                  <div className="text-sandstorm-muted font-medium">Iteration {iteration}:</div>
+                  {iterSteps.map((step, i) => (
+                    <div key={i} className="ml-3 text-sandstorm-text-secondary">
+                      {step.phase.charAt(0).toUpperCase() + step.phase.slice(1)}: {formatTokenCount(step.input_tokens)} in / {formatTokenCount(step.output_tokens)} out
+                    </div>
+                  ))}
+                </div>
+              ))}
+              <div className="border-t border-sandstorm-border pt-1 mt-1 text-sandstorm-text font-medium">
+                Total: {formatTokenCount(task.input_tokens)} in / {formatTokenCount(task.output_tokens)} out
+              </div>
+            </div>
+          ) : (
+            <div className="space-y-0.5">
+              <div className="text-sandstorm-text-secondary">
+                Execution: {formatTokenCount(task.execution_input_tokens)} in / {formatTokenCount(task.execution_output_tokens)} out
+              </div>
+              <div className="text-sandstorm-text-secondary">
+                Review: {formatTokenCount(task.review_input_tokens)} in / {formatTokenCount(task.review_output_tokens)} out
+              </div>
+              <div className="border-t border-sandstorm-border pt-1 mt-1 text-sandstorm-text font-medium">
+                Total: {formatTokenCount(task.input_tokens)} in / {formatTokenCount(task.output_tokens)} out
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

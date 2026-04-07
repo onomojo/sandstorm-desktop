@@ -54,6 +54,7 @@ export interface SandstormAPI {
   tasks: {
     dispatch: (stackId: string, prompt: string, model?: string) => Promise<unknown>;
     list: (stackId: string) => Promise<unknown[]>;
+    tokenSteps: (taskId: number) => Promise<unknown[]>;
   };
   diff: {
     get: (stackId: string) => Promise<string>;
@@ -75,6 +76,7 @@ export interface SandstormAPI {
     globalTokenUsage: () => Promise<unknown>;
     rateLimit: () => Promise<unknown>;
     accountUsage: () => Promise<unknown>;
+    outerClaudeTokens: () => Promise<unknown[]>;
   };
   runtime: {
     available: () => Promise<{ docker: boolean; podman: boolean }>;
@@ -154,6 +156,7 @@ const api: SandstormAPI = {
     dispatch: (stackId, prompt, model?) =>
       ipcRenderer.invoke('tasks:dispatch', stackId, prompt, model),
     list: (stackId) => ipcRenderer.invoke('tasks:list', stackId),
+    tokenSteps: (taskId) => ipcRenderer.invoke('tasks:tokenSteps', taskId),
   },
   diff: {
     get: (stackId) => ipcRenderer.invoke('diff:get', stackId),
@@ -177,6 +180,7 @@ const api: SandstormAPI = {
     globalTokenUsage: () => ipcRenderer.invoke('stats:global-token-usage'),
     rateLimit: () => ipcRenderer.invoke('stats:rate-limit'),
     accountUsage: () => ipcRenderer.invoke('stats:account-usage'),
+    outerClaudeTokens: () => ipcRenderer.invoke('stats:outer-claude-tokens'),
   },
   runtime: {
     available: () => ipcRenderer.invoke('runtime:available'),

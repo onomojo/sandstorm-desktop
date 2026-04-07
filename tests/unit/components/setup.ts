@@ -37,6 +37,7 @@ export function mockSandstormApi() {
     tasks: {
       dispatch: vi.fn().mockResolvedValue({ id: 1, stack_id: 'test', prompt: '', model: null, status: 'running' }),
       list: vi.fn().mockResolvedValue([]),
+      tokenSteps: vi.fn().mockResolvedValue([]),
     },
     diff: {
       get: vi.fn().mockResolvedValue(''),
@@ -58,6 +59,7 @@ export function mockSandstormApi() {
       globalTokenUsage: vi.fn().mockResolvedValue({ total_input_tokens: 0, total_output_tokens: 0, total_tokens: 0, per_stack: [] }),
       rateLimit: vi.fn().mockResolvedValue({ active: false, reset_at: null, affected_stacks: [], reason: null }),
       accountUsage: vi.fn().mockResolvedValue(null),
+      outerClaudeTokens: vi.fn().mockResolvedValue([]),
     },
     docker: {
       status: vi.fn().mockResolvedValue({ connected: true }),
