@@ -849,6 +849,12 @@ export class StackManager {
     };
   }
 
+  // --- Workflow Progress ---
+
+  async getWorkflowProgress(stackId: string) {
+    return this.taskWatcher.getWorkflowProgress(stackId);
+  }
+
   // --- Token Usage ---
 
   getStackTokenUsage(stackId: string): TokenUsageStats {

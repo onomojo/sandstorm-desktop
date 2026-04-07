@@ -55,6 +55,7 @@ export interface SandstormAPI {
     dispatch: (stackId: string, prompt: string, model?: string) => Promise<unknown>;
     list: (stackId: string) => Promise<unknown[]>;
     tokenSteps: (taskId: number) => Promise<unknown[]>;
+    workflowProgress: (stackId: string) => Promise<unknown>;
   };
   diff: {
     get: (stackId: string) => Promise<string>;
@@ -168,6 +169,7 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tasks:dispatch', stackId, prompt, model),
     list: (stackId) => ipcRenderer.invoke('tasks:list', stackId),
     tokenSteps: (taskId) => ipcRenderer.invoke('tasks:tokenSteps', taskId),
+    workflowProgress: (stackId) => ipcRenderer.invoke('tasks:workflowProgress', stackId),
   },
   diff: {
     get: (stackId) => ipcRenderer.invoke('diff:get', stackId),

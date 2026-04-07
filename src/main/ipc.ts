@@ -552,6 +552,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return registry.getTaskTokenSteps(taskId);
   });
 
+  ipcMain.handle('tasks:workflowProgress', async (_event, stackId: string) => {
+    return stackManager.getWorkflowProgress(stackId);
+  });
+
   // --- Diff ---
 
   ipcMain.handle('diff:get', async (_event, stackId: string) => {

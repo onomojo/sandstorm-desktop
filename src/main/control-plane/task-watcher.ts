@@ -3,11 +3,24 @@ import { Registry, Task } from './registry';
 import { ContainerRuntime } from '../runtime/types';
 import { parseTokenUsage, parsePhaseTokenTotals, parsePhaseTokenSteps } from './token-parser';
 
+export interface WorkflowProgressData {
+  stackId: string;
+  currentPhase: 'execution' | 'review' | 'verify' | 'idle';
+  outerIteration: number;
+  innerIteration: number;
+  phases: Array<{ phase: string; status: 'pending' | 'running' | 'passed' | 'failed' }>;
+  steps: Array<{ phase: string; iteration: number; input_tokens: number; output_tokens: number; live: boolean }>;
+  taskPrompt: string | null;
+  startedAt: string | null;
+  model: string | null;
+}
+
 export interface TaskEvents {
   'task:started': { stackId: string; task: Task };
   'task:completed': { stackId: string; task: Task };
   'task:failed': { stackId: string; task: Task };
   'task:output': { stackId: string; taskId: number; data: string };
+  'task:workflow-progress': WorkflowProgressData;
 }
 
 /** Max consecutive exec failures before marking a task as failed */
@@ -42,6 +55,8 @@ export class TaskWatcher extends EventEmitter {
 
   /** Track active output streams for cleanup */
   private activeOutputStreams = new Map<string, AbortController>();
+  /** Track container IDs for each watched stack (for on-demand progress queries) */
+  private containerIds = new Map<string, string>();
 
   constructor(
     private registry: Registry,
@@ -79,6 +94,7 @@ export class TaskWatcher extends EventEmitter {
     this.errorCounts.set(stackId, 0);
     this.seenRunning.set(stackId, false);
     this.stalePollCounts.set(stackId, 0);
+    this.containerIds.set(stackId, containerId);
 
     this.schedulePoll(stackId, containerId, this.pollInterval);
   }
@@ -93,6 +109,7 @@ export class TaskWatcher extends EventEmitter {
     this.seenRunning.delete(stackId);
     this.stalePollCounts.delete(stackId);
     this.lastTokenPoll.delete(stackId);
+    this.containerIds.delete(stackId);
 
     // Abort any active output stream
     const controller = this.activeOutputStreams.get(stackId);
@@ -336,6 +353,135 @@ export class TaskWatcher extends EventEmitter {
   }
 
   /**
+   * Read current workflow progress from the container (phase, iterations, live tokens).
+   * Called during the token poll interval while a task is running.
+   */
+  private async readWorkflowProgress(
+    stackId: string,
+    containerId: string,
+    task: Task
+  ): Promise<WorkflowProgressData> {
+    const runtime = this.getRuntimeForStack(stackId);
+
+    // Read phase timing, iteration counts, and token files in parallel
+    const [timingResult, reviewIterResult, verifyRetryResult, execTokenResult, reviewTokenResult] = await Promise.all([
+      runtime.exec(containerId, ['cat', '/tmp/claude-phase-timing.txt']).catch(() => ({ stdout: '' })),
+      runtime.exec(containerId, ['cat', '/tmp/claude-task.review-iterations']).catch(() => ({ stdout: '' })),
+      runtime.exec(containerId, ['cat', '/tmp/claude-task.verify-retries']).catch(() => ({ stdout: '' })),
+      runtime.exec(containerId, ['cat', '/tmp/claude-tokens-execution']).catch(() => ({ stdout: '' })),
+      runtime.exec(containerId, ['cat', '/tmp/claude-tokens-review']).catch(() => ({ stdout: '' })),
+    ]);
+
+    // Parse iteration counts
+    const reviewIterations = parseInt(reviewIterResult.stdout.trim(), 10) || 0;
+    const verifyRetries = parseInt(verifyRetryResult.stdout.trim(), 10) || 0;
+
+    // Derive current phase from timing file
+    const timing: Record<string, string> = {};
+    for (const line of timingResult.stdout.trim().split('\n').filter(Boolean)) {
+      const [key, value] = line.split('=', 2);
+      if (key && value) timing[key] = value;
+    }
+
+    let currentPhase: WorkflowProgressData['currentPhase'] = 'execution';
+    const phases: WorkflowProgressData['phases'] = [];
+
+    if (timing.verify_started_at && !timing.verify_finished_at) {
+      currentPhase = 'verify';
+      phases.push({ phase: 'execution', status: 'passed' });
+      phases.push({ phase: 'review', status: 'passed' });
+      phases.push({ phase: 'verify', status: 'running' });
+    } else if (timing.review_started_at && !timing.review_finished_at) {
+      currentPhase = 'review';
+      phases.push({ phase: 'execution', status: 'passed' });
+      phases.push({ phase: 'review', status: 'running' });
+      phases.push({ phase: 'verify', status: 'pending' });
+    } else if (timing.review_finished_at && timing.verify_finished_at) {
+      // Both finished — verify failed, back to execution (outer loop retry)
+      currentPhase = 'execution';
+      phases.push({ phase: 'execution', status: 'running' });
+      phases.push({ phase: 'review', status: 'pending' });
+      phases.push({ phase: 'verify', status: 'failed' });
+    } else if (timing.review_finished_at && !timing.verify_started_at) {
+      // Review finished, verify not started — review failed, back to execution
+      currentPhase = 'execution';
+      phases.push({ phase: 'execution', status: 'running' });
+      phases.push({ phase: 'review', status: 'failed' });
+      phases.push({ phase: 'verify', status: 'pending' });
+    } else {
+      // Default: execution phase
+      phases.push({ phase: 'execution', status: 'running' });
+      phases.push({ phase: 'review', status: 'pending' });
+      phases.push({ phase: 'verify', status: 'pending' });
+    }
+
+    // Parse per-step token data
+    const tokenSteps = parsePhaseTokenSteps(execTokenResult.stdout, reviewTokenResult.stdout);
+    const steps: WorkflowProgressData['steps'] = tokenSteps.map((s) => ({
+      phase: s.phase,
+      iteration: s.iteration,
+      input_tokens: s.input_tokens,
+      output_tokens: s.output_tokens,
+      live: false,
+    }));
+
+    // Mark the last step matching the current phase as live
+    for (let i = steps.length - 1; i >= 0; i--) {
+      if (steps[i].phase === currentPhase) {
+        steps[i].live = true;
+        break;
+      }
+    }
+
+    // If no step exists for the current phase yet, add a live placeholder
+    if (!steps.some((s) => s.phase === currentPhase)) {
+      const iteration = currentPhase === 'verify'
+        ? verifyRetries + 1
+        : reviewIterations + 1;
+      steps.push({
+        phase: currentPhase,
+        iteration,
+        input_tokens: 0,
+        output_tokens: 0,
+        live: true,
+      });
+    }
+
+    // Outer iteration = verify retries + 1, inner = review iterations within current outer
+    const outerIteration = verifyRetries + 1;
+    const innerIteration = reviewIterations + 1;
+
+    return {
+      stackId,
+      currentPhase,
+      outerIteration,
+      innerIteration,
+      phases,
+      steps,
+      taskPrompt: task.prompt,
+      startedAt: task.started_at,
+      model: task.resolved_model || task.model,
+    };
+  }
+
+  /**
+   * Get the current workflow progress for a stack (on-demand, for IPC handlers).
+   */
+  async getWorkflowProgress(stackId: string): Promise<WorkflowProgressData | null> {
+    const task = this.registry.getRunningTask(stackId);
+    if (!task) return null;
+
+    const containerId = this.containerIds.get(stackId);
+    if (!containerId) return null;
+
+    try {
+      return await this.readWorkflowProgress(stackId, containerId, task);
+    } catch {
+      return null;
+    }
+  }
+
+  /**
    * Read whatever metadata files exist for a task (used during teardown
    * to capture partial data before the container is removed).
    */
@@ -385,7 +531,7 @@ export class TaskWatcher extends EventEmitter {
         this.seenRunning.set(stackId, true);
         this.errorCounts.set(stackId, 0);
 
-        // Poll tokens periodically while running (throttled)
+        // Poll tokens and workflow progress periodically while running (throttled)
         const now = Date.now();
         const lastPoll = this.lastTokenPoll.get(stackId) ?? 0;
         if (now - lastPoll >= this.tokenPollInterval) {
@@ -393,6 +539,11 @@ export class TaskWatcher extends EventEmitter {
           const runningTask = this.registry.getRunningTask(stackId);
           if (runningTask) {
             this.readTaskTokens(runningTask.id, stackId, containerId).catch(() => {});
+            this.readWorkflowProgress(stackId, containerId, runningTask)
+              .then((progress) => {
+                this.emit('task:workflow-progress', progress);
+              })
+              .catch(() => {});
           }
         }
 

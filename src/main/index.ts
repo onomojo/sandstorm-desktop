@@ -174,6 +174,10 @@ async function initializeApp(): Promise<void> {
     mainWindow?.webContents.send('task:output', { stackId, data });
   });
 
+  taskWatcher.on('task:workflow-progress', (progress) => {
+    mainWindow?.webContents.send('task:workflow-progress', progress);
+  });
+
   // Forward Docker connection status to renderer
   if (dockerConnectionManager) {
     dockerConnectionManager.on('connected', () => {

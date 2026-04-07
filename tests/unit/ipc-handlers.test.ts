@@ -51,6 +51,7 @@ const {
     getStackTokenUsage: vi.fn(),
     getGlobalTokenUsage: vi.fn(),
     getRateLimitState: vi.fn(),
+    getWorkflowProgress: vi.fn(),
   };
 
   const mockDockerRuntime = {
@@ -869,6 +870,7 @@ describe('IPC Handlers', () => {
       'tasks:dispatch',
       'tasks:list',
       'tasks:tokenSteps',
+      'tasks:workflowProgress',
       'diff:get',
       'push:execute',
       'ports:get',

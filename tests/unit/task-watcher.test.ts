@@ -1116,4 +1116,126 @@ describe('TaskWatcher', () => {
 
     watcher.unwatchAll();
   });
+
+  it('getWorkflowProgress returns progress data for running task', async () => {
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.status')) {
+          return { exitCode: 0, stdout: 'running', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-phase-timing.txt')) {
+          return { exitCode: 0, stdout: 'execution_started_at=2026-04-07T10:00:00Z\nexecution_finished_at=2026-04-07T10:01:00Z\nreview_started_at=2026-04-07T10:01:01Z\n', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-task.review-iterations')) {
+          return { exitCode: 0, stdout: '2', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-task.verify-retries')) {
+          return { exitCode: 0, stdout: '0', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-tokens-execution')) {
+          return { exitCode: 0, stdout: '{"in":1000,"out":500,"iter":1,"phase":"execution"}\n', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-tokens-review')) {
+          return { exitCode: 0, stdout: '{"in":800,"out":300,"iter":1,"phase":"review"}\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+
+    registry.createTask('watch-stack', 'test progress task');
+    watcher.watch('watch-stack', 'container-123');
+
+    const progress = await watcher.getWorkflowProgress('watch-stack');
+
+    expect(progress).not.toBeNull();
+    expect(progress!.stackId).toBe('watch-stack');
+    expect(progress!.currentPhase).toBe('review');
+    expect(progress!.outerIteration).toBe(1);
+    expect(progress!.innerIteration).toBe(3); // reviewIterations (2) + 1
+    expect(progress!.phases).toEqual([
+      { phase: 'execution', status: 'passed' },
+      { phase: 'review', status: 'running' },
+      { phase: 'verify', status: 'pending' },
+    ]);
+    expect(progress!.steps.length).toBeGreaterThanOrEqual(2);
+    expect(progress!.taskPrompt).toBe('test progress task');
+
+    watcher.unwatchAll();
+  });
+
+  it('getWorkflowProgress returns null when no running task', async () => {
+    const runtime = createMockRuntime('running');
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+
+    const progress = await watcher.getWorkflowProgress('watch-stack');
+    expect(progress).toBeNull();
+
+    watcher.unwatchAll();
+  });
+
+  it('getWorkflowProgress returns null when stack not being watched', async () => {
+    const runtime = createMockRuntime('running');
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+
+    registry.createTask('watch-stack', 'test task');
+
+    const progress = await watcher.getWorkflowProgress('watch-stack');
+    expect(progress).toBeNull();
+
+    watcher.unwatchAll();
+  });
+
+  it('emits workflow progress during token poll', async () => {
+    let pollCount = 0;
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.status')) {
+          pollCount++;
+          return { exitCode: 0, stdout: 'running', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-phase-timing.txt')) {
+          return { exitCode: 0, stdout: 'execution_started_at=2026-04-07T10:00:00Z\n', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
+      pollInterval: 20,
+      tokenPollInterval: 20,
+    });
+
+    registry.createTask('watch-stack', 'test progress task');
+
+    const progressPromise = new Promise<void>((resolve) => {
+      watcher.on('task:workflow-progress', (progress) => {
+        expect(progress.stackId).toBe('watch-stack');
+        expect(progress.currentPhase).toBe('execution');
+        resolve();
+      });
+    });
+
+    watcher.watch('watch-stack', 'container-123');
+
+    await progressPromise;
+    watcher.unwatchAll();
+  });
 });

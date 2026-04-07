@@ -80,6 +80,34 @@ export interface TaskTokenStep {
   output_tokens: number;
 }
 
+export type WorkflowPhase = 'execution' | 'review' | 'verify' | 'idle';
+export type PhaseStatus = 'pending' | 'running' | 'passed' | 'failed';
+
+export interface WorkflowPhaseState {
+  phase: WorkflowPhase;
+  status: PhaseStatus;
+}
+
+export interface WorkflowStepTokens {
+  phase: string;
+  iteration: number;
+  input_tokens: number;
+  output_tokens: number;
+  live: boolean;
+}
+
+export interface WorkflowProgress {
+  stackId: string;
+  currentPhase: WorkflowPhase;
+  outerIteration: number;
+  innerIteration: number;
+  phases: WorkflowPhaseState[];
+  steps: WorkflowStepTokens[];
+  taskPrompt: string | null;
+  startedAt: string | null;
+  model: string | null;
+}
+
 export interface OuterClaudeTokenUsage {
   project_dir: string;
   input_tokens: number;
@@ -251,6 +279,11 @@ interface AppState {
   rateLimitState: RateLimitState | null;
   accountUsage: UsageSnapshot | null;
 
+  // Live workflow progress (per-stack)
+  workflowProgress: Record<string, WorkflowProgress>;
+  updateWorkflowProgress: (stackId: string, progress: WorkflowProgress) => void;
+  clearWorkflowProgress: (stackId: string) => void;
+
   // Stale workspaces
   staleWorkspaces: StaleWorkspace[];
   staleWorkspacesLoading: boolean;
@@ -373,6 +406,7 @@ declare global {
         dispatch: (stackId: string, prompt: string, model?: string) => Promise<Task>;
         list: (stackId: string) => Promise<Task[]>;
         tokenSteps: (taskId: number) => Promise<TaskTokenStep[]>;
+        workflowProgress: (stackId: string) => Promise<WorkflowProgress | null>;
       };
       diff: {
         get: (stackId: string) => Promise<string>;
@@ -499,6 +533,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   globalTokenUsage: null,
   rateLimitState: null,
   accountUsage: null,
+
+  // Live workflow progress
+  workflowProgress: {},
+  updateWorkflowProgress: (stackId, progress) => {
+    set((state) => ({
+      workflowProgress: { ...state.workflowProgress, [stackId]: progress },
+    }));
+  },
+  clearWorkflowProgress: (stackId) => {
+    set((state) => {
+      const { [stackId]: _, ...rest } = state.workflowProgress;
+      return { workflowProgress: rest };
+    });
+  },
 
   // Model settings
   globalModelSettings: { inner_model: 'sonnet', outer_model: 'opus' },
