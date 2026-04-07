@@ -263,7 +263,7 @@ declare global {
         add: (directory: string) => Promise<Project>;
         remove: (id: number) => Promise<void>;
         browse: () => Promise<string | null>;
-        checkInit: (directory: string) => Promise<boolean>;
+        checkInit: (directory: string) => Promise<{ state: 'uninitialized' | 'partial' | 'full' }>;
         initialize: (directory: string) => Promise<{ success: boolean; error?: string }>;
         checkMigration: (directory: string) => Promise<{
           needsMigration: boolean;
@@ -279,6 +279,20 @@ declare global {
           directory: string,
           verifyScript: string,
           serviceDescriptions: Record<string, string>,
+        ) => Promise<{ success: boolean; error?: string }>;
+        generateCompose: (directory: string) => Promise<{
+          success: boolean;
+          yaml?: string;
+          config?: string;
+          composeFile?: string;
+          services?: Array<{ name: string; description: string; ports: Array<{ host: string; container: string }> }>;
+          error?: string;
+          noProjectCompose?: boolean;
+        }>;
+        saveComposeSetup: (
+          directory: string,
+          composeYaml: string,
+          composeFile: string,
         ) => Promise<{ success: boolean; error?: string }>;
       };
       stacks: {

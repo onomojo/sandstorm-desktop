@@ -41,7 +41,7 @@ describe('Dashboard', () => {
       projects: [{ id: 1, name: 'myproject', directory: '/my/project', added_at: '' }],
       activeProjectId: 1,
     });
-    api.projects.checkInit.mockResolvedValue(true);
+    api.projects.checkInit.mockResolvedValue({ state: 'full' });
 
     render(<Dashboard />);
     expect(screen.getByText('myproject')).toBeDefined();
@@ -310,7 +310,7 @@ describe('Dashboard', () => {
         },
       ],
     });
-    api.projects.checkInit.mockResolvedValue(true);
+    api.projects.checkInit.mockResolvedValue({ state: 'full' });
 
     render(<Dashboard />);
     // Only a-stack should be visible since we filtered by project /a
