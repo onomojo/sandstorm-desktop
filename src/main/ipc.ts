@@ -10,6 +10,7 @@ import {
   cliDir,
   agentBackend,
   dockerConnectionManager,
+  sessionMonitor,
 } from './index';
 import { StackManager } from './control-plane/stack-manager';
 import { CreateStackOpts } from './control-plane/stack-manager';
@@ -741,6 +742,55 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('modelSettings:getEffective', (_event, projectDir: string) => {
     return registry.getEffectiveModels(projectDir);
+  });
+
+  // --- Session Monitor ---
+
+  ipcMain.handle('session:getState', () => {
+    return sessionMonitor.getState();
+  });
+
+  ipcMain.handle('session:getSettings', () => {
+    return registry.getSessionMonitorSettings();
+  });
+
+  ipcMain.handle('session:updateSettings', (_event, settings: Record<string, unknown>) => {
+    registry.setSessionMonitorSettings(settings as Partial<{
+      warningThreshold: number;
+      criticalThreshold: number;
+      autoHaltThreshold: number;
+      autoHaltEnabled: boolean;
+      autoResumeAfterReset: boolean;
+      pollIntervalMs: number;
+      idleTimeoutMs: number;
+      pollingDisabled: boolean;
+    }>);
+    sessionMonitor.updateSettings(registry.getSessionMonitorSettings());
+  });
+
+  ipcMain.handle('session:acknowledgeCritical', () => {
+    sessionMonitor.acknowledgeCritical();
+  });
+
+  ipcMain.handle('session:haltAll', () => {
+    return stackManager.sessionPauseAllStacks();
+  });
+
+  ipcMain.handle('session:resumeAll', () => {
+    sessionMonitor.markResumed();
+    return stackManager.sessionResumeAllStacks();
+  });
+
+  ipcMain.handle('session:resumeStack', (_event, stackId: string) => {
+    stackManager.sessionResumeStack(stackId);
+  });
+
+  ipcMain.handle('session:forcePoll', async () => {
+    return sessionMonitor.forcePoll();
+  });
+
+  ipcMain.on('session:activity', () => {
+    sessionMonitor.reportActivity();
   });
 
   ipcMain.handle('docker:status', () => {

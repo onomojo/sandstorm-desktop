@@ -97,6 +97,29 @@ export function mockSandstormApi() {
       removeProject: vi.fn().mockResolvedValue(undefined),
       getEffective: vi.fn().mockResolvedValue({ inner_model: 'sonnet', outer_model: 'opus' }),
     },
+    session: {
+      getState: vi.fn().mockResolvedValue({
+        usage: null, level: 'normal', stale: false, halted: false,
+        lastPollAt: null, consecutiveFailures: 0,
+        pollMode: 'normal', nextPollAt: null, idle: false, tmuxAvailable: null,
+      }),
+      getSettings: vi.fn().mockResolvedValue({
+        warningThreshold: 80, criticalThreshold: 90, autoHaltThreshold: 95,
+        autoHaltEnabled: true, autoResumeAfterReset: false, pollIntervalMs: 120000,
+        idleTimeoutMs: 300000, pollingDisabled: false,
+      }),
+      updateSettings: vi.fn().mockResolvedValue(undefined),
+      acknowledgeCritical: vi.fn().mockResolvedValue(undefined),
+      haltAll: vi.fn().mockResolvedValue([]),
+      resumeAll: vi.fn().mockResolvedValue([]),
+      resumeStack: vi.fn().mockResolvedValue(undefined),
+      forcePoll: vi.fn().mockResolvedValue({
+        usage: null, level: 'normal', stale: false, halted: false,
+        lastPollAt: null, consecutiveFailures: 0,
+        pollMode: 'normal', nextPollAt: null, idle: false, tmuxAvailable: null,
+      }),
+      reportActivity: vi.fn(),
+    },
     auth: {
       status: vi.fn().mockResolvedValue({ loggedIn: false, expired: false }),
       login: vi.fn().mockResolvedValue({ success: true }),

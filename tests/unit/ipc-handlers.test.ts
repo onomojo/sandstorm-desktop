@@ -113,6 +113,7 @@ vi.mock('electron', () => ({
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       registeredHandlers[channel] = handler;
     }),
+    on: vi.fn(),
   },
   dialog: {
     showOpenDialog: vi.fn(),
@@ -899,6 +900,14 @@ describe('IPC Handlers', () => {
       'modelSettings:removeProject',
       'modelSettings:getEffective',
       'runtime:available',
+      'session:getState',
+      'session:getSettings',
+      'session:updateSettings',
+      'session:acknowledgeCritical',
+      'session:haltAll',
+      'session:resumeAll',
+      'session:resumeStack',
+      'session:forcePoll',
       'docker:status',
       'auth:status',
       'auth:login',

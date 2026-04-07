@@ -1,254 +1,278 @@
 /**
- * Fetches Claude Code account-level usage (rate limit progress) from the
- * claude.ai API using the local OAuth credentials.
+ * Fetches Claude Code account-level session usage by driving the official
+ * `claude` CLI binary in a detached tmux pane, sending `/usage`, and parsing
+ * the rendered TUI output.
  *
- * The data mirrors what the Claude Code CLI shows via `/usage`:
- *   - current token usage within the rate-limit window
- *   - the token limit for the window
- *   - when the window resets
+ * This approach has been verified end-to-end with real captured output. It
+ * retrieves real account-level session data (not aggregated stack tokens).
+ *
+ * Requirements:
+ *   - `tmux` must be installed
+ *   - `claude` CLI must be installed and OAuth-authenticated
+ *   - Must NOT be called from inside another `claude` session (TTY collision)
  */
 
-import fs from 'fs';
-import path from 'path';
-import https from 'https';
+import { exec } from 'child_process';
 
-export interface AccountUsage {
-  /** Tokens consumed in the current rate-limit window */
-  used_tokens: number;
-  /** Token limit for the current window (0 = unknown) */
-  limit_tokens: number;
-  /** Percentage of limit consumed (0–100) */
+// ---------------------------------------------------------------------------
+// Types
+// ---------------------------------------------------------------------------
+
+export interface UsageBlock {
   percent: number;
-  /** ISO timestamp when the rate-limit window resets, or null if unknown */
-  reset_at: string | null;
-  /** Human-readable time until reset, e.g. "2h 43m" */
-  reset_in: string | null;
-  /** Subscription type from credentials (e.g. "max", "pro") */
-  subscription_type: string | null;
-  /** Rate limit tier from credentials */
-  rate_limit_tier: string | null;
+  resetsAt: string;
 }
 
-interface OAuthCredentials {
-  accessToken: string;
-  refreshToken?: string;
-  expiresAt?: number;
-  subscriptionType?: string;
-  rateLimitTier?: string;
+export interface UsageSnapshot {
+  session: UsageBlock | null;
+  weekAll: UsageBlock | null;
+  weekSonnet: UsageBlock | null;
+  extraUsage: { enabled: boolean };
+  capturedAt: string;
+  status: 'ok' | 'rate_limited' | 'at_limit' | 'auth_expired' | 'parse_error';
 }
 
-function readCredentials(): OAuthCredentials | null {
-  try {
-    const credsPath = path.join(process.env.HOME || '', '.claude', '.credentials.json');
-    const raw = fs.readFileSync(credsPath, 'utf-8');
-    const parsed = JSON.parse(raw);
-    return parsed.claudeAiOauth ?? null;
-  } catch {
-    return null;
-  }
-}
+// ---------------------------------------------------------------------------
+// Shell helpers
+// ---------------------------------------------------------------------------
 
-/**
- * Make an HTTPS GET request and return the parsed JSON response.
- */
-function httpsGet(url: string, headers: Record<string, string>): Promise<{ status: number; body: unknown }> {
+function execAsync(cmd: string, timeoutMs = 20_000): Promise<string> {
   return new Promise((resolve, reject) => {
-    const parsedUrl = new URL(url);
-    const req = https.request(
-      {
-        hostname: parsedUrl.hostname,
-        port: parsedUrl.port || 443,
-        path: parsedUrl.pathname + parsedUrl.search,
-        method: 'GET',
-        headers: {
-          ...headers,
-          'Accept': 'application/json',
-          'User-Agent': 'Sandstorm-Desktop/1.0',
-        },
-        timeout: 10_000,
-      },
-      (res) => {
-        let data = '';
-        res.on('data', (chunk: Buffer) => { data += chunk.toString(); });
-        res.on('end', () => {
-          try {
-            resolve({ status: res.statusCode ?? 0, body: JSON.parse(data) });
-          } catch {
-            resolve({ status: res.statusCode ?? 0, body: data });
-          }
-        });
-      }
-    );
-    req.on('error', reject);
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Request timed out'));
+    exec(cmd, { timeout: timeoutMs, maxBuffer: 1024 * 1024 }, (err, stdout) => {
+      if (err) reject(err);
+      else resolve(stdout);
     });
-    req.end();
   });
 }
 
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// ---------------------------------------------------------------------------
+// tmux dependency check
+// ---------------------------------------------------------------------------
+
+let tmuxChecked = false;
+let tmuxAvailable = false;
+
+export async function checkTmuxInstalled(): Promise<boolean> {
+  if (tmuxChecked) return tmuxAvailable;
+  try {
+    await execAsync('which tmux');
+    tmuxAvailable = true;
+  } catch {
+    tmuxAvailable = false;
+  }
+  tmuxChecked = true;
+  return tmuxAvailable;
+}
+
+/** Reset cached check (for testing). */
+export function resetTmuxCheck(): void {
+  tmuxChecked = false;
+  tmuxAvailable = false;
+}
+
+// ---------------------------------------------------------------------------
+// Parser
+// ---------------------------------------------------------------------------
+
 /**
- * Format a duration in milliseconds as a human-readable string like "2h 43m" or "15m".
+ * Parse a single usage block from the captured tmux pane output.
+ * Looks for a pattern like:
+ *   Current session
+ *     ███████████████████████▌                           47% used
+ *     Resets 6pm (America/New_York)
  */
-function formatResetIn(ms: number): string {
-  if (ms <= 0) return 'now';
-  const totalMinutes = Math.ceil(ms / 60_000);
-  const hours = Math.floor(totalMinutes / 60);
-  const minutes = totalMinutes % 60;
-  if (hours > 0 && minutes > 0) return `${hours}h ${minutes}m`;
-  if (hours > 0) return `${hours}h`;
-  return `${minutes}m`;
+export function parseUsageBlock(pane: string, label: string): UsageBlock | null {
+  // Match: label, then on a following line "N% used", then on the next line "Resets ..."
+  // Use non-greedy [^\n]*? before the percent to avoid consuming the digits
+  const re = new RegExp(
+    label + '[^\\n]*\\n[^\\n]*?\\s(\\d+)% used[^\\n]*\\n[^\\n]*Resets ([^\\n]+)'
+  );
+  const m = pane.match(re);
+  if (!m) return null;
+  // Strip trailing whitespace and box-drawing characters (│, ╯, ╰, etc.)
+  const resetsAt = m[2].replace(/[\s│╯╰╮╭─]+$/u, '');
+  return { percent: Number(m[1]), resetsAt };
 }
 
 /**
- * Attempt to fetch account usage from the claude.ai API.
- * Returns null if the API is unreachable or credentials are missing.
+ * Detect whether the pane output indicates a rate-limit on `/usage` itself.
+ * We look for rate-limit-like keywords when no percentage bars are found.
  */
-export async function fetchAccountUsage(): Promise<AccountUsage | null> {
-  const creds = readCredentials();
-  if (!creds?.accessToken) return null;
+function isRateLimited(pane: string): boolean {
+  const lower = pane.toLowerCase();
+  return (
+    (lower.includes('rate') && lower.includes('limit')) ||
+    lower.includes('frequently') ||
+    lower.includes('try again') ||
+    lower.includes('too many')
+  );
+}
 
-  const baseInfo: Pick<AccountUsage, 'subscription_type' | 'rate_limit_tier'> = {
-    subscription_type: creds.subscriptionType ?? null,
-    rate_limit_tier: creds.rateLimitTier ?? null,
-  };
+/**
+ * Detect whether the pane output indicates an expired OAuth session.
+ */
+function isAuthExpired(pane: string): boolean {
+  const lower = pane.toLowerCase();
+  return (
+    lower.includes('auth') ||
+    lower.includes('login') ||
+    lower.includes('sign in') ||
+    lower.includes('authenticate') ||
+    lower.includes('expired')
+  );
+}
 
-  try {
-    // Try the Claude API bootstrap endpoint which returns account info
-    const result = await httpsGet('https://api.claude.ai/api/bootstrap', {
-      'Authorization': `Bearer ${creds.accessToken}`,
-      'Content-Type': 'application/json',
-    });
+/**
+ * Parse the full tmux pane output into a UsageSnapshot.
+ */
+export function parseUsageOutput(pane: string): UsageSnapshot {
+  const session = parseUsageBlock(pane, 'Current session');
+  const weekAll = parseUsageBlock(pane, 'Current week \\(all models\\)');
+  const weekSonnet = parseUsageBlock(pane, 'Current week \\(Sonnet only\\)');
+  const extraUsageEnabled = !/Extra usage not enabled/.test(pane);
+  const capturedAt = new Date().toISOString();
 
-    if (result.status === 200 && result.body && typeof result.body === 'object') {
-      const body = result.body as Record<string, unknown>;
-
-      // Try to extract usage data from various possible response shapes
-      const usage = extractUsageFromBootstrap(body);
-      if (usage) {
-        return {
-          ...usage,
-          ...baseInfo,
-        };
-      }
-    }
-  } catch {
-    // API unreachable — fall through to fallback
+  if (session) {
+    const status = session.percent >= 95 ? 'at_limit' as const : 'ok' as const;
+    return {
+      session,
+      weekAll,
+      weekSonnet,
+      extraUsage: { enabled: extraUsageEnabled },
+      capturedAt,
+      status,
+    };
   }
 
-  // Try the dedicated usage endpoint
-  try {
-    const result = await httpsGet('https://api.claude.ai/api/usage', {
-      'Authorization': `Bearer ${creds.accessToken}`,
-      'Content-Type': 'application/json',
-    });
-
-    if (result.status === 200 && result.body && typeof result.body === 'object') {
-      const body = result.body as Record<string, unknown>;
-      const usage = extractUsageFromDirect(body);
-      if (usage) {
-        return { ...usage, ...baseInfo };
-      }
-    }
-  } catch {
-    // Fall through
+  // No session block found — try to classify the error
+  if (isRateLimited(pane)) {
+    return {
+      session: null, weekAll: null, weekSonnet: null,
+      extraUsage: { enabled: false },
+      capturedAt,
+      status: 'rate_limited',
+    };
   }
 
-  // Return credential-only info so the UI can at least show the tier
+  if (isAuthExpired(pane)) {
+    return {
+      session: null, weekAll: null, weekSonnet: null,
+      extraUsage: { enabled: false },
+      capturedAt,
+      status: 'auth_expired',
+    };
+  }
+
   return {
-    used_tokens: 0,
-    limit_tokens: 0,
-    percent: 0,
-    reset_at: null,
-    reset_in: null,
-    ...baseInfo,
+    session: null, weekAll: null, weekSonnet: null,
+    extraUsage: { enabled: false },
+    capturedAt,
+    status: 'parse_error',
   };
 }
 
+// ---------------------------------------------------------------------------
+// Main fetch function
+// ---------------------------------------------------------------------------
+
 /**
- * Extract usage data from the bootstrap API response.
- * The response shape varies — we try several known patterns.
+ * Fetch real account-level session usage by driving `claude` in a detached
+ * tmux pane, sending `/usage`, and parsing the rendered output.
+ *
+ * Returns a UsageSnapshot on success, or null if tmux/claude are unavailable.
+ * The `status` field in the snapshot indicates parse success or specific errors.
+ *
+ * Wall time: ~3–4 seconds typical, up to ~20s worst case.
  */
-function extractUsageFromBootstrap(body: Record<string, unknown>): Omit<AccountUsage, 'subscription_type' | 'rate_limit_tier'> | null {
-  // Pattern: { usage: { tokens_used, tokens_limit, reset_at } }
-  if (body.usage && typeof body.usage === 'object') {
-    return extractFromUsageObject(body.usage as Record<string, unknown>);
-  }
-
-  // Pattern: { account: { usage: { ... } } }
-  if (body.account && typeof body.account === 'object') {
-    const account = body.account as Record<string, unknown>;
-    if (account.usage && typeof account.usage === 'object') {
-      return extractFromUsageObject(account.usage as Record<string, unknown>);
-    }
-  }
-
-  // Pattern: { rate_limit: { ... } }
-  if (body.rate_limit && typeof body.rate_limit === 'object') {
-    return extractFromUsageObject(body.rate_limit as Record<string, unknown>);
-  }
-
-  // Pattern: top-level fields
-  if (typeof body.tokens_used === 'number' || typeof body.used_tokens === 'number') {
-    return extractFromUsageObject(body);
-  }
-
-  return null;
-}
-
-function extractUsageFromDirect(body: Record<string, unknown>): Omit<AccountUsage, 'subscription_type' | 'rate_limit_tier'> | null {
-  return extractFromUsageObject(body);
-}
-
-function extractFromUsageObject(obj: Record<string, unknown>): Omit<AccountUsage, 'subscription_type' | 'rate_limit_tier'> | null {
-  const used = (obj.tokens_used ?? obj.used_tokens ?? obj.current_usage ?? obj.input_tokens) as number | undefined;
-  const limit = (obj.tokens_limit ?? obj.limit_tokens ?? obj.max_tokens ?? obj.token_limit) as number | undefined;
-  const resetAt = (obj.reset_at ?? obj.resets_at ?? obj.reset_time) as string | undefined;
-  const percent = obj.percent_used as number | undefined;
-
-  if (used === undefined && limit === undefined && percent === undefined) {
+export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
+  if (!(await checkTmuxInstalled())) {
     return null;
   }
 
-  const usedTokens = typeof used === 'number' ? used : 0;
-  const limitTokens = typeof limit === 'number' ? limit : 0;
-  const computedPercent = typeof percent === 'number'
-    ? percent
-    : (limitTokens > 0 ? Math.min((usedTokens / limitTokens) * 100, 100) : 0);
+  const session = `claude-usage-${process.pid}-${Date.now()}`;
+  const claudeCmd = [
+    'CLAUDE_CODE_DISABLE_CLAUDE_MDS=1',
+    'claude',
+    '--strict-mcp-config',
+    "--mcp-config '{\\\"mcpServers\\\":{}}'",
+    '--setting-sources user',
+  ].join(' ');
 
-  let resetIn: string | null = null;
-  let resetAtIso: string | null = null;
-  if (resetAt) {
-    try {
-      const resetDate = new Date(resetAt);
-      resetAtIso = resetDate.toISOString();
-      const msUntilReset = resetDate.getTime() - Date.now();
-      if (msUntilReset > 0) {
-        resetIn = formatResetIn(msUntilReset);
+  try {
+    // Launch claude in a detached tmux session
+    await execAsync(
+      `tmux new-session -d -s "${session}" -x 220 -y 60 "${claudeCmd}"`
+    );
+
+    // Wait for claude to be ready (look for "for shortcuts" prompt)
+    let ready = false;
+    for (let i = 0; i < 60; i++) {
+      await sleep(250);
+      try {
+        const pane = await execAsync(`tmux capture-pane -t "${session}" -p 2>/dev/null`);
+        if (pane.includes('for shortcuts')) {
+          ready = true;
+          break;
+        }
+      } catch {
+        // tmux session may not be ready yet
       }
+    }
+
+    if (!ready) {
+      return {
+        session: null, weekAll: null, weekSonnet: null,
+        extraUsage: { enabled: false },
+        capturedAt: new Date().toISOString(),
+        status: 'parse_error',
+      };
+    }
+
+    // Send /usage command
+    await execAsync(`tmux send-keys -t "${session}" "/usage" Enter`);
+
+    // Wait for usage dialog to render
+    let usagePane = '';
+    for (let i = 0; i < 40; i++) {
+      await sleep(250);
+      try {
+        usagePane = await execAsync(`tmux capture-pane -t "${session}" -p 2>/dev/null`);
+        if (usagePane.includes('Current session') || usagePane.includes('Extra usage')) {
+          break;
+        }
+      } catch {
+        // Retry
+      }
+    }
+
+    // Capture final pane content
+    try {
+      usagePane = await execAsync(`tmux capture-pane -t "${session}" -p`);
     } catch {
-      // Invalid date
+      // Use last captured content
+    }
+
+    // Dismiss dialog and exit cleanly
+    try {
+      await execAsync(`tmux send-keys -t "${session}" Escape`);
+      await execAsync(`tmux send-keys -t "${session}" "/exit" Enter`);
+    } catch {
+      // Best-effort cleanup
+    }
+
+    return parseUsageOutput(usagePane);
+  } catch {
+    return null;
+  } finally {
+    // Always kill the tmux session
+    try {
+      await execAsync(`tmux kill-session -t "${session}" 2>/dev/null`);
+    } catch {
+      // Session may already be gone
     }
   }
-
-  return {
-    used_tokens: usedTokens,
-    limit_tokens: limitTokens,
-    percent: Math.round(computedPercent * 10) / 10,
-    reset_at: resetAtIso,
-    reset_in: resetIn,
-  };
-}
-
-/**
- * Read just the credential metadata (subscription type, rate limit tier)
- * without making any API calls. Used as a fast synchronous fallback.
- */
-export function readAccountInfo(): Pick<AccountUsage, 'subscription_type' | 'rate_limit_tier'> {
-  const creds = readCredentials();
-  return {
-    subscription_type: creds?.subscriptionType ?? null,
-    rate_limit_tier: creds?.rateLimitTier ?? null,
-  };
 }
