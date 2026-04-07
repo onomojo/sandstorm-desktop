@@ -211,25 +211,63 @@ fi
 # ---------------------------------------------------------------------------
 # Ticket provider selection
 # ---------------------------------------------------------------------------
+
+# Auto-detect available ticket systems by inspecting the environment.
+# Returns: "jira", "github", or "skeleton"
+detect_ticket_provider() {
+  # Jira: check for atlassian MCP server config in .mcp.json
+  if [ -f "$PROJECT_ROOT/.mcp.json" ] && grep -q '"atlassian"' "$PROJECT_ROOT/.mcp.json" 2>/dev/null; then
+    echo "jira"
+    return
+  fi
+  # GitHub: check for gh CLI and a GitHub remote
+  if command -v gh >/dev/null 2>&1 && git -C "$PROJECT_ROOT" remote -v 2>/dev/null | grep -q "github\.com"; then
+    echo "github"
+    return
+  fi
+  echo "skeleton"
+}
+
 TICKET_PROVIDER="github"
 
 if [ "$SKIP_PROMPT" != "true" ]; then
+  DETECTED_PROVIDER="$(detect_ticket_provider)"
+  case "$DETECTED_PROVIDER" in
+    jira)    DEFAULT_CHOICE="2" ;;
+    github)  DEFAULT_CHOICE="1" ;;
+    *)       DEFAULT_CHOICE="3" ;;
+  esac
+
   echo ""
-  echo "Ticket provider:"
+  echo "Ticket provider (auto-detected: ${DETECTED_PROVIDER}):"
   echo "  1. GitHub Issues (uses gh CLI)"
   echo "  2. Jira (uses Atlassian MCP)"
   echo "  3. Custom (create your own scripts later)"
   echo ""
-  read -rp "Which ticket system does this project use? [1/2/3] " PROVIDER_CHOICE
-  PROVIDER_CHOICE="${PROVIDER_CHOICE:-1}"
+  read -rp "Which ticket system does this project use? [1/2/3, default: ${DEFAULT_CHOICE}] " PROVIDER_CHOICE
+  PROVIDER_CHOICE="${PROVIDER_CHOICE:-${DEFAULT_CHOICE}}"
   case "$PROVIDER_CHOICE" in
     1) TICKET_PROVIDER="github" ;;
     2) TICKET_PROVIDER="jira" ;;
     3) TICKET_PROVIDER="skeleton" ;;
-    *) TICKET_PROVIDER="github" ;;
+    *) TICKET_PROVIDER="$DETECTED_PROVIDER" ;;
   esac
 else
-  echo "  Ticket provider: GitHub Issues (default for non-interactive mode)"
+  TICKET_PROVIDER="$(detect_ticket_provider)"
+  case "$TICKET_PROVIDER" in
+    jira)
+      echo "  Ticket provider: Jira (detected atlassian MCP config in .mcp.json)"
+      ;;
+    github)
+      echo "  Ticket provider: GitHub Issues (detected gh CLI and GitHub remote)"
+      ;;
+    *)
+      TICKET_PROVIDER="skeleton"
+      echo "  Ticket provider: none auto-detected — skeleton script will be generated"
+      echo "    To enable ticket fetching, implement .sandstorm/scripts/fetch-ticket.sh"
+      echo "    (script receives ticket ID as \$1, must output ticket body to stdout)"
+      ;;
+  esac
 fi
 
 # ---------------------------------------------------------------------------
@@ -520,13 +558,19 @@ TEMPLATES_SRC="$SANDSTORM_DIR/templates/${TICKET_PROVIDER}"
 if [ -d "$TEMPLATES_SRC" ]; then
   # Copy scripts (only if project doesn't already have them)
   SCRIPTS_DEST="$SANDSTORM_CONFIG_DIR/scripts"
+  FETCH_SCRIPT="$SCRIPTS_DEST/fetch-ticket.sh"
   if [ ! -d "$SCRIPTS_DEST" ] || [ -z "$(ls -A "$SCRIPTS_DEST" 2>/dev/null)" ]; then
     mkdir -p "$SCRIPTS_DEST"
     cp "$TEMPLATES_SRC"/scripts/*.sh "$SCRIPTS_DEST/"
     chmod +x "$SCRIPTS_DEST"/*.sh
     echo "  Installed ticket scripts to .sandstorm/scripts/ (${TICKET_PROVIDER})"
   else
-    echo "  Skipped ticket scripts — .sandstorm/scripts/ already exists"
+    if [ -f "$FETCH_SCRIPT" ] && [ ! -x "$FETCH_SCRIPT" ]; then
+      echo "  Warning: .sandstorm/scripts/fetch-ticket.sh exists but is not executable"
+      echo "    Run: chmod +x $FETCH_SCRIPT"
+    else
+      echo "  Skipped ticket scripts — .sandstorm/scripts/ already has scripts"
+    fi
   fi
 
   # Copy skills (only if project doesn't already have them)

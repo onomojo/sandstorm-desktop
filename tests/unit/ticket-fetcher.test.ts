@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { fetchTicketContext, referencesTicket } from '../../src/main/control-plane/ticket-fetcher';
+import { fetchTicketContext, referencesTicket, getScriptStatus } from '../../src/main/control-plane/ticket-fetcher';
 import * as child_process from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
@@ -48,6 +48,36 @@ describe('referencesTicket', () => {
   it('does not match single uppercase letter followed by dash and digits', () => {
     // Jira requires at least 2 uppercase letters
     expect(referencesTicket('See A-123')).toBe(false);
+  });
+});
+
+describe('getScriptStatus', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'script-status-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('returns "missing" when fetch-ticket.sh does not exist', () => {
+    expect(getScriptStatus(tmpDir)).toBe('missing');
+  });
+
+  it('returns "not_executable" when script exists but lacks execute permission', () => {
+    const scriptsDir = path.join(tmpDir, '.sandstorm', 'scripts');
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(scriptsDir, 'fetch-ticket.sh'), '#!/bin/bash\necho hi', { mode: 0o644 });
+    expect(getScriptStatus(tmpDir)).toBe('not_executable');
+  });
+
+  it('returns "ok" when script exists and is executable', () => {
+    const scriptsDir = path.join(tmpDir, '.sandstorm', 'scripts');
+    fs.mkdirSync(scriptsDir, { recursive: true });
+    fs.writeFileSync(path.join(scriptsDir, 'fetch-ticket.sh'), '#!/bin/bash\necho hi', { mode: 0o755 });
+    expect(getScriptStatus(tmpDir)).toBe('ok');
   });
 });
 

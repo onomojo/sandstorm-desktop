@@ -15,6 +15,7 @@ vi.mock('../../src/main/index', () => ({
 
 vi.mock('../../src/main/control-plane/ticket-fetcher', () => ({
   fetchTicketContext: vi.fn().mockResolvedValue(null),
+  getScriptStatus: vi.fn().mockReturnValue('ok'),
 }));
 
 vi.mock('../../src/main/spec-quality-gate', () => ({
@@ -22,12 +23,14 @@ vi.mock('../../src/main/spec-quality-gate', () => ({
 }));
 
 import { stackManager, agentBackend } from '../../src/main/index';
-import { fetchTicketContext } from '../../src/main/control-plane/ticket-fetcher';
+import { fetchTicketContext, getScriptStatus } from '../../src/main/control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../../src/main/spec-quality-gate';
 
 describe('MCP tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // Default: script exists and is executable (individual tests override as needed)
+    vi.mocked(getScriptStatus).mockReturnValue('ok');
   });
 
   describe('tool definitions', () => {
@@ -137,15 +140,37 @@ describe('MCP tools', () => {
   });
 
   describe('handleToolCall — spec_check', () => {
-    it('returns error when ticket cannot be fetched', async () => {
+    it('returns passed:false with reason when fetch-ticket.sh is missing', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('missing');
+      const result = await handleToolCall('spec_check', {
+        ticketId: '999',
+        projectDir: '/proj',
+      }) as { passed: boolean; reason: string };
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('fetch-ticket.sh not found');
+      expect(result.reason).toContain('sandstorm init');
+    });
+
+    it('returns passed:false with reason when fetch-ticket.sh is not executable', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('not_executable');
+      const result = await handleToolCall('spec_check', {
+        ticketId: '999',
+        projectDir: '/proj',
+      }) as { passed: boolean; reason: string };
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('not executable');
+      expect(result.reason).toContain('chmod');
+    });
+
+    it('returns passed:false with reason when script runs but returns no output', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('ok');
       vi.mocked(fetchTicketContext).mockResolvedValue(null);
       const result = await handleToolCall('spec_check', {
         ticketId: '999',
         projectDir: '/proj',
-      });
-      expect(result).toEqual(
-        expect.objectContaining({ error: expect.stringContaining('Could not fetch ticket') })
-      );
+      }) as { passed: boolean; reason: string };
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('returned no output');
     });
 
     it('returns error when quality gate is not configured', async () => {
@@ -197,15 +222,25 @@ describe('MCP tools', () => {
   });
 
   describe('handleToolCall — spec_refine', () => {
-    it('returns error when ticket cannot be fetched', async () => {
+    it('returns passed:false with reason when fetch-ticket.sh is missing', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('missing');
+      const result = await handleToolCall('spec_refine', {
+        ticketId: '999',
+        projectDir: '/proj',
+      }) as { passed: boolean; reason: string };
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('fetch-ticket.sh not found');
+    });
+
+    it('returns passed:false with reason when script runs but returns no output', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('ok');
       vi.mocked(fetchTicketContext).mockResolvedValue(null);
       const result = await handleToolCall('spec_refine', {
         ticketId: '999',
         projectDir: '/proj',
-      });
-      expect(result).toEqual(
-        expect.objectContaining({ error: expect.stringContaining('Could not fetch ticket') })
-      );
+      }) as { passed: boolean; reason: string };
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('returned no output');
     });
 
     it('returns initial gaps when called without userAnswers', async () => {
