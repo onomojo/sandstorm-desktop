@@ -111,6 +111,16 @@ export interface SandstormAPI {
     removeProject: (projectDir: string) => Promise<void>;
     getEffective: (projectDir: string) => Promise<{ inner_model: string; outer_model: string }>;
   };
+  session: {
+    getState: () => Promise<unknown>;
+    getSettings: () => Promise<unknown>;
+    updateSettings: (settings: Record<string, unknown>) => Promise<void>;
+    acknowledgeCritical: () => Promise<void>;
+    haltAll: () => Promise<string[]>;
+    resumeAll: () => Promise<string[]>;
+    resumeStack: (stackId: string) => Promise<void>;
+    forcePoll: () => Promise<unknown>;
+  };
   auth: {
     status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
     login: () => Promise<{ success: boolean; error?: string }>;
@@ -223,6 +233,16 @@ const api: SandstormAPI = {
     setProject: (projectDir, settings) => ipcRenderer.invoke('modelSettings:setProject', projectDir, settings),
     removeProject: (projectDir) => ipcRenderer.invoke('modelSettings:removeProject', projectDir),
     getEffective: (projectDir) => ipcRenderer.invoke('modelSettings:getEffective', projectDir),
+  },
+  session: {
+    getState: () => ipcRenderer.invoke('session:getState'),
+    getSettings: () => ipcRenderer.invoke('session:getSettings'),
+    updateSettings: (settings) => ipcRenderer.invoke('session:updateSettings', settings),
+    acknowledgeCritical: () => ipcRenderer.invoke('session:acknowledgeCritical'),
+    haltAll: () => ipcRenderer.invoke('session:haltAll'),
+    resumeAll: () => ipcRenderer.invoke('session:resumeAll'),
+    resumeStack: (stackId) => ipcRenderer.invoke('session:resumeStack', stackId),
+    forcePoll: () => ipcRenderer.invoke('session:forcePoll'),
   },
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),

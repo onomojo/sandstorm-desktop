@@ -11,6 +11,7 @@ import { DockerConnectionManager } from './runtime/docker-connection';
 import { AgentBackend, ClaudeBackend } from './agent';
 import { registerIpcHandlers } from './ipc';
 import { createTray } from './tray';
+import { SessionMonitor } from './control-plane/session-monitor';
 
 let mainWindow: BrowserWindow | null = null;
 
@@ -24,6 +25,7 @@ export let podmanRuntime: ContainerRuntime;
 export let cliDir: string;
 export let agentBackend: AgentBackend;
 export let dockerConnectionManager: DockerConnectionManager | null = null;
+export let sessionMonitor: SessionMonitor;
 
 function createWindow(): BrowserWindow {
   nativeTheme.themeSource = 'dark';
@@ -123,6 +125,40 @@ async function initializeApp(): Promise<void> {
   });
   await agentBackend.initialize();
 
+  // Initialize session monitor with persisted settings
+  const monitorSettings = registry.getSessionMonitorSettings();
+  sessionMonitor = new SessionMonitor(monitorSettings);
+
+  // Wire session monitor events
+  sessionMonitor.on('threshold:warning', (usage) => {
+    mainWindow?.webContents.send('session:threshold', { level: 'warning', usage });
+  });
+  sessionMonitor.on('threshold:critical', (usage) => {
+    mainWindow?.webContents.send('session:threshold', { level: 'critical', usage });
+  });
+  sessionMonitor.on('threshold:limit', (usage) => {
+    mainWindow?.webContents.send('session:threshold', { level: 'limit', usage });
+  });
+  sessionMonitor.on('threshold:cleared', () => {
+    mainWindow?.webContents.send('session:threshold', { level: 'normal', usage: null });
+  });
+  sessionMonitor.on('halt:triggered', () => {
+    const paused = stackManager.sessionPauseAllStacks();
+    mainWindow?.webContents.send('session:halted', { pausedStacks: paused });
+  });
+  sessionMonitor.on('session:reset', () => {
+    const currentSettings = registry.getSessionMonitorSettings();
+    if (currentSettings.autoResumeAfterReset) {
+      stackManager.sessionResumeAllStacks();
+    }
+    mainWindow?.webContents.send('session:reset');
+  });
+  sessionMonitor.on('state:changed', (state) => {
+    mainWindow?.webContents.send('session:state', state);
+  });
+
+  sessionMonitor.start();
+
   // Listen for task events to send to renderer
   taskWatcher.on('task:completed', ({ stackId, task }) => {
     mainWindow?.webContents.send('task:completed', { stackId, task });
@@ -171,6 +207,7 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  sessionMonitor?.destroy();
   agentBackend?.destroy();
   stackManager?.destroy();
   taskWatcher?.unwatchAll();

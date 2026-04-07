@@ -69,7 +69,7 @@ describe('AccountUsageBar', () => {
     expect(screen.getByTestId('usage-reset-in').textContent).toBe('2h 43m');
   });
 
-  it('caps progress at 100% when over limit', () => {
+  it('caps progress bar width at 100% when over limit but shows raw percent', () => {
     useAppStore.setState({
       accountUsage: {
         used_tokens: 1500000,
@@ -82,7 +82,9 @@ describe('AccountUsageBar', () => {
       },
     });
     render(<AccountUsageBar />);
-    expect(screen.getByTestId('usage-percent').textContent).toBe('100%');
+    // Text shows raw percent (can exceed 100%)
+    expect(screen.getByTestId('usage-percent').textContent).toBe('150%');
+    // Bar width is capped at 100%
     const fill = screen.getByTestId('usage-progress-fill');
     expect(fill.style.width).toBe('100%');
   });
@@ -156,7 +158,7 @@ describe('AccountUsageBar', () => {
     expect(percent.className).toContain('text-red-400');
   });
 
-  it('shows correct color for medium usage (yellow at 50-74%)', () => {
+  it('shows correct color for medium usage (emerald at <70%)', () => {
     useAppStore.setState({
       accountUsage: {
         used_tokens: 600000,
@@ -170,10 +172,10 @@ describe('AccountUsageBar', () => {
     });
     render(<AccountUsageBar />);
     const fill = screen.getByTestId('usage-progress-fill');
-    expect(fill.className).toContain('bg-yellow-500');
+    expect(fill.className).toContain('bg-emerald-500');
   });
 
-  it('shows correct color for low usage (green at <50%)', () => {
+  it('shows correct color for low usage (emerald at <70%)', () => {
     useAppStore.setState({
       accountUsage: {
         used_tokens: 200000,
@@ -190,7 +192,7 @@ describe('AccountUsageBar', () => {
     expect(fill.className).toContain('bg-emerald-500');
   });
 
-  it('shows correct color for orange usage (75-89%)', () => {
+  it('shows correct color for amber usage (70-89%)', () => {
     useAppStore.setState({
       accountUsage: {
         used_tokens: 800000,
@@ -204,7 +206,7 @@ describe('AccountUsageBar', () => {
     });
     render(<AccountUsageBar />);
     const fill = screen.getByTestId('usage-progress-fill');
-    expect(fill.className).toContain('bg-orange-500');
+    expect(fill.className).toContain('bg-amber-500');
   });
 
   it('shows per-project breakdown when multiple projects exist', () => {
@@ -250,6 +252,76 @@ describe('AccountUsageBar', () => {
     expect(screen.queryAllByTestId('project-usage-row')).toHaveLength(0);
     const popover = screen.getByTestId('usage-popover');
     expect(popover.textContent).not.toContain('By Project');
+  });
+
+  it('shows HALTED badge in popover when session is halted', () => {
+    useAppStore.setState({
+      accountUsage: {
+        used_tokens: 1000000,
+        limit_tokens: 1000000,
+        percent: 100,
+        reset_at: null,
+        reset_in: null,
+        subscription_type: 'max',
+        rate_limit_tier: null,
+      },
+      sessionMonitorState: {
+        usage: null,
+        level: 'limit',
+        stale: false,
+        halted: true,
+        lastPollAt: null,
+        consecutiveFailures: 0,
+      },
+    });
+    render(<AccountUsageBar />);
+    fireEvent.click(screen.getByTestId('usage-bar-button'));
+    expect(screen.getByTestId('halted-badge')).toBeDefined();
+    expect(screen.getByTestId('halted-badge').textContent).toBe('HALTED');
+  });
+
+  it('shows STALE badge in popover when session data is stale', () => {
+    useAppStore.setState({
+      accountUsage: {
+        used_tokens: 500000,
+        limit_tokens: 1000000,
+        percent: 50,
+        reset_at: null,
+        reset_in: null,
+        subscription_type: 'max',
+        rate_limit_tier: null,
+      },
+      sessionMonitorState: {
+        usage: null,
+        level: 'normal',
+        stale: true,
+        halted: false,
+        lastPollAt: null,
+        consecutiveFailures: 3,
+      },
+    });
+    render(<AccountUsageBar />);
+    fireEvent.click(screen.getByTestId('usage-bar-button'));
+    expect(screen.getByTestId('stale-badge')).toBeDefined();
+    expect(screen.getByTestId('stale-badge').textContent).toBe('STALE');
+  });
+
+  it('shows flashing red bar when over 100%', () => {
+    useAppStore.setState({
+      accountUsage: {
+        used_tokens: 1500000,
+        limit_tokens: 1000000,
+        percent: 120,
+        reset_at: null,
+        reset_in: null,
+        subscription_type: 'max',
+        rate_limit_tier: null,
+      },
+    });
+    render(<AccountUsageBar />);
+    const fill = screen.getByTestId('usage-progress-fill');
+    expect(fill.className).toContain('bg-red-500');
+    expect(fill.className).toContain('animate-pulse');
   });
 
   it('falls back to counter when account usage has no limit', () => {

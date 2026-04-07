@@ -1,11 +1,12 @@
 import React, { useEffect } from 'react';
-import { useAppStore } from './store';
+import { useAppStore, ThresholdLevel } from './store';
 import { Dashboard } from './components/Dashboard';
 import { StackDetail } from './components/StackDetail';
 import { NewStackDialog } from './components/NewStackDialog';
 import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { AccountUsageBar } from './components/AccountUsageBar';
+import { SessionWarningModal } from './components/SessionWarningModal';
 import trayIcon from './tray-icon.png';
 import buildVersion from './build-version.txt?raw';
 
@@ -29,8 +30,13 @@ export default function App() {
     refreshStackHistory,
     refreshMetrics,
     refreshAccountUsage,
+    refreshSessionState,
     selectStack,
     setDockerConnected,
+    sessionMonitorState,
+    sessionWarningLevel,
+    showSessionWarningModal,
+    setShowSessionWarningModal,
     error,
   } = useAppStore();
 
@@ -63,6 +69,42 @@ export default function App() {
     const interval = setInterval(refreshAccountUsage, ACCOUNT_USAGE_POLL_INTERVAL);
     return () => clearInterval(interval);
   }, [refreshAccountUsage]);
+
+  // Session monitor: listen for threshold/halt/reset IPC events from main process
+  useEffect(() => {
+    refreshSessionState();
+
+    const unsubThreshold = window.sandstorm.on('session:threshold', (data: unknown) => {
+      const { level, usage } = data as { level: ThresholdLevel; usage: unknown };
+      useAppStore.setState({ sessionWarningLevel: level });
+      if (level === 'critical' || level === 'limit' || level === 'over_limit') {
+        useAppStore.setState({ showSessionWarningModal: true });
+      }
+      refreshSessionState();
+    });
+
+    const unsubHalted = window.sandstorm.on('session:halted', () => {
+      refreshSessionState();
+      refreshStacks();
+    });
+
+    const unsubReset = window.sandstorm.on('session:reset', () => {
+      useAppStore.setState({ sessionWarningLevel: null, showSessionWarningModal: false });
+      refreshSessionState();
+      refreshStacks();
+    });
+
+    const unsubState = window.sandstorm.on('session:state', () => {
+      refreshSessionState();
+    });
+
+    return () => {
+      unsubThreshold();
+      unsubHalted();
+      unsubReset();
+      unsubState();
+    };
+  }, [refreshSessionState, refreshStacks]);
 
   useEffect(() => {
     refreshProjects();
@@ -161,9 +203,30 @@ export default function App() {
         )}
       </div>
 
+      {/* Session warning banner (non-blocking, at 80% threshold) */}
+      {sessionWarningLevel === 'warning' && sessionMonitorState?.usage && (
+        <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2.5 text-sm text-amber-400 flex items-center gap-2 shrink-0 animate-fade-in" data-testid="session-warning-banner">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0">
+            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+            <line x1="12" y1="9" x2="12" y2="13" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+            <line x1="12" y1="17" x2="12.01" y2="17" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
+          </svg>
+          You've used {Math.round(sessionMonitorState.usage.percent)}% of your session token limit. Consider pausing non-critical stacks.
+        </div>
+      )}
+
       {/* Dialogs */}
       {showNewStackDialog && <NewStackDialog />}
       {showOpenProjectDialog && <OpenProjectDialog />}
+
+      {/* Session warning modal (blocking, at 95% and 100% thresholds) */}
+      {showSessionWarningModal && sessionWarningLevel && sessionWarningLevel !== 'warning' && sessionWarningLevel !== 'normal' && (
+        <SessionWarningModal
+          level={sessionWarningLevel}
+          usage={sessionMonitorState?.usage ?? null}
+          onClose={() => setShowSessionWarningModal(false)}
+        />
+      )}
     </div>
   );
 }

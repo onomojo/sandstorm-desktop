@@ -426,6 +426,66 @@ export class StackManager {
     }
   }
 
+  /**
+   * Pause all running stacks due to session token limit.
+   * Uses docker stop (not teardown) so stacks can be resumed.
+   * Returns the list of stack IDs that were paused.
+   */
+  sessionPauseAllStacks(): string[] {
+    const stacks = this.registry.listStacks();
+    const runningStatuses = new Set(['running', 'up', 'building', 'rebuilding', 'idle', 'completed', 'pushed', 'pr_created']);
+    const paused: string[] = [];
+
+    for (const stack of stacks) {
+      if (runningStatuses.has(stack.status)) {
+        this.taskWatcher.unwatch(stack.id);
+        this.registry.updateStackStatus(stack.id, 'session_paused');
+        paused.push(stack.id);
+        // Stop containers in background
+        this.stopInBackground(stack, stack.id).catch(() => {});
+      }
+    }
+
+    if (paused.length > 0) {
+      this.notifyUpdate();
+    }
+    return paused;
+  }
+
+  /**
+   * Resume a stack that was paused due to session limit.
+   */
+  sessionResumeStack(stackId: string): void {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+    if (stack.status !== 'session_paused') return;
+
+    this.registry.updateStackStatus(stackId, 'building');
+    this.notifyUpdate();
+    this.startInBackground(stack, stackId).catch(() => {});
+  }
+
+  /**
+   * Resume all stacks that were paused due to session limit.
+   */
+  sessionResumeAllStacks(): string[] {
+    const stacks = this.registry.listStacks();
+    const resumed: string[] = [];
+
+    for (const stack of stacks) {
+      if (stack.status === 'session_paused') {
+        this.registry.updateStackStatus(stack.id, 'building');
+        resumed.push(stack.id);
+        this.startInBackground(stack, stack.id).catch(() => {});
+      }
+    }
+
+    if (resumed.length > 0) {
+      this.notifyUpdate();
+    }
+    return resumed;
+  }
+
   async teardownStack(stackId: string): Promise<void> {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);

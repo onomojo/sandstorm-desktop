@@ -3,17 +3,17 @@ import { useAppStore } from '../store';
 import { formatTokenCount } from '../utils/format';
 
 function getBarColor(percent: number): string {
-  if (percent < 50) return 'bg-emerald-500';
-  if (percent < 75) return 'bg-yellow-500';
-  if (percent < 90) return 'bg-orange-500';
-  return 'bg-red-500';
+  if (percent > 100) return 'bg-red-500 animate-pulse';
+  if (percent >= 90) return 'bg-red-500';
+  if (percent >= 70) return 'bg-amber-500';
+  return 'bg-emerald-500';
 }
 
 function getTextColor(percent: number): string {
-  if (percent < 50) return 'text-emerald-400';
-  if (percent < 75) return 'text-yellow-400';
-  if (percent < 90) return 'text-orange-400';
-  return 'text-red-400';
+  if (percent > 100) return 'text-red-400 animate-pulse';
+  if (percent >= 90) return 'text-red-400';
+  if (percent >= 70) return 'text-amber-400';
+  return 'text-emerald-400';
 }
 
 function formatTierLabel(tier: string | null, sub: string | null): string {
@@ -28,7 +28,7 @@ function formatTierLabel(tier: string | null, sub: string | null): string {
 }
 
 export function AccountUsageBar() {
-  const { accountUsage, globalTokenUsage } = useAppStore();
+  const { accountUsage, globalTokenUsage, sessionMonitorState } = useAppStore();
   const [showPopover, setShowPopover] = useState(false);
   const popoverRef = useRef<HTMLDivElement>(null);
   const buttonRef = useRef<HTMLButtonElement>(null);
@@ -56,7 +56,8 @@ export function AccountUsageBar() {
   // Nothing to show at all
   if (!hasAccountData && !hasStackData && !accountUsage) return null;
 
-  const percent = hasAccountData ? Math.min(accountUsage.percent, 100) : 0;
+  const rawPercent = hasAccountData ? accountUsage.percent : 0;
+  const percent = Math.min(rawPercent, 100); // cap bar width at 100%
   const usedTokens = hasAccountData ? accountUsage.used_tokens : (globalTokenUsage?.total_tokens ?? 0);
   const limitTokens = hasAccountData ? accountUsage.limit_tokens : 0;
   const resetIn = hasAccountData ? accountUsage.reset_in : null;
@@ -72,7 +73,7 @@ export function AccountUsageBar() {
         onClick={() => setShowPopover(!showPopover)}
         className="flex items-center gap-2 px-2 py-1 rounded-md hover:bg-sandstorm-surface-hover transition-colors group"
         title={hasAccountData
-          ? `Usage: ${formatTokenCount(usedTokens)} / ${formatTokenCount(limitTokens)} (${Math.round(percent)}%)${resetIn ? `\nResets in ${resetIn}` : ''}`
+          ? `Usage: ${formatTokenCount(usedTokens)} / ${formatTokenCount(limitTokens)} (${Math.round(rawPercent)}%)${resetIn ? `\nResets in ${resetIn}` : ''}${sessionMonitorState?.halted ? '\nStacks halted — session limit reached' : ''}`
           : `Stack tokens: ${(globalTokenUsage?.total_tokens ?? 0).toLocaleString()}`}
         data-testid="usage-bar-button"
       >
@@ -86,13 +87,13 @@ export function AccountUsageBar() {
           <div className="flex items-center gap-1.5">
             <div className="w-16 h-1.5 bg-sandstorm-border rounded-full overflow-hidden">
               <div
-                className={`h-full rounded-full transition-all duration-500 ${getBarColor(percent)}`}
+                className={`h-full rounded-full transition-all duration-500 ${getBarColor(rawPercent)}`}
                 style={{ width: `${percent}%` }}
                 data-testid="usage-progress-fill"
               />
             </div>
-            <span className={`text-[10px] tabular-nums font-medium ${getTextColor(percent)}`} data-testid="usage-percent">
-              {Math.round(percent)}%
+            <span className={`text-[10px] tabular-nums font-medium ${getTextColor(rawPercent)}`} data-testid="usage-percent">
+              {Math.round(rawPercent)}%
             </span>
             {resetIn && (
               <span className="text-[10px] tabular-nums text-sandstorm-muted" data-testid="usage-reset-in">
@@ -115,8 +116,18 @@ export function AccountUsageBar() {
           className="absolute top-full right-0 mt-1 w-60 bg-sandstorm-surface border border-sandstorm-border rounded-lg shadow-xl z-50 p-3"
           data-testid="usage-popover"
         >
-          <div className="text-[11px] font-semibold text-sandstorm-text mb-2">
+          <div className="text-[11px] font-semibold text-sandstorm-text mb-2 flex items-center gap-2">
             Account Usage
+            {sessionMonitorState?.halted && (
+              <span className="text-[9px] font-bold text-red-400 bg-red-500/10 px-1.5 py-0.5 rounded" data-testid="halted-badge">
+                HALTED
+              </span>
+            )}
+            {sessionMonitorState?.stale && (
+              <span className="text-[9px] font-bold text-yellow-400 bg-yellow-500/10 px-1.5 py-0.5 rounded" data-testid="stale-badge">
+                STALE
+              </span>
+            )}
           </div>
 
           {/* Account rate limit info */}
@@ -125,17 +136,17 @@ export function AccountUsageBar() {
               {/* Large progress bar */}
               <div className="w-full h-2 bg-sandstorm-border rounded-full overflow-hidden mb-1.5">
                 <div
-                  className={`h-full rounded-full transition-all duration-500 ${getBarColor(percent)}`}
+                  className={`h-full rounded-full transition-all duration-500 ${getBarColor(rawPercent)}`}
                   style={{ width: `${percent}%` }}
                   data-testid="popover-progress-fill"
                 />
               </div>
               <div className="flex justify-between text-[10px]">
-                <span className={`tabular-nums font-medium ${getTextColor(percent)}`}>
+                <span className={`tabular-nums font-medium ${getTextColor(rawPercent)}`}>
                   {formatTokenCount(usedTokens)} / {formatTokenCount(limitTokens)}
                 </span>
                 <span className="text-sandstorm-muted tabular-nums">
-                  {Math.round(percent)}%
+                  {Math.round(rawPercent)}%
                 </span>
               </div>
             </div>

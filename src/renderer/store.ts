@@ -126,6 +126,26 @@ export interface AccountUsage {
   rate_limit_tier: string | null;
 }
 
+export type ThresholdLevel = 'normal' | 'warning' | 'critical' | 'limit' | 'over_limit';
+
+export interface SessionMonitorState {
+  usage: AccountUsage | null;
+  level: ThresholdLevel;
+  stale: boolean;
+  halted: boolean;
+  lastPollAt: string | null;
+  consecutiveFailures: number;
+}
+
+export interface SessionMonitorSettings {
+  warningThreshold: number;
+  criticalThreshold: number;
+  autoHaltThreshold: number;
+  autoHaltEnabled: boolean;
+  autoResumeAfterReset: boolean;
+  pollIntervalMs: number;
+}
+
 export interface PortMapping {
   stack_id: string;
   service: string;
@@ -235,6 +255,21 @@ interface AppState {
   getProjectModelSettings: (projectDir: string) => Promise<ModelSettings | null>;
   setProjectModelSettings: (projectDir: string, settings: Partial<ModelSettings>) => Promise<void>;
   removeProjectModelSettings: (projectDir: string) => Promise<void>;
+
+  // Session monitor
+  sessionMonitorState: SessionMonitorState | null;
+  sessionMonitorSettings: SessionMonitorSettings | null;
+  /** The current threshold event level for displaying warnings */
+  sessionWarningLevel: ThresholdLevel | null;
+  /** Whether to show the session warning modal */
+  showSessionWarningModal: boolean;
+  setShowSessionWarningModal: (show: boolean) => void;
+  refreshSessionState: () => Promise<void>;
+  refreshSessionSettings: () => Promise<void>;
+  updateSessionSettings: (settings: Partial<SessionMonitorSettings>) => Promise<void>;
+  sessionAcknowledgeCritical: () => Promise<void>;
+  sessionHaltAll: () => Promise<string[]>;
+  sessionResumeAll: () => Promise<string[]>;
 
   // Account usage budget (persisted in localStorage)
   tokenBudget: number; // 0 means no budget set
@@ -382,6 +417,16 @@ declare global {
         removeProject: (projectDir: string) => Promise<void>;
         getEffective: (projectDir: string) => Promise<ModelSettings>;
       };
+      session: {
+        getState: () => Promise<SessionMonitorState>;
+        getSettings: () => Promise<SessionMonitorSettings>;
+        updateSettings: (settings: Partial<SessionMonitorSettings>) => Promise<void>;
+        acknowledgeCritical: () => Promise<void>;
+        haltAll: () => Promise<string[]>;
+        resumeAll: () => Promise<string[]>;
+        resumeStack: (stackId: string) => Promise<void>;
+        forcePoll: () => Promise<SessionMonitorState>;
+      };
       auth: {
         status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
         login: () => Promise<{ success: boolean; error?: string }>;
@@ -476,6 +521,52 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeProjectModelSettings: async (projectDir) => {
     await window.sandstorm.modelSettings.removeProject(projectDir);
+  },
+
+  // Session monitor
+  sessionMonitorState: null,
+  sessionMonitorSettings: null,
+  sessionWarningLevel: null,
+  showSessionWarningModal: false,
+  setShowSessionWarningModal: (show) => set({ showSessionWarningModal: show }),
+
+  refreshSessionState: async () => {
+    try {
+      const sessionMonitorState = await window.sandstorm.session.getState();
+      set({ sessionMonitorState });
+    } catch {
+      // Non-fatal
+    }
+  },
+
+  refreshSessionSettings: async () => {
+    try {
+      const sessionMonitorSettings = await window.sandstorm.session.getSettings();
+      set({ sessionMonitorSettings });
+    } catch {
+      // Non-fatal
+    }
+  },
+
+  updateSessionSettings: async (settings) => {
+    await window.sandstorm.session.updateSettings(settings);
+    await get().refreshSessionSettings();
+  },
+
+  sessionAcknowledgeCritical: async () => {
+    await window.sandstorm.session.acknowledgeCritical();
+  },
+
+  sessionHaltAll: async () => {
+    const paused = await window.sandstorm.session.haltAll();
+    await get().refreshStacks();
+    return paused;
+  },
+
+  sessionResumeAll: async () => {
+    const resumed = await window.sandstorm.session.resumeAll();
+    await get().refreshStacks();
+    return resumed;
   },
 
   // Account usage budget

@@ -38,7 +38,8 @@ export type StackStatus =
   | 'stopped'
   | 'pushed'
   | 'pr_created'
-  | 'rate_limited';
+  | 'rate_limited'
+  | 'session_paused';
 
 export interface Task {
   id: number;
@@ -137,6 +138,26 @@ export interface TokenValidationResult {
 export interface ModelSettings {
   inner_model: string;
   outer_model: string;
+}
+
+export interface SessionMonitorSettingsRecord {
+  warningThreshold: number;
+  criticalThreshold: number;
+  autoHaltThreshold: number;
+  autoHaltEnabled: boolean;
+  autoResumeAfterReset: boolean;
+  pollIntervalMs: number;
+}
+
+/** Raw DB row shape for session_monitor_settings */
+interface SessionMonitorSettingsRow {
+  key: string;
+  warning_threshold: number;
+  critical_threshold: number;
+  auto_halt_threshold: number;
+  auto_halt_enabled: number;
+  auto_resume_after_reset: number;
+  poll_interval_ms: number;
 }
 
 export class Registry {
@@ -403,8 +424,31 @@ export class Registry {
       this.setSchemaVersion(10);
     }
 
+    if (currentVersion < 11) {
+      // Session monitor settings — global app-level config for auto-halt thresholds
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS session_monitor_settings (
+          key                    TEXT PRIMARY KEY DEFAULT 'global',
+          warning_threshold      INTEGER NOT NULL DEFAULT 80,
+          critical_threshold     INTEGER NOT NULL DEFAULT 95,
+          auto_halt_threshold    INTEGER NOT NULL DEFAULT 100,
+          auto_halt_enabled      INTEGER NOT NULL DEFAULT 1,
+          auto_resume_after_reset INTEGER NOT NULL DEFAULT 0,
+          poll_interval_ms       INTEGER NOT NULL DEFAULT 60000
+        );
+      `);
+      this.db.exec(`
+        INSERT OR IGNORE INTO session_monitor_settings (key) VALUES ('global');
+      `);
+
+      // Add current_model column to stacks (may already exist via subquery alias)
+      try { this.db.exec('ALTER TABLE stacks ADD COLUMN current_model TEXT'); } catch { /* exists */ }
+
+      this.setSchemaVersion(11);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 11) { ... this.setSchemaVersion(11); }
+    // if (currentVersion < 12) { ... this.setSchemaVersion(12); }
   }
 
   // --- Projects ---
@@ -949,6 +993,47 @@ export class Registry {
       inner_model: project.inner_model === 'global' ? global.inner_model : project.inner_model,
       outer_model: project.outer_model === 'global' ? global.outer_model : project.outer_model,
     };
+  }
+
+  // --- Session Monitor Settings ---
+
+  getSessionMonitorSettings(): SessionMonitorSettingsRecord {
+    const row = this.db.prepare(
+      "SELECT * FROM session_monitor_settings WHERE key = 'global'"
+    ).get() as SessionMonitorSettingsRow | undefined;
+    return row
+      ? {
+          warningThreshold: row.warning_threshold,
+          criticalThreshold: row.critical_threshold,
+          autoHaltThreshold: row.auto_halt_threshold,
+          autoHaltEnabled: row.auto_halt_enabled === 1,
+          autoResumeAfterReset: row.auto_resume_after_reset === 1,
+          pollIntervalMs: row.poll_interval_ms,
+        }
+      : {
+          warningThreshold: 80,
+          criticalThreshold: 95,
+          autoHaltThreshold: 100,
+          autoHaltEnabled: true,
+          autoResumeAfterReset: false,
+          pollIntervalMs: 60_000,
+        };
+  }
+
+  setSessionMonitorSettings(settings: Partial<SessionMonitorSettingsRecord>): void {
+    const current = this.getSessionMonitorSettings();
+    this.db.prepare(
+      `INSERT OR REPLACE INTO session_monitor_settings
+        (key, warning_threshold, critical_threshold, auto_halt_threshold, auto_halt_enabled, auto_resume_after_reset, poll_interval_ms)
+       VALUES ('global', ?, ?, ?, ?, ?, ?)`
+    ).run(
+      settings.warningThreshold ?? current.warningThreshold,
+      settings.criticalThreshold ?? current.criticalThreshold,
+      settings.autoHaltThreshold ?? current.autoHaltThreshold,
+      (settings.autoHaltEnabled ?? current.autoHaltEnabled) ? 1 : 0,
+      (settings.autoResumeAfterReset ?? current.autoResumeAfterReset) ? 1 : 0,
+      settings.pollIntervalMs ?? current.pollIntervalMs,
+    );
   }
 
   // --- Cleanup ---
