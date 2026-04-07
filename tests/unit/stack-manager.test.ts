@@ -529,54 +529,53 @@ describe('StackManager', () => {
       }, { timeout: 25000 });
     }, 30000);
 
-    it('propagates forceBypass to dispatchTask when forceBypass is true', async () => {
+    it('propagates forceBypass to internal dispatchTask call (regression #186)', async () => {
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
-      const capturedOpts: Array<{ gateApproved?: boolean; forceBypass?: boolean }> = [];
-      vi.spyOn(manager, 'dispatchTask').mockImplementation(async (_stackId, _prompt, _model, opts) => {
-        capturedOpts.push(opts ?? {});
-        return { id: 1, stack_id: 'bypass-prop', prompt: 'task', model: null, status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null };
+      const dispatchSpy = vi.spyOn(manager, 'dispatchTask').mockResolvedValue({
+        id: 1, stack_id: 'bypass-prop', prompt: 'Fix issue #99', model: null,
+        status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null,
       });
 
       manager.createStack({
         name: 'bypass-prop',
         projectDir: tmpDir,
         runtime: 'docker',
-        task: 'Fix issue #42',
+        task: 'Fix issue #99',
         forceBypass: true,
       });
 
       await vi.waitFor(() => {
-        expect(capturedOpts.length).toBeGreaterThan(0);
-      }, { timeout: 20000 });
+        expect(dispatchSpy).toHaveBeenCalled();
+      }, { timeout: 5000 });
 
-      expect(capturedOpts[0].forceBypass).toBe(true);
-    }, 25000);
+      const [, , , opts] = dispatchSpy.mock.calls[0];
+      expect(opts?.forceBypass).toBe(true);
+    });
 
-    it('propagates gateApproved to dispatchTask when gateApproved is true', async () => {
+    it('propagates gateApproved to internal dispatchTask call', async () => {
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
-      const capturedOpts: Array<{ gateApproved?: boolean; forceBypass?: boolean }> = [];
-      vi.spyOn(manager, 'dispatchTask').mockImplementation(async (_stackId, _prompt, _model, opts) => {
-        capturedOpts.push(opts ?? {});
-        return { id: 1, stack_id: 'gate-prop', prompt: 'task', model: null, status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null };
+      const dispatchSpy = vi.spyOn(manager, 'dispatchTask').mockResolvedValue({
+        id: 1, stack_id: 'gate-prop', prompt: 'Fix issue #99', model: null,
+        status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null,
       });
 
       manager.createStack({
         name: 'gate-prop',
         projectDir: tmpDir,
         runtime: 'docker',
-        task: 'do work',
-        ticket: 'PROJ-123',
+        task: 'Fix issue #99',
         gateApproved: true,
       });
 
       await vi.waitFor(() => {
-        expect(capturedOpts.length).toBeGreaterThan(0);
-      }, { timeout: 20000 });
+        expect(dispatchSpy).toHaveBeenCalled();
+      }, { timeout: 5000 });
 
-      expect(capturedOpts[0].gateApproved).toBe(true);
-    }, 25000);
+      const [, , , opts] = dispatchSpy.mock.calls[0];
+      expect(opts?.gateApproved).toBe(true);
+    });
   });
 
   describe('stopStack', () => {
