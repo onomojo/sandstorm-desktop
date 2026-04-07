@@ -1,9 +1,10 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAppStore, Task, TaskTokenStep, StackMetrics } from '../store';
+import { useAppStore, Task, TaskTokenStep, StackMetrics, WorkflowProgress } from '../store';
 import { ServiceList } from './ServiceList';
 import { TaskOutput } from './TaskOutput';
 import { DiffViewer } from './DiffViewer';
 import { LogViewer } from './LogViewer';
+import { WorkflowProgressPanel } from './WorkflowProgress';
 import { formatTokenCount, formatBytes, formatMs } from '../utils/format';
 
 type Tab = 'output' | 'diff' | 'logs' | 'history';
@@ -33,6 +34,7 @@ export function StackDetail({
   const [selectedLogContainer, setSelectedLogContainer] = useState<string | null>(null);
   const [dispatching, setDispatching] = useState(false);
   const [taskModel, setTaskModel] = useState<string>('sonnet');
+  const [workflowProgress, setWorkflowProgress] = useState<WorkflowProgress | null>(null);
 
   const loadTasks = useCallback(async () => {
     const taskList = await window.sandstorm.tasks.list(stackId);
@@ -63,6 +65,54 @@ export function StackDetail({
     if (activeTab === 'history') loadTasks();
     if (activeTab === 'diff') loadDiff();
   }, [activeTab, loadTasks, loadDiff]);
+
+  // Poll workflow progress for running stacks and listen for live updates
+  useEffect(() => {
+    if (!stack || stack.status !== 'running') {
+      setWorkflowProgress(null);
+      return;
+    }
+
+    // Initial fetch
+    window.sandstorm.tasks.workflowProgress(stackId)
+      .then((progress) => {
+        if (progress) setWorkflowProgress(progress as WorkflowProgress);
+      })
+      .catch(() => {});
+
+    // Listen for live updates
+    const unsubscribe = window.sandstorm.on('task:workflow-progress', (data: unknown) => {
+      const progress = data as WorkflowProgress;
+      if (progress && progress.stackId === stackId) {
+        setWorkflowProgress(progress);
+      }
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [stackId, stack?.status]);
+
+  // Clear workflow progress when task completes
+  useEffect(() => {
+    const unsubComplete = window.sandstorm.on('task:completed', (data: unknown) => {
+      const event = data as { stackId: string };
+      if (event.stackId === stackId) {
+        setWorkflowProgress(null);
+      }
+    });
+    const unsubFailed = window.sandstorm.on('task:failed', (data: unknown) => {
+      const event = data as { stackId: string };
+      if (event.stackId === stackId) {
+        setWorkflowProgress(null);
+      }
+    });
+
+    return () => {
+      unsubComplete();
+      unsubFailed();
+    };
+  }, [stackId]);
 
   if (!stack) {
     return (
@@ -136,6 +186,8 @@ export function StackDetail({
             : stack.status === 'rate_limited'
               ? 'bg-orange-500/10 border-orange-500/20 text-orange-400'
               : 'bg-gray-500/10 border-gray-500/20 text-gray-400';
+
+  const showWorkflowPanel = workflowProgress !== null;
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
@@ -252,62 +304,75 @@ export function StackDetail({
         }}
       />
 
-      {/* Tabs */}
-      <div className="border-b border-sandstorm-border px-5 shrink-0">
-        <div className="flex gap-0.5">
-          {TAB_CONFIG.map(({ key, label, icon }) => (
-            <button
-              key={key}
-              onClick={() => setActiveTab(key)}
-              className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors ${
-                activeTab === key
-                  ? 'border-sandstorm-accent text-sandstorm-text'
-                  : 'border-transparent text-sandstorm-muted hover:text-sandstorm-text-secondary'
-              }`}
-            >
-              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-70">
-                <path d={icon}/>
-              </svg>
-              {label}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Two-column layout: workflow progress (left) + tabs (right) */}
+      <div className="flex-1 overflow-hidden flex">
+        {/* Left column: workflow progress panel */}
+        {showWorkflowPanel && (
+          <div className="w-[35%] min-w-[260px] max-w-[380px] border-r border-sandstorm-border flex flex-col overflow-hidden shrink-0">
+            <WorkflowProgressPanel progress={workflowProgress} />
+          </div>
+        )}
 
-      {/* Tab content */}
-      <div className="flex-1 overflow-hidden">
-        {activeTab === 'output' && (
-          <TaskOutput
-            stackId={stackId}
-            runtime={stack.runtime}
-            claudeContainerId={
-              stack.services.find((s) => s.name === 'claude')?.containerId ?? null
-            }
-          />
-        )}
-        {activeTab === 'diff' && <DiffViewer diff={diff} />}
-        {activeTab === 'logs' && (
-          <LogViewer
-            services={stack.services}
-            runtime={stack.runtime}
-            selectedContainerId={selectedLogContainer}
-          />
-        )}
-        {activeTab === 'history' && (
-          <div className="p-5 overflow-y-auto h-full">
-            {tasks.length === 0 ? (
-              <div className="flex flex-col items-center justify-center h-32 text-sandstorm-muted">
-                <p className="text-sm">No tasks dispatched yet</p>
-              </div>
-            ) : (
-              <div className="space-y-2">
-                {tasks.map((task) => (
-                  <TaskHistoryCard key={task.id} task={task} />
-                ))}
+        {/* Right column: tabs + content */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {/* Tabs */}
+          <div className="border-b border-sandstorm-border px-5 shrink-0">
+            <div className="flex gap-0.5">
+              {TAB_CONFIG.map(({ key, label, icon }) => (
+                <button
+                  key={key}
+                  onClick={() => setActiveTab(key)}
+                  className={`flex items-center gap-1.5 px-3 py-2.5 text-xs font-medium border-b-2 transition-colors ${
+                    activeTab === key
+                      ? 'border-sandstorm-accent text-sandstorm-text'
+                      : 'border-transparent text-sandstorm-muted hover:text-sandstorm-text-secondary'
+                  }`}
+                >
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-70">
+                    <path d={icon}/>
+                  </svg>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Tab content */}
+          <div className="flex-1 overflow-hidden">
+            {activeTab === 'output' && (
+              <TaskOutput
+                stackId={stackId}
+                runtime={stack.runtime}
+                claudeContainerId={
+                  stack.services.find((s) => s.name === 'claude')?.containerId ?? null
+                }
+              />
+            )}
+            {activeTab === 'diff' && <DiffViewer diff={diff} />}
+            {activeTab === 'logs' && (
+              <LogViewer
+                services={stack.services}
+                runtime={stack.runtime}
+                selectedContainerId={selectedLogContainer}
+              />
+            )}
+            {activeTab === 'history' && (
+              <div className="p-5 overflow-y-auto h-full">
+                {tasks.length === 0 ? (
+                  <div className="flex flex-col items-center justify-center h-32 text-sandstorm-muted">
+                    <p className="text-sm">No tasks dispatched yet</p>
+                  </div>
+                ) : (
+                  <div className="space-y-2">
+                    {tasks.map((task) => (
+                      <TaskHistoryCard key={task.id} task={task} />
+                    ))}
+                  </div>
+                )}
               </div>
             )}
           </div>
-        )}
+        </div>
       </div>
 
       {/* New task input + action buttons */}

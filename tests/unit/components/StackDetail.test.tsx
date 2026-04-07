@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { StackDetail } from '../../../src/renderer/components/StackDetail';
-import { useAppStore, Stack } from '../../../src/renderer/store';
+import { useAppStore, Stack, WorkflowProgress } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
 
 function makeStack(overrides: Partial<Stack> = {}): Stack {
@@ -388,6 +388,63 @@ describe('StackDetail', () => {
       expect(detail.textContent).toContain('Execution');
       expect(detail.textContent).toContain('Review');
     });
+  });
+
+  it('shows workflow progress panel for running stack with progress data', async () => {
+    const progressData: WorkflowProgress = {
+      stackId: 'detail-stack',
+      currentPhase: 'review',
+      outerIteration: 1,
+      innerIteration: 2,
+      phases: [
+        { phase: 'execution', status: 'passed' },
+        { phase: 'review', status: 'running' },
+        { phase: 'verify', status: 'pending' },
+      ],
+      steps: [
+        { phase: 'execution', iteration: 1, input_tokens: 5000, output_tokens: 2000, live: false },
+        { phase: 'review', iteration: 1, input_tokens: 3000, output_tokens: 1000, live: true },
+      ],
+      taskPrompt: 'Fix the login bug',
+      startedAt: new Date().toISOString(),
+      model: 'sonnet',
+    };
+
+    useAppStore.setState({
+      stacks: [makeStack({ status: 'running' })],
+    });
+    api.tasks.workflowProgress.mockResolvedValue(progressData);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-progress-panel')).toBeDefined();
+    });
+    expect(screen.getByTestId('outer-loop-counter').textContent).toBe('1 of 5');
+    expect(screen.getByTestId('inner-loop-counter').textContent).toBe('2 of 5');
+  });
+
+  it('does not show workflow panel when stack is not running', () => {
+    useAppStore.setState({
+      stacks: [makeStack({ status: 'completed' })],
+    });
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    expect(screen.queryByTestId('workflow-progress-panel')).toBeNull();
+  });
+
+  it('does not show workflow panel when no progress data available', async () => {
+    useAppStore.setState({
+      stacks: [makeStack({ status: 'running' })],
+    });
+    api.tasks.workflowProgress.mockResolvedValue(null);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+
+    // Wait for async call to settle
+    await waitFor(() => {
+      expect(api.tasks.workflowProgress).toHaveBeenCalledWith('detail-stack');
+    });
+    expect(screen.queryByTestId('workflow-progress-panel')).toBeNull();
   });
 
   it('shows aggregate fallback when no per-step data exists', async () => {

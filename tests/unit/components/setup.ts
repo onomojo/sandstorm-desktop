@@ -38,6 +38,7 @@ export function mockSandstormApi() {
       dispatch: vi.fn().mockResolvedValue({ id: 1, stack_id: 'test', prompt: '', model: null, status: 'running' }),
       list: vi.fn().mockResolvedValue([]),
       tokenSteps: vi.fn().mockResolvedValue([]),
+      workflowProgress: vi.fn().mockResolvedValue(null),
     },
     diff: {
       get: vi.fn().mockResolvedValue(''),
