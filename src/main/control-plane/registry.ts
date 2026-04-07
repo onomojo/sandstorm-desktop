@@ -110,6 +110,30 @@ export interface Project {
   added_at: string;
 }
 
+export interface TaskTokenStep {
+  id: number;
+  task_id: number;
+  iteration: number;
+  phase: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface ProjectTokenUsageRecord {
+  id: number;
+  project_dir: string;
+  input_tokens: number;
+  output_tokens: number;
+  updated_at: string;
+}
+
+export interface TokenValidationResult {
+  valid: boolean;
+  stepTotal: { input: number; output: number };
+  phaseTotal: { executionInput: number; executionOutput: number; reviewInput: number; reviewOutput: number };
+  taskTotal: { input: number; output: number };
+}
+
 export interface ModelSettings {
   inner_model: string;
   outer_model: string;
@@ -349,8 +373,38 @@ export class Registry {
       this.setSchemaVersion(9);
     }
 
+    if (currentVersion < 10) {
+      // Per-step token tracking for iteration-level observability
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS task_token_steps (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          task_id       INTEGER NOT NULL REFERENCES tasks(id) ON DELETE CASCADE,
+          iteration     INTEGER NOT NULL,
+          phase         TEXT NOT NULL,
+          input_tokens  INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0
+        );
+      `);
+      this.db.exec(`
+        CREATE INDEX IF NOT EXISTS idx_task_token_steps_task_id ON task_token_steps(task_id);
+      `);
+
+      // Outer Claude token tracking per project
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS project_token_usage (
+          id            INTEGER PRIMARY KEY AUTOINCREMENT,
+          project_dir   TEXT NOT NULL UNIQUE,
+          input_tokens  INTEGER NOT NULL DEFAULT 0,
+          output_tokens INTEGER NOT NULL DEFAULT 0,
+          updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+
+      this.setSchemaVersion(10);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 10) { ... this.setSchemaVersion(10); }
+    // if (currentVersion < 11) { ... this.setSchemaVersion(11); }
   }
 
   // --- Projects ---
@@ -584,6 +638,124 @@ export class Registry {
     if (sets.length === 0) return;
     values.push(taskId);
     this.db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values);
+  }
+
+  // --- Task Token Steps ---
+
+  setTaskTokenSteps(taskId: number, steps: { iteration: number; phase: string; input_tokens: number; output_tokens: number }[]): void {
+    const insertOrUpdate = this.db.transaction(() => {
+      // Clear existing steps for this task
+      this.db.prepare('DELETE FROM task_token_steps WHERE task_id = ?').run(taskId);
+      const insert = this.db.prepare(
+        'INSERT INTO task_token_steps (task_id, iteration, phase, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?)'
+      );
+      for (const step of steps) {
+        insert.run(taskId, step.iteration, step.phase, step.input_tokens, step.output_tokens);
+      }
+    });
+    insertOrUpdate();
+  }
+
+  getTaskTokenSteps(taskId: number): TaskTokenStep[] {
+    return this.db.prepare(
+      'SELECT * FROM task_token_steps WHERE task_id = ? ORDER BY iteration ASC, CASE phase WHEN \'execution\' THEN 0 WHEN \'review\' THEN 1 WHEN \'verify\' THEN 2 ELSE 99 END ASC'
+    ).all(taskId) as TaskTokenStep[];
+  }
+
+  /**
+   * Validate that per-step token sums match phase totals and grand total.
+   * Returns validation result with computed sums.
+   */
+  validateTaskTokens(taskId: number): TokenValidationResult {
+    const task = this.db.prepare(
+      'SELECT input_tokens, output_tokens, execution_input_tokens, execution_output_tokens, review_input_tokens, review_output_tokens FROM tasks WHERE id = ?'
+    ).get(taskId) as {
+      input_tokens: number; output_tokens: number;
+      execution_input_tokens: number; execution_output_tokens: number;
+      review_input_tokens: number; review_output_tokens: number;
+    } | undefined;
+
+    if (!task) {
+      return { valid: true, stepTotal: { input: 0, output: 0 }, phaseTotal: { executionInput: 0, executionOutput: 0, reviewInput: 0, reviewOutput: 0 }, taskTotal: { input: 0, output: 0 } };
+    }
+
+    const steps = this.getTaskTokenSteps(taskId);
+
+    // Sum steps by phase
+    let stepExecIn = 0, stepExecOut = 0, stepRevIn = 0, stepRevOut = 0;
+    let stepTotalIn = 0, stepTotalOut = 0;
+
+    for (const step of steps) {
+      stepTotalIn += step.input_tokens;
+      stepTotalOut += step.output_tokens;
+      if (step.phase === 'execution') {
+        stepExecIn += step.input_tokens;
+        stepExecOut += step.output_tokens;
+      } else if (step.phase === 'review') {
+        stepRevIn += step.input_tokens;
+        stepRevOut += step.output_tokens;
+      }
+      // verify tokens contribute to total but not to exec/review phase fields
+    }
+
+    const phaseTotalIn = task.execution_input_tokens + task.review_input_tokens;
+    const phaseTotalOut = task.execution_output_tokens + task.review_output_tokens;
+
+    // Steps should match phase totals (execution steps = execution phase, review steps = review phase)
+    const stepsMatchPhases =
+      stepExecIn === task.execution_input_tokens &&
+      stepExecOut === task.execution_output_tokens &&
+      stepRevIn === task.review_input_tokens &&
+      stepRevOut === task.review_output_tokens;
+
+    // Phase totals should match grand total (verify tokens account for the difference)
+    const phasesMatchTotal =
+      phaseTotalIn <= task.input_tokens &&
+      phaseTotalOut <= task.output_tokens;
+
+    return {
+      valid: steps.length === 0 || (stepsMatchPhases && phasesMatchTotal),
+      stepTotal: { input: stepTotalIn, output: stepTotalOut },
+      phaseTotal: {
+        executionInput: task.execution_input_tokens,
+        executionOutput: task.execution_output_tokens,
+        reviewInput: task.review_input_tokens,
+        reviewOutput: task.review_output_tokens,
+      },
+      taskTotal: { input: task.input_tokens, output: task.output_tokens },
+    };
+  }
+
+  // --- Project Token Usage (Outer Claude) ---
+
+  getProjectTokenUsage(projectDir: string): ProjectTokenUsageRecord | undefined {
+    const normalizedDir = path.resolve(projectDir);
+    return this.db.prepare(
+      'SELECT * FROM project_token_usage WHERE project_dir = ?'
+    ).get(normalizedDir) as ProjectTokenUsageRecord | undefined;
+  }
+
+  addProjectTokenUsage(projectDir: string, inputTokens: number, outputTokens: number): void {
+    const normalizedDir = path.resolve(projectDir);
+    const existing = this.db.prepare(
+      'SELECT id FROM project_token_usage WHERE project_dir = ?'
+    ).get(normalizedDir) as { id: number } | undefined;
+
+    if (existing) {
+      this.db.prepare(
+        "UPDATE project_token_usage SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, updated_at = datetime('now') WHERE project_dir = ?"
+      ).run(inputTokens, outputTokens, normalizedDir);
+    } else {
+      this.db.prepare(
+        'INSERT INTO project_token_usage (project_dir, input_tokens, output_tokens) VALUES (?, ?, ?)'
+      ).run(normalizedDir, inputTokens, outputTokens);
+    }
+  }
+
+  listProjectTokenUsage(): ProjectTokenUsageRecord[] {
+    return this.db.prepare(
+      'SELECT * FROM project_token_usage ORDER BY updated_at DESC'
+    ).all() as ProjectTokenUsageRecord[];
   }
 
   interruptTask(taskId: number): void {

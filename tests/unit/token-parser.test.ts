@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { parseTokenUsage, parsePhaseTokenTotals } from '../../src/main/control-plane/token-parser';
+import { parseTokenUsage, parsePhaseTokenTotals, parsePhaseTokenSteps } from '../../src/main/control-plane/token-parser';
 
 describe('parseTokenUsage', () => {
   it('returns zeros for empty input', () => {
@@ -312,5 +312,101 @@ describe('parsePhaseTokenTotals', () => {
     const result = parsePhaseTokenTotals(output);
     expect(result.input_tokens).toBe(800);
     expect(result.output_tokens).toBe(300);
+  });
+});
+
+describe('parsePhaseTokenSteps', () => {
+  it('returns empty array for empty input', () => {
+    const result = parsePhaseTokenSteps('', '');
+    expect(result).toEqual([]);
+  });
+
+  it('parses tagged execution lines with iteration and phase', () => {
+    const execOutput = '{"in":1000,"out":500,"iter":1,"phase":"execution"}\n';
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      iteration: 1,
+      phase: 'execution',
+      input_tokens: 1000,
+      output_tokens: 500,
+    });
+  });
+
+  it('parses tagged review lines', () => {
+    const reviewOutput = '{"in":800,"out":300,"iter":1,"phase":"review"}\n';
+    const result = parsePhaseTokenSteps('', reviewOutput);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      iteration: 1,
+      phase: 'review',
+      input_tokens: 800,
+      output_tokens: 300,
+    });
+  });
+
+  it('sums multiple API turns within the same iteration+phase', () => {
+    const execOutput = [
+      '{"in":500,"out":200,"iter":1,"phase":"execution"}',
+      '{"in":300,"out":150,"iter":1,"phase":"execution"}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    expect(result[0].input_tokens).toBe(800);
+    expect(result[0].output_tokens).toBe(350);
+  });
+
+  it('separates different iterations', () => {
+    const execOutput = [
+      '{"in":1000,"out":500,"iter":1,"phase":"execution"}',
+      '{"in":800,"out":400,"iter":2,"phase":"execution"}',
+    ].join('\n');
+    const reviewOutput = [
+      '{"in":600,"out":200,"iter":1,"phase":"review"}',
+      '{"in":500,"out":150,"iter":2,"phase":"review"}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, reviewOutput);
+    expect(result).toHaveLength(4);
+    // Sorted: iter1-exec, iter1-review, iter2-exec, iter2-review
+    expect(result[0]).toEqual({ iteration: 1, phase: 'execution', input_tokens: 1000, output_tokens: 500 });
+    expect(result[1]).toEqual({ iteration: 1, phase: 'review', input_tokens: 600, output_tokens: 200 });
+    expect(result[2]).toEqual({ iteration: 2, phase: 'execution', input_tokens: 800, output_tokens: 400 });
+    expect(result[3]).toEqual({ iteration: 2, phase: 'review', input_tokens: 500, output_tokens: 150 });
+  });
+
+  it('falls back to default phase and iteration 1 for legacy lines', () => {
+    const execOutput = '{"in":1000,"out":500}\n';
+    const reviewOutput = '{"in":600,"out":200}\n';
+    const result = parsePhaseTokenSteps(execOutput, reviewOutput);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ iteration: 1, phase: 'execution', input_tokens: 1000, output_tokens: 500 });
+    expect(result[1]).toEqual({ iteration: 1, phase: 'review', input_tokens: 600, output_tokens: 200 });
+  });
+
+  it('sorts by iteration then phase order (execution < review < verify)', () => {
+    const execOutput = [
+      '{"in":100,"out":50,"iter":2,"phase":"execution"}',
+      '{"in":200,"out":100,"iter":1,"phase":"execution"}',
+      '{"in":50,"out":25,"iter":2,"phase":"verify"}',
+    ].join('\n');
+    const reviewOutput = '{"in":150,"out":75,"iter":1,"phase":"review"}\n';
+    const result = parsePhaseTokenSteps(execOutput, reviewOutput);
+    expect(result.map(s => `${s.iteration}:${s.phase}`)).toEqual([
+      '1:execution', '1:review', '2:execution', '2:verify',
+    ]);
+  });
+
+  it('skips zero-token lines', () => {
+    const execOutput = '{"in":0,"out":0,"iter":1,"phase":"execution"}\n{"in":100,"out":50,"iter":1,"phase":"execution"}\n';
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    expect(result[0].input_tokens).toBe(100);
+  });
+
+  it('handles mixed valid and invalid lines', () => {
+    const execOutput = 'not json\n{"in":500,"out":200,"iter":1,"phase":"execution"}\ngarbage\n';
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    expect(result[0].input_tokens).toBe(500);
   });
 });

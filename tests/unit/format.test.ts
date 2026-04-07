@@ -111,3 +111,4 @@ describe('buildTokenTooltip', () => {
     expect(tooltip).toBe('Input: 0 / Output: 0');
   });
 });
+

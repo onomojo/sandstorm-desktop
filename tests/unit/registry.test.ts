@@ -962,4 +962,178 @@ describe('Registry', () => {
       registry = await Registry.create(makeTempDb());
     });
   });
+
+  // ===========================================
+  // Task Token Steps
+  // ===========================================
+  describe('task token steps', () => {
+    beforeEach(() => {
+      registry.createStack(makeStack({ id: 'token-steps-stack' }));
+    });
+
+    it('stores and retrieves per-step token data', () => {
+      const task = registry.createTask('token-steps-stack', 'test task');
+      const steps = [
+        { iteration: 1, phase: 'execution', input_tokens: 1000, output_tokens: 500 },
+        { iteration: 1, phase: 'review', input_tokens: 800, output_tokens: 300 },
+        { iteration: 2, phase: 'execution', input_tokens: 600, output_tokens: 200 },
+      ];
+      registry.setTaskTokenSteps(task.id, steps);
+
+      const retrieved = registry.getTaskTokenSteps(task.id);
+      expect(retrieved).toHaveLength(3);
+      expect(retrieved[0].iteration).toBe(1);
+      expect(retrieved[0].phase).toBe('execution');
+      expect(retrieved[0].input_tokens).toBe(1000);
+      expect(retrieved[0].output_tokens).toBe(500);
+      expect(retrieved[1].phase).toBe('review');
+      expect(retrieved[2].iteration).toBe(2);
+    });
+
+    it('replaces existing steps on re-set', () => {
+      const task = registry.createTask('token-steps-stack', 'replace test');
+      registry.setTaskTokenSteps(task.id, [
+        { iteration: 1, phase: 'execution', input_tokens: 100, output_tokens: 50 },
+      ]);
+      expect(registry.getTaskTokenSteps(task.id)).toHaveLength(1);
+
+      registry.setTaskTokenSteps(task.id, [
+        { iteration: 1, phase: 'execution', input_tokens: 200, output_tokens: 100 },
+        { iteration: 1, phase: 'review', input_tokens: 150, output_tokens: 75 },
+      ]);
+      const steps = registry.getTaskTokenSteps(task.id);
+      expect(steps).toHaveLength(2);
+      expect(steps[0].input_tokens).toBe(200);
+    });
+
+    it('returns empty array for task with no steps', () => {
+      const task = registry.createTask('token-steps-stack', 'no steps');
+      expect(registry.getTaskTokenSteps(task.id)).toEqual([]);
+    });
+
+    it('cascades delete with task', () => {
+      const task = registry.createTask('token-steps-stack', 'cascade test');
+      registry.setTaskTokenSteps(task.id, [
+        { iteration: 1, phase: 'execution', input_tokens: 100, output_tokens: 50 },
+      ]);
+      registry.deleteStack('token-steps-stack');
+      expect(registry.getTaskTokenSteps(task.id)).toEqual([]);
+    });
+
+    it('orders steps by iteration then phase', () => {
+      const task = registry.createTask('token-steps-stack', 'order test');
+      registry.setTaskTokenSteps(task.id, [
+        { iteration: 2, phase: 'review', input_tokens: 100, output_tokens: 50 },
+        { iteration: 1, phase: 'review', input_tokens: 100, output_tokens: 50 },
+        { iteration: 1, phase: 'execution', input_tokens: 200, output_tokens: 100 },
+        { iteration: 2, phase: 'execution', input_tokens: 200, output_tokens: 100 },
+      ]);
+      const steps = registry.getTaskTokenSteps(task.id);
+      expect(steps.map(s => `${s.iteration}:${s.phase}`)).toEqual([
+        '1:execution', '1:review', '2:execution', '2:review',
+      ]);
+    });
+  });
+
+  // ===========================================
+  // Token Validation
+  // ===========================================
+  describe('token validation', () => {
+    beforeEach(() => {
+      registry.createStack(makeStack({ id: 'validate-stack' }));
+    });
+
+    it('validates matching step and phase totals', () => {
+      const task = registry.createTask('validate-stack', 'validate test');
+      registry.updateTaskTokens(task.id, 1800, 800, {
+        executionInput: 1000,
+        executionOutput: 500,
+        reviewInput: 800,
+        reviewOutput: 300,
+      });
+      registry.setTaskTokenSteps(task.id, [
+        { iteration: 1, phase: 'execution', input_tokens: 1000, output_tokens: 500 },
+        { iteration: 1, phase: 'review', input_tokens: 800, output_tokens: 300 },
+      ]);
+
+      const result = registry.validateTaskTokens(task.id);
+      expect(result.valid).toBe(true);
+    });
+
+    it('detects mismatched step vs phase totals', () => {
+      const task = registry.createTask('validate-stack', 'mismatch test');
+      registry.updateTaskTokens(task.id, 1800, 800, {
+        executionInput: 1000,
+        executionOutput: 500,
+        reviewInput: 800,
+        reviewOutput: 300,
+      });
+      // Steps don't match phase totals
+      registry.setTaskTokenSteps(task.id, [
+        { iteration: 1, phase: 'execution', input_tokens: 500, output_tokens: 200 },
+        { iteration: 1, phase: 'review', input_tokens: 400, output_tokens: 150 },
+      ]);
+
+      const result = registry.validateTaskTokens(task.id);
+      expect(result.valid).toBe(false);
+    });
+
+    it('validates task with no steps (valid by default)', () => {
+      const task = registry.createTask('validate-stack', 'no steps');
+      registry.updateTaskTokens(task.id, 1000, 500, {
+        executionInput: 1000,
+        executionOutput: 500,
+        reviewInput: 0,
+        reviewOutput: 0,
+      });
+
+      const result = registry.validateTaskTokens(task.id);
+      expect(result.valid).toBe(true);
+    });
+
+    it('returns valid for non-existent task', () => {
+      const result = registry.validateTaskTokens(99999);
+      expect(result.valid).toBe(true);
+    });
+  });
+
+  // ===========================================
+  // Project Token Usage (Outer Claude)
+  // ===========================================
+  describe('project token usage', () => {
+    it('adds token usage for a new project', () => {
+      registry.addProjectTokenUsage('/test/project', 1000, 500);
+      const usage = registry.getProjectTokenUsage('/test/project');
+      expect(usage).toBeDefined();
+      expect(usage!.input_tokens).toBe(1000);
+      expect(usage!.output_tokens).toBe(500);
+    });
+
+    it('accumulates token usage for existing project', () => {
+      registry.addProjectTokenUsage('/test/project', 1000, 500);
+      registry.addProjectTokenUsage('/test/project', 2000, 800);
+      const usage = registry.getProjectTokenUsage('/test/project');
+      expect(usage!.input_tokens).toBe(3000);
+      expect(usage!.output_tokens).toBe(1300);
+    });
+
+    it('returns undefined for unknown project', () => {
+      expect(registry.getProjectTokenUsage('/nonexistent')).toBeUndefined();
+    });
+
+    it('lists all project token usage records', () => {
+      registry.addProjectTokenUsage('/proj1', 1000, 500);
+      registry.addProjectTokenUsage('/proj2', 2000, 800);
+      const list = registry.listProjectTokenUsage();
+      expect(list).toHaveLength(2);
+    });
+
+    it('normalizes project directory paths', () => {
+      registry.addProjectTokenUsage('/test/project', 1000, 500);
+      registry.addProjectTokenUsage('/test/project', 500, 200);
+      const list = registry.listProjectTokenUsage();
+      expect(list).toHaveLength(1);
+      expect(list[0].input_tokens).toBe(1500);
+    });
+  });
 });

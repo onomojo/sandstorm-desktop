@@ -547,6 +547,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return stackManager.getTasksForStack(stackId);
   });
 
+  ipcMain.handle('tasks:tokenSteps', async (_event, taskId: number) => {
+    return registry.getTaskTokenSteps(taskId);
+  });
+
   // --- Diff ---
 
   ipcMain.handle('diff:get', async (_event, stackId: string) => {
@@ -617,6 +621,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stats:account-usage', async () => {
     return fetchAccountUsage();
+  });
+
+  ipcMain.handle('stats:outer-claude-tokens', async () => {
+    return registry.listProjectTokenUsage();
   });
 
   // --- Custom Context ---

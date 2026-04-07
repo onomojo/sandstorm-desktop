@@ -1,7 +1,7 @@
 import { EventEmitter } from 'events';
 import { Registry, Task } from './registry';
 import { ContainerRuntime } from '../runtime/types';
-import { parseTokenUsage, parsePhaseTokenTotals } from './token-parser';
+import { parseTokenUsage, parsePhaseTokenTotals, parsePhaseTokenSteps } from './token-parser';
 
 export interface TaskEvents {
   'task:started': { stackId: string; task: Task };
@@ -181,6 +181,12 @@ export class TaskWatcher extends EventEmitter {
           reviewInput: reviewTokens.input_tokens,
           reviewOutput: reviewTokens.output_tokens,
         });
+      }
+
+      // Parse and persist per-step token data
+      const steps = parsePhaseTokenSteps(execResult.stdout, reviewResult.stdout);
+      if (steps.length > 0) {
+        this.registry.setTaskTokenSteps(taskId, steps);
       }
 
       // Parse raw log for metadata (session ID, resolved model)

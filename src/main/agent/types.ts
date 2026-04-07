@@ -76,4 +76,7 @@ export interface AgentBackend {
 
   /** Sync credentials to running stack containers */
   syncCredentials(stacks: StackInfo[]): Promise<void>;
+
+  /** Register a callback to receive token usage reports per project (optional) */
+  setTokenUsageCallback?(callback: (projectDir: string, inputTokens: number, outputTokens: number) => void): void;
 }

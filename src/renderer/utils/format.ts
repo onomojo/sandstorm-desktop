@@ -44,3 +44,4 @@ export function buildTokenTooltip(stack: Stack): string {
 
   return `Input: ${stack.total_input_tokens.toLocaleString()} / Output: ${stack.total_output_tokens.toLocaleString()}`;
 }
+

@@ -71,6 +71,21 @@ export interface Task {
   finished_at: string | null;
 }
 
+export interface TaskTokenStep {
+  id: number;
+  task_id: number;
+  iteration: number;
+  phase: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
+export interface OuterClaudeTokenUsage {
+  project_dir: string;
+  input_tokens: number;
+  output_tokens: number;
+}
+
 export interface TokenUsageStats {
   stackId: string;
   input_tokens: number;
@@ -310,6 +325,7 @@ declare global {
       tasks: {
         dispatch: (stackId: string, prompt: string, model?: string) => Promise<Task>;
         list: (stackId: string) => Promise<Task[]>;
+        tokenSteps: (taskId: number) => Promise<TaskTokenStep[]>;
       };
       diff: {
         get: (stackId: string) => Promise<string>;
@@ -331,6 +347,7 @@ declare global {
         globalTokenUsage: () => Promise<GlobalTokenUsage>;
         rateLimit: () => Promise<RateLimitState>;
         accountUsage: () => Promise<AccountUsage | null>;
+        outerClaudeTokens: () => Promise<OuterClaudeTokenUsage[]>;
       };
       runtime: {
         available: () => Promise<{ docker: boolean; podman: boolean }>;

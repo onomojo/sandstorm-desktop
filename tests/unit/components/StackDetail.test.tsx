@@ -291,4 +291,156 @@ describe('StackDetail', () => {
       expect(screen.getByText('Fix the login page')).toBeDefined();
     });
   });
+
+  it('shows token breakdown toggle for tasks with tokens', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Add feature',
+        model: 'sonnet',
+        resolved_model: null,
+        status: 'completed',
+        exit_code: 0,
+        session_id: null,
+        input_tokens: 5000,
+        output_tokens: 2000,
+        execution_input_tokens: 3000,
+        execution_output_tokens: 1200,
+        review_input_tokens: 2000,
+        review_output_tokens: 800,
+        review_iterations: 1,
+        verify_retries: 0,
+        review_verdicts: null,
+        verify_outputs: null,
+        execution_summary: null,
+        execution_started_at: null,
+        execution_finished_at: null,
+        review_started_at: null,
+        review_finished_at: null,
+        verify_started_at: null,
+        verify_finished_at: null,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    fireEvent.click(screen.getByText('History'));
+
+    await waitFor(() => {
+      const toggle = screen.getByTestId('token-breakdown-toggle');
+      expect(toggle).toBeDefined();
+      expect(toggle.textContent).toContain('7.0k tokens');
+    });
+  });
+
+  it('expands token breakdown with per-iteration data', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Add feature',
+        model: 'sonnet',
+        resolved_model: null,
+        status: 'completed',
+        exit_code: 0,
+        session_id: null,
+        input_tokens: 5000,
+        output_tokens: 2000,
+        execution_input_tokens: 3000,
+        execution_output_tokens: 1200,
+        review_input_tokens: 2000,
+        review_output_tokens: 800,
+        review_iterations: 1,
+        verify_retries: 0,
+        review_verdicts: null,
+        verify_outputs: null,
+        execution_summary: null,
+        execution_started_at: null,
+        execution_finished_at: null,
+        review_started_at: null,
+        review_finished_at: null,
+        verify_started_at: null,
+        verify_finished_at: null,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+    api.tasks.tokenSteps.mockResolvedValue([
+      { id: 1, task_id: 1, iteration: 1, phase: 'execution', input_tokens: 3000, output_tokens: 1200 },
+      { id: 2, task_id: 1, iteration: 1, phase: 'review', input_tokens: 2000, output_tokens: 800 },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    fireEvent.click(screen.getByText('History'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('token-breakdown-toggle')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByTestId('token-breakdown-toggle'));
+
+    await waitFor(() => {
+      const detail = screen.getByTestId('token-breakdown-detail');
+      expect(detail).toBeDefined();
+      expect(detail.textContent).toContain('Iteration 1');
+      expect(detail.textContent).toContain('Execution');
+      expect(detail.textContent).toContain('Review');
+    });
+  });
+
+  it('shows aggregate fallback when no per-step data exists', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Old task',
+        model: 'sonnet',
+        resolved_model: null,
+        status: 'completed',
+        exit_code: 0,
+        session_id: null,
+        input_tokens: 5000,
+        output_tokens: 2000,
+        execution_input_tokens: 3000,
+        execution_output_tokens: 1200,
+        review_input_tokens: 2000,
+        review_output_tokens: 800,
+        review_iterations: 1,
+        verify_retries: 0,
+        review_verdicts: null,
+        verify_outputs: null,
+        execution_summary: null,
+        execution_started_at: null,
+        execution_finished_at: null,
+        review_started_at: null,
+        review_finished_at: null,
+        verify_started_at: null,
+        verify_finished_at: null,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+    // No per-step data — returns empty
+    api.tasks.tokenSteps.mockResolvedValue([]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    fireEvent.click(screen.getByText('History'));
+
+    await waitFor(() => {
+      expect(screen.getByTestId('token-breakdown-toggle')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByTestId('token-breakdown-toggle'));
+
+    await waitFor(() => {
+      const detail = screen.getByTestId('token-breakdown-detail');
+      expect(detail).toBeDefined();
+      // Shows aggregate phase breakdown
+      expect(detail.textContent).toContain('Execution');
+      expect(detail.textContent).toContain('Review');
+      expect(detail.textContent).toContain('Total');
+    });
+  });
 });
