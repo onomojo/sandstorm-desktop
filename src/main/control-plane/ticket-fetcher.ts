@@ -9,6 +9,7 @@ export type ScriptStatus = 'ok' | 'missing' | 'not_executable';
  */
 export function getScriptStatus(projectDir: string): ScriptStatus {
   const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
+  console.log(`[sandstorm] getScriptStatus: checking "${scriptPath}"`);
   if (!fs.existsSync(scriptPath)) return 'missing';
   try {
     fs.accessSync(scriptPath, fs.constants.X_OK);
@@ -28,6 +29,7 @@ export async function fetchTicketContext(
   projectDir: string
 ): Promise<string | null> {
   const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
+  console.log(`[sandstorm] fetchTicketContext: projectDir="${projectDir}", scriptPath="${scriptPath}"`);
 
   if (!fs.existsSync(scriptPath)) {
     console.warn(

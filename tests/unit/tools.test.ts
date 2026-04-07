@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { tools, handleToolCall } from '../../src/main/claude/tools';
+import { tools, handleToolCall, validateProjectDir } from '../../src/main/claude/tools';
 
 // Mock the stackManager and agentBackend imports
 vi.mock('../../src/main/index', () => ({
@@ -218,6 +218,182 @@ describe('MCP tools', () => {
       }) as { passed: boolean; report: string };
 
       expect(result.passed).toBe(false);
+    });
+  });
+
+  describe('validateProjectDir', () => {
+    it('returns null for valid absolute paths', () => {
+      expect(validateProjectDir('/home/user/project')).toBeNull();
+      expect(validateProjectDir('/tmp/my-project')).toBeNull();
+      expect(validateProjectDir('/home/user/path with spaces/project')).toBeNull();
+    });
+
+    it('returns error for empty string', () => {
+      const result = validateProjectDir('');
+      expect(result).not.toBeNull();
+      expect(result!.error).toContain('required');
+    });
+
+    it('returns error for undefined', () => {
+      const result = validateProjectDir(undefined);
+      expect(result).not.toBeNull();
+      expect(result!.error).toContain('required');
+    });
+
+    it('returns error for null', () => {
+      const result = validateProjectDir(null);
+      expect(result).not.toBeNull();
+      expect(result!.error).toContain('required');
+    });
+
+    it('returns error for whitespace-only string', () => {
+      const result = validateProjectDir('   ');
+      expect(result).not.toBeNull();
+      expect(result!.error).toContain('required');
+    });
+
+    it('returns error for relative path "."', () => {
+      const result = validateProjectDir('.');
+      expect(result).not.toBeNull();
+      expect(result!.error).toContain('absolute path');
+      expect(result!.error).toContain('"."');
+    });
+
+    it('returns error for relative path "./project"', () => {
+      const result = validateProjectDir('./project');
+      expect(result).not.toBeNull();
+      expect(result!.error).toContain('absolute path');
+    });
+
+    it('returns error for relative path "project"', () => {
+      const result = validateProjectDir('project');
+      expect(result).not.toBeNull();
+      expect(result!.error).toContain('absolute path');
+    });
+
+    it('returns error for non-string types', () => {
+      expect(validateProjectDir(123)).not.toBeNull();
+      expect(validateProjectDir(true)).not.toBeNull();
+      expect(validateProjectDir({})).not.toBeNull();
+    });
+  });
+
+  describe('handleToolCall — projectDir validation', () => {
+    it('spec_check rejects empty projectDir', async () => {
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '',
+      }) as { error: string };
+      expect(result.error).toContain('required');
+    });
+
+    it('spec_check rejects relative projectDir', async () => {
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '.',
+      }) as { error: string };
+      expect(result.error).toContain('absolute path');
+    });
+
+    it('spec_check rejects undefined projectDir', async () => {
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+      }) as { error: string };
+      expect(result.error).toContain('required');
+    });
+
+    it('spec_refine rejects empty projectDir', async () => {
+      const result = await handleToolCall('spec_refine', {
+        ticketId: '42',
+        projectDir: '',
+      }) as { error: string };
+      expect(result.error).toContain('required');
+    });
+
+    it('spec_refine rejects relative projectDir', async () => {
+      const result = await handleToolCall('spec_refine', {
+        ticketId: '42',
+        projectDir: './my-project',
+      }) as { error: string };
+      expect(result.error).toContain('absolute path');
+    });
+
+    it('create_stack rejects empty projectDir', async () => {
+      const result = await handleToolCall('create_stack', {
+        name: 'test',
+        projectDir: '',
+      }) as { error: string };
+      expect(result.error).toContain('required');
+    });
+
+    it('create_stack rejects relative projectDir', async () => {
+      const result = await handleToolCall('create_stack', {
+        name: 'test',
+        projectDir: '.',
+      }) as { error: string };
+      expect(result.error).toContain('absolute path');
+    });
+
+    it('spec_check accepts valid absolute projectDir', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('missing');
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/home/user/my-project',
+      }) as { passed: boolean; reason: string };
+      // Should proceed to script check, not fail on validation
+      expect(result.passed).toBe(false);
+      expect(result.reason).toContain('/home/user/my-project/.sandstorm/scripts/fetch-ticket.sh');
+    });
+  });
+
+  describe('handleToolCall — error messages include full paths', () => {
+    it('spec_check missing script error includes absolute path', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('missing');
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/home/user/my-project',
+      }) as { passed: boolean; reason: string };
+      expect(result.reason).toContain('/home/user/my-project/.sandstorm/scripts/fetch-ticket.sh');
+    });
+
+    it('spec_check not-executable error includes absolute path', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('not_executable');
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/home/user/my-project',
+      }) as { passed: boolean; reason: string };
+      expect(result.reason).toContain('chmod +x /home/user/my-project/.sandstorm/scripts/fetch-ticket.sh');
+    });
+
+    it('spec_check no-quality-gate error includes absolute path', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('ok');
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Ticket body');
+      vi.mocked(getSpecQualityGate).mockReturnValue('');
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/home/user/my-project',
+      }) as { error: string };
+      expect(result.error).toContain('/home/user/my-project/.sandstorm/spec-quality-gate.md');
+    });
+
+    it('spec_refine missing script error includes absolute path', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('missing');
+      const result = await handleToolCall('spec_refine', {
+        ticketId: '42',
+        projectDir: '/home/user/my-project',
+      }) as { passed: boolean; reason: string };
+      expect(result.reason).toContain('/home/user/my-project/.sandstorm/scripts/fetch-ticket.sh');
+    });
+
+    it('spec_refine no-quality-gate error includes absolute path', async () => {
+      vi.mocked(getScriptStatus).mockReturnValue('ok');
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Ticket body');
+      vi.mocked(getSpecQualityGate).mockReturnValue('');
+      const result = await handleToolCall('spec_refine', {
+        ticketId: '42',
+        projectDir: '/home/user/my-project',
+      }) as { error: string };
+      expect(result.error).toContain('/home/user/my-project/.sandstorm/spec-quality-gate.md');
     });
   });
 

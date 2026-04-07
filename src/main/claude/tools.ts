@@ -4,9 +4,32 @@
  * dispatch tasks, and manage the lifecycle programmatically.
  */
 
+import path from 'path';
 import { stackManager, agentBackend } from '../index';
 import { fetchTicketContext, getScriptStatus } from '../control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../spec-quality-gate';
+
+/**
+ * Validate that projectDir is a non-empty absolute path.
+ * Returns an error object if invalid, or null if valid.
+ */
+export function validateProjectDir(projectDir: unknown): { error: string } | null {
+  if (!projectDir || typeof projectDir !== 'string' || !projectDir.trim()) {
+    return {
+      error:
+        'projectDir is required and must be a non-empty string. ' +
+        'Pass the absolute path to the project directory (e.g., "/home/user/my-project").',
+    };
+  }
+  if (!path.isAbsolute(projectDir)) {
+    return {
+      error:
+        `projectDir must be an absolute path, got relative path: "${projectDir}". ` +
+        'Use the full path (e.g., "/home/user/my-project") instead of a relative path like "." or "./project".',
+    };
+  }
+  return null;
+}
 
 export interface ToolDefinition {
   name: string;
@@ -195,7 +218,9 @@ export async function handleToolCall(
   input: Record<string, unknown>
 ): Promise<unknown> {
   switch (name) {
-    case 'create_stack':
+    case 'create_stack': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
       return stackManager.createStack({
         name: input.name as string,
         projectDir: input.projectDir as string,
@@ -208,6 +233,7 @@ export async function handleToolCall(
         gateApproved: input.gateApproved as boolean | undefined,
         forceBypass: input.forceBypass as boolean | undefined,
       });
+    }
 
     case 'list_stacks':
       return stackManager.listStacksWithServices();
@@ -260,18 +286,24 @@ export async function handleToolCall(
       );
       return { success: true };
 
-    case 'spec_check':
+    case 'spec_check': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
       return handleSpecCheck(
         input.ticketId as string,
         input.projectDir as string
       );
+    }
 
-    case 'spec_refine':
+    case 'spec_refine': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
       return handleSpecRefine(
         input.ticketId as string,
         input.projectDir as string,
         input.userAnswers as string | undefined
       );
+    }
 
     default:
       throw new Error(`Unknown tool: ${name}`);
@@ -282,12 +314,15 @@ async function handleSpecCheck(
   ticketId: string,
   projectDir: string
 ): Promise<unknown> {
+  const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
+  console.log(`[sandstorm] spec_check: projectDir="${projectDir}", scriptPath="${scriptPath}"`);
+
   const scriptStatus = getScriptStatus(projectDir);
   if (scriptStatus === 'missing') {
     return {
       passed: false,
       reason:
-        "fetch-ticket.sh not found at .sandstorm/scripts/fetch-ticket.sh. " +
+        `fetch-ticket.sh not found at ${scriptPath}. ` +
         "Run 'sandstorm init' to auto-generate it for your ticket system (Jira or GitHub Issues), " +
         "or create it manually: the script receives a ticket ID as $1 and must output the ticket body to stdout.",
     };
@@ -296,8 +331,8 @@ async function handleSpecCheck(
     return {
       passed: false,
       reason:
-        "fetch-ticket.sh exists but is not executable. " +
-        "Fix with: chmod +x .sandstorm/scripts/fetch-ticket.sh",
+        `fetch-ticket.sh exists but is not executable. ` +
+        `Fix with: chmod +x ${scriptPath}`,
     };
   }
 
@@ -309,10 +344,11 @@ async function handleSpecCheck(
     };
   }
 
+  const gatePath = path.join(projectDir, '.sandstorm', 'spec-quality-gate.md');
   const gate = getSpecQualityGate(projectDir);
   if (!gate) {
     return {
-      error: 'No quality gate configured. Run sandstorm init or create .sandstorm/spec-quality-gate.md.',
+      error: `No quality gate configured at ${gatePath}. Run sandstorm init or create .sandstorm/spec-quality-gate.md.`,
     };
   }
 
@@ -364,12 +400,15 @@ async function handleSpecRefine(
   projectDir: string,
   userAnswers?: string
 ): Promise<unknown> {
+  const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
+  console.log(`[sandstorm] spec_refine: projectDir="${projectDir}", scriptPath="${scriptPath}"`);
+
   const scriptStatus = getScriptStatus(projectDir);
   if (scriptStatus === 'missing') {
     return {
       passed: false,
       reason:
-        "fetch-ticket.sh not found at .sandstorm/scripts/fetch-ticket.sh. " +
+        `fetch-ticket.sh not found at ${scriptPath}. ` +
         "Run 'sandstorm init' to auto-generate it for your ticket system (Jira or GitHub Issues), " +
         "or create it manually: the script receives a ticket ID as $1 and must output the ticket body to stdout.",
     };
@@ -378,8 +417,8 @@ async function handleSpecRefine(
     return {
       passed: false,
       reason:
-        "fetch-ticket.sh exists but is not executable. " +
-        "Fix with: chmod +x .sandstorm/scripts/fetch-ticket.sh",
+        `fetch-ticket.sh exists but is not executable. ` +
+        `Fix with: chmod +x ${scriptPath}`,
     };
   }
 
@@ -391,10 +430,11 @@ async function handleSpecRefine(
     };
   }
 
+  const gatePath = path.join(projectDir, '.sandstorm', 'spec-quality-gate.md');
   const gate = getSpecQualityGate(projectDir);
   if (!gate) {
     return {
-      error: 'No quality gate configured. Run sandstorm init or create .sandstorm/spec-quality-gate.md.',
+      error: `No quality gate configured at ${gatePath}. Run sandstorm init or create .sandstorm/spec-quality-gate.md.`,
     };
   }
 
