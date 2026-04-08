@@ -66,7 +66,7 @@ export class TaskWatcher extends EventEmitter {
   ) {
     super();
     this.pollInterval = options?.pollInterval ?? 2000;
-    this.tokenPollInterval = options?.tokenPollInterval ?? 10_000;
+    this.tokenPollInterval = options?.tokenPollInterval ?? 5_000;
   }
 
   /**
@@ -476,7 +476,8 @@ export class TaskWatcher extends EventEmitter {
 
     try {
       return await this.readWorkflowProgress(stackId, containerId, task);
-    } catch {
+    } catch (err) {
+      console.warn(`[TaskWatcher] getWorkflowProgress failed for ${stackId}:`, (err as Error)?.message ?? err);
       return null;
     }
   }
@@ -528,22 +529,28 @@ export class TaskWatcher extends EventEmitter {
       const status = result.stdout.trim();
 
       if (status === 'running') {
+        const wasFirstRunning = !this.seenRunning.get(stackId);
         this.seenRunning.set(stackId, true);
         this.errorCounts.set(stackId, 0);
 
         // Poll tokens and workflow progress periodically while running (throttled)
+        // On the first "running" poll, fetch immediately to avoid startup delay
         const now = Date.now();
         const lastPoll = this.lastTokenPoll.get(stackId) ?? 0;
-        if (now - lastPoll >= this.tokenPollInterval) {
+        if (wasFirstRunning || now - lastPoll >= this.tokenPollInterval) {
           this.lastTokenPoll.set(stackId, now);
           const runningTask = this.registry.getRunningTask(stackId);
           if (runningTask) {
-            this.readTaskTokens(runningTask.id, stackId, containerId).catch(() => {});
+            this.readTaskTokens(runningTask.id, stackId, containerId).catch((err) => {
+              console.warn(`[TaskWatcher] Failed to read tokens for ${stackId}:`, err?.message ?? err);
+            });
             this.readWorkflowProgress(stackId, containerId, runningTask)
               .then((progress) => {
                 this.emit('task:workflow-progress', progress);
               })
-              .catch(() => {});
+              .catch((err) => {
+                console.warn(`[TaskWatcher] Failed to read workflow progress for ${stackId}:`, err?.message ?? err);
+              });
           }
         }
 

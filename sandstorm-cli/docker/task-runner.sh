@@ -303,6 +303,10 @@ while true; do
     # Initialize phase timing file
     > /tmp/claude-phase-timing.txt
 
+    # Initialize iteration count files for live monitoring
+    echo "0" > /tmp/claude-task.review-iterations
+    echo "0" > /tmp/claude-task.verify-retries
+
     # ── Step 1: Initial execution pass ──────────────────────────────────
 
     log_loop "Starting initial execution pass..."
@@ -374,6 +378,8 @@ while true; do
       while [ $INNER_ITERATION -lt $MAX_INNER_ITERATIONS ] && [ $REVIEW_PASSED -eq 0 ]; do
         INNER_ITERATION=$((INNER_ITERATION + 1))
         TOTAL_REVIEW_ITERATIONS=$((TOTAL_REVIEW_ITERATIONS + 1))
+        # Update iteration count file for live monitoring
+        echo "${TOTAL_REVIEW_ITERATIONS}" > /tmp/claude-task.review-iterations
 
         log_loop "Review iteration $INNER_ITERATION/$MAX_INNER_ITERATIONS (outer $OUTER_ITERATION/$MAX_OUTER_ITERATIONS)"
 
@@ -457,6 +463,8 @@ while true; do
         break
       else
         TOTAL_VERIFY_RETRIES=$((TOTAL_VERIFY_RETRIES + 1))
+        # Update verify retries file for live monitoring
+        echo "${TOTAL_VERIFY_RETRIES}" > /tmp/claude-task.verify-retries
         log_loop "Verify FAILED, outer iteration $OUTER_ITERATION/$MAX_OUTER_ITERATIONS"
 
         if [ $OUTER_ITERATION -ge $MAX_OUTER_ITERATIONS ]; then
