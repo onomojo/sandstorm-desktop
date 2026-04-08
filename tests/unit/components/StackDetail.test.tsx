@@ -432,7 +432,7 @@ describe('StackDetail', () => {
     expect(screen.queryByTestId('workflow-progress-panel')).toBeNull();
   });
 
-  it('does not show workflow panel when no progress data available', async () => {
+  it('shows default workflow panel when running stack has no progress data yet', async () => {
     useAppStore.setState({
       stacks: [makeStack({ status: 'running' })],
     });
@@ -440,10 +440,23 @@ describe('StackDetail', () => {
 
     render(<StackDetail stackId="detail-stack" onBack={onBack} />);
 
-    // Wait for async call to settle
+    // Even with null progress data, a running stack should show the default panel
     await waitFor(() => {
-      expect(api.tasks.workflowProgress).toHaveBeenCalledWith('detail-stack');
+      expect(screen.getByTestId('workflow-progress-panel')).toBeDefined();
     });
+    // Default state shows Execution as running
+    const executionPhase = screen.getByTestId('phase-execution');
+    expect(executionPhase.textContent).toContain('running');
+    // Default loop counters
+    expect(screen.getByTestId('outer-loop-counter').textContent).toBe('1 of 5');
+    expect(screen.getByTestId('inner-loop-counter').textContent).toBe('1 of 5');
+  });
+
+  it('does not show workflow panel when stack is not running and no progress data', () => {
+    useAppStore.setState({
+      stacks: [makeStack({ status: 'idle' })],
+    });
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
     expect(screen.queryByTestId('workflow-progress-panel')).toBeNull();
   });
 

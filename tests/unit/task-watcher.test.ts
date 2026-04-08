@@ -1238,4 +1238,56 @@ describe('TaskWatcher', () => {
     await progressPromise;
     watcher.unwatchAll();
   });
+
+  it('emits workflow progress immediately on first running poll even with long token interval', async () => {
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        if (cmd.includes('/tmp/claude-task.status')) {
+          return { exitCode: 0, stdout: 'running', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-phase-timing.txt')) {
+          return { exitCode: 0, stdout: 'execution_started_at=2026-04-07T10:00:00Z\n', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-task.review-iterations')) {
+          return { exitCode: 0, stdout: '2', stderr: '' };
+        }
+        if (cmd.includes('/tmp/claude-task.verify-retries')) {
+          return { exitCode: 0, stdout: '1', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+    };
+
+    // Long token poll interval — but first poll should still emit immediately
+    const watcher = new TaskWatcher(registry, runtime, runtime, {
+      pollInterval: 20,
+      tokenPollInterval: 60_000,
+    });
+
+    registry.createTask('watch-stack', 'test first poll progress');
+
+    const progressPromise = new Promise<void>((resolve) => {
+      watcher.on('task:workflow-progress', (progress) => {
+        expect(progress.stackId).toBe('watch-stack');
+        expect(progress.currentPhase).toBe('execution');
+        expect(progress.outerIteration).toBe(2); // verify retries + 1
+        expect(progress.innerIteration).toBe(3); // review iterations + 1
+        resolve();
+      });
+    });
+
+    watcher.watch('watch-stack', 'container-123');
+
+    // Should resolve quickly despite 60s token poll interval
+    await progressPromise;
+    watcher.unwatchAll();
+  });
 });

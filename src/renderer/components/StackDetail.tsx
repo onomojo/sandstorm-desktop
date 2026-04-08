@@ -187,7 +187,27 @@ export function StackDetail({
               ? 'bg-orange-500/10 border-orange-500/20 text-orange-400'
               : 'bg-gray-500/10 border-gray-500/20 text-gray-400';
 
-  const showWorkflowPanel = workflowProgress !== null;
+  const isRunning = stack.status === 'running';
+
+  // Default workflow progress for running stacks when no container data has arrived yet
+  const defaultWorkflowProgress: WorkflowProgress = {
+    stackId,
+    currentPhase: 'execution',
+    outerIteration: 1,
+    innerIteration: 1,
+    phases: [
+      { phase: 'execution', status: 'running' },
+      { phase: 'review', status: 'pending' },
+      { phase: 'verify', status: 'pending' },
+    ],
+    steps: [],
+    taskPrompt: null,
+    startedAt: null,
+    model: null,
+  };
+
+  const effectiveWorkflowProgress = workflowProgress ?? (isRunning ? defaultWorkflowProgress : null);
+  const showWorkflowPanel = effectiveWorkflowProgress !== null;
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
@@ -309,7 +329,7 @@ export function StackDetail({
         {/* Left column: workflow progress panel */}
         {showWorkflowPanel && (
           <div className="w-[35%] min-w-[260px] max-w-[380px] border-r border-sandstorm-border flex flex-col overflow-hidden shrink-0">
-            <WorkflowProgressPanel progress={workflowProgress} />
+            <WorkflowProgressPanel progress={effectiveWorkflowProgress!} />
           </div>
         )}
 
