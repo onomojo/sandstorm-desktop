@@ -5,14 +5,21 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, act } from '@testing-library/react';
 import { AgentSession } from '../../../src/renderer/components/AgentSession';
+import { useAppStore } from '../../../src/renderer/store';
+import { _resetForTesting } from '../../../src/renderer/agentStreamService';
 import { mockSandstormApi } from './setup';
 
 describe('AgentSession', () => {
   let api: ReturnType<typeof mockSandstormApi>;
-  // Track event listeners registered via window.sandstorm.on
+  // Track event listeners registered via window.sandstorm.on (keyed by channel)
   let eventHandlers: Record<string, (...args: unknown[]) => void>;
 
   beforeEach(() => {
+    // Reset store agent session state so tests are isolated
+    useAppStore.setState({ agentSessions: {} });
+    // Reset service registered-tabs tracking so listeners re-register each test
+    _resetForTesting();
+
     api = mockSandstormApi();
     eventHandlers = {};
     api.on.mockImplementation((channel: string, cb: (...args: unknown[]) => void) => {
@@ -168,5 +175,194 @@ describe('AgentSession', () => {
     expect(screen.queryByText('Thinking...')).toBeNull();
     // Error message should be in the chat
     expect(screen.getByText(/spawn failed/)).toBeDefined();
+  });
+
+  // --- Tests for tab-switching persistence (issue #211) ---
+
+  it('accumulates streamingContent in store while component is mounted', async () => {
+    await act(async () => {
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
+    });
+
+    const outputHandler = eventHandlers['agent:output:test-tab'];
+    expect(outputHandler).toBeDefined();
+
+    act(() => {
+      outputHandler('Hello ');
+      outputHandler('world');
+    });
+
+    // Streaming content should be visible in the UI
+    expect(screen.getByText(/Hello world/)).toBeDefined();
+
+    // And persisted in the store
+    const state = useAppStore.getState().agentSessions['test-tab'];
+    expect(state?.streamingContent).toBe('Hello world');
+  });
+
+  it('preserves streamingContent in store after component unmounts (tab switch)', async () => {
+    const { unmount } = await act(async () =>
+      render(<AgentSession tabId="test-tab" projectDir="/test" />)
+    );
+
+    // Receive some streaming chunks
+    const outputHandler = eventHandlers['agent:output:test-tab'];
+    act(() => {
+      outputHandler('Partial response...');
+    });
+
+    // Unmount (simulates switching to another tab)
+    unmount();
+
+    // Store should still have the streaming content
+    const state = useAppStore.getState().agentSessions['test-tab'];
+    expect(state?.streamingContent).toBe('Partial response...');
+  });
+
+  it('continues receiving streaming chunks while component is unmounted', async () => {
+    const { unmount } = await act(async () =>
+      render(<AgentSession tabId="test-tab" projectDir="/test" />)
+    );
+
+    const outputHandler = eventHandlers['agent:output:test-tab'];
+    act(() => {
+      outputHandler('First chunk ');
+    });
+
+    // Unmount (tab switch away)
+    unmount();
+
+    // More chunks arrive while unmounted
+    act(() => {
+      outputHandler('second chunk');
+    });
+
+    // Store has all accumulated content
+    const state = useAppStore.getState().agentSessions['test-tab'];
+    expect(state?.streamingContent).toBe('First chunk second chunk');
+  });
+
+  it('shows accumulated streamingContent when component remounts after tab switch', async () => {
+    // Pre-populate store as if streaming happened while component was unmounted
+    useAppStore.getState().updateAgentSession('test-tab', {
+      streamingContent: 'Accumulated while away...',
+      isLoading: true,
+    });
+
+    await act(async () => {
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
+    });
+
+    // The partial streaming message should be visible immediately on remount
+    expect(screen.getByText(/Accumulated while away/)).toBeDefined();
+  });
+
+  it('shows completed message when stream finishes while component is unmounted', async () => {
+    const { unmount } = await act(async () =>
+      render(<AgentSession tabId="test-tab" projectDir="/test" />)
+    );
+
+    const outputHandler = eventHandlers['agent:output:test-tab'];
+    act(() => {
+      outputHandler('The complete answer');
+    });
+
+    // Unmount while still streaming
+    unmount();
+
+    // Stream finishes while unmounted
+    api.agent.history.mockResolvedValue({
+      messages: [
+        { role: 'user', content: 'question' },
+        { role: 'assistant', content: 'The complete answer' },
+      ],
+      processing: false,
+    });
+
+    const doneHandler = eventHandlers['agent:done:test-tab'];
+    await act(async () => {
+      doneHandler();
+      await Promise.resolve();
+    });
+
+    // Store should have the completed message and no streaming content
+    const state = useAppStore.getState().agentSessions['test-tab'];
+    expect(state?.streamingContent).toBe('');
+    expect(state?.isLoading).toBe(false);
+    expect(state?.messages.some((m) => m.content === 'The complete answer')).toBe(true);
+
+    // Remount — completed message should be visible
+    await act(async () => {
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
+    });
+
+    expect(screen.getAllByText('The complete answer').length).toBeGreaterThan(0);
+  });
+
+  it('captures error state while component is unmounted and shows on remount', async () => {
+    const { unmount } = await act(async () =>
+      render(<AgentSession tabId="test-tab" projectDir="/test" />)
+    );
+
+    const outputHandler = eventHandlers['agent:output:test-tab'];
+    act(() => {
+      outputHandler('Partial before error');
+    });
+
+    // Unmount while streaming
+    unmount();
+
+    // Error fires while unmounted
+    const errorHandler = eventHandlers['agent:error:test-tab'];
+    act(() => {
+      errorHandler('connection lost');
+    });
+
+    // Store captures the error
+    const state = useAppStore.getState().agentSessions['test-tab'];
+    expect(state?.streamingContent).toBe('');
+    expect(state?.isLoading).toBe(false);
+    expect(state?.messages.some((m) => m.content.includes('connection lost'))).toBe(true);
+    expect(state?.messages.some((m) => m.content.includes('Partial before error'))).toBe(true);
+
+    // Remount — error message should be visible
+    await act(async () => {
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
+    });
+
+    expect(screen.getByText(/connection lost/)).toBeDefined();
+  });
+
+  it('shows "Thinking..." when isLoading:true is preserved in store after remount', async () => {
+    // Pre-populate store as if a message was sent while component was unmounted.
+    // Mock history to match — backend is still processing so isLoading stays true.
+    useAppStore.getState().updateAgentSession('test-tab', {
+      isLoading: true,
+      isQueued: false,
+    });
+    api.agent.history.mockResolvedValue({ messages: [], processing: true });
+
+    await act(async () => {
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
+    });
+
+    // Thinking indicator should be shown
+    expect(screen.getByText('Thinking...')).toBeDefined();
+  });
+
+  it('shows "Message queued..." when isQueued:true is preserved in store after remount', async () => {
+    // Pre-populate store as if message was queued while component was unmounted.
+    // Mock history to match — backend is still processing.
+    useAppStore.getState().updateAgentSession('test-tab', {
+      isLoading: true,
+      isQueued: true,
+    });
+    api.agent.history.mockResolvedValue({ messages: [], processing: true });
+
+    await act(async () => {
+      render(<AgentSession tabId="test-tab" projectDir="/test" />);
+    });
+
+    expect(screen.getByText('Message queued...')).toBeDefined();
   });
 });

@@ -1,5 +1,17 @@
 import { create } from 'zustand';
 
+export interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+export interface AgentSessionState {
+  messages: ChatMessage[];
+  streamingContent: string;
+  isLoading: boolean;
+  isQueued: boolean;
+}
+
 export interface Project {
   id: number;
   name: string;
@@ -279,6 +291,11 @@ interface AppState {
   rateLimitState: RateLimitState | null;
   accountUsage: UsageSnapshot | null;
 
+  // Agent session state (per-tab) — streaming content, loading, queued
+  agentSessions: Record<string, AgentSessionState>;
+  updateAgentSession: (tabId: string, update: Partial<AgentSessionState>) => void;
+  clearAgentSession: (tabId: string) => void;
+
   // Live workflow progress (per-stack)
   workflowProgress: Record<string, WorkflowProgress>;
   updateWorkflowProgress: (stackId: string, progress: WorkflowProgress) => void;
@@ -533,6 +550,28 @@ export const useAppStore = create<AppState>((set, get) => ({
   globalTokenUsage: null,
   rateLimitState: null,
   accountUsage: null,
+
+  // Agent session state
+  agentSessions: {},
+  updateAgentSession: (tabId, update) =>
+    set((state) => ({
+      agentSessions: {
+        ...state.agentSessions,
+        [tabId]: {
+          messages: [],
+          streamingContent: '',
+          isLoading: false,
+          isQueued: false,
+          ...(state.agentSessions[tabId] ?? {}),
+          ...update,
+        },
+      },
+    })),
+  clearAgentSession: (tabId) =>
+    set((state) => {
+      const { [tabId]: _, ...rest } = state.agentSessions;
+      return { agentSessions: rest };
+    }),
 
   // Live workflow progress
   workflowProgress: {},

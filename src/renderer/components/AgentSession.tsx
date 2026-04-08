@@ -1,9 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
+import { useAppStore } from '../store';
+import { registerAgentStreamListeners } from '../agentStreamService';
 
 interface AgentSessionProps {
   tabId: string;
@@ -11,24 +8,43 @@ interface AgentSessionProps {
 }
 
 export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
-  const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [input, setInput] = useState('');
-  const [isLoading, setIsLoading] = useState(false);
-  const [isQueued, setIsQueued] = useState(false);
-  const [streamingContent, setStreamingContent] = useState('');
+  const updateAgentSession = useAppStore((s) => s.updateAgentSession);
+  const clearAgentSession = useAppStore((s) => s.clearAgentSession);
+  const sessionState = useAppStore((s) => s.agentSessions[tabId]);
 
+  const messages = sessionState?.messages ?? [];
+  const streamingContent = sessionState?.streamingContent ?? '';
+  const isLoading = sessionState?.isLoading ?? false;
+  const isQueued = sessionState?.isQueued ?? false;
+
+  const [input, setInput] = useState('');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLTextAreaElement>(null);
 
-  // On mount, fetch full history from the backend
+  // Register persistent IPC listeners (once per tabId, survive unmount) and sync
+  // history from the backend on every mount so state is always up to date.
   useEffect(() => {
+    registerAgentStreamListeners(tabId);
+
     window.sandstorm.agent.history(tabId).then((result) => {
       const typed = result.messages.map((m) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
       }));
-      setMessages(typed);
-      setIsLoading(result.processing);
+      const currentState = useAppStore.getState().agentSessions[tabId];
+      const currentStreamingContent = currentState?.streamingContent ?? '';
+      // Merge: use history for messages it knows about, but preserve any trailing
+      // locally-generated messages (e.g. error messages not persisted in the backend).
+      const currentMessages = currentState?.messages ?? [];
+      const mergedMessages =
+        typed.length >= currentMessages.length
+          ? typed
+          : [...typed, ...currentMessages.slice(typed.length)];
+      updateAgentSession(tabId, {
+        messages: mergedMessages,
+        // Keep isLoading true if backend is processing OR if we have active streaming content
+        isLoading: result.processing || currentStreamingContent !== '',
+      });
     });
   }, [tabId]);
 
@@ -39,96 +55,18 @@ export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
     }
   }, [messages, streamingContent]);
 
-  // Listen for agent output/done/error/user-message events scoped to this tab
-  useEffect(() => {
-    const unsubQueued = window.sandstorm.on(
-      `agent:queued:${tabId}`,
-      () => {
-        setIsQueued(true);
-      }
-    );
-
-    const unsubOutput = window.sandstorm.on(
-      `agent:output:${tabId}`,
-      (data: unknown) => {
-        setIsQueued(false);
-        setStreamingContent((prev) => prev + (data as string));
-      }
-    );
-
-    const unsubDone = window.sandstorm.on(`agent:done:${tabId}`, () => {
-      setIsQueued(false);
-      setIsLoading(false);
-      setStreamingContent((prev) => {
-        if (prev) {
-          setMessages((msgs) => [...msgs, { role: 'assistant', content: prev }]);
-        }
-        return '';
-      });
-      // Re-fetch history to get authoritative message list
-      window.sandstorm.agent.history(tabId).then((result) => {
-        const typed = result.messages.map((m) => ({
-          role: m.role as 'user' | 'assistant',
-          content: m.content,
-        }));
-        setMessages(typed);
-        if (result.processing) {
-          setIsLoading(true);
-        }
-      });
-    });
-
-    const unsubError = window.sandstorm.on(
-      `agent:error:${tabId}`,
-      (error: unknown) => {
-        setIsQueued(false);
-        setStreamingContent((prev) => {
-          const errorMsg = (prev ? prev + '\n\n' : '') + 'Error: ' + (error as string);
-          setMessages((msgs) => [
-            ...msgs,
-            { role: 'assistant', content: errorMsg.trim() },
-          ]);
-          return '';
-        });
-        setIsLoading(false);
-      }
-    );
-
-    // Listen for user messages sent while this component might have been remounting
-    const unsubUserMsg = window.sandstorm.on(
-      `agent:user-message:${tabId}`,
-      (message: unknown) => {
-        setMessages((msgs) => {
-          const last = msgs[msgs.length - 1];
-          if (last && last.role === 'user' && last.content === (message as string)) {
-            return msgs;
-          }
-          return [...msgs, { role: 'user', content: message as string }];
-        });
-        setIsLoading(true);
-      }
-    );
-
-    return () => {
-      unsubQueued();
-      unsubOutput();
-      unsubDone();
-      unsubError();
-      unsubUserMsg();
-    };
-  }, [tabId]);
-
-
   const sendMessage = useCallback(async () => {
     const trimmed = input.trim();
     if (!trimmed) return;
 
-    setMessages((prev) => [...prev, { role: 'user', content: trimmed }]);
+    // Optimistic add — the agent:user-message handler deduplicates
+    updateAgentSession(tabId, {
+      messages: [...messages, { role: 'user', content: trimmed }],
+      isLoading: true,
+    });
     setInput('');
-    setIsLoading(true);
-
     window.sandstorm.agent.send(tabId, trimmed, projectDir);
-  }, [input, tabId, projectDir]);
+  }, [input, tabId, projectDir, messages, updateAgentSession]);
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' && !e.shiftKey) {
@@ -175,10 +113,7 @@ export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
                 window.sandstorm.agent.cancel(tabId);
               }
               await window.sandstorm.agent.reset(tabId);
-              setMessages([]);
-              setStreamingContent('');
-              setIsLoading(false);
-              setIsQueued(false);
+              clearAgentSession(tabId);
             }}
             title="Start a new session (clears conversation history to reduce token usage)"
             className="text-[10px] px-2 py-0.5 rounded bg-sandstorm-surface text-sandstorm-muted hover:text-sandstorm-text hover:bg-sandstorm-border transition-colors border border-sandstorm-border"
