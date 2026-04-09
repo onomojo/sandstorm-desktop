@@ -193,6 +193,7 @@ async function callBridge(name, input) {
         'X-Auth-Token': BRIDGE_TOKEN,
         'Content-Length': Buffer.byteLength(data),
       },
+      timeout: 310_000,
     }, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk; });
@@ -203,6 +204,10 @@ async function callBridge(name, input) {
           else resolve(parsed.result);
         } catch (e) { reject(e); }
       });
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Bridge request timed out after 310s'));
     });
     req.on('error', reject);
     req.write(data);
@@ -349,7 +354,7 @@ rl.on('line', async (line) => {
    * Uses -p (pipe/print) mode — no session persistence, no MCP tools.
    * Used for spec quality gate evaluation to avoid inflating the outer session.
    */
-  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs = 120_000): Promise<string> {
+  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs = 300_000): Promise<string> {
     return new Promise((resolve, reject) => {
       const claudeBin = getClaudeBin();
       const args = [
@@ -368,11 +373,24 @@ rl.on('line', async (line) => {
       let outputBuffer = '';
       let fullText = '';
       let stderrBuffer = '';
+      let settled = false;
+
+      const settle = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      };
 
       const timer = setTimeout(() => {
         if (child.exitCode === null) {
-          child.kill();
-          reject(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`));
+          child.kill('SIGTERM');
+          setTimeout(() => {
+            if (child.exitCode === null) {
+              child.kill('SIGKILL');
+            }
+          }, 5_000);
+          settle(() => reject(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`)));
         }
       }, timeoutMs);
 
@@ -398,7 +416,6 @@ rl.on('line', async (line) => {
       });
 
       child.on('close', (code) => {
-        clearTimeout(timer);
         // Process any remaining buffer
         if (outputBuffer.trim()) {
           try {
@@ -410,18 +427,19 @@ rl.on('line', async (line) => {
           }
         }
 
-        if (code !== 0 && !fullText.trim()) {
-          reject(new Error(
-            `Ephemeral agent exited with code ${code}: ${stderrBuffer.trim() || 'unknown error'}`
-          ));
-        } else {
-          resolve(fullText);
-        }
+        settle(() => {
+          if (code !== 0 && !fullText.trim()) {
+            reject(new Error(
+              `Ephemeral agent exited with code ${code}: ${stderrBuffer.trim() || 'unknown error'}`
+            ));
+          } else {
+            resolve(fullText);
+          }
+        });
       });
 
       child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
+        settle(() => reject(err));
       });
     });
   }
