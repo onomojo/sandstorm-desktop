@@ -219,6 +219,30 @@ describe('MCP tools', () => {
 
       expect(result.passed).toBe(false);
     });
+
+    it('spec_check prompt includes assumption resolution phase', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Test\nBody');
+      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: PASS\n\n### Assumption Resolution\n| # | Assumption | Type | Resolution |\n|---|---|---|---|'
+      );
+
+      await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/proj',
+      });
+
+      const prompt = vi.mocked(agentBackend.runEphemeralAgent).mock.calls[0][0];
+      expect(prompt).toContain('Phase 1: Assumption Resolution');
+      expect(prompt).toContain('Self-resolvable');
+      expect(prompt).toContain('Requires human input');
+      expect(prompt).toContain('Zero Unresolved');
+      expect(prompt).toContain('End-to-End Data Flow');
+      expect(prompt).toContain('Dependency Contracts');
+      expect(prompt).toContain('Automated Visual Verification');
+      expect(prompt).toContain('All Verification Automatable');
+      expect(prompt).toContain('Questions Requiring User Answers');
+    });
   });
 
   describe('validateProjectDir', () => {
@@ -454,6 +478,51 @@ describe('MCP tools', () => {
       );
       expect(result.passed).toBe(true);
       expect(result.updatedBody).toContain('Better spec');
+    });
+
+    it('spec_refine initial prompt includes assumption resolution and enhanced checks', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Test\nBody');
+      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: FAIL\n\n### Questions to Resolve Gaps\n1. What is X?'
+      );
+
+      await handleToolCall('spec_refine', {
+        ticketId: '42',
+        projectDir: '/proj',
+      });
+
+      const prompt = vi.mocked(agentBackend.runEphemeralAgent).mock.calls[0][0];
+      expect(prompt).toContain('Phase 1: Assumption Resolution');
+      expect(prompt).toContain('Self-resolvable');
+      expect(prompt).toContain('Requires human input');
+      expect(prompt).toContain('Zero Unresolved Assumptions');
+      expect(prompt).toContain('End-to-End Data Flow');
+      expect(prompt).toContain('Dependency Contracts');
+      expect(prompt).toContain('Automated Visual Verification');
+      expect(prompt).toContain('All Verification Automatable');
+    });
+
+    it('spec_refine refinement prompt includes enhanced evaluation criteria', async () => {
+      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Test\nBody');
+      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Updated Ticket Body\n\n# Issue: Updated\n\n## Spec Quality Gate: PASS\n\n### Results\n| Criterion | Result |\n|---|---|\n| Problem Statement | PASS |'
+      );
+
+      await handleToolCall('spec_refine', {
+        ticketId: '42',
+        projectDir: '/proj',
+        userAnswers: 'Answer to question 1',
+      });
+
+      const prompt = vi.mocked(agentBackend.runEphemeralAgent).mock.calls[0][0];
+      expect(prompt).toContain('Zero Unresolved Assumptions');
+      expect(prompt).toContain('End-to-End Data Flow');
+      expect(prompt).toContain('Dependency Contracts');
+      expect(prompt).toContain('Automated Visual Verification');
+      expect(prompt).toContain('All Verification Automatable');
+      expect(prompt).toContain('Replace resolved assumptions with verified facts');
     });
   });
 });

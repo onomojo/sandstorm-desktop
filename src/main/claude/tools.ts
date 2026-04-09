@@ -364,13 +364,37 @@ ${ticketBody}
 
 ## Instructions
 
-For each criterion, determine PASS or FAIL. If FAIL, explain specifically what's missing.
+### Phase 1: Assumption Resolution
+Before evaluating pass/fail, identify every assumption in the ticket (explicit "Assumes..." statements AND implicit assumptions you would make if starting this task).
 
-Then list every assumption you would make if you started this task right now.
+For each assumption, classify it:
+- **Self-resolvable**: Can be validated by reading code, checking APIs, schemas, or running commands. For these, state what you would check and whether the assumption appears correct or incorrect based on the information available.
+- **Requires human input**: Business logic context, domain knowledge, behavioral expectations, product direction, edge case decisions — things the codebase can't answer. For these, formulate a specific question that must be answered before the spec is complete.
+
+### Phase 2: Enhanced Evaluation
+For each criterion, determine PASS or FAIL. Apply these additional checks:
+
+**Assumptions — Zero Unresolved**: FAIL if any assumptions remain unresolved (neither verified as fact nor answered by user). Listing assumptions is NOT sufficient — they must be resolved.
+
+**End-to-End Data Flow Verification**: If the feature spans multiple system boundaries, FAIL if testability consists entirely of mocked/unit tests with no end-to-end verification item. Identify every integration boundary the data crosses.
+
+**Dependency Contracts**: If the ticket references other tickets, modules, or external systems, FAIL if the data contract is not explicit (format, interface, timing). FAIL if read/write timing is incompatible (e.g., source writes at end-of-process but consumer reads mid-process).
+
+**Automated Visual Verification**: If the ticket describes UI/visual changes, FAIL if there is no automated visual verification step against the real running application. Mocked component renders don't count.
+
+**All Verification Automatable**: FAIL if ANY verification item requires manual human intervention ("manually verify", "visually confirm", "deploy and check") or includes optional checkboxes that can be skipped.
+
+### Phase 3: Report
 
 Respond in EXACTLY this format (no other text before or after):
 
 ## Spec Quality Gate: [PASS or FAIL]
+
+### Assumption Resolution
+| # | Assumption | Type | Resolution |
+|---|-----------|------|------------|
+| 1 | <assumption text> | Self-resolvable / Requires human input | <verified fact OR specific question> |
+...
 
 ### Results
 | Criterion | Result | Notes |
@@ -379,11 +403,11 @@ Respond in EXACTLY this format (no other text before or after):
 ...
 
 ### Gaps (if any)
-- [ ] Specific gap 1 — what needs to be clarified
+- [ ] Specific gap 1 — what needs to be clarified and how to fix it
 ...
 
-### Assumptions
-- Assumption 1
+### Questions Requiring User Answers (if any)
+1. <specific question from unresolvable assumptions or ambiguities>
 ...`;
 
   const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
@@ -452,11 +476,31 @@ ${ticketBody}
 
 ## Instructions
 
+### Phase 1: Assumption Resolution
+Identify every assumption (explicit and implicit). For each:
+- **Self-resolvable** (can check code/APIs/schemas): State what you'd verify and whether it appears correct or incorrect.
+- **Requires human input** (business logic, domain knowledge, product direction): Formulate a specific blocking question.
+
+### Phase 2: Enhanced Evaluation
+Apply ALL criteria from the quality gate, including:
+- **Zero Unresolved Assumptions**: FAIL if any assumptions remain unverified/unanswered.
+- **End-to-End Data Flow**: FAIL if multi-boundary features have only mocked tests.
+- **Dependency Contracts**: FAIL if cross-ticket/module dependencies lack explicit contracts (format, timing, verification).
+- **Automated Visual Verification**: FAIL if UI tickets lack automated visual verification against the real app.
+- **All Verification Automatable**: FAIL if any verification requires manual human steps.
+
+### Phase 3: Report
 For each criterion that FAILS, ask a specific, answerable question that would resolve the gap. Don't ask vague questions — ask exactly what you need to know. Group related gaps into a single question when possible.
 
 Respond in EXACTLY this format:
 
 ## Spec Quality Gate: [PASS or FAIL]
+
+### Assumption Resolution
+| # | Assumption | Type | Resolution |
+|---|-----------|------|------------|
+| 1 | <assumption text> | Self-resolvable / Requires human input | <verified fact OR specific question> |
+...
 
 ### Results
 | Criterion | Result | Notes |
@@ -495,8 +539,13 @@ ${userAnswers}
 
 ## Instructions
 
-1. Incorporate the user's answers into the ticket body. Preserve existing content — add clarifications inline or in new sections, don't delete anything.
-2. Re-evaluate the updated ticket against the quality gate.
+1. Incorporate the user's answers into the ticket body. Preserve existing content — add clarifications inline or in new sections, don't delete anything. Replace resolved assumptions with verified facts (e.g., "Verified: function X returns Y (see src/path/file.ts:42)").
+2. Re-evaluate the updated ticket against ALL quality gate criteria, including:
+   - **Zero Unresolved Assumptions**: Any remaining assumptions must be resolved. Listing them is not enough.
+   - **End-to-End Data Flow**: Multi-boundary features need e2e verification, not just mocked tests.
+   - **Dependency Contracts**: Cross-ticket/module references need explicit contracts (format, timing, verification).
+   - **Automated Visual Verification**: UI tickets need automated visual checks against the real app.
+   - **All Verification Automatable**: No manual steps allowed.
 3. If it still FAILs, ask new specific questions for the remaining gaps.
 
 Respond in EXACTLY this format:
@@ -506,6 +555,12 @@ Respond in EXACTLY this format:
 <the full updated ticket body with answers incorporated>
 
 ## Spec Quality Gate: [PASS or FAIL]
+
+### Assumption Resolution
+| # | Assumption | Type | Resolution |
+|---|-----------|------|------------|
+| 1 | <assumption text> | Self-resolvable / Requires human input | <verified fact OR answered> |
+...
 
 ### Results
 | Criterion | Result | Notes |

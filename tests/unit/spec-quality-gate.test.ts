@@ -30,6 +30,41 @@ describe('getDefaultSpecQualityGate', () => {
     expect(content).toContain('### Assumptions');
   });
 
+  it('includes enhanced gate criteria for assumption resolution', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('### Assumptions — Zero Unresolved');
+    expect(content).toContain('Assumptions are ambiguity');
+    expect(content).toContain('MUST NOT pass with unresolved assumptions');
+  });
+
+  it('includes end-to-end data flow verification criterion', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('### End-to-End Data Flow Verification');
+    expect(content).toContain('entire pipeline without mocks');
+    expect(content).toContain('integration boundary');
+  });
+
+  it('includes dependency contracts criterion', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('### Dependency Contracts');
+    expect(content).toContain('data contract must be explicit');
+    expect(content).toContain('Read/write timing');
+  });
+
+  it('includes automated visual verification criterion', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('### Automated Visual Verification (UI Tickets)');
+    expect(content).toContain('real running application');
+    expect(content).toContain('not mocked component renders');
+  });
+
+  it('includes all-verification-automatable criterion', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('### All Verification Must Be Automatable');
+    expect(content).toContain('No "manually verify"');
+    expect(content).toContain('eliminate manual steps entirely');
+  });
+
   it('starts with a markdown heading', () => {
     const content = getDefaultSpecQualityGate();
     expect(content).toMatch(/^# Spec Quality Gate/);
@@ -210,6 +245,15 @@ describe('init.sh generates spec-quality-gate.md', () => {
     expect(init).toContain('### Ambiguity Check');
     expect(init).toContain('### Assumptions');
   });
+
+  it('includes enhanced gate criteria in init.sh', () => {
+    const init = fs.readFileSync(initPath, 'utf-8');
+    expect(init).toContain('### Assumptions — Zero Unresolved');
+    expect(init).toContain('### End-to-End Data Flow Verification');
+    expect(init).toContain('### Dependency Contracts');
+    expect(init).toContain('### Automated Visual Verification (UI Tickets)');
+    expect(init).toContain('### All Verification Must Be Automatable');
+  });
 });
 
 describe('skill files for spec quality gate', () => {
@@ -232,6 +276,37 @@ describe('skill files for spec quality gate', () => {
     expect(content).toContain('spec-refine');
     expect(content).toContain('spec-quality-gate.md');
     expect(content).toContain('update-ticket');
+  });
+
+  it('spec-check skill includes assumption resolution phase', () => {
+    const content = fs.readFileSync(
+      path.join(skillsDir, 'sandstorm-spec-check.md'),
+      'utf-8',
+    );
+    expect(content).toContain('Resolve assumptions');
+    expect(content).toContain('Self-resolvable');
+    expect(content).toContain('Requires human input');
+    expect(content).toContain('Assumptions — Zero Unresolved');
+    expect(content).toContain('End-to-End Data Flow');
+    expect(content).toContain('Dependency Contracts');
+    expect(content).toContain('Automated Visual Verification');
+    expect(content).toContain('All Verification Automatable');
+    expect(content).toContain('Questions Requiring User Answers');
+  });
+
+  it('spec-refine skill includes enhanced evaluation checks', () => {
+    const content = fs.readFileSync(
+      path.join(skillsDir, 'sandstorm-spec-refine.md'),
+      'utf-8',
+    );
+    expect(content).toContain('Resolve assumptions first');
+    expect(content).toContain('Self-resolvable');
+    expect(content).toContain('Zero Unresolved Assumptions');
+    expect(content).toContain('End-to-End Data Flow');
+    expect(content).toContain('Dependency Contracts');
+    expect(content).toContain('Automated Visual Verification');
+    expect(content).toContain('All Verification Automatable');
+    expect(content).toContain('Replace resolved assumptions with verified facts');
   });
 
   it('spec-check skill is user-invocable', () => {
