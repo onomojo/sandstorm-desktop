@@ -17,7 +17,7 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:integration:docker": "vitest run --config vitest.integration.config.ts",
-    "test:integration": "xvfb-run --auto-servernum playwright test --config playwright.integration.config.ts",
+    "test:integration": "xvfb-run --server-num=50 playwright test --config playwright.integration.config.ts",
     "test:e2e": "playwright test",
     "lint": "eslint src/",
     "typecheck": "tsc --noEmit",

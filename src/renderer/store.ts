@@ -489,6 +489,7 @@ declare global {
         resumeAll: () => Promise<string[]>;
         resumeStack: (stackId: string) => Promise<void>;
         forcePoll: () => Promise<SessionMonitorState>;
+        reportActivity: () => void;
       };
       auth: {
         status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
@@ -558,11 +559,12 @@ export const useAppStore = create<AppState>((set, get) => ({
       agentSessions: {
         ...state.agentSessions,
         [tabId]: {
-          messages: [],
-          streamingContent: '',
-          isLoading: false,
-          isQueued: false,
-          ...(state.agentSessions[tabId] ?? {}),
+          ...(state.agentSessions[tabId] ?? {
+            messages: [],
+            streamingContent: '',
+            isLoading: false,
+            isQueued: false,
+          }),
           ...update,
         },
       },
