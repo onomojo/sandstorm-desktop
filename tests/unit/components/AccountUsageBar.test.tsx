@@ -32,7 +32,7 @@ function makeMonitorState(overrides: Partial<SessionMonitorState> = {}): Session
     pollMode: 'normal',
     nextPollAt: null,
     idle: false,
-    tmuxAvailable: true,
+    claudeAvailable: true,
     ...overrides,
   };
 }
@@ -236,10 +236,10 @@ describe('AccountUsageBar', () => {
     expect(screen.getByTestId('idle-badge').textContent).toBe('IDLE');
   });
 
-  it('shows tmux missing warning in popover', () => {
+  it('shows claude CLI missing warning in popover', () => {
     useAppStore.setState({
       sessionMonitorState: makeMonitorState({
-        tmuxAvailable: false,
+        claudeAvailable: false,
       }),
       globalTokenUsage: {
         total_input_tokens: 100,
@@ -251,7 +251,7 @@ describe('AccountUsageBar', () => {
     render(<AccountUsageBar />);
     fireEvent.click(screen.getByTestId('usage-bar-button'));
     const popover = screen.getByTestId('usage-popover');
-    expect(popover.textContent).toContain('tmux not installed');
+    expect(popover.textContent).toContain('Claude CLI not installed');
   });
 
   it('shows extra usage status', () => {

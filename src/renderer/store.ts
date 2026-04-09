@@ -184,7 +184,7 @@ export interface SessionMonitorState {
   pollMode: PollMode;
   nextPollAt: string | null;
   idle: boolean;
-  tmuxAvailable: boolean | null;
+  claudeAvailable: boolean | null;
 }
 
 export interface SessionMonitorSettings {

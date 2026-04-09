@@ -2,7 +2,7 @@
  * @vitest-environment node
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { parseUsageOutput, parseUsageBlock, resetTmuxCheck } from '../../src/main/control-plane/account-usage';
+import { parseUsageOutput, parseUsageBlock, resetClaudeCheck, stripAnsi } from '../../src/main/control-plane/account-usage';
 
 // ---------------------------------------------------------------------------
 // Parser tests — these don't need mocks, they just test string parsing
@@ -52,7 +52,7 @@ const EMPTY_PANE = `
 
 describe('account-usage parser', () => {
   beforeEach(() => {
-    resetTmuxCheck();
+    resetClaudeCheck();
   });
 
   describe('parseUsageBlock', () => {
@@ -186,6 +186,89 @@ describe('account-usage parser', () => {
       expect(parseUsageOutput('rate limit exceeded').status).toBe('rate_limited');
       expect(parseUsageOutput('Too many requests, try again later').status).toBe('rate_limited');
       expect(parseUsageOutput('You are requesting too frequently').status).toBe('rate_limited');
+    });
+  });
+
+  describe('stripAnsi', () => {
+    it('strips color codes', () => {
+      const input = '\x1b[38;5;231mHello\x1b[0m World';
+      expect(stripAnsi(input)).toBe('Hello World');
+    });
+
+    it('strips cursor movement codes', () => {
+      const input = '\x1b[1AHello\x1b[2B World';
+      expect(stripAnsi(input)).toBe('Hello World');
+    });
+
+    it('strips OSC sequences', () => {
+      const input = '\x1b]0;title\x07Hello';
+      expect(stripAnsi(input)).toBe('Hello');
+    });
+
+    it('strips charset switching', () => {
+      const input = '\x1b(BHello\x1b)0 World';
+      expect(stripAnsi(input)).toBe('Hello World');
+    });
+
+    it('strips control characters but keeps newlines and tabs', () => {
+      const input = 'Hello\x01\x02\nWorld\t!';
+      expect(stripAnsi(input)).toBe('Hello\nWorld\t!');
+    });
+
+    it('returns empty string for empty input', () => {
+      expect(stripAnsi('')).toBe('');
+    });
+
+    it('returns plain text unchanged', () => {
+      expect(stripAnsi('plain text')).toBe('plain text');
+    });
+
+    it('handles private mode sequences like ?2026l', () => {
+      const input = '\x1b[?2026lHello';
+      expect(stripAnsi(input)).toBe('Hello');
+    });
+  });
+
+  describe('parsing ANSI-stripped PTY output', () => {
+    it('parses usage from stripped PTY output (simulating node-pty)', () => {
+      // Simulate what node-pty output looks like after ANSI stripping
+      const rawPtyOutput = `\x1b[38;5;231mCurrent session\x1b[0m
+\x1b[38;5;70m  ███████████████████████▌\x1b[0m                 47% used
+  Resets 6pm (America/New_York)
+
+\x1b[38;5;231mExtra usage not enabled\x1b[0m`;
+      const stripped = stripAnsi(rawPtyOutput);
+      const snapshot = parseUsageOutput(stripped);
+      expect(snapshot.status).toBe('ok');
+      expect(snapshot.session!.percent).toBe(47);
+      expect(snapshot.session!.resetsAt).toBe('6pm (America/New_York)');
+      expect(snapshot.extraUsage.enabled).toBe(false);
+    });
+
+    it('parses full dialog from stripped PTY output', () => {
+      const stripped = `
+╭─────────────────────────────────────────────────╮
+│ Current session                                 │
+│   ███████████████████████▌            47% used  │
+│   Resets 6pm (America/New_York)                 │
+│                                                 │
+│ Current week (all models)                       │
+│   ██████████▌                         22% used  │
+│   Resets Monday 12am (America/New_York)         │
+│                                                 │
+│ Current week (Sonnet only)                      │
+│   ████▌                                8% used  │
+│   Resets Monday 12am (America/New_York)         │
+│                                                 │
+│ Extra usage not enabled                         │
+╰─────────────────────────────────────────────────╯
+`;
+      const snapshot = parseUsageOutput(stripped);
+      expect(snapshot.status).toBe('ok');
+      expect(snapshot.session!.percent).toBe(47);
+      expect(snapshot.weekAll!.percent).toBe(22);
+      expect(snapshot.weekSonnet!.percent).toBe(8);
+      expect(snapshot.extraUsage.enabled).toBe(false);
     });
   });
 });
