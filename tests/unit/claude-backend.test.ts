@@ -549,3 +549,73 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
     });
   });
 });
+
+describe('ClaudeBackend.runEphemeralAgent — promise settlement', () => {
+  beforeEach(() => {
+    spawnedProcesses.length = 0;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function getEphemeralProcess(): MockChildProcess {
+    return spawnedProcesses[spawnedProcesses.length - 1];
+  }
+
+  it('resolves exactly once on normal exit', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+
+    const resultPromise = backendUnderTest.runEphemeralAgent('test prompt', '/tmp', 5_000);
+
+    const proc = getEphemeralProcess();
+    const resultLine = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'output text' }] } });
+    proc.stdout.emit('data', Buffer.from(resultLine + '\n'));
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+
+    // Advance timers — timeout fires after close, should be a no-op
+    vi.advanceTimersByTime(6_000);
+
+    const result = await resultPromise;
+    expect(result).toBe('output text');
+
+    backendUnderTest.destroy();
+  });
+
+  it('rejects exactly once on timeout and does not double-settle when close fires later', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+
+    const resultPromise = backendUnderTest.runEphemeralAgent('test prompt', '/tmp', 3_000);
+    const proc = getEphemeralProcess();
+
+    // Timeout fires before the process exits
+    vi.advanceTimersByTime(3_100);
+
+    // Now the process exits — this close event must NOT cause a second settlement
+    proc.exitCode = 143;
+    proc.emit('close', 143);
+
+    await expect(resultPromise).rejects.toThrow('Ephemeral agent timed out after 3000ms');
+
+    backendUnderTest.destroy();
+  });
+
+  it('settles exactly once when both error and close events fire', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+
+    const resultPromise = backendUnderTest.runEphemeralAgent('test prompt', '/tmp', 5_000);
+    const proc = getEphemeralProcess();
+
+    // Emit both error and close — only first settlement should count
+    proc.emit('error', new Error('ENOENT: spawn failed'));
+    proc.exitCode = 1;
+    proc.emit('close', 1);
+
+    await expect(resultPromise).rejects.toThrow('ENOENT: spawn failed');
+
+    backendUnderTest.destroy();
+  });
+});
