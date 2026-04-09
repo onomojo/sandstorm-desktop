@@ -178,10 +178,10 @@ export function AccountUsageBar() {
             </div>
           )}
 
-          {/* tmux missing warning */}
-          {sessionMonitorState?.tmuxAvailable === false && (
+          {/* claude CLI missing warning */}
+          {sessionMonitorState?.claudeAvailable === false && (
             <div className="text-[10px] text-red-400 mt-2 pt-2 border-t border-sandstorm-border">
-              tmux not installed — session monitoring unavailable
+              Claude CLI not installed — session monitoring unavailable
             </div>
           )}
 

@@ -1,17 +1,19 @@
 /**
  * Fetches Claude Code account-level session usage by driving the official
- * `claude` CLI binary in a detached tmux pane, sending `/usage`, and parsing
- * the rendered TUI output.
+ * `claude` CLI binary in a pseudo-terminal (via node-pty), sending `/usage`,
+ * and parsing the rendered TUI output.
  *
- * This approach has been verified end-to-end with real captured output. It
- * retrieves real account-level session data (not aggregated stack tokens).
+ * This replaces the previous tmux-based approach, which only worked on Linux.
+ * node-pty works cross-platform (macOS, Linux, Windows) without requiring
+ * any external dependencies.
  *
  * Requirements:
- *   - `tmux` must be installed
+ *   - `node-pty` npm package (already a dependency)
  *   - `claude` CLI must be installed and OAuth-authenticated
  *   - Must NOT be called from inside another `claude` session (TTY collision)
  */
 
+import * as nodePty from 'node-pty';
 import { exec } from 'child_process';
 
 // ---------------------------------------------------------------------------
@@ -33,8 +35,12 @@ export interface UsageSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Shell helpers
+// Helpers
 // ---------------------------------------------------------------------------
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function execAsync(cmd: string, timeoutMs = 20_000): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -45,51 +51,58 @@ function execAsync(cmd: string, timeoutMs = 20_000): Promise<string> {
   });
 }
 
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+/**
+ * Strip ANSI escape sequences from PTY output so the parser can work
+ * on plain text. PTY output includes color codes, cursor movement, etc.
+ */
+export function stripAnsi(str: string): string {
+  return str
+    .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
+    .replace(/\x1b\][^\x07]*\x07/g, '')
+    .replace(/\x1b[()][0-9A-Za-z]/g, '')
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
 }
 
 // ---------------------------------------------------------------------------
-// tmux dependency check
+// Claude CLI dependency check
 // ---------------------------------------------------------------------------
 
-let tmuxChecked = false;
-let tmuxAvailable = false;
+let claudeChecked = false;
+let claudeAvailable = false;
 
-export async function checkTmuxInstalled(): Promise<boolean> {
-  if (tmuxChecked) return tmuxAvailable;
+export async function checkClaudeInstalled(): Promise<boolean> {
+  if (claudeChecked) return claudeAvailable;
   try {
-    await execAsync('which tmux');
-    tmuxAvailable = true;
+    await execAsync('which claude');
+    claudeAvailable = true;
   } catch {
-    tmuxAvailable = false;
+    claudeAvailable = false;
   }
-  tmuxChecked = true;
-  return tmuxAvailable;
+  claudeChecked = true;
+  return claudeAvailable;
 }
 
 /** Reset cached check (for testing). */
-export function resetTmuxCheck(): void {
-  tmuxChecked = false;
-  tmuxAvailable = false;
+export function resetClaudeCheck(): void {
+  claudeChecked = false;
+  claudeAvailable = false;
 }
+
 
 // ---------------------------------------------------------------------------
 // Parser
 // ---------------------------------------------------------------------------
 
 /**
- * Parse a single usage block from the captured tmux pane output.
+ * Parse a single usage block from the captured output.
  * Looks for a pattern like:
  *   Current session
  *     ███████████████████████▌                           47% used
  *     Resets 6pm (America/New_York)
  */
 export function parseUsageBlock(pane: string, label: string): UsageBlock | null {
-  // Match: label, then on a following line "N% used", then on the next line "Resets ..."
-  // Use non-greedy [^\n]*? before the percent to avoid consuming the digits
   const re = new RegExp(
-    label + '[^\\n]*\\n[^\\n]*?\\s(\\d+)% used[^\\n]*\\n[^\\n]*Resets ([^\\n]+)'
+    label + '[^\\n]*\\n[^\\n]*?\\s(\\d+)%\\s*used[^\\n]*\\n[^\\n]*Resets ([^\\n]+)'
   );
   const m = pane.match(re);
   if (!m) return null;
@@ -99,8 +112,7 @@ export function parseUsageBlock(pane: string, label: string): UsageBlock | null 
 }
 
 /**
- * Detect whether the pane output indicates a rate-limit on `/usage` itself.
- * We look for rate-limit-like keywords when no percentage bars are found.
+ * Detect whether the output indicates a rate-limit on `/usage` itself.
  */
 function isRateLimited(pane: string): boolean {
   const lower = pane.toLowerCase();
@@ -113,7 +125,7 @@ function isRateLimited(pane: string): boolean {
 }
 
 /**
- * Detect whether the pane output indicates an expired OAuth session.
+ * Detect whether the output indicates an expired OAuth session.
  */
 function isAuthExpired(pane: string): boolean {
   const lower = pane.toLowerCase();
@@ -127,7 +139,7 @@ function isAuthExpired(pane: string): boolean {
 }
 
 /**
- * Parse the full tmux pane output into a UsageSnapshot.
+ * Parse the full captured output into a UsageSnapshot.
  */
 export function parseUsageOutput(pane: string): UsageSnapshot {
   const session = parseUsageBlock(pane, 'Current session');
@@ -176,52 +188,96 @@ export function parseUsageOutput(pane: string): UsageSnapshot {
 }
 
 // ---------------------------------------------------------------------------
-// Main fetch function
+// PTY-based fetch
 // ---------------------------------------------------------------------------
 
 /**
- * Fetch real account-level session usage by driving `claude` in a detached
- * tmux pane, sending `/usage`, and parsing the rendered output.
+ * Wait for a marker string in the PTY output buffer.
+ * Returns the buffer content when a marker is found, or null on timeout.
+ */
+function waitForOutput(
+  ptyProcess: nodePty.IPty,
+  markers: string[],
+  timeoutMs: number,
+  existingBuffer: { value: string }
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => {
+      disposable.dispose();
+      resolve(false);
+    }, timeoutMs);
+
+    // Listen for new data to trigger marker checks, but do NOT append to the
+    // buffer here — the caller's global onData listener handles accumulation.
+    // This avoids double-appending every chunk.
+    const disposable = ptyProcess.onData(() => {
+      const clean = stripAnsi(existingBuffer.value);
+      for (const marker of markers) {
+        if (clean.includes(marker)) {
+          clearTimeout(timer);
+          disposable.dispose();
+          resolve(true);
+          return;
+        }
+      }
+    });
+
+    // Also check existing buffer immediately
+    const clean = stripAnsi(existingBuffer.value);
+    for (const marker of markers) {
+      if (clean.includes(marker)) {
+        clearTimeout(timer);
+        disposable.dispose();
+        resolve(true);
+        return;
+      }
+    }
+  });
+}
+
+/**
+ * Fetch real account-level session usage by driving `claude` in a
+ * pseudo-terminal, sending `/usage`, and parsing the rendered output.
  *
- * Returns a UsageSnapshot on success, or null if tmux/claude are unavailable.
+ * Returns a UsageSnapshot on success, or null if claude is unavailable.
  * The `status` field in the snapshot indicates parse success or specific errors.
  *
  * Wall time: ~3–4 seconds typical, up to ~20s worst case.
  */
 export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
-  if (!(await checkTmuxInstalled())) {
+  if (!(await checkClaudeInstalled())) {
     return null;
   }
 
-  const session = `claude-usage-${process.pid}-${Date.now()}`;
-  const claudeCmd = [
-    'CLAUDE_CODE_DISABLE_CLAUDE_MDS=1',
-    'claude',
+  const claudeArgs = [
     '--strict-mcp-config',
-    "--mcp-config '{\\\"mcpServers\\\":{}}'",
-    '--setting-sources user',
-  ].join(' ');
+    '--mcp-config', '{"mcpServers":{}}',
+    '--setting-sources', 'user',
+  ];
+
+  let proc: nodePty.IPty | null = null;
+  const buffer = { value: '' };
 
   try {
-    // Launch claude in a detached tmux session
-    await execAsync(
-      `tmux new-session -d -s "${session}" -x 220 -y 60 "${claudeCmd}"`
-    );
+    // Launch claude in a pseudo-terminal
+    proc = nodePty.spawn('claude', claudeArgs, {
+      name: 'xterm-256color',
+      cols: 220,
+      rows: 60,
+      env: {
+        ...process.env,
+        CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+      },
+    });
+
+    // Collect all output into buffer — single global listener ensures no data
+    // is lost between waitForOutput calls (e.g. during sleep intervals).
+    proc.onData((data) => {
+      buffer.value += data;
+    });
 
     // Wait for claude to be ready (look for "for shortcuts" prompt)
-    let ready = false;
-    for (let i = 0; i < 60; i++) {
-      await sleep(250);
-      try {
-        const pane = await execAsync(`tmux capture-pane -t "${session}" -p 2>/dev/null`);
-        if (pane.includes('for shortcuts')) {
-          ready = true;
-          break;
-        }
-      } catch {
-        // tmux session may not be ready yet
-      }
-    }
+    const ready = await waitForOutput(proc, ['for shortcuts'], 15_000, buffer);
 
     if (!ready) {
       return {
@@ -232,47 +288,48 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
       };
     }
 
+    // Small delay to let the prompt fully render
+    await sleep(500);
+
     // Send /usage command
-    await execAsync(`tmux send-keys -t "${session}" "/usage" Enter`);
+    proc.write('/usage\r');
 
     // Wait for usage dialog to render
-    let usagePane = '';
-    for (let i = 0; i < 40; i++) {
-      await sleep(250);
-      try {
-        usagePane = await execAsync(`tmux capture-pane -t "${session}" -p 2>/dev/null`);
-        if (usagePane.includes('Current session') || usagePane.includes('Extra usage')) {
-          break;
-        }
-      } catch {
-        // Retry
-      }
+    const usageReady = await waitForOutput(
+      proc,
+      ['Current session', 'Extra usage'],
+      10_000,
+      buffer
+    );
+
+    if (usageReady) {
+      // Give it a moment to finish rendering the full dialog
+      await sleep(1000);
     }
 
-    // Capture final pane content
-    try {
-      usagePane = await execAsync(`tmux capture-pane -t "${session}" -p`);
-    } catch {
-      // Use last captured content
-    }
+    // Strip ANSI codes and parse
+    const cleanOutput = stripAnsi(buffer.value);
 
     // Dismiss dialog and exit cleanly
     try {
-      await execAsync(`tmux send-keys -t "${session}" Escape`);
-      await execAsync(`tmux send-keys -t "${session}" "/exit" Enter`);
+      proc.write('\x1b'); // Escape key
+      await sleep(300);
+      proc.write('/exit\r');
     } catch {
       // Best-effort cleanup
     }
 
-    return parseUsageOutput(usagePane);
+    return parseUsageOutput(cleanOutput);
   } catch {
     return null;
   } finally {
-    // Always kill the tmux session
-    try {
-      await execAsync(`tmux kill-session -t "${session}" 2>/dev/null`);
-    } catch {
-      // Session may already be gone
+    // Always kill the PTY process
+    if (proc) {
+      try {
+        proc.kill();
+      } catch {
+        // Process may already be gone
+      }
     }
   }
 }

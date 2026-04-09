@@ -3,11 +3,11 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 // Mock the account-usage module before importing SessionMonitor
 vi.mock('../../src/main/control-plane/account-usage', () => ({
   fetchAccountUsage: vi.fn(),
-  checkTmuxInstalled: vi.fn().mockResolvedValue(true),
+  checkClaudeInstalled: vi.fn().mockResolvedValue(true),
 }));
 
 import { SessionMonitor, DEFAULT_SESSION_MONITOR_SETTINGS } from '../../src/main/control-plane/session-monitor';
-import { fetchAccountUsage, checkTmuxInstalled } from '../../src/main/control-plane/account-usage';
+import { fetchAccountUsage, checkClaudeInstalled } from '../../src/main/control-plane/account-usage';
 import type { UsageSnapshot } from '../../src/main/control-plane/account-usage';
 
 const mockFetchAccountUsage = fetchAccountUsage as ReturnType<typeof vi.fn>;

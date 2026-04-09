@@ -102,7 +102,7 @@ export function mockSandstormApi() {
       getState: vi.fn().mockResolvedValue({
         usage: null, level: 'normal', stale: false, halted: false,
         lastPollAt: null, consecutiveFailures: 0,
-        pollMode: 'normal', nextPollAt: null, idle: false, tmuxAvailable: null,
+        pollMode: 'normal', nextPollAt: null, idle: false, claudeAvailable: null,
       }),
       getSettings: vi.fn().mockResolvedValue({
         warningThreshold: 80, criticalThreshold: 90, autoHaltThreshold: 95,
@@ -117,7 +117,7 @@ export function mockSandstormApi() {
       forcePoll: vi.fn().mockResolvedValue({
         usage: null, level: 'normal', stale: false, halted: false,
         lastPollAt: null, consecutiveFailures: 0,
-        pollMode: 'normal', nextPollAt: null, idle: false, tmuxAvailable: null,
+        pollMode: 'normal', nextPollAt: null, idle: false, claudeAvailable: null,
       }),
       reportActivity: vi.fn(),
     },

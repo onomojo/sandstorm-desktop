@@ -1,6 +1,6 @@
 /**
  * Session token limit monitor — polls real account-level usage data via the
- * tmux-based CLI approach and triggers warnings / auto-halt when configurable
+ * node-pty-based CLI approach and triggers warnings / auto-halt when configurable
  * thresholds are crossed.
  *
  * Implements a three-mode polling state machine:
@@ -14,7 +14,7 @@
  */
 
 import { EventEmitter } from 'events';
-import { fetchAccountUsage, UsageSnapshot, checkTmuxInstalled } from './account-usage';
+import { fetchAccountUsage, UsageSnapshot, checkClaudeInstalled } from './account-usage';
 
 // ---------------------------------------------------------------------------
 // Settings & types
@@ -73,8 +73,8 @@ export interface SessionMonitorState {
   nextPollAt: string | null;
   /** Whether the app is considered idle (polling paused) */
   idle: boolean;
-  /** Whether tmux is available */
-  tmuxAvailable: boolean | null;
+  /** Whether the claude CLI is available for usage collection */
+  claudeAvailable: boolean | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ export interface SessionMonitorState {
  *  - 'halt:triggered'      () — auto-halt was triggered
  *  - 'state:changed'       (state: SessionMonitorState) — any state change
  *  - 'stale'               () — usage data became stale
- *  - 'tmux:missing'        () — tmux not installed
+ *  - 'claude:missing'      () — claude CLI not installed
  */
 export class SessionMonitor extends EventEmitter {
   private settings: SessionMonitorSettings;
@@ -132,7 +132,7 @@ export class SessionMonitor extends EventEmitter {
       pollMode: 'normal',
       nextPollAt: null,
       idle: false,
-      tmuxAvailable: null,
+      claudeAvailable: null,
     };
   }
 
@@ -257,17 +257,17 @@ export class SessionMonitor extends EventEmitter {
     }
 
     if (!snapshot) {
-      // Total failure (tmux missing, claude not found, etc.)
+      // Total failure (claude not found, etc.)
       this.handlePollFailure('error');
       return;
     }
 
-    // Check tmux availability
-    if (this.state.tmuxAvailable === null) {
-      const available = await checkTmuxInstalled();
-      this.state.tmuxAvailable = available;
+    // Check claude CLI availability
+    if (this.state.claudeAvailable === null) {
+      const available = await checkClaudeInstalled();
+      this.state.claudeAvailable = available;
       if (!available) {
-        this.emit('tmux:missing');
+        this.emit('claude:missing');
       }
     }
 
