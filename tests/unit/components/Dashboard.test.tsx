@@ -183,6 +183,92 @@ describe('Dashboard', () => {
     expect(screen.getByText('No history yet')).toBeDefined();
   });
 
+  it('shows workflow phases in history card for completed stack', () => {
+    const completedTask = {
+      id: 1, stack_id: 'old-stack', prompt: 'Fix bug', model: 'sonnet',
+      resolved_model: null, status: 'completed', exit_code: 0,
+      session_id: null, input_tokens: 5000, output_tokens: 2000,
+      execution_input_tokens: 3000, execution_output_tokens: 1200,
+      review_input_tokens: 2000, review_output_tokens: 800,
+      review_iterations: 1, verify_retries: 0,
+      review_verdicts: null, verify_outputs: null, execution_summary: null,
+      execution_started_at: '2026-01-01T00:00:00Z',
+      execution_finished_at: '2026-01-01T00:05:00Z',
+      review_started_at: '2026-01-01T00:05:00Z',
+      review_finished_at: '2026-01-01T00:07:00Z',
+      verify_started_at: '2026-01-01T00:07:00Z',
+      verify_finished_at: '2026-01-01T00:08:00Z',
+      started_at: '2026-01-01T00:00:00Z',
+      finished_at: '2026-01-01T00:08:00Z',
+    };
+
+    useAppStore.setState({
+      stackHistory: [
+        {
+          id: 1, stack_id: 'old-stack', project: 'proj', project_dir: '/proj',
+          ticket: null, branch: null, description: null,
+          final_status: 'completed' as const, error: null,
+          runtime: 'docker' as const, task_prompt: 'Fix bug',
+          task_history: JSON.stringify([completedTask]),
+          created_at: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
+          duration_seconds: 480,
+        },
+      ],
+    });
+
+    render(<Dashboard />);
+    fireEvent.click(screen.getByTestId('tab-history'));
+    expect(screen.getByTestId('history-workflow-phases')).toBeDefined();
+    // All three phases should have checkmarks for completed task
+    const phasesEl = screen.getByTestId('history-workflow-phases');
+    expect(phasesEl.textContent).toContain('Exec');
+    expect(phasesEl.textContent).toContain('Review');
+    expect(phasesEl.textContent).toContain('Verify');
+    expect(phasesEl.textContent).toContain('\u2713');
+  });
+
+  it('shows failed phase in history card for failed stack', () => {
+    const failedTask = {
+      id: 1, stack_id: 'fail-stack', prompt: 'Fix bug', model: 'sonnet',
+      resolved_model: null, status: 'failed', exit_code: 1,
+      session_id: null, input_tokens: 5000, output_tokens: 2000,
+      execution_input_tokens: 3000, execution_output_tokens: 1200,
+      review_input_tokens: 2000, review_output_tokens: 800,
+      review_iterations: 1, verify_retries: 0,
+      review_verdicts: null, verify_outputs: null, execution_summary: null,
+      execution_started_at: '2026-01-01T00:00:00Z',
+      execution_finished_at: '2026-01-01T00:05:00Z',
+      review_started_at: '2026-01-01T00:05:00Z',
+      review_finished_at: '2026-01-01T00:07:00Z',
+      verify_started_at: '2026-01-01T00:07:00Z',
+      verify_finished_at: null,
+      started_at: '2026-01-01T00:00:00Z',
+      finished_at: '2026-01-01T00:08:00Z',
+    };
+
+    useAppStore.setState({
+      stackHistory: [
+        {
+          id: 1, stack_id: 'fail-stack', project: 'proj', project_dir: '/proj',
+          ticket: null, branch: null, description: null,
+          final_status: 'failed' as const, error: 'verify failed',
+          runtime: 'docker' as const, task_prompt: 'Fix bug',
+          task_history: JSON.stringify([failedTask]),
+          created_at: new Date().toISOString(),
+          finished_at: new Date().toISOString(),
+          duration_seconds: 480,
+        },
+      ],
+    });
+
+    render(<Dashboard />);
+    fireEvent.click(screen.getByTestId('tab-history'));
+    const phasesEl = screen.getByTestId('history-workflow-phases');
+    // Verify phase should show X mark for failed
+    expect(phasesEl.textContent).toContain('\u2717');
+  });
+
   it('shows stopped count when stacks are stopped', () => {
     useAppStore.setState({
       stacks: [

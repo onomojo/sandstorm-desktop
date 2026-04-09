@@ -119,6 +119,81 @@ describe('WorkflowProgressPanel', () => {
     expect(screen.getByTestId('phase-verify')).toBeDefined();
   });
 
+  it('shows idle state when no task has been dispatched', () => {
+    const idleProgress = makeProgress({
+      currentPhase: 'idle',
+      outerIteration: 0,
+      innerIteration: 0,
+      phases: [
+        { phase: 'execution', status: 'pending' },
+        { phase: 'review', status: 'pending' },
+        { phase: 'verify', status: 'pending' },
+      ],
+      steps: [],
+      taskPrompt: null,
+      startedAt: null,
+      model: null,
+    });
+    render(<WorkflowProgressPanel progress={idleProgress} />);
+    expect(screen.getByTestId('workflow-idle-label')).toBeDefined();
+    expect(screen.getByTestId('workflow-idle-label').textContent).toBe('No task dispatched yet');
+    // Should not show loop counters
+    expect(screen.queryByTestId('outer-loop-counter')).toBeNull();
+    expect(screen.queryByTestId('inner-loop-counter')).toBeNull();
+  });
+
+  it('shows completed state with all phases passed', () => {
+    const completedProgress = makeProgress({
+      currentPhase: 'idle',
+      outerIteration: 1,
+      innerIteration: 2,
+      phases: [
+        { phase: 'execution', status: 'passed' },
+        { phase: 'review', status: 'passed' },
+        { phase: 'verify', status: 'passed' },
+      ],
+      steps: [
+        { phase: 'execution', iteration: 1, input_tokens: 5000, output_tokens: 2000, live: false },
+        { phase: 'review', iteration: 1, input_tokens: 3000, output_tokens: 1000, live: false },
+        { phase: 'verify', iteration: 1, input_tokens: 1000, output_tokens: 500, live: false },
+      ],
+      taskPrompt: 'Fix bug',
+      startedAt: new Date().toISOString(),
+      model: 'sonnet',
+    });
+    render(<WorkflowProgressPanel progress={completedProgress} />);
+
+    // All phases should show checkmarks
+    expect(screen.getByTestId('phase-execution').textContent).toContain('\u2713');
+    expect(screen.getByTestId('phase-review').textContent).toContain('\u2713');
+    expect(screen.getByTestId('phase-verify').textContent).toContain('\u2713');
+
+    // Loop counters should still be visible
+    expect(screen.getByTestId('outer-loop-counter').textContent).toBe('1 of 5');
+  });
+
+  it('does not show bottom info bar when no task data exists', () => {
+    const idleProgress = makeProgress({
+      currentPhase: 'idle',
+      outerIteration: 0,
+      innerIteration: 0,
+      phases: [
+        { phase: 'execution', status: 'pending' },
+        { phase: 'review', status: 'pending' },
+        { phase: 'verify', status: 'pending' },
+      ],
+      steps: [],
+      taskPrompt: null,
+      startedAt: null,
+      model: null,
+    });
+    render(<WorkflowProgressPanel progress={idleProgress} />);
+    // Should not render the bottom info bar
+    expect(screen.queryByText(/Task:/)).toBeNull();
+    expect(screen.queryByText(/Started:/)).toBeNull();
+    expect(screen.queryByText(/Model:/)).toBeNull();
+  });
+
   it('calculates token totals correctly', () => {
     const progress = makeProgress({
       steps: [
