@@ -13,6 +13,11 @@ import { registerIpcHandlers } from './ipc';
 import { createTray } from './tray';
 import { SessionMonitor } from './control-plane/session-monitor';
 
+// Enable remote debugging via env var (used by integration tests and ad-hoc CDP connections)
+if (process.env.REMOTE_DEBUGGING_PORT) {
+  app.commandLine.appendSwitch('remote-debugging-port', process.env.REMOTE_DEBUGGING_PORT);
+}
+
 let mainWindow: BrowserWindow | null = null;
 
 // Global app state
