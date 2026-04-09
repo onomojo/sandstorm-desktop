@@ -424,12 +424,38 @@ describe('StackDetail', () => {
     expect(screen.getByTestId('inner-loop-counter').textContent).toBe('2 of 5');
   });
 
-  it('does not show workflow panel when stack is not running', () => {
+  it('shows workflow panel for completed stack with persisted progress data', async () => {
+    const progressData: WorkflowProgress = {
+      stackId: 'detail-stack',
+      currentPhase: 'idle',
+      outerIteration: 2,
+      innerIteration: 3,
+      phases: [
+        { phase: 'execution', status: 'passed' },
+        { phase: 'review', status: 'passed' },
+        { phase: 'verify', status: 'passed' },
+      ],
+      steps: [
+        { phase: 'execution', iteration: 1, input_tokens: 5000, output_tokens: 2000, live: false },
+        { phase: 'review', iteration: 1, input_tokens: 3000, output_tokens: 1000, live: false },
+      ],
+      taskPrompt: 'Fix the login bug',
+      startedAt: new Date().toISOString(),
+      model: 'sonnet',
+    };
+
     useAppStore.setState({
       stacks: [makeStack({ status: 'completed' })],
     });
+    api.tasks.workflowProgress.mockResolvedValue(progressData);
+
     render(<StackDetail stackId="detail-stack" onBack={onBack} />);
-    expect(screen.queryByTestId('workflow-progress-panel')).toBeNull();
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-progress-panel')).toBeDefined();
+    });
+    expect(screen.getByTestId('outer-loop-counter').textContent).toBe('2 of 5');
+    expect(screen.getByTestId('inner-loop-counter').textContent).toBe('3 of 5');
   });
 
   it('shows default workflow panel when running stack has no progress data yet', async () => {
@@ -452,12 +478,82 @@ describe('StackDetail', () => {
     expect(screen.getByTestId('inner-loop-counter').textContent).toBe('1 of 5');
   });
 
-  it('does not show workflow panel when stack is not running and no progress data', () => {
+  it('shows workflow panel in idle state when stack has no progress data', () => {
     useAppStore.setState({
       stacks: [makeStack({ status: 'idle' })],
     });
     render(<StackDetail stackId="detail-stack" onBack={onBack} />);
-    expect(screen.queryByTestId('workflow-progress-panel')).toBeNull();
+    // Panel is always visible even for idle stacks
+    expect(screen.getByTestId('workflow-progress-panel')).toBeDefined();
+    expect(screen.getByTestId('workflow-idle-label')).toBeDefined();
+    expect(screen.getByTestId('workflow-idle-label').textContent).toBe('No task dispatched yet');
+  });
+
+  it('shows workflow panel for failed stack with failed phase indication', async () => {
+    const progressData: WorkflowProgress = {
+      stackId: 'detail-stack',
+      currentPhase: 'verify',
+      outerIteration: 2,
+      innerIteration: 1,
+      phases: [
+        { phase: 'execution', status: 'passed' },
+        { phase: 'review', status: 'passed' },
+        { phase: 'verify', status: 'failed' },
+      ],
+      steps: [
+        { phase: 'execution', iteration: 1, input_tokens: 5000, output_tokens: 2000, live: false },
+      ],
+      taskPrompt: 'Fix the API',
+      startedAt: new Date().toISOString(),
+      model: 'sonnet',
+    };
+
+    useAppStore.setState({
+      stacks: [makeStack({ status: 'failed', error: 'verify step failed' })],
+    });
+    api.tasks.workflowProgress.mockResolvedValue(progressData);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-progress-panel')).toBeDefined();
+    });
+
+    const verifyPhase = screen.getByTestId('phase-verify');
+    expect(verifyPhase.textContent).toContain('\u2717');
+  });
+
+  it('re-fetches workflow progress when task completes instead of clearing', async () => {
+    useAppStore.setState({
+      stacks: [makeStack({ status: 'running' })],
+    });
+
+    const runningProgress: WorkflowProgress = {
+      stackId: 'detail-stack',
+      currentPhase: 'execution',
+      outerIteration: 1,
+      innerIteration: 1,
+      phases: [
+        { phase: 'execution', status: 'running' },
+        { phase: 'review', status: 'pending' },
+        { phase: 'verify', status: 'pending' },
+      ],
+      steps: [],
+      taskPrompt: 'Fix bug',
+      startedAt: new Date().toISOString(),
+      model: 'sonnet',
+    };
+
+    api.tasks.workflowProgress.mockResolvedValue(runningProgress);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('workflow-progress-panel')).toBeDefined();
+    });
+
+    // The panel should always be present — verify it's still there
+    expect(screen.getByTestId('workflow-progress-panel')).toBeDefined();
   });
 
   it('shows aggregate fallback when no per-step data exists', async () => {

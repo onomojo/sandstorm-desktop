@@ -66,21 +66,18 @@ export function StackDetail({
     if (activeTab === 'diff') loadDiff();
   }, [activeTab, loadTasks, loadDiff]);
 
-  // Poll workflow progress for running stacks and listen for live updates
+  // Fetch workflow progress for any stack state and listen for live updates
   useEffect(() => {
-    if (!stack || stack.status !== 'running') {
-      setWorkflowProgress(null);
-      return;
-    }
+    if (!stack) return;
 
-    // Initial fetch
+    // Fetch workflow progress (works for both running and completed stacks)
     window.sandstorm.tasks.workflowProgress(stackId)
       .then((progress) => {
         if (progress) setWorkflowProgress(progress as WorkflowProgress);
       })
       .catch(() => {});
 
-    // Listen for live updates
+    // Listen for live updates (only relevant while running)
     const unsubscribe = window.sandstorm.on('task:workflow-progress', (data: unknown) => {
       const progress = data as WorkflowProgress;
       if (progress && progress.stackId === stackId) {
@@ -93,20 +90,21 @@ export function StackDetail({
     };
   }, [stackId, stack?.status]);
 
-  // Clear workflow progress when task completes
+  // Re-fetch workflow progress when task completes/fails (to get final DB state)
   useEffect(() => {
-    const unsubComplete = window.sandstorm.on('task:completed', (data: unknown) => {
+    const refetchProgress = (data: unknown) => {
       const event = data as { stackId: string };
       if (event.stackId === stackId) {
-        setWorkflowProgress(null);
+        window.sandstorm.tasks.workflowProgress(stackId)
+          .then((progress) => {
+            if (progress) setWorkflowProgress(progress as WorkflowProgress);
+          })
+          .catch(() => {});
       }
-    });
-    const unsubFailed = window.sandstorm.on('task:failed', (data: unknown) => {
-      const event = data as { stackId: string };
-      if (event.stackId === stackId) {
-        setWorkflowProgress(null);
-      }
-    });
+    };
+
+    const unsubComplete = window.sandstorm.on('task:completed', refetchProgress);
+    const unsubFailed = window.sandstorm.on('task:failed', refetchProgress);
 
     return () => {
       unsubComplete();
@@ -192,22 +190,28 @@ export function StackDetail({
   // Default workflow progress for running stacks when no container data has arrived yet
   const defaultWorkflowProgress: WorkflowProgress = {
     stackId,
-    currentPhase: 'execution',
-    outerIteration: 1,
-    innerIteration: 1,
-    phases: [
-      { phase: 'execution', status: 'running' },
-      { phase: 'review', status: 'pending' },
-      { phase: 'verify', status: 'pending' },
-    ],
+    currentPhase: isRunning ? 'execution' : 'idle',
+    outerIteration: isRunning ? 1 : 0,
+    innerIteration: isRunning ? 1 : 0,
+    phases: isRunning
+      ? [
+          { phase: 'execution', status: 'running' },
+          { phase: 'review', status: 'pending' },
+          { phase: 'verify', status: 'pending' },
+        ]
+      : [
+          { phase: 'execution', status: 'pending' },
+          { phase: 'review', status: 'pending' },
+          { phase: 'verify', status: 'pending' },
+        ],
     steps: [],
     taskPrompt: null,
     startedAt: null,
     model: null,
   };
 
-  const effectiveWorkflowProgress = workflowProgress ?? (isRunning ? defaultWorkflowProgress : null);
-  const showWorkflowPanel = effectiveWorkflowProgress !== null;
+  // Always show the workflow panel — use fetched data, or a default empty state
+  const effectiveWorkflowProgress = workflowProgress ?? defaultWorkflowProgress;
 
   return (
     <div className="h-full flex flex-col animate-fade-in">
@@ -326,12 +330,10 @@ export function StackDetail({
 
       {/* Two-column layout: workflow progress (left) + tabs (right) */}
       <div className="flex-1 overflow-hidden flex">
-        {/* Left column: workflow progress panel */}
-        {showWorkflowPanel && (
-          <div className="w-[35%] min-w-[260px] max-w-[380px] border-r border-sandstorm-border flex flex-col overflow-hidden shrink-0">
-            <WorkflowProgressPanel progress={effectiveWorkflowProgress!} />
-          </div>
-        )}
+        {/* Left column: workflow progress panel — always visible */}
+        <div className="w-[35%] min-w-[260px] max-w-[380px] border-r border-sandstorm-border flex flex-col overflow-hidden shrink-0">
+          <WorkflowProgressPanel progress={effectiveWorkflowProgress} />
+        </div>
 
         {/* Right column: tabs + content */}
         <div className="flex-1 flex flex-col overflow-hidden">

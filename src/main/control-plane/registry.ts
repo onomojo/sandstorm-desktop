@@ -597,6 +597,12 @@ export class Registry {
     ).get(stackId) as Task | undefined;
   }
 
+  getMostRecentTask(stackId: string): Task | undefined {
+    return this.db.prepare(
+      'SELECT * FROM tasks WHERE stack_id = ? ORDER BY started_at DESC LIMIT 1'
+    ).get(stackId) as Task | undefined;
+  }
+
   // --- Token Usage ---
 
   updateTaskTokens(

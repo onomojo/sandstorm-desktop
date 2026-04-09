@@ -3,7 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { Registry, Stack, StackHistoryRecord, Task, TokenUsage } from './registry';
 import { PortAllocator, ServicePort } from './port-allocator';
-import { TaskWatcher } from './task-watcher';
+import { TaskWatcher, WorkflowProgressData } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
 import { fetchTicketContext, referencesTicket } from './ticket-fetcher';
@@ -852,7 +852,78 @@ export class StackManager {
   // --- Workflow Progress ---
 
   async getWorkflowProgress(stackId: string) {
-    return this.taskWatcher.getWorkflowProgress(stackId);
+    // Try live progress first (running tasks)
+    const liveProgress = await this.taskWatcher.getWorkflowProgress(stackId);
+    if (liveProgress) return liveProgress;
+
+    // Fall back to reconstructed progress from the most recent completed task
+    return this.reconstructWorkflowProgress(stackId);
+  }
+
+  private reconstructWorkflowProgress(stackId: string): WorkflowProgressData | null {
+    const task = this.registry.getMostRecentTask(stackId);
+    if (!task) return null;
+
+    const tokenSteps = this.registry.getTaskTokenSteps(task.id);
+
+    // Determine final phase statuses based on task status and timing data
+    type PhaseStatus = 'pending' | 'running' | 'passed' | 'failed';
+    const phases: Array<{ phase: string; status: PhaseStatus }> = [];
+    let currentPhase: WorkflowProgressData['currentPhase'] = 'idle';
+
+    if (task.status === 'running') {
+      // Should have been caught by live progress, but handle gracefully
+      return null;
+    } else if (task.status === 'completed') {
+      currentPhase = 'idle';
+      phases.push({ phase: 'execution', status: 'passed' });
+      phases.push({ phase: 'review', status: 'passed' });
+      phases.push({ phase: 'verify', status: 'passed' });
+    } else if (task.status === 'failed') {
+      // Determine which phase failed based on timing data
+      if (task.verify_started_at && !task.verify_finished_at) {
+        currentPhase = 'verify';
+        phases.push({ phase: 'execution', status: 'passed' });
+        phases.push({ phase: 'review', status: 'passed' });
+        phases.push({ phase: 'verify', status: 'failed' });
+      } else if (task.review_started_at && !task.review_finished_at) {
+        currentPhase = 'review';
+        phases.push({ phase: 'execution', status: 'passed' });
+        phases.push({ phase: 'review', status: 'failed' });
+        phases.push({ phase: 'verify', status: 'pending' });
+      } else {
+        currentPhase = 'execution';
+        phases.push({ phase: 'execution', status: 'failed' });
+        phases.push({ phase: 'review', status: 'pending' });
+        phases.push({ phase: 'verify', status: 'pending' });
+      }
+    } else {
+      // stopped, cancelled, etc.
+      currentPhase = 'idle';
+      phases.push({ phase: 'execution', status: task.execution_started_at ? 'passed' : 'pending' });
+      phases.push({ phase: 'review', status: task.review_started_at ? 'passed' : 'pending' });
+      phases.push({ phase: 'verify', status: task.verify_started_at ? 'passed' : 'pending' });
+    }
+
+    const steps = tokenSteps.map((s) => ({
+      phase: s.phase,
+      iteration: s.iteration,
+      input_tokens: s.input_tokens,
+      output_tokens: s.output_tokens,
+      live: false,
+    }));
+
+    return {
+      stackId,
+      currentPhase,
+      outerIteration: task.verify_retries + 1,
+      innerIteration: task.review_iterations + 1,
+      phases,
+      steps,
+      taskPrompt: task.prompt,
+      startedAt: task.started_at,
+      model: task.resolved_model || task.model,
+    };
   }
 
   // --- Token Usage ---

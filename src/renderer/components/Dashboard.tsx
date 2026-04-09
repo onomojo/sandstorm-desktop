@@ -167,6 +167,60 @@ function ExpandableSection({ title, content, expanded, onToggle }: {
   );
 }
 
+function HistoryWorkflowPhases({ task }: { task: Task }) {
+  type PhaseStatus = 'passed' | 'failed' | 'pending';
+  let execStatus: PhaseStatus = 'pending';
+  let reviewStatus: PhaseStatus = 'pending';
+  let verifyStatus: PhaseStatus = 'pending';
+
+  if (task.status === 'completed') {
+    execStatus = 'passed';
+    reviewStatus = 'passed';
+    verifyStatus = 'passed';
+  } else if (task.status === 'failed') {
+    if (task.verify_started_at) {
+      execStatus = 'passed';
+      reviewStatus = 'passed';
+      verifyStatus = 'failed';
+    } else if (task.review_started_at) {
+      execStatus = 'passed';
+      reviewStatus = 'failed';
+    } else {
+      execStatus = 'failed';
+    }
+  } else {
+    // interrupted or other status
+    if (task.execution_started_at) execStatus = 'passed';
+    if (task.review_started_at) reviewStatus = 'passed';
+    if (task.verify_started_at) verifyStatus = 'passed';
+  }
+
+  const phaseColor = (status: PhaseStatus) =>
+    status === 'passed' ? 'text-emerald-400 border-emerald-500/30 bg-emerald-500/10'
+    : status === 'failed' ? 'text-red-400 border-red-500/30 bg-red-500/10'
+    : 'text-sandstorm-muted border-sandstorm-border bg-sandstorm-bg';
+
+  const phaseIcon = (status: PhaseStatus) =>
+    status === 'passed' ? '\u2713' : status === 'failed' ? '\u2717' : '\u2014';
+
+  return (
+    <div className="flex items-center gap-1.5 text-[10px]" data-testid="history-workflow-phases">
+      {[
+        { label: 'Exec', status: execStatus },
+        { label: 'Review', status: reviewStatus },
+        { label: 'Verify', status: verifyStatus },
+      ].map(({ label, status }, i) => (
+        <React.Fragment key={label}>
+          {i > 0 && <span className="text-sandstorm-muted/40">&rarr;</span>}
+          <span className={`px-1.5 py-0.5 rounded border font-medium ${phaseColor(status)}`}>
+            {label} {phaseIcon(status)}
+          </span>
+        </React.Fragment>
+      ))}
+    </div>
+  );
+}
+
 function HistoryCard({ record, showProject }: { record: StackHistoryRecord; showProject?: boolean }) {
   const [expanded, setExpanded] = useState(false);
   const badge = HISTORY_STATUS_BADGE[record.final_status] ?? HISTORY_STATUS_BADGE.torn_down;
@@ -243,6 +297,13 @@ function HistoryCard({ record, showProject }: { record: StackHistoryRecord; show
             <span>Duration: {formatDuration(record.duration_seconds)}</span>
             <span>Started: {new Date(record.created_at + (record.created_at.endsWith('Z') ? '' : 'Z')).toLocaleString()}</span>
           </div>
+
+          {/* Workflow phases for the most recent task */}
+          {tasks.length > 0 && (
+            <div className="mt-2 ml-5">
+              <HistoryWorkflowPhases task={tasks[0]} />
+            </div>
+          )}
 
           {/* Task metadata from archived tasks */}
           {tasks.length > 0 && (

@@ -66,7 +66,10 @@ function DownArrow() {
 }
 
 export function WorkflowProgressPanel({ progress }: { progress: WorkflowProgressType }) {
-  const { outerIteration, innerIteration, phases, steps, taskPrompt, startedAt, model } = progress;
+  const { outerIteration, innerIteration, phases, steps, taskPrompt, startedAt, model, currentPhase } = progress;
+
+  const isIdle = currentPhase === 'idle' && steps.length === 0 && !taskPrompt;
+  const hasRunData = outerIteration > 0 || steps.length > 0 || taskPrompt;
 
   const executionPhase = phases.find((p) => p.phase === 'execution') ?? { phase: 'execution' as const, status: 'pending' as const };
   const reviewPhase = phases.find((p) => p.phase === 'review') ?? { phase: 'review' as const, status: 'pending' as const };
@@ -85,16 +88,20 @@ export function WorkflowProgressPanel({ progress }: { progress: WorkflowProgress
       {/* Loop counters */}
       <div className="px-4 pt-4 pb-2">
         <h3 className="text-[11px] font-semibold uppercase tracking-wider text-sandstorm-muted mb-2">Workflow Progress</h3>
-        <div className="flex gap-3 text-xs">
-          <div className="flex items-center gap-1.5 bg-sandstorm-bg px-2 py-1 rounded-md border border-sandstorm-border">
-            <span className="text-sandstorm-muted">Outer Loop:</span>
-            <span className="text-sandstorm-text font-medium tabular-nums" data-testid="outer-loop-counter">{outerIteration} of 5</span>
+        {hasRunData ? (
+          <div className="flex gap-3 text-xs">
+            <div className="flex items-center gap-1.5 bg-sandstorm-bg px-2 py-1 rounded-md border border-sandstorm-border">
+              <span className="text-sandstorm-muted">Outer Loop:</span>
+              <span className="text-sandstorm-text font-medium tabular-nums" data-testid="outer-loop-counter">{outerIteration} of 5</span>
+            </div>
+            <div className="flex items-center gap-1.5 bg-sandstorm-bg px-2 py-1 rounded-md border border-sandstorm-border">
+              <span className="text-sandstorm-muted">Inner Loop:</span>
+              <span className="text-sandstorm-text font-medium tabular-nums" data-testid="inner-loop-counter">{innerIteration} of 5</span>
+            </div>
           </div>
-          <div className="flex items-center gap-1.5 bg-sandstorm-bg px-2 py-1 rounded-md border border-sandstorm-border">
-            <span className="text-sandstorm-muted">Inner Loop:</span>
-            <span className="text-sandstorm-text font-medium tabular-nums" data-testid="inner-loop-counter">{innerIteration} of 5</span>
-          </div>
-        </div>
+        ) : (
+          <p className="text-xs text-sandstorm-muted" data-testid="workflow-idle-label">No task dispatched yet</p>
+        )}
       </div>
 
       {/* Visual stepper */}
@@ -156,20 +163,22 @@ export function WorkflowProgressPanel({ progress }: { progress: WorkflowProgress
       </div>
 
       {/* Bottom info bar */}
-      <div className="mt-auto mx-4 mb-3 pt-2 border-t border-sandstorm-border">
-        {taskPrompt && (
-          <p className="text-[10px] text-sandstorm-text-secondary truncate mb-1" title={taskPrompt}>
-            Task: &ldquo;{taskPrompt}&rdquo;
-          </p>
-        )}
-        <div className="flex items-center gap-2 text-[10px] text-sandstorm-muted tabular-nums">
-          {startedAt && <span>Started: {new Date(startedAt + (startedAt.endsWith('Z') ? '' : 'Z')).toLocaleTimeString()}</span>}
-          {startedAt && <span className="text-sandstorm-border">|</span>}
-          <span>Elapsed: {elapsedStr}</span>
-          {model && <span className="text-sandstorm-border">|</span>}
-          {model && <span>Model: {model}</span>}
+      {(taskPrompt || startedAt || model) && (
+        <div className="mt-auto mx-4 mb-3 pt-2 border-t border-sandstorm-border">
+          {taskPrompt && (
+            <p className="text-[10px] text-sandstorm-text-secondary truncate mb-1" title={taskPrompt}>
+              Task: &ldquo;{taskPrompt}&rdquo;
+            </p>
+          )}
+          <div className="flex items-center gap-2 text-[10px] text-sandstorm-muted tabular-nums">
+            {startedAt && <span>Started: {new Date(startedAt + (startedAt.endsWith('Z') ? '' : 'Z')).toLocaleTimeString()}</span>}
+            {startedAt && <span className="text-sandstorm-border">|</span>}
+            {startedAt && <span>Elapsed: {elapsedStr}</span>}
+            {model && <span className="text-sandstorm-border">|</span>}
+            {model && <span>Model: {model}</span>}
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
