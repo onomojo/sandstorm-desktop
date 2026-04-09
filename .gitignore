@@ -12,3 +12,4 @@ squashfs-root/
 .sandstorm-ready
 .sandstorm/
 src/renderer/build-version.txt
+test-results/
