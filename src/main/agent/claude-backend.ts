@@ -22,7 +22,7 @@ import {
   StackInfo,
 } from './types';
 
-const DEFAULT_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — must be longer than MCP tool chain (300s ephemeral + 310s bridge)
 
 /** Callback for reporting outer Claude token usage per project */
 export type TokenUsageCallback = (projectDir: string, inputTokens: number, outputTokens: number) => void;
@@ -39,6 +39,8 @@ interface ClaudeSession {
   outputBuffer: string;     // partial line buffer for stdout parsing
   fullResponse: string;     // accumulated response text for current turn
   stderrBuffer: string;
+  cancelledTurn: boolean;   // true when the user cancelled the current turn (process kept alive)
+  cancelFallback: ReturnType<typeof setTimeout> | null; // fallback kill timer after cancel
 }
 
 function getClaudeBin(): string {
@@ -193,6 +195,7 @@ async function callBridge(name, input) {
         'X-Auth-Token': BRIDGE_TOKEN,
         'Content-Length': Buffer.byteLength(data),
       },
+      timeout: 310_000,
     }, (res) => {
       let body = '';
       res.on('data', (chunk) => { body += chunk; });
@@ -203,6 +206,10 @@ async function callBridge(name, input) {
           else resolve(parsed.result);
         } catch (e) { reject(e); }
       });
+    });
+    req.on('timeout', () => {
+      req.destroy();
+      reject(new Error('Bridge request timed out after 310s'));
     });
     req.on('error', reject);
     req.write(data);
@@ -284,6 +291,8 @@ rl.on('line', async (line) => {
         outputBuffer: '',
         fullResponse: '',
         stderrBuffer: '',
+        cancelledTurn: false,
+        cancelFallback: null,
       };
       this.sessions.set(tabId, session);
     }
@@ -297,8 +306,8 @@ rl.on('line', async (line) => {
     this.mainWindow?.webContents.send(`agent:user-message:${tabId}`, message);
     this.log(`Message received for tab=${tabId}`);
 
-    // If process is alive and currently processing a response, queue the message
-    if (session.process && session.fullResponse !== '') {
+    // If process is alive and currently processing a response (or finishing a cancelled turn), queue the message
+    if (session.process && (session.fullResponse !== '' || session.cancelledTurn)) {
       session.pendingMessages.push(message);
       this.log(`Message queued for tab=${tabId} (queue size: ${session.pendingMessages.length})`);
       this.mainWindow?.webContents.send(`agent:queued:${tabId}`);
@@ -326,19 +335,47 @@ rl.on('line', async (line) => {
     if (!session) return;
     if (session.watchdog) clearTimeout(session.watchdog);
     session.watchdog = null;
-    if (session.process) {
-      session.process.kill();
-      session.process = null;
+    if (session.cancelFallback) clearTimeout(session.cancelFallback);
+    session.cancelFallback = null;
+
+    if (session.process && session.processing) {
+      // Cancel the current turn without killing the process.
+      // The process continues running; output from the cancelled turn is discarded.
+      // When the result event arrives, the process becomes available for new messages.
+      session.cancelledTurn = true;
+      session.processing = false;
+      session.pendingMessages = [];
+      this.mainWindow?.webContents.send(`agent:done:${tabId}`);
+      this.log(`Turn cancelled for tab=${tabId} (process kept alive, pid=${session.process.pid})`);
+
+      // Fallback: if the process produces no result within 30s, kill it
+      session.cancelFallback = setTimeout(() => {
+        if (session.cancelledTurn && session.process) {
+          this.log(`Cancel fallback: killing stuck process for tab=${tabId} after 30s`);
+          session.process.kill();
+        }
+      }, 30_000);
+    } else if (session.process && !session.processing) {
+      // Not processing — nothing to cancel
+      session.pendingMessages = [];
+    } else {
+      // No process — just clean up
+      session.pendingMessages = [];
     }
-    session.ready = false;
-    session.fullResponse = '';
-    session.outputBuffer = '';
-    session.stderrBuffer = '';
-    session.pendingMessages = [];
   }
 
   resetSession(tabId: string): void {
-    this.cancelSession(tabId);
+    const session = this.sessions.get(tabId);
+    if (session) {
+      if (session.watchdog) clearTimeout(session.watchdog);
+      session.watchdog = null;
+      if (session.cancelFallback) clearTimeout(session.cancelFallback);
+      session.cancelFallback = null;
+      if (session.process) {
+        session.process.kill();
+        session.process = null;
+      }
+    }
     this.sessions.delete(tabId);
   }
 
@@ -349,7 +386,7 @@ rl.on('line', async (line) => {
    * Uses -p (pipe/print) mode — no session persistence, no MCP tools.
    * Used for spec quality gate evaluation to avoid inflating the outer session.
    */
-  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs = 120_000): Promise<string> {
+  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs = 300_000): Promise<string> {
     return new Promise((resolve, reject) => {
       const claudeBin = getClaudeBin();
       const args = [
@@ -368,11 +405,24 @@ rl.on('line', async (line) => {
       let outputBuffer = '';
       let fullText = '';
       let stderrBuffer = '';
+      let settled = false;
+
+      const settle = (fn: () => void): void => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        fn();
+      };
 
       const timer = setTimeout(() => {
         if (child.exitCode === null) {
-          child.kill();
-          reject(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`));
+          child.kill('SIGTERM');
+          setTimeout(() => {
+            if (child.exitCode === null) {
+              child.kill('SIGKILL');
+            }
+          }, 5_000);
+          settle(() => reject(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`)));
         }
       }, timeoutMs);
 
@@ -398,7 +448,6 @@ rl.on('line', async (line) => {
       });
 
       child.on('close', (code) => {
-        clearTimeout(timer);
         // Process any remaining buffer
         if (outputBuffer.trim()) {
           try {
@@ -410,18 +459,19 @@ rl.on('line', async (line) => {
           }
         }
 
-        if (code !== 0 && !fullText.trim()) {
-          reject(new Error(
-            `Ephemeral agent exited with code ${code}: ${stderrBuffer.trim() || 'unknown error'}`
-          ));
-        } else {
-          resolve(fullText);
-        }
+        settle(() => {
+          if (code !== 0 && !fullText.trim()) {
+            reject(new Error(
+              `Ephemeral agent exited with code ${code}: ${stderrBuffer.trim() || 'unknown error'}`
+            ));
+          } else {
+            resolve(fullText);
+          }
+        });
       });
 
       child.on('error', (err) => {
-        clearTimeout(timer);
-        reject(err);
+        settle(() => reject(err));
       });
     });
   }
@@ -637,6 +687,9 @@ rl.on('line', async (line) => {
     session.outputBuffer = '';
     session.fullResponse = '';
     session.stderrBuffer = '';
+    session.cancelledTurn = false;
+    if (session.cancelFallback) clearTimeout(session.cancelFallback);
+    session.cancelFallback = null;
 
     this.log(`Persistent Claude process spawned for tab=${tabId} pid=${child.pid}`);
 
@@ -667,6 +720,22 @@ rl.on('line', async (line) => {
           if (parsed.type === 'result') {
             if (session.watchdog) clearTimeout(session.watchdog);
             session.watchdog = null;
+
+            if (session.cancelledTurn) {
+              // Cancelled turn finished — discard its output, dequeue if needed
+              if (session.cancelFallback) clearTimeout(session.cancelFallback);
+              session.cancelFallback = null;
+              session.cancelledTurn = false;
+              session.fullResponse = '';
+              this.log(`Cancelled turn finished for tab=${tabId}`);
+              if (session.pendingMessages.length > 0) {
+                const next = session.pendingMessages.shift()!;
+                session.processing = true;
+                this.log(`Dequeuing message after cancelled turn for tab=${tabId}`);
+                this.writeMessage(tabId, next);
+              }
+              continue;
+            }
 
             // Report token usage for this turn
             if (parsed.usage && session.projectDir && this.tokenUsageCallback) {
@@ -702,11 +771,30 @@ rl.on('line', async (line) => {
             continue;
           }
 
+          // Log tool_use events for observability
+          if (parsed.type === 'content_block_start') {
+            const contentBlock = (parsed as { content_block?: { type?: string; name?: string; id?: string } }).content_block;
+            if (contentBlock?.type === 'tool_use') {
+              this.log(`Tool call: tab=${tabId} tool=${contentBlock.name} id=${contentBlock.id}`);
+            }
+          }
+          if (parsed.type === 'content_block_stop') {
+            const idx = (parsed as { index?: number }).index;
+            this.log(`Tool call ended: tab=${tabId} block_index=${idx}`);
+          }
+
           // Extract text for streaming output
           const extracted = this.extractText(parsed);
           if (extracted) {
-            session.fullResponse += extracted;
-            send(`agent:output:${tabId}`, extracted);
+            if (session.cancelledTurn) {
+              // Discard output from cancelled turn, but still accumulate for queue detection
+              session.fullResponse += extracted;
+            } else {
+              session.fullResponse += extracted;
+              send(`agent:output:${tabId}`, extracted);
+            }
+            // Reset watchdog on any streaming output — only fire during TRUE silence
+            this.resetWatchdog(tabId);
           }
         } catch {
           // Non-JSON line — skip
@@ -723,8 +811,11 @@ rl.on('line', async (line) => {
     child.on('close', (code) => {
       if (session.watchdog) clearTimeout(session.watchdog);
       session.watchdog = null;
+      if (session.cancelFallback) clearTimeout(session.cancelFallback);
+      session.cancelFallback = null;
       session.process = null;
       session.ready = false;
+      session.cancelledTurn = false;
       this.log(`Persistent Claude process exited for tab=${tabId} code=${code}`);
 
       if (session.processing) {
@@ -744,9 +835,12 @@ rl.on('line', async (line) => {
     child.on('error', (err) => {
       if (session.watchdog) clearTimeout(session.watchdog);
       session.watchdog = null;
+      if (session.cancelFallback) clearTimeout(session.cancelFallback);
+      session.cancelFallback = null;
       session.process = null;
       session.ready = false;
       session.processing = false;
+      session.cancelledTurn = false;
       session.pendingMessages = [];
       this.log(`Spawn error for tab=${tabId}: ${err.message}`);
       send(`agent:error:${tabId}`, err.message);

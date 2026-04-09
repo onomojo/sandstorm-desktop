@@ -195,16 +195,22 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       );
     });
 
-    it('spawns a new process after cancel', () => {
+    it('cancel keeps process alive and reuses it for next message', () => {
       backend.sendMessage('tab1', 'hello', '/tmp');
       const proc1 = getLastProcess();
       emitInit(proc1);
+      emitAssistant(proc1, 'partial');
 
       backend.cancelSession('tab1');
-      expect(proc1.killed).toBe(true);
+      // Process is NOT killed — turn is cancelled, process kept alive
+      expect(proc1.killed).toBe(false);
 
+      // Simulate the cancelled turn finishing
+      emitResult(proc1);
+
+      // Next message should reuse the same process
       backend.sendMessage('tab1', 'again', '/tmp');
-      expect(spawnedProcesses.length).toBe(2);
+      expect(spawnedProcesses.length).toBe(1);
     });
 
     it('spawns a new process after reset', () => {
@@ -547,5 +553,271 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
     it('does not throw when createWriteStream fails', () => {
       expect(() => new ClaudeBackend(1000)).not.toThrow();
     });
+  });
+});
+
+describe('Watchdog resets on streaming output', () => {
+  let backend: AgentBackend;
+  let mockWindow: { webContents: { send: ReturnType<typeof vi.fn> } };
+
+  beforeEach(async () => {
+    spawnedProcesses.length = 0;
+    mockWindow = {
+      webContents: {
+        send: vi.fn(),
+      },
+    };
+    // Use 2s watchdog for this test
+    backend = new ClaudeBackend(2000);
+    backend.setMainWindow(mockWindow as never);
+    await backend.initialize();
+  });
+
+  afterEach(() => {
+    backend.destroy();
+    vi.clearAllMocks();
+  });
+
+  it('does not kill the process when streaming text arrives within timeout', async () => {
+    backend.sendMessage('tab1', 'hello', '/tmp');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+
+    const initEvent = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'test' });
+    proc.stdout.emit('data', Buffer.from(initEvent + '\n'));
+
+    // Stream text at 1.5s intervals — each should reset the 2s watchdog
+    await new Promise((r) => setTimeout(r, 1500));
+    const assistantEvent = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'chunk1' }] },
+    });
+    proc.stdout.emit('data', Buffer.from(assistantEvent + '\n'));
+
+    await new Promise((r) => setTimeout(r, 1500));
+    const assistantEvent2 = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'chunk2' }] },
+    });
+    proc.stdout.emit('data', Buffer.from(assistantEvent2 + '\n'));
+
+    // Total time: 3s > 2s watchdog, but process should be alive since watchdog was reset
+    expect(proc.killed).toBe(false);
+  }, 10000);
+});
+
+describe('Watchdog timeout is longer than MCP tool chain', () => {
+  it('default timeout is 600s (10 minutes), longer than ephemeral 300s + bridge 310s', async () => {
+    const backend = new ClaudeBackend();
+    // Access the private timeoutMs via type assertion
+    const timeoutMs = (backend as unknown as { timeoutMs: number }).timeoutMs;
+    expect(timeoutMs).toBe(600_000);
+    expect(timeoutMs).toBeGreaterThan(310_000); // Must exceed bridge timeout
+    backend.destroy();
+  });
+});
+
+describe('cancelSession — turn cancellation', () => {
+  let backend: AgentBackend;
+  let mockWindow: { webContents: { send: ReturnType<typeof vi.fn> } };
+  let sentMessages: Array<{ channel: string; args: unknown[] }>;
+
+  beforeEach(async () => {
+    spawnedProcesses.length = 0;
+    sentMessages = [];
+    mockWindow = {
+      webContents: {
+        send: vi.fn((...args: unknown[]) => {
+          sentMessages.push({ channel: args[0] as string, args: args.slice(1) });
+        }),
+      },
+    };
+    backend = new ClaudeBackend(60_000);
+    backend.setMainWindow(mockWindow as never);
+    await backend.initialize();
+  });
+
+  afterEach(() => {
+    backend.destroy();
+    vi.clearAllMocks();
+  });
+
+  function findMessages(channelPattern: string): Array<{ channel: string; args: unknown[] }> {
+    return sentMessages.filter((m) => m.channel.includes(channelPattern));
+  }
+
+  it('sends agent:done and keeps process alive on cancel', () => {
+    backend.sendMessage('tab1', 'hello', '/tmp');
+    const proc = spawnedProcesses[0];
+    const initEvent = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'test' });
+    proc.stdout.emit('data', Buffer.from(initEvent + '\n'));
+    const assistantEvent = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'partial' }] },
+    });
+    proc.stdout.emit('data', Buffer.from(assistantEvent + '\n'));
+
+    backend.cancelSession('tab1');
+
+    expect(proc.killed).toBe(false);
+    const dones = findMessages('agent:done:tab1');
+    expect(dones.length).toBe(1);
+  });
+
+  it('discards output from cancelled turn and dequeues next message on result', () => {
+    backend.sendMessage('tab1', 'first', '/tmp');
+    const proc = spawnedProcesses[0];
+    const initEvent = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'test' });
+    proc.stdout.emit('data', Buffer.from(initEvent + '\n'));
+    const assistantEvent = JSON.stringify({
+      type: 'assistant',
+      message: { content: [{ type: 'text', text: 'old response' }] },
+    });
+    proc.stdout.emit('data', Buffer.from(assistantEvent + '\n'));
+
+    // Cancel and queue a new message
+    backend.cancelSession('tab1');
+    backend.sendMessage('tab1', 'second', '/tmp');
+
+    // The cancelled turn finishes
+    const resultEvent = JSON.stringify({ type: 'result', result: 'ok' });
+    proc.stdout.emit('data', Buffer.from(resultEvent + '\n'));
+
+    // Second message should have been written to stdin
+    const stdinWrites = proc.stdin.write.mock.calls;
+    const secondWrite = stdinWrites.find((call: [string]) =>
+      call[0].includes('second')
+    );
+    expect(secondWrite).toBeDefined();
+
+    // The cancelled turn's response should NOT be in history
+    const history = backend.getHistory('tab1');
+    const assistantMessages = history.messages.filter((m) => m.role === 'assistant');
+    expect(assistantMessages.length).toBe(0);
+  });
+
+  it('resetSession still kills the process', () => {
+    backend.sendMessage('tab1', 'hello', '/tmp');
+    const proc = spawnedProcesses[0];
+    const initEvent = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'test' });
+    proc.stdout.emit('data', Buffer.from(initEvent + '\n'));
+
+    backend.resetSession('tab1');
+    expect(proc.killed).toBe(true);
+  });
+});
+
+describe('Tool use event logging', () => {
+  let backend: ClaudeBackend;
+  let logSpy: ReturnType<typeof vi.fn>;
+  let mockWindow: { webContents: { send: ReturnType<typeof vi.fn> } };
+
+  beforeEach(async () => {
+    spawnedProcesses.length = 0;
+    mockWindow = {
+      webContents: {
+        send: vi.fn(),
+      },
+    };
+    backend = new ClaudeBackend(60_000);
+    backend.setMainWindow(mockWindow as never);
+    await backend.initialize();
+    // Spy on the log method
+    logSpy = vi.fn();
+    (backend as unknown as { log: ReturnType<typeof vi.fn> }).log = logSpy;
+  });
+
+  afterEach(() => {
+    backend.destroy();
+    vi.clearAllMocks();
+  });
+
+  it('logs content_block_start tool_use events', () => {
+    backend.sendMessage('tab1', 'hello', '/tmp');
+    const proc = spawnedProcesses[0];
+    const initEvent = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'test' });
+    proc.stdout.emit('data', Buffer.from(initEvent + '\n'));
+
+    const toolEvent = JSON.stringify({
+      type: 'content_block_start',
+      content_block: { type: 'tool_use', name: 'spec_check', id: 'tool_123' },
+    });
+    proc.stdout.emit('data', Buffer.from(toolEvent + '\n'));
+
+    const toolLogCalls = logSpy.mock.calls.filter(
+      (call: [string]) => call[0].includes('Tool call:')
+    );
+    expect(toolLogCalls.length).toBe(1);
+    expect(toolLogCalls[0][0]).toContain('spec_check');
+    expect(toolLogCalls[0][0]).toContain('tool_123');
+  });
+});
+
+describe('ClaudeBackend.runEphemeralAgent — promise settlement', () => {
+  beforeEach(() => {
+    spawnedProcesses.length = 0;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function getEphemeralProcess(): MockChildProcess {
+    return spawnedProcesses[spawnedProcesses.length - 1];
+  }
+
+  it('resolves exactly once on normal exit', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+
+    const resultPromise = backendUnderTest.runEphemeralAgent('test prompt', '/tmp', 5_000);
+
+    const proc = getEphemeralProcess();
+    const resultLine = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'output text' }] } });
+    proc.stdout.emit('data', Buffer.from(resultLine + '\n'));
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+
+    // Advance timers — timeout fires after close, should be a no-op
+    vi.advanceTimersByTime(6_000);
+
+    const result = await resultPromise;
+    expect(result).toBe('output text');
+
+    backendUnderTest.destroy();
+  });
+
+  it('rejects exactly once on timeout and does not double-settle when close fires later', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+
+    const resultPromise = backendUnderTest.runEphemeralAgent('test prompt', '/tmp', 3_000);
+    const proc = getEphemeralProcess();
+
+    // Timeout fires before the process exits
+    vi.advanceTimersByTime(3_100);
+
+    // Now the process exits — this close event must NOT cause a second settlement
+    proc.exitCode = 143;
+    proc.emit('close', 143);
+
+    await expect(resultPromise).rejects.toThrow('Ephemeral agent timed out after 3000ms');
+
+    backendUnderTest.destroy();
+  });
+
+  it('settles exactly once when both error and close events fire', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+
+    const resultPromise = backendUnderTest.runEphemeralAgent('test prompt', '/tmp', 5_000);
+    const proc = getEphemeralProcess();
+
+    // Emit both error and close — only first settlement should count
+    proc.emit('error', new Error('ENOENT: spawn failed'));
+    proc.exitCode = 1;
+    proc.emit('close', 1);
+
+    await expect(resultPromise).rejects.toThrow('ENOENT: spawn failed');
+
+    backendUnderTest.destroy();
   });
 });
