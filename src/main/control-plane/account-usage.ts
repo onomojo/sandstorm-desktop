@@ -13,8 +13,9 @@
  *   - Must NOT be called from inside another `claude` session (TTY collision)
  */
 
-import * as nodePty from 'node-pty';
 import { exec } from 'child_process';
+import path from 'path';
+import fs from 'fs';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -64,6 +65,94 @@ export function stripAnsi(str: string): string {
 }
 
 // ---------------------------------------------------------------------------
+// Dynamic node-pty loader
+// ---------------------------------------------------------------------------
+
+let nodePtyModule: typeof import('node-pty') | null = null;
+let nodePtyLoadAttempted = false;
+let nodePtyLoadError: string | null = null;
+
+async function loadNodePty(): Promise<typeof import('node-pty') | null> {
+  if (nodePtyLoadAttempted) return nodePtyModule;
+  nodePtyLoadAttempted = true;
+
+  try {
+    nodePtyModule = await import('node-pty');
+    console.log('[account-usage] node-pty loaded successfully');
+    return nodePtyModule;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    nodePtyLoadError = message;
+    console.error('[account-usage] Failed to load node-pty:', message);
+    if (err instanceof Error && err.stack) {
+      console.error('[account-usage] Stack:', err.stack);
+    }
+    return null;
+  }
+}
+
+/** Reset the node-pty load cache (for testing). */
+export function resetNodePtyLoader(): void {
+  nodePtyModule = null;
+  nodePtyLoadAttempted = false;
+  nodePtyLoadError = null;
+}
+
+/** Get the last node-pty load error (for diagnostics). */
+export function getNodePtyLoadError(): string | null {
+  return nodePtyLoadError;
+}
+
+// ---------------------------------------------------------------------------
+// PATH resolution for Electron
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a PATH that includes common CLI install locations.
+ * Electron apps often launch with a restricted PATH that doesn't include
+ * user-installed CLI tools (e.g. `claude` installed via npm global or pipx).
+ */
+function getEnhancedPath(): string {
+  const currentPath = process.env.PATH || '';
+  const home = process.env.HOME || '';
+  const extraPaths: string[] = [];
+
+  if (home) {
+    // Common locations for globally-installed CLI tools
+    extraPaths.push(
+      path.join(home, '.local', 'bin'),
+      path.join(home, '.npm-global', 'bin'),
+      path.join(home, '.nvm', 'versions', 'node'),  // nvm managed node
+      path.join(home, 'bin'),
+    );
+  }
+
+  // System paths that may be missing in Electron context
+  extraPaths.push(
+    '/usr/local/bin',
+    '/usr/bin',
+    '/opt/homebrew/bin',  // macOS Apple Silicon homebrew
+    '/home/linuxbrew/.linuxbrew/bin',  // Linux homebrew
+  );
+
+  // Only add paths that exist and aren't already in PATH
+  const pathSet = new Set(currentPath.split(path.delimiter));
+  const additions = extraPaths.filter((p) => {
+    if (pathSet.has(p)) return false;
+    try {
+      return fs.existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+
+  if (additions.length > 0) {
+    return [...additions, currentPath].join(path.delimiter);
+  }
+  return currentPath;
+}
+
+// ---------------------------------------------------------------------------
 // Claude CLI dependency check
 // ---------------------------------------------------------------------------
 
@@ -73,10 +162,13 @@ let claudeAvailable = false;
 export async function checkClaudeInstalled(): Promise<boolean> {
   if (claudeChecked) return claudeAvailable;
   try {
-    await execAsync('which claude');
+    const enhancedPath = getEnhancedPath();
+    await execAsync(`PATH="${enhancedPath}" which claude`);
     claudeAvailable = true;
+    console.log('[account-usage] claude CLI found in PATH');
   } catch {
     claudeAvailable = false;
+    console.warn('[account-usage] claude CLI not found in PATH');
   }
   claudeChecked = true;
   return claudeAvailable;
@@ -193,10 +285,10 @@ export function parseUsageOutput(pane: string): UsageSnapshot {
 
 /**
  * Wait for a marker string in the PTY output buffer.
- * Returns the buffer content when a marker is found, or null on timeout.
+ * Returns true when a marker is found, or false on timeout.
  */
 function waitForOutput(
-  ptyProcess: nodePty.IPty,
+  ptyProcess: { onData: (cb: (data: string) => void) => { dispose: () => void } },
   markers: string[],
   timeoutMs: number,
   existingBuffer: { value: string }
@@ -249,26 +341,37 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
     return null;
   }
 
+  const pty = await loadNodePty();
+  if (!pty) {
+    console.error('[account-usage] Cannot fetch usage: node-pty not available.', nodePtyLoadError ? `Load error: ${nodePtyLoadError}` : '');
+    return null;
+  }
+
   const claudeArgs = [
     '--strict-mcp-config',
     '--mcp-config', '{"mcpServers":{}}',
     '--setting-sources', 'user',
   ];
 
-  let proc: nodePty.IPty | null = null;
+  let proc: ReturnType<typeof pty.spawn> | null = null;
   const buffer = { value: '' };
 
   try {
+    const enhancedPath = getEnhancedPath();
+
     // Launch claude in a pseudo-terminal
-    proc = nodePty.spawn('claude', claudeArgs, {
+    proc = pty.spawn('claude', claudeArgs, {
       name: 'xterm-256color',
       cols: 220,
       rows: 60,
       env: {
         ...process.env,
+        PATH: enhancedPath,
         CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
       },
     });
+
+    console.log('[account-usage] PTY spawned claude process');
 
     // Collect all output into buffer — single global listener ensures no data
     // is lost between waitForOutput calls (e.g. during sleep intervals).
@@ -320,7 +423,9 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
     }
 
     return parseUsageOutput(cleanOutput);
-  } catch {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[account-usage] Error during PTY usage fetch:', message);
     return null;
   } finally {
     // Always kill the PTY process
