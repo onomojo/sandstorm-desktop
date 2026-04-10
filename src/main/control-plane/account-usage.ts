@@ -79,9 +79,47 @@ let nodePtyModule: typeof import('node-pty') | null = null;
 let nodePtyLoadAttempted = false;
 let nodePtyLoadError: string | null = null;
 
+/**
+ * Ensure the node-pty spawn-helper binary has execute permission.
+ *
+ * npm does not preserve file permissions on prebuilt binaries, so
+ * `spawn-helper` ships as 644 after `npm install`. Without the execute
+ * bit every `pty.spawn()` call fails with "posix_spawnp failed." on
+ * macOS (and potentially Linux). This fixes it at runtime before the
+ * first spawn attempt.
+ */
+export function ensureSpawnHelperPermissions(): void {
+  if (process.platform === 'win32') return;
+
+  try {
+    // Resolve the node-pty package directory
+    const nodePtyPath = require.resolve('node-pty');
+    const nodePtyDir = path.dirname(nodePtyPath);
+    // prebuilds live at <node-pty>/prebuilds/<platform>-<arch>/spawn-helper
+    const platformArch = `${process.platform}-${process.arch}`;
+    const helperPath = path.join(nodePtyDir, '..', 'prebuilds', platformArch, 'spawn-helper');
+
+    if (!fs.existsSync(helperPath)) return;
+
+    const stat = fs.statSync(helperPath);
+    const isExecutable = (stat.mode & 0o111) !== 0;
+    if (!isExecutable) {
+      fs.chmodSync(helperPath, stat.mode | 0o755);
+      console.log('[account-usage] Fixed spawn-helper execute permission:', helperPath);
+    }
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn('[account-usage] Could not verify spawn-helper permissions:', message);
+  }
+}
+
 async function loadNodePty(): Promise<typeof import('node-pty') | null> {
   if (nodePtyLoadAttempted) return nodePtyModule;
   nodePtyLoadAttempted = true;
+
+  // Fix spawn-helper permissions before loading — must happen first because
+  // node-pty's spawn() will fail on macOS if the helper isn't executable.
+  ensureSpawnHelperPermissions();
 
   try {
     nodePtyModule = await import('node-pty');
