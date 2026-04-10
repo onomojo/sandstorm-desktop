@@ -58,10 +58,17 @@ function execAsync(cmd: string, timeoutMs = 20_000): Promise<string> {
  */
 export function stripAnsi(str: string): string {
   return str
+    // Replace cursor-forward (CSI <n> C) with the equivalent number of spaces
+    // so that word boundaries are preserved in the cleaned output.
+    .replace(/\x1b\[(\d+)C/g, (_m, n) => ' '.repeat(Number(n)))
     .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
     .replace(/\x1b\][^\x07]*\x07/g, '')
     .replace(/\x1b[()][0-9A-Za-z]/g, '')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+    // Normalize line endings: \r\n → \n, then standalone \r → \n.
+    // PTY output often uses \r for line breaks in TUI dialogs.
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -193,8 +200,10 @@ export function resetClaudeCheck(): void {
  *     Resets 6pm (America/New_York)
  */
 export function parseUsageBlock(pane: string, label: string): UsageBlock | null {
+  // PTY output may insert cursor-movement artifacts inside "Resets" (e.g. "Rese s",
+  // "Reset s") so we match R-e-s-e-t-s with optional spaces/missing chars.
   const re = new RegExp(
-    label + '[^\\n]*\\n[^\\n]*?\\s(\\d+)%\\s*used[^\\n]*\\n[^\\n]*Resets ([^\\n]+)'
+    label + '[^\\n]*\\n[^\\n]*?\\s(\\d+)%\\s*used[^\\n]*\\n[^\\n]*R\\s*e\\s*s\\s*e\\s*t?\\s*s\\s+([^\\n]+)'
   );
   const m = pane.match(re);
   if (!m) return null;
@@ -379,8 +388,28 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
       buffer.value += data;
     });
 
-    // Wait for claude to be ready (look for "for shortcuts" prompt)
-    const ready = await waitForOutput(proc, ['for shortcuts'], 15_000, buffer);
+    // Wait for claude to be ready (look for "for shortcuts" prompt).
+    // On first launch the CLI may show a theme-selection onboarding screen.
+    // If we detect it, press Enter to accept the default and keep waiting.
+    let ready = await waitForOutput(proc, ['for shortcuts'], 15_000, buffer);
+
+    if (!ready) {
+      // Check if we're stuck on the onboarding theme picker
+      const cleanSoFar = stripAnsi(buffer.value);
+      if (cleanSoFar.includes('Choose') && cleanSoFar.includes('text style')) {
+        // Accept the default theme selection by pressing Enter.
+        // Then keep pressing Enter through any remaining onboarding screens.
+        for (let i = 0; i < 8; i++) {
+          proc.write('\r');
+          await sleep(1500);
+          const nowReady = await waitForOutput(proc, ['for shortcuts'], 5_000, buffer);
+          if (nowReady) {
+            ready = true;
+            break;
+          }
+        }
+      }
+    }
 
     if (!ready) {
       return {

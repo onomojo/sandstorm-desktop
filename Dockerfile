@@ -22,13 +22,20 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     xauth \
   && rm -rf /var/lib/apt/lists/*
 
+# Claude Code CLI — needed by the app to fetch account usage stats
+RUN npm install -g @anthropic-ai/claude-code
+
 ENV DISPLAY=:99
 
 WORKDIR /app
+
+COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
+RUN chmod +x /usr/local/bin/docker-entrypoint.sh
 
 COPY package.json package-lock.json ./
 RUN npm ci
 
 COPY . .
 
+ENTRYPOINT ["docker-entrypoint.sh"]
 CMD ["xvfb-run", "--auto-servernum", "npm", "run", "dev"]

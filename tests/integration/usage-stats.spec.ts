@@ -1,49 +1,38 @@
 import { test, expect } from './fixtures';
 
 test.describe('Usage Stats', () => {
-  test('usage percentage or usage bar renders in the header', async ({ mainWindow }) => {
+  test('session monitor polls usage and renders usage bar with real data', async ({ mainWindow }) => {
     // Wait for the app to fully render
     await mainWindow.waitForSelector('text=Sandstorm', { timeout: 15000 });
 
-    // The AccountUsageBar component renders with data-testid="account-usage-bar".
-    // When session data is available, it shows a percentage like "47%".
-    // When only stack data is available, it shows a token counter.
-    // When neither is available, the component returns null (not rendered).
-    //
-    // In the integration test environment, the claude CLI may not be available
-    // or authenticated, so usage stats may not load. We verify:
-    // 1. The app doesn't crash due to node-pty loading
-    // 2. If usage data IS available, the percentage is visible
-    // 3. If usage data is NOT available, the app still works (graceful degradation)
+    // Give the session monitor time to complete at least one poll cycle.
+    // The PTY-based fetch takes ~5-15s typical, up to 30s with onboarding.
+    await mainWindow.waitForTimeout(35000);
 
-    // Give the session monitor time to attempt its first poll
-    await mainWindow.waitForTimeout(5000);
+    // Check the session monitor state via the preload API
+    const state = await mainWindow.evaluate(async () => {
+      // @ts-expect-error - accessing preload API
+      return await window.sandstorm.session.getState();
+    });
 
-    // Check if the usage bar component rendered at all
+    // The session monitor must have attempted at least one poll
+    expect(state).toBeTruthy();
+    expect(state.claudeAvailable).toBe(true);
+
+    // Usage data MUST be available — no conditional fallback
+    expect(state.usage).toBeTruthy();
+    expect(state.usage.session).toBeTruthy();
+
+    // The usage bar MUST be visible
     const usageBar = mainWindow.locator('[data-testid="account-usage-bar"]');
-    const usageBarVisible = await usageBar.isVisible().catch(() => false);
+    await expect(usageBar).toBeVisible({ timeout: 5000 });
 
-    if (usageBarVisible) {
-      // Usage bar is showing — verify it has meaningful content
-      const usagePercent = mainWindow.locator('[data-testid="usage-percent"]');
-      const usageCounter = mainWindow.locator('[data-testid="usage-counter"]');
+    // The usage percent MUST show a percentage
+    const usagePercent = mainWindow.locator('[data-testid="usage-percent"]');
+    await expect(usagePercent).toBeVisible({ timeout: 5000 });
 
-      // Either the percentage display or the token counter should be visible
-      const percentVisible = await usagePercent.isVisible().catch(() => false);
-      const counterVisible = await usageCounter.isVisible().catch(() => false);
-
-      expect(percentVisible || counterVisible).toBe(true);
-
-      if (percentVisible) {
-        // Verify the percentage text matches expected format (e.g., "47%" or "...")
-        const text = await usagePercent.textContent();
-        expect(text).toMatch(/^\d+%$|^\.\.\.$/);
-      }
-    }
-
-    // Regardless of whether usage data loaded, the app should be functional.
-    // Verify the core UI is still responsive (not crashed by node-pty issues).
-    await expect(mainWindow.locator('text=Sandstorm').first()).toBeVisible();
+    const text = await usagePercent.textContent();
+    expect(text).toMatch(/^\d+%$/);
   });
 
   test('app does not crash when node-pty loads or fails to load', async ({ mainWindow }) => {
@@ -74,22 +63,44 @@ test.describe('Usage Stats', () => {
     await expect(newStackBtn).toBeVisible({ timeout: 5000 });
   });
 
-  test('usage bar click opens popover when usage data available', async ({ mainWindow }) => {
+  test('usage bar click opens popover with Session Usage', async ({ mainWindow }) => {
     await mainWindow.waitForSelector('text=Sandstorm', { timeout: 15000 });
-    await mainWindow.waitForTimeout(5000);
 
+    // Wait for session monitor to poll
+    await mainWindow.waitForTimeout(35000);
+
+    // The usage bar MUST be visible — no conditional skip
     const usageButton = mainWindow.locator('[data-testid="usage-bar-button"]');
-    const buttonVisible = await usageButton.isVisible().catch(() => false);
+    await expect(usageButton).toBeVisible({ timeout: 5000 });
 
-    if (buttonVisible) {
-      await usageButton.click();
+    // Click to open the popover
+    await usageButton.click();
 
-      // Popover should appear
-      const popover = mainWindow.locator('[data-testid="usage-popover"]');
-      await expect(popover).toBeVisible({ timeout: 3000 });
+    // Popover MUST appear with session usage details
+    const popover = mainWindow.locator('[data-testid="usage-popover"]');
+    await expect(popover).toBeVisible({ timeout: 3000 });
 
-      // Popover should contain "Session Usage" text
-      await expect(popover.locator('text=Session Usage')).toBeVisible();
-    }
+    // Popover MUST contain "Session Usage" heading
+    await expect(popover.locator('text=Session Usage')).toBeVisible();
+
+    // Popover MUST show "Current Session" section with a real percentage
+    await expect(popover.locator('text=Current Session')).toBeVisible();
+    await expect(popover.locator('text=/\\d+% used/')).toBeVisible();
+  });
+
+  test('session monitor reports claude CLI availability', async ({ mainWindow }) => {
+    await mainWindow.waitForSelector('text=Sandstorm', { timeout: 15000 });
+
+    // Give session monitor time to check claude availability
+    await mainWindow.waitForTimeout(20000);
+
+    const state = await mainWindow.evaluate(async () => {
+      // @ts-expect-error - accessing preload API
+      return await window.sandstorm.session.getState();
+    });
+
+    // The session monitor must report on claude availability
+    expect(state).toBeTruthy();
+    expect(state.claudeAvailable).toBe(true);
   });
 });

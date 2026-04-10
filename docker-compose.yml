@@ -6,7 +6,9 @@ services:
     volumes:
       - .:/app
       - node_modules:/app/node_modules
+      - claude-credentials:/claude-credentials
     command: ["xvfb-run", "--auto-servernum", "npm", "run", "dev"]
 
 volumes:
   node_modules:
+  claude-credentials:
