@@ -389,7 +389,9 @@ function waitForOutput(
  * Wall time: ~3–4 seconds typical, up to ~20s worst case.
  */
 export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
+  console.log('[account-usage] fetchAccountUsage called, cwd:', process.cwd());
   if (!(await checkClaudeInstalled())) {
+    console.log('[account-usage] claude not installed, returning null');
     return null;
   }
 
@@ -436,40 +438,30 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
       buffer.value += data;
     });
 
-    // Wait for claude to be ready (look for "for shortcuts" prompt).
-    // On first launch the CLI may show a theme-selection onboarding screen.
-    // If we detect it, press Enter to accept the default and keep waiting.
-    let ready = await waitForOutput(proc, ['for shortcuts'], 15_000, buffer);
+    // Wait for claude to be ready. Poll frequently so we can detect and
+    // dismiss interactive prompts that block startup:
+    //   - Workspace trust dialog (macOS Finder launch → CWD triggers trust prompt)
+    //   - Onboarding theme picker (first-ever launch)
+    let ready = false;
+    for (let attempt = 0; attempt < 15; attempt++) {
+      ready = await waitForOutput(proc, ['for shortcuts'], 2_000, buffer);
+      if (ready) break;
 
-    if (!ready) {
       const cleanSoFar = stripAnsi(buffer.value);
-      console.log('[account-usage] Not ready after 15s, checking for interactive prompts...');
-
-      // On macOS, when the Electron app is launched from Finder the CWD may
-      // trigger Claude's workspace trust dialog ("Is this a project you trust?").
-      // The default selection is "Yes, I trust this folder" — press Enter to accept.
-      // Also handle the onboarding theme picker on first-ever launch.
-      const needsInteraction =
+      const hasInteractivePrompt =
         (cleanSoFar.includes('trust') && cleanSoFar.includes('folder')) ||
         (cleanSoFar.includes('Choose') && cleanSoFar.includes('text style'));
 
-      if (needsInteraction) {
-        console.log('[account-usage] Interactive prompt detected, pressing Enter to proceed...');
-        for (let i = 0; i < 8; i++) {
-          proc.write('\r');
-          await sleep(1500);
-          const nowReady = await waitForOutput(proc, ['for shortcuts'], 5_000, buffer);
-          if (nowReady) {
-            ready = true;
-            console.log('[account-usage] Ready after interactive prompt, iteration:', i + 1);
-            break;
-          }
-        }
+      if (hasInteractivePrompt) {
+        console.log('[account-usage] Interactive prompt detected, pressing Enter...');
+        proc.write('\r');
       }
     }
 
     if (!ready) {
-      console.log('[account-usage] Claude never became ready. Buffer:', stripAnsi(buffer.value).substring(0, 200));
+      const fullBuf = stripAnsi(buffer.value);
+      console.log('[account-usage] FAILED - Claude never became ready. Buffer length:', fullBuf.length);
+      console.log('[account-usage] FULL BUFFER:', fullBuf);
       return {
         session: null, weekAll: null, weekSonnet: null,
         extraUsage: { enabled: false },
@@ -513,7 +505,9 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
       // Best-effort cleanup
     }
 
-    return parseUsageOutput(cleanOutput);
+    const result = parseUsageOutput(cleanOutput);
+    console.log('[account-usage] RESULT:', result.status, result.session ? `${result.session.percent}%` : 'no session');
+    return result;
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     console.log('[account-usage] Error during PTY usage fetch:', message);
