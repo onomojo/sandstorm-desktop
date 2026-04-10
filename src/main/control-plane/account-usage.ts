@@ -97,7 +97,11 @@ export function ensureSpawnHelperPermissions(): void {
     const nodePtyDir = path.dirname(nodePtyPath);
     // prebuilds live at <node-pty>/prebuilds/<platform>-<arch>/spawn-helper
     const platformArch = `${process.platform}-${process.arch}`;
-    const helperPath = path.join(nodePtyDir, '..', 'prebuilds', platformArch, 'spawn-helper');
+    let helperPath = path.join(nodePtyDir, '..', 'prebuilds', platformArch, 'spawn-helper');
+
+    // In a packaged Electron app, native files are in app.asar.unpacked/
+    // (node-pty's own code does this same replacement in unixTerminal.js)
+    helperPath = helperPath.replace('app.asar', 'app.asar.unpacked');
 
     if (!fs.existsSync(helperPath)) return;
 

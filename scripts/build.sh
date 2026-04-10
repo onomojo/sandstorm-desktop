@@ -14,6 +14,12 @@ echo "    Platform: $platform"
 echo "==> Installing dependencies..."
 npm ci
 
+echo "==> Fixing node-pty spawn-helper permissions..."
+# npm does not preserve execute permissions on prebuilt binaries.
+# node-pty's spawn-helper must be executable for pty.spawn() to work on macOS/Linux.
+find node_modules/node-pty -name spawn-helper -exec chmod +x {} \;
+echo "    spawn-helper permissions fixed."
+
 echo "==> Writing build version..."
 git rev-parse --short HEAD > src/renderer/build-version.txt
 echo "    Commit: $(cat src/renderer/build-version.txt)"
