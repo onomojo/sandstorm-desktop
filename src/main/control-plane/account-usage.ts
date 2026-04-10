@@ -13,8 +13,9 @@
  *   - Must NOT be called from inside another `claude` session (TTY collision)
  */
 
-import * as nodePty from 'node-pty';
 import { exec } from 'child_process';
+import path from 'path';
+import fs from 'fs';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -57,10 +58,105 @@ function execAsync(cmd: string, timeoutMs = 20_000): Promise<string> {
  */
 export function stripAnsi(str: string): string {
   return str
+    // Replace cursor-forward (CSI <n> C) with the equivalent number of spaces
+    // so that word boundaries are preserved in the cleaned output.
+    .replace(/\x1b\[(\d+)C/g, (_m, n) => ' '.repeat(Number(n)))
     .replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '')
     .replace(/\x1b\][^\x07]*\x07/g, '')
     .replace(/\x1b[()][0-9A-Za-z]/g, '')
-    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '');
+    .replace(/[\x00-\x08\x0b\x0c\x0e-\x1f]/g, '')
+    // Normalize line endings: \r\n → \n, then standalone \r → \n.
+    // PTY output often uses \r for line breaks in TUI dialogs.
+    .replace(/\r\n/g, '\n')
+    .replace(/\r/g, '\n');
+}
+
+// ---------------------------------------------------------------------------
+// Dynamic node-pty loader
+// ---------------------------------------------------------------------------
+
+let nodePtyModule: typeof import('node-pty') | null = null;
+let nodePtyLoadAttempted = false;
+let nodePtyLoadError: string | null = null;
+
+async function loadNodePty(): Promise<typeof import('node-pty') | null> {
+  if (nodePtyLoadAttempted) return nodePtyModule;
+  nodePtyLoadAttempted = true;
+
+  try {
+    nodePtyModule = await import('node-pty');
+    console.log('[account-usage] node-pty loaded successfully');
+    return nodePtyModule;
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    nodePtyLoadError = message;
+    console.error('[account-usage] Failed to load node-pty:', message);
+    if (err instanceof Error && err.stack) {
+      console.error('[account-usage] Stack:', err.stack);
+    }
+    return null;
+  }
+}
+
+/** Reset the node-pty load cache (for testing). */
+export function resetNodePtyLoader(): void {
+  nodePtyModule = null;
+  nodePtyLoadAttempted = false;
+  nodePtyLoadError = null;
+}
+
+/** Get the last node-pty load error (for diagnostics). */
+export function getNodePtyLoadError(): string | null {
+  return nodePtyLoadError;
+}
+
+// ---------------------------------------------------------------------------
+// PATH resolution for Electron
+// ---------------------------------------------------------------------------
+
+/**
+ * Build a PATH that includes common CLI install locations.
+ * Electron apps often launch with a restricted PATH that doesn't include
+ * user-installed CLI tools (e.g. `claude` installed via npm global or pipx).
+ */
+function getEnhancedPath(): string {
+  const currentPath = process.env.PATH || '';
+  const home = process.env.HOME || '';
+  const extraPaths: string[] = [];
+
+  if (home) {
+    // Common locations for globally-installed CLI tools
+    extraPaths.push(
+      path.join(home, '.local', 'bin'),
+      path.join(home, '.npm-global', 'bin'),
+      path.join(home, '.nvm', 'versions', 'node'),  // nvm managed node
+      path.join(home, 'bin'),
+    );
+  }
+
+  // System paths that may be missing in Electron context
+  extraPaths.push(
+    '/usr/local/bin',
+    '/usr/bin',
+    '/opt/homebrew/bin',  // macOS Apple Silicon homebrew
+    '/home/linuxbrew/.linuxbrew/bin',  // Linux homebrew
+  );
+
+  // Only add paths that exist and aren't already in PATH
+  const pathSet = new Set(currentPath.split(path.delimiter));
+  const additions = extraPaths.filter((p) => {
+    if (pathSet.has(p)) return false;
+    try {
+      return fs.existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+
+  if (additions.length > 0) {
+    return [...additions, currentPath].join(path.delimiter);
+  }
+  return currentPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -73,10 +169,13 @@ let claudeAvailable = false;
 export async function checkClaudeInstalled(): Promise<boolean> {
   if (claudeChecked) return claudeAvailable;
   try {
-    await execAsync('which claude');
+    const enhancedPath = getEnhancedPath();
+    await execAsync(`PATH="${enhancedPath}" which claude`);
     claudeAvailable = true;
+    console.log('[account-usage] claude CLI found in PATH');
   } catch {
     claudeAvailable = false;
+    console.warn('[account-usage] claude CLI not found in PATH');
   }
   claudeChecked = true;
   return claudeAvailable;
@@ -101,8 +200,10 @@ export function resetClaudeCheck(): void {
  *     Resets 6pm (America/New_York)
  */
 export function parseUsageBlock(pane: string, label: string): UsageBlock | null {
+  // PTY output may insert cursor-movement artifacts inside "Resets" (e.g. "Rese s",
+  // "Reset s") so we match R-e-s-e-t-s with optional spaces/missing chars.
   const re = new RegExp(
-    label + '[^\\n]*\\n[^\\n]*?\\s(\\d+)%\\s*used[^\\n]*\\n[^\\n]*Resets ([^\\n]+)'
+    label + '[^\\n]*\\n[^\\n]*?\\s(\\d+)%\\s*used[^\\n]*\\n[^\\n]*R\\s*e\\s*s\\s*e\\s*t?\\s*s\\s+([^\\n]+)'
   );
   const m = pane.match(re);
   if (!m) return null;
@@ -193,10 +294,10 @@ export function parseUsageOutput(pane: string): UsageSnapshot {
 
 /**
  * Wait for a marker string in the PTY output buffer.
- * Returns the buffer content when a marker is found, or null on timeout.
+ * Returns true when a marker is found, or false on timeout.
  */
 function waitForOutput(
-  ptyProcess: nodePty.IPty,
+  ptyProcess: { onData: (cb: (data: string) => void) => { dispose: () => void } },
   markers: string[],
   timeoutMs: number,
   existingBuffer: { value: string }
@@ -249,26 +350,37 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
     return null;
   }
 
+  const pty = await loadNodePty();
+  if (!pty) {
+    console.error('[account-usage] Cannot fetch usage: node-pty not available.', nodePtyLoadError ? `Load error: ${nodePtyLoadError}` : '');
+    return null;
+  }
+
   const claudeArgs = [
     '--strict-mcp-config',
     '--mcp-config', '{"mcpServers":{}}',
     '--setting-sources', 'user',
   ];
 
-  let proc: nodePty.IPty | null = null;
+  let proc: ReturnType<typeof pty.spawn> | null = null;
   const buffer = { value: '' };
 
   try {
+    const enhancedPath = getEnhancedPath();
+
     // Launch claude in a pseudo-terminal
-    proc = nodePty.spawn('claude', claudeArgs, {
+    proc = pty.spawn('claude', claudeArgs, {
       name: 'xterm-256color',
       cols: 220,
       rows: 60,
       env: {
         ...process.env,
+        PATH: enhancedPath,
         CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
       },
     });
+
+    console.log('[account-usage] PTY spawned claude process');
 
     // Collect all output into buffer — single global listener ensures no data
     // is lost between waitForOutput calls (e.g. during sleep intervals).
@@ -276,8 +388,28 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
       buffer.value += data;
     });
 
-    // Wait for claude to be ready (look for "for shortcuts" prompt)
-    const ready = await waitForOutput(proc, ['for shortcuts'], 15_000, buffer);
+    // Wait for claude to be ready (look for "for shortcuts" prompt).
+    // On first launch the CLI may show a theme-selection onboarding screen.
+    // If we detect it, press Enter to accept the default and keep waiting.
+    let ready = await waitForOutput(proc, ['for shortcuts'], 15_000, buffer);
+
+    if (!ready) {
+      // Check if we're stuck on the onboarding theme picker
+      const cleanSoFar = stripAnsi(buffer.value);
+      if (cleanSoFar.includes('Choose') && cleanSoFar.includes('text style')) {
+        // Accept the default theme selection by pressing Enter.
+        // Then keep pressing Enter through any remaining onboarding screens.
+        for (let i = 0; i < 8; i++) {
+          proc.write('\r');
+          await sleep(1500);
+          const nowReady = await waitForOutput(proc, ['for shortcuts'], 5_000, buffer);
+          if (nowReady) {
+            ready = true;
+            break;
+          }
+        }
+      }
+    }
 
     if (!ready) {
       return {
@@ -320,7 +452,9 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
     }
 
     return parseUsageOutput(cleanOutput);
-  } catch {
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.error('[account-usage] Error during PTY usage fetch:', message);
     return null;
   } finally {
     // Always kill the PTY process

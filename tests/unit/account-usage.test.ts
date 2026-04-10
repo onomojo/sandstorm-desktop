@@ -200,6 +200,17 @@ describe('account-usage parser', () => {
       expect(stripAnsi(input)).toBe('Hello World');
     });
 
+    it('replaces cursor-forward (CSI <n> C) with spaces to preserve word boundaries', () => {
+      // cursor-forward moves the cursor right without overwriting — equivalent to spaces
+      const input = 'Hello\x1b[5CWorld';
+      expect(stripAnsi(input)).toBe('Hello     World');
+    });
+
+    it('handles cursor-forward with single character move', () => {
+      const input = 'A\x1b[1CB';
+      expect(stripAnsi(input)).toBe('A B');
+    });
+
     it('strips OSC sequences', () => {
       const input = '\x1b]0;title\x07Hello';
       expect(stripAnsi(input)).toBe('Hello');
@@ -243,6 +254,47 @@ describe('account-usage parser', () => {
       expect(snapshot.session!.percent).toBe(47);
       expect(snapshot.session!.resetsAt).toBe('6pm (America/New_York)');
       expect(snapshot.extraUsage.enabled).toBe(false);
+    });
+
+    it('parses PTY output with \\r line endings (real TUI dialog format)', () => {
+      // Real PTY output uses \r line breaks within TUI dialogs, not \n.
+      // stripAnsi normalizes \r → \n so the parser works.
+      const rawPty = [
+        'Current session    ',
+        '  ███████████████████████████████████                70% used',
+        '  Resets 6pm (UTC)',
+        '  Current week (all models)',
+        '  █▌                                                 3% used',
+        '  Resets Apr 17, 2pm (UTC)',
+        '  Current week (Sonnet only)',
+        '  ███████                                            14% used',
+        '  Resets Apr 13, 11pm (UTC)',
+        '  Extra usage',
+        '  Extra usage not enabled',
+      ].join('\r');
+      const stripped = stripAnsi(rawPty);
+      const snapshot = parseUsageOutput(stripped);
+      expect(snapshot.status).toBe('ok');
+      expect(snapshot.session!.percent).toBe(70);
+      expect(snapshot.session!.resetsAt).toBe('6pm (UTC)');
+      expect(snapshot.weekAll!.percent).toBe(3);
+      expect(snapshot.weekSonnet!.percent).toBe(14);
+      expect(snapshot.extraUsage.enabled).toBe(false);
+    });
+
+    it('parses PTY output where Resets has cursor artifacts (e.g. "Rese s")', () => {
+      // PTY cursor-forward codes can split "Resets" into "Rese s" or similar
+      const output = [
+        'Current session',
+        '  ██████████████████  47% used',
+        '  Rese s 6pm (America/New_York)',
+        '',
+        '  Extra usage not enabled',
+      ].join('\n');
+      const snapshot = parseUsageOutput(output);
+      expect(snapshot.status).toBe('ok');
+      expect(snapshot.session!.percent).toBe(47);
+      expect(snapshot.session!.resetsAt).toBe('6pm (America/New_York)');
     });
 
     it('parses full dialog from stripped PTY output', () => {

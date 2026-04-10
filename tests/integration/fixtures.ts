@@ -114,6 +114,9 @@ export const test = base.extend<object, IntegrationFixtures>({
         env: {
           ...process.env,
           REMOTE_DEBUGGING_PORT: '9222',
+          // Ensure the packaged app can find claude CLI and its credentials
+          HOME: '/root',
+          PATH: '/usr/local/bin:/usr/bin:/bin',
         },
         timeout: 60000,
       });
