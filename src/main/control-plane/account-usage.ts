@@ -16,6 +16,7 @@
 import { exec } from 'child_process';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 
 // ---------------------------------------------------------------------------
 // Types
@@ -113,7 +114,7 @@ export function ensureSpawnHelperPermissions(): void {
     }
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn('[account-usage] Could not verify spawn-helper permissions:', message);
+    console.log('[account-usage] Could not verify spawn-helper permissions:', message);
   }
 }
 
@@ -132,9 +133,9 @@ async function loadNodePty(): Promise<typeof import('node-pty') | null> {
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
     nodePtyLoadError = message;
-    console.error('[account-usage] Failed to load node-pty:', message);
+    console.log('[account-usage] Failed to load node-pty:', message);
     if (err instanceof Error && err.stack) {
-      console.error('[account-usage] Stack:', err.stack);
+      console.log('[account-usage] Stack:', err.stack);
     }
     return null;
   }
@@ -217,7 +218,7 @@ export async function checkClaudeInstalled(): Promise<boolean> {
     console.log('[account-usage] claude CLI found in PATH');
   } catch {
     claudeAvailable = false;
-    console.warn('[account-usage] claude CLI not found in PATH');
+    console.log('[account-usage] claude CLI not found in PATH');
   }
   claudeChecked = true;
   return claudeAvailable;
@@ -394,7 +395,7 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
 
   const pty = await loadNodePty();
   if (!pty) {
-    console.error('[account-usage] Cannot fetch usage: node-pty not available.', nodePtyLoadError ? `Load error: ${nodePtyLoadError}` : '');
+    console.log('[account-usage] Cannot fetch usage: node-pty not available.', nodePtyLoadError ? `Load error: ${nodePtyLoadError}` : '');
     return null;
   }
 
@@ -410,11 +411,16 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
   try {
     const enhancedPath = getEnhancedPath();
 
-    // Launch claude in a pseudo-terminal
+    // Launch claude in a pseudo-terminal.
+    // CWD must be set explicitly — when Electron is launched from Finder,
+    // process.cwd() is '/' which can cause claude to hang during startup.
+    const cwd = process.env.HOME || os.homedir() || '/tmp';
+
     proc = pty.spawn('claude', claudeArgs, {
       name: 'xterm-256color',
       cols: 220,
       rows: 60,
+      cwd,
       env: {
         ...process.env,
         PATH: enhancedPath,
@@ -436,17 +442,26 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
     let ready = await waitForOutput(proc, ['for shortcuts'], 15_000, buffer);
 
     if (!ready) {
-      // Check if we're stuck on the onboarding theme picker
       const cleanSoFar = stripAnsi(buffer.value);
-      if (cleanSoFar.includes('Choose') && cleanSoFar.includes('text style')) {
-        // Accept the default theme selection by pressing Enter.
-        // Then keep pressing Enter through any remaining onboarding screens.
+      console.log('[account-usage] Not ready after 15s, checking for interactive prompts...');
+
+      // On macOS, when the Electron app is launched from Finder the CWD may
+      // trigger Claude's workspace trust dialog ("Is this a project you trust?").
+      // The default selection is "Yes, I trust this folder" — press Enter to accept.
+      // Also handle the onboarding theme picker on first-ever launch.
+      const needsInteraction =
+        (cleanSoFar.includes('trust') && cleanSoFar.includes('folder')) ||
+        (cleanSoFar.includes('Choose') && cleanSoFar.includes('text style'));
+
+      if (needsInteraction) {
+        console.log('[account-usage] Interactive prompt detected, pressing Enter to proceed...');
         for (let i = 0; i < 8; i++) {
           proc.write('\r');
           await sleep(1500);
           const nowReady = await waitForOutput(proc, ['for shortcuts'], 5_000, buffer);
           if (nowReady) {
             ready = true;
+            console.log('[account-usage] Ready after interactive prompt, iteration:', i + 1);
             break;
           }
         }
@@ -454,6 +469,7 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
     }
 
     if (!ready) {
+      console.log('[account-usage] Claude never became ready. Buffer:', stripAnsi(buffer.value).substring(0, 200));
       return {
         session: null, weekAll: null, weekSonnet: null,
         extraUsage: { enabled: false },
@@ -461,6 +477,8 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
         status: 'parse_error',
       };
     }
+
+    console.log('[account-usage] Claude ready, sending /usage');
 
     // Small delay to let the prompt fully render
     await sleep(500);
@@ -475,6 +493,8 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
       10_000,
       buffer
     );
+
+    console.log('[account-usage] Usage dialog detected:', usageReady);
 
     if (usageReady) {
       // Give it a moment to finish rendering the full dialog
@@ -496,7 +516,10 @@ export async function fetchAccountUsage(): Promise<UsageSnapshot | null> {
     return parseUsageOutput(cleanOutput);
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error('[account-usage] Error during PTY usage fetch:', message);
+    console.log('[account-usage] Error during PTY usage fetch:', message);
+    if (err instanceof Error && err.stack) {
+      console.log('[account-usage] Stack:', err.stack);
+    }
     return null;
   } finally {
     // Always kill the PTY process
