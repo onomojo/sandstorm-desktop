@@ -10,6 +10,7 @@ files:
   - package.json
 asarUnpack:
   - "**/*.node"
+  - "**/spawn-helper"
 extraResources:
   - from: sandstorm-cli
     to: sandstorm-cli
