@@ -5,6 +5,7 @@ interface MigrationModalProps {
   missingVerifyScript: boolean;
   missingServiceLabels: boolean;
   missingSpecQualityGate?: boolean;
+  missingReviewPrompt?: boolean;
   onComplete: () => void;
   onDismiss: () => void;
 }
@@ -14,12 +15,14 @@ export function MigrationModal({
   missingVerifyScript,
   missingServiceLabels,
   missingSpecQualityGate,
+  missingReviewPrompt,
   onComplete,
   onDismiss,
 }: MigrationModalProps) {
   const [verifyScript, setVerifyScript] = useState('');
   const [serviceDescriptions, setServiceDescriptions] = useState<Record<string, string>>({});
   const [specQualityGate, setSpecQualityGate] = useState('');
+  const [reviewPrompt, setReviewPrompt] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -29,17 +32,21 @@ export function MigrationModal({
     const loadGate = missingSpecQualityGate
       ? window.sandstorm.specGate.getDefault()
       : Promise.resolve('');
+    const loadReviewPrompt = missingReviewPrompt
+      ? window.sandstorm.reviewPrompt.getDefault()
+      : Promise.resolve('');
 
-    Promise.all([loadVerify, loadGate]).then(([verifyResult, gateContent]) => {
+    Promise.all([loadVerify, loadGate, loadReviewPrompt]).then(([verifyResult, gateContent, reviewPromptContent]) => {
       setVerifyScript(verifyResult.verifyScript);
       setServiceDescriptions(verifyResult.serviceDescriptions);
       setSpecQualityGate(gateContent);
+      setReviewPrompt(reviewPromptContent);
       setLoading(false);
     }).catch((err) => {
       setError(String(err));
       setLoading(false);
     });
-  }, [projectDir, missingSpecQualityGate]);
+  }, [projectDir, missingSpecQualityGate, missingReviewPrompt]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -57,6 +64,10 @@ export function MigrationModal({
       // Save spec quality gate if it was missing
       if (missingSpecQualityGate && specQualityGate) {
         await window.sandstorm.specGate.save(projectDir, specQualityGate);
+      }
+      // Save review prompt if it was missing
+      if (missingReviewPrompt && reviewPrompt) {
+        await window.sandstorm.reviewPrompt.save(projectDir, reviewPrompt);
       }
       onComplete();
     } catch (err) {
@@ -82,6 +93,7 @@ export function MigrationModal({
               missingVerifyScript && 'a verify script',
               missingServiceLabels && 'service descriptions',
               missingSpecQualityGate && 'a spec quality gate',
+              missingReviewPrompt && 'a review prompt',
             ].filter(Boolean).join(', ')
             .replace(/, ([^,]*)$/, ' and $1')}{' '}
             to work with the stack system.
@@ -159,6 +171,26 @@ export function MigrationModal({
                     className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 text-xs font-mono text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent resize-y"
                     spellCheck={false}
                     data-testid="spec-quality-gate-editor"
+                  />
+                </div>
+              )}
+
+              {/* Review prompt editor */}
+              {missingReviewPrompt && (
+                <div>
+                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-1.5">
+                    Review Prompt (.sandstorm/review-prompt.md)
+                  </label>
+                  <p className="text-[11px] text-sandstorm-muted mb-2">
+                    Instructions for the review agent that evaluates code changes. Customize to match your project's standards.
+                  </p>
+                  <textarea
+                    value={reviewPrompt}
+                    onChange={(e) => setReviewPrompt(e.target.value)}
+                    rows={12}
+                    className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 text-xs font-mono text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent resize-y"
+                    spellCheck={false}
+                    data-testid="review-prompt-editor"
                   />
                 </div>
               )}

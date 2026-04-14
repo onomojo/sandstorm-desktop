@@ -382,6 +382,7 @@ declare global {
           missingVerifyScript?: boolean;
           missingServiceLabels?: boolean;
           missingSpecQualityGate?: boolean;
+          missingReviewPrompt?: boolean;
         }>;
         autoDetectVerify: (directory: string) => Promise<{
           verifyScript: string;
@@ -467,6 +468,12 @@ declare global {
         saveSettings: (projectDir: string, content: string) => Promise<void>;
       };
       specGate: {
+        get: (projectDir: string) => Promise<string>;
+        save: (projectDir: string, content: string) => Promise<void>;
+        getDefault: () => Promise<string>;
+        ensure: (projectDir: string) => Promise<boolean>;
+      };
+      reviewPrompt: {
         get: (projectDir: string) => Promise<string>;
         save: (projectDir: string, content: string) => Promise<void>;
         getDefault: () => Promise<string>;

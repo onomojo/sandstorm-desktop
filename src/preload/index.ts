@@ -13,6 +13,7 @@ export interface SandstormAPI {
       missingVerifyScript?: boolean;
       missingServiceLabels?: boolean;
       missingSpecQualityGate?: boolean;
+      missingReviewPrompt?: boolean;
       networksMigrated?: boolean;
     }>;
     autoDetectVerify: (directory: string) => Promise<{
@@ -99,6 +100,12 @@ export interface SandstormAPI {
     saveSettings: (projectDir: string, content: string) => Promise<void>;
   };
   specGate: {
+    get: (projectDir: string) => Promise<string>;
+    save: (projectDir: string, content: string) => Promise<void>;
+    getDefault: () => Promise<string>;
+    ensure: (projectDir: string) => Promise<boolean>;
+  };
+  reviewPrompt: {
     get: (projectDir: string) => Promise<string>;
     save: (projectDir: string, content: string) => Promise<void>;
     getDefault: () => Promise<string>;
@@ -228,6 +235,13 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('specGate:save', projectDir, content),
     getDefault: () => ipcRenderer.invoke('specGate:getDefault'),
     ensure: (projectDir) => ipcRenderer.invoke('specGate:ensure', projectDir),
+  },
+  reviewPrompt: {
+    get: (projectDir) => ipcRenderer.invoke('reviewPrompt:get', projectDir),
+    save: (projectDir, content) =>
+      ipcRenderer.invoke('reviewPrompt:save', projectDir, content),
+    getDefault: () => ipcRenderer.invoke('reviewPrompt:getDefault'),
+    ensure: (projectDir) => ipcRenderer.invoke('reviewPrompt:ensure', projectDir),
   },
   modelSettings: {
     getGlobal: () => ipcRenderer.invoke('modelSettings:getGlobal'),

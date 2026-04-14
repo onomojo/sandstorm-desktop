@@ -90,6 +90,12 @@ export function mockSandstormApi() {
       getDefault: vi.fn().mockResolvedValue(''),
       ensure: vi.fn().mockResolvedValue(true),
     },
+    reviewPrompt: {
+      get: vi.fn().mockResolvedValue(''),
+      save: vi.fn().mockResolvedValue(undefined),
+      getDefault: vi.fn().mockResolvedValue(''),
+      ensure: vi.fn().mockResolvedValue(true),
+    },
     modelSettings: {
       getGlobal: vi.fn().mockResolvedValue({ inner_model: 'sonnet', outer_model: 'opus' }),
       setGlobal: vi.fn().mockResolvedValue(undefined),

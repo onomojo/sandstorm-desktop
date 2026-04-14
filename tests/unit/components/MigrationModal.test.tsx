@@ -138,6 +138,80 @@ describe('MigrationModal', () => {
     });
   });
 
+  it('shows review prompt editor when missingReviewPrompt is true', async () => {
+    api.projects.autoDetectVerify.mockResolvedValue({
+      verifyScript: '#!/bin/bash\nset -e\n',
+      serviceDescriptions: {},
+    });
+    api.reviewPrompt.getDefault.mockResolvedValue('# Default Review Prompt\n\nReview instructions here.');
+
+    render(
+      <MigrationModal
+        {...defaultProps}
+        missingVerifyScript={false}
+        missingReviewPrompt={true}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('review-prompt-editor')).toBeDefined();
+    });
+
+    const textarea = screen.getByTestId('review-prompt-editor') as HTMLTextAreaElement;
+    expect(textarea.value).toContain('Default Review Prompt');
+  });
+
+  it('saves review prompt on save when missingReviewPrompt is true', async () => {
+    api.projects.autoDetectVerify.mockResolvedValue({
+      verifyScript: '#!/bin/bash\nset -e\n',
+      serviceDescriptions: {},
+    });
+    api.projects.saveMigration.mockResolvedValue({ success: true });
+    api.reviewPrompt.getDefault.mockResolvedValue('# Review Prompt Content');
+    api.reviewPrompt.save.mockResolvedValue(undefined);
+
+    render(
+      <MigrationModal
+        {...defaultProps}
+        missingVerifyScript={true}
+        missingReviewPrompt={true}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('migration-save-btn')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByTestId('migration-save-btn'));
+
+    await waitFor(() => {
+      expect(api.reviewPrompt.save).toHaveBeenCalledWith(
+        '/test/project',
+        '# Review Prompt Content',
+      );
+    });
+  });
+
+  it('does not show review prompt editor when missingReviewPrompt is false', async () => {
+    api.projects.autoDetectVerify.mockResolvedValue({
+      verifyScript: '#!/bin/bash\nset -e\n',
+      serviceDescriptions: {},
+    });
+
+    render(
+      <MigrationModal
+        {...defaultProps}
+        missingReviewPrompt={false}
+      />,
+    );
+
+    await waitFor(() => {
+      expect(screen.getByTestId('verify-script-editor')).toBeDefined();
+    });
+
+    expect(screen.queryByTestId('review-prompt-editor')).toBeNull();
+  });
+
   it('allows editing the verify script before saving', async () => {
     api.projects.autoDetectVerify.mockResolvedValue({
       verifyScript: '#!/bin/bash\nset -e\n',
