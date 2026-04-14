@@ -502,6 +502,9 @@ export class Registry {
   // --- Stacks ---
 
   createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'total_execution_input_tokens' | 'total_execution_output_tokens' | 'total_review_input_tokens' | 'total_review_output_tokens' | 'rate_limit_reset_at' | 'current_model'>): Stack {
+    if (!stack.id) {
+      throw new Error('Stack id is required and cannot be null or empty');
+    }
     const normalizedDir = path.resolve(stack.project_dir);
     this.db.prepare(
       `INSERT INTO stacks (id, project, project_dir, ticket, branch, description, status, runtime)
@@ -518,10 +521,10 @@ export class Registry {
   }
 
   listStacks(): Stack[] {
-    return this.db.prepare(
+    return (this.db.prepare(
       `SELECT s.*, (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model
-       FROM stacks s ORDER BY s.created_at DESC`
-    ).all() as Stack[];
+       FROM stacks s WHERE s.id IS NOT NULL ORDER BY s.created_at DESC`
+    ).all() as Stack[]);
   }
 
   updateStackStatus(id: string, status: StackStatus, error?: string): void {

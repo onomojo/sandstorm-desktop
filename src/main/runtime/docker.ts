@@ -375,7 +375,7 @@ export class DockerRuntime implements ContainerRuntime {
   }
 
   private mapState(state: string): string {
-    const normalized = state.toLowerCase();
+    const normalized = (state ?? 'unknown').toLowerCase();
     if (normalized === 'running') return 'running';
     if (normalized === 'exited') return 'exited';
     if (normalized === 'restarting') return 'restarting';

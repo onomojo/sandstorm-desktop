@@ -96,7 +96,7 @@ export interface RateLimitState {
  * Segments must consist only of lowercase alphanumeric characters, hyphens, and underscores.
  */
 export function sanitizeComposeName(input: string): string {
-  const name = input
+  const name = (input ?? '')
     .toLowerCase()
     .replace(/\s+/g, '-')       // spaces → hyphens
     .replace(/[^a-z0-9_-]/g, '') // strip invalid chars
