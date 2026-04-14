@@ -57,6 +57,12 @@ export GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL
 # Legacy JSON-based registry functions were removed — see issue #166.
 
 # ---------------------------------------------------------------------------
+# Clone helpers
+# ---------------------------------------------------------------------------
+
+source "$SANDSTORM_DIR/lib/clone.sh"
+
+# ---------------------------------------------------------------------------
 # Dashboard
 # ---------------------------------------------------------------------------
 render_dashboard() {
@@ -259,19 +265,7 @@ case "$COMMAND" in
     if [ ! -d "$WORKSPACE/.git" ]; then
       echo "  Cloning repo to workspace..."
       mkdir -p "$WORKSPACE"
-      git clone "$GIT_REMOTE_URL" "$WORKSPACE" > /dev/null 2>&1
-      if [ -n "${GIT_BRANCH:-}" ]; then
-        # Point workspace origin at the real remote (not the local clone source)
-        REMOTE_URL=$(git -C "$PROJECT_ROOT" remote get-url origin 2>/dev/null || true)
-        if [ -n "$REMOTE_URL" ]; then
-          git -C "$WORKSPACE" remote set-url origin "$REMOTE_URL"
-          git -C "$WORKSPACE" fetch origin 2>/dev/null || true
-        fi
-        # Try checking out existing remote branch first, then fall back to creating new
-        git -C "$WORKSPACE" checkout "$GIT_BRANCH" 2>/dev/null \
-          || git -C "$WORKSPACE" checkout -b "$GIT_BRANCH" "origin/$GIT_BRANCH" 2>/dev/null \
-          || git -C "$WORKSPACE" checkout -b "$GIT_BRANCH"
-      fi
+      clone_workspace "$GIT_REMOTE_URL" "$GIT_BRANCH" "$WORKSPACE"
       # Copy env files that are gitignored (secrets/config needed to run)
       for f in "$PROJECT_ROOT"/.env*; do
         [ -f "$f" ] && cp "$f" "$WORKSPACE/" 2>/dev/null
