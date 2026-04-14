@@ -116,10 +116,6 @@ run_review() {
   local original_prompt="$1"
   local iteration="${2:-1}"
 
-  # Capture diffs to files to avoid bash variable size limits and special char mangling
-  (cd /app && git diff HEAD 2>/dev/null) > /tmp/claude-review-diff.txt
-  (cd /app && git ls-files --others --exclude-standard -z 2>/dev/null | xargs -0 -I{} git diff --no-index /dev/null {} 2>/dev/null || true) > /tmp/claude-review-untracked.txt
-
   # Build the review prompt from template
   local review_prompt_file="/tmp/claude-review-prompt.txt"
   local template=""
@@ -141,24 +137,14 @@ run_review() {
     fi
   fi
 
-  # Assemble the review prompt
+  # Assemble the review prompt (template + original task only — no diff content)
+  # The review agent discovers changes itself via git status / git diff
   {
     cat "$template"
     echo ""
     echo "## Original Task"
     echo ""
     echo "$original_prompt"
-    echo ""
-    echo "## Current Diff (staged + unstaged)"
-    echo ""
-    echo '```diff'
-    cat /tmp/claude-review-diff.txt
-    if [ -s /tmp/claude-review-untracked.txt ]; then
-      echo ""
-      echo "# New (untracked) files:"
-      cat /tmp/claude-review-untracked.txt
-    fi
-    echo '```'
   } > "$review_prompt_file"
 
   log_loop "Starting review agent with fresh context..."
@@ -167,7 +153,7 @@ run_review() {
   run_claude "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log review "$iteration" "${MODEL_ARGS[@]}"
   local review_exit=$?
 
-  rm -f "$review_prompt_file" /tmp/claude-review-diff.txt /tmp/claude-review-untracked.txt
+  rm -f "$review_prompt_file"
 
   if [ $review_exit -ne 0 ]; then
     log_loop "Review agent crashed (exit $review_exit), treating as REVIEW_FAIL"
