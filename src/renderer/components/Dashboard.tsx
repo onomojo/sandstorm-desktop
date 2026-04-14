@@ -388,6 +388,7 @@ export function Dashboard() {
     missingVerifyScript: boolean;
     missingServiceLabels: boolean;
     missingSpecQualityGate: boolean;
+    missingReviewPrompt: boolean;
   } | null>(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
   const [showComposeSetup, setShowComposeSetup] = useState(false);
@@ -439,6 +440,7 @@ export function Dashboard() {
               missingVerifyScript: migration.missingVerifyScript ?? false,
               missingServiceLabels: migration.missingServiceLabels ?? false,
               missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
+              missingReviewPrompt: migration.missingReviewPrompt ?? false,
             } : null);
             if (migration.needsMigration) {
               setShowMigrationModal(true);
@@ -792,6 +794,7 @@ export function Dashboard() {
           missingVerifyScript={migrationState.missingVerifyScript}
           missingServiceLabels={migrationState.missingServiceLabels}
           missingSpecQualityGate={migrationState.missingSpecQualityGate}
+          missingReviewPrompt={migrationState.missingReviewPrompt}
           onComplete={() => {
             setShowMigrationModal(false);
             setMigrationState(null);

@@ -1,4 +1,14 @@
-# Code Review — Fresh Context
+import fs from 'fs';
+import path from 'path';
+
+const REVIEW_PROMPT_FILE = 'review-prompt.md';
+
+/**
+ * Returns the default content for .sandstorm/review-prompt.md.
+ * This defines how the review agent evaluates code changes.
+ */
+export function getDefaultReviewPrompt(): string {
+  return `# Code Review — Fresh Context
 
 You are a code review agent. You have been given the original task description and the current git diff. You have NO prior context from the execution agent — review the changes with fresh eyes.
 
@@ -32,19 +42,19 @@ Read the full history to understand how the team arrived at the current requirem
 You MUST end your response with exactly one of these verdict lines:
 
 **If the code is acceptable:**
-```
+` + '```' + `
 REVIEW_PASS
-```
+` + '```' + `
 
 **If there are issues that must be fixed:**
-```
+` + '```' + `
 REVIEW_FAIL
 
 Issues:
 1. [CATEGORY] Description of issue — file:line if applicable
 2. [CATEGORY] Description of issue — file:line if applicable
 ...
-```
+` + '```' + `
 
 Categories: REQUIREMENTS, ARCHITECTURE, BEST_PRACTICE, SEPARATION, DRY, SECURITY, SCALABILITY, OPTIMIZATION, TEST_COVERAGE, BUG
 
@@ -77,3 +87,45 @@ Do not leave unclassified observations floating in your review. If you mention i
 
 ---
 
+`;
+}
+
+/**
+ * Read the review prompt file for a project.
+ * Returns empty string if file doesn't exist.
+ */
+export function getReviewPrompt(projectDir: string): string {
+  const filePath = path.join(projectDir, '.sandstorm', REVIEW_PROMPT_FILE);
+  if (!fs.existsSync(filePath)) return '';
+  return fs.readFileSync(filePath, 'utf-8');
+}
+
+/**
+ * Save the review prompt file for a project.
+ */
+export function saveReviewPrompt(projectDir: string, content: string): void {
+  const sandstormDir = path.join(projectDir, '.sandstorm');
+  if (!fs.existsSync(sandstormDir)) {
+    fs.mkdirSync(sandstormDir, { recursive: true });
+  }
+  fs.writeFileSync(path.join(sandstormDir, REVIEW_PROMPT_FILE), content, 'utf-8');
+}
+
+/**
+ * Check if an initialized project is missing the review prompt file.
+ */
+export function isReviewPromptMissing(projectDir: string): boolean {
+  const sandstormDir = path.join(projectDir, '.sandstorm');
+  if (!fs.existsSync(path.join(sandstormDir, 'config'))) return false;
+  return !fs.existsSync(path.join(sandstormDir, REVIEW_PROMPT_FILE));
+}
+
+/**
+ * Auto-create the review prompt file if missing.
+ * Returns true if the file was created.
+ */
+export function ensureReviewPrompt(projectDir: string): boolean {
+  if (!isReviewPromptMissing(projectDir)) return false;
+  saveReviewPrompt(projectDir, getDefaultReviewPrompt());
+  return true;
+}

@@ -41,6 +41,13 @@ import {
   ensureSpecQualityGate,
   getDefaultSpecQualityGate,
 } from './spec-quality-gate';
+import {
+  getReviewPrompt,
+  saveReviewPrompt,
+  getDefaultReviewPrompt,
+  ensureReviewPrompt,
+  isReviewPromptMissing,
+} from './review-prompt';
 
 /**
  * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
@@ -365,12 +372,14 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       }
 
       const missingSpecQualityGate = isSpecQualityGateMissing(directory);
+      const missingReviewPrompt = isReviewPromptMissing(directory);
 
       return {
-        needsMigration: !hasVerifyScript || !hasServiceLabels || missingSpecQualityGate,
+        needsMigration: !hasVerifyScript || !hasServiceLabels || missingSpecQualityGate || missingReviewPrompt,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
         missingSpecQualityGate,
+        missingReviewPrompt,
         networksMigrated,
       };
     } catch {
@@ -700,6 +709,27 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('specGate:ensure', async (_event, projectDir: string) => {
     return ensureSpecQualityGate(projectDir);
+  });
+
+  // --- Review Prompt ---
+
+  ipcMain.handle('reviewPrompt:get', async (_event, projectDir: string) => {
+    return getReviewPrompt(projectDir);
+  });
+
+  ipcMain.handle(
+    'reviewPrompt:save',
+    async (_event, projectDir: string, content: string) => {
+      saveReviewPrompt(projectDir, content);
+    }
+  );
+
+  ipcMain.handle('reviewPrompt:getDefault', async () => {
+    return getDefaultReviewPrompt();
+  });
+
+  ipcMain.handle('reviewPrompt:ensure', async (_event, projectDir: string) => {
+    return ensureReviewPrompt(projectDir);
   });
 
   // --- Stale Workspace Detection & Cleanup ---

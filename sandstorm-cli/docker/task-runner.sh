@@ -122,11 +122,23 @@ run_review() {
 
   # Build the review prompt from template
   local review_prompt_file="/tmp/claude-review-prompt.txt"
-  local template="/usr/bin/review-prompt.md"
+  local template=""
 
-  if [ ! -f "$template" ]; then
-    # Fallback if template not installed
-    template="/app/sandstorm-cli/docker/review-prompt.md"
+  # Check for per-project review prompt first
+  if [ -f "/app/.sandstorm/review-prompt.md" ] && [ -s "/app/.sandstorm/review-prompt.md" ]; then
+    template="/app/.sandstorm/review-prompt.md"
+    log_loop "Using per-project review prompt: $template"
+  elif [ -f "/app/.sandstorm/review-prompt.md" ] && [ ! -s "/app/.sandstorm/review-prompt.md" ]; then
+    log_loop "WARNING: /app/.sandstorm/review-prompt.md exists but is empty, falling back to built-in default"
+  fi
+
+  # Fall back to built-in default
+  if [ -z "$template" ]; then
+    template="/usr/bin/review-prompt.md"
+    if [ ! -f "$template" ]; then
+      # Fallback if template not installed
+      template="/app/sandstorm-cli/docker/review-prompt.md"
+    fi
   fi
 
   # Assemble the review prompt
