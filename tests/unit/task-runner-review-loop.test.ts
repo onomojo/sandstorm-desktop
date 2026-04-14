@@ -58,9 +58,10 @@ describe('task-runner.sh dual-loop workflow', () => {
       expect(taskRunner).toContain('run_review()')
     })
 
-    it('generates a diff for the review agent', () => {
-      // The review function should capture git diff for the review prompt
-      expect(taskRunner).toContain('git diff HEAD')
+    it('does not embed a diff in the review agent prompt', () => {
+      // The review agent discovers changes itself via git tools — no diff is embedded
+      expect(taskRunner).not.toContain('cat /tmp/claude-review-diff.txt')
+      expect(taskRunner).not.toContain('Current Diff (staged + unstaged)')
     })
 
     it('uses the review-prompt.md template', () => {
@@ -143,16 +144,22 @@ describe('task-runner.sh dual-loop workflow', () => {
   // ── Diff handling ──────────────────────────────────────────────────
 
   describe('review diff handling', () => {
-    it('pipes diff to a file instead of storing in a variable', () => {
-      expect(taskRunner).toContain('> /tmp/claude-review-diff.txt')
+    it('does NOT create a temp diff file', () => {
+      expect(taskRunner).not.toContain('> /tmp/claude-review-diff.txt')
     })
 
-    it('pipes untracked diff to a file', () => {
-      expect(taskRunner).toContain('> /tmp/claude-review-untracked.txt')
+    it('does NOT create a temp untracked diff file', () => {
+      expect(taskRunner).not.toContain('> /tmp/claude-review-untracked.txt')
     })
 
-    it('uses cat to include diff in review prompt', () => {
-      expect(taskRunner).toContain('cat /tmp/claude-review-diff.txt')
+    it('does NOT embed diff content in the review prompt', () => {
+      expect(taskRunner).not.toContain('cat /tmp/claude-review-diff.txt')
+      expect(taskRunner).not.toContain('Current Diff (staged + unstaged)')
+    })
+
+    it('assembles review prompt from template and original task only', () => {
+      // The comment in the script documents this constraint
+      expect(taskRunner).toContain('no diff content')
     })
   })
 
@@ -592,6 +599,18 @@ describe('review-prompt.md template', () => {
   it('instructs the review agent to pay attention to issue comments', () => {
     expect(reviewPrompt.toLowerCase()).toContain('comments')
     expect(reviewPrompt).toContain('Requirements evolve')
+  })
+
+  it('does NOT claim a diff was given to the agent', () => {
+    expect(reviewPrompt).not.toContain('the current git diff')
+  })
+
+  it('instructs the review agent to run git status to discover changes', () => {
+    expect(reviewPrompt).toContain('git status')
+  })
+
+  it('instructs the review agent to run git diff to inspect changes', () => {
+    expect(reviewPrompt).toContain('git diff HEAD')
   })
 })
 
