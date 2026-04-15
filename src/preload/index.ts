@@ -66,6 +66,9 @@ export interface SandstormAPI {
   };
   ports: {
     get: (stackId: string) => Promise<unknown[]>;
+    expose: (stackId: string, service: string, containerPort: number) => Promise<number>;
+    unexpose: (stackId: string, service: string, containerPort: number) => Promise<void>;
+    cleanupLegacy: (directory: string) => Promise<{ success: boolean; error?: string }>;
   };
   logs: {
     stream: (containerId: string, runtime: string) => Promise<string>;
@@ -187,6 +190,12 @@ const api: SandstormAPI = {
   },
   ports: {
     get: (stackId) => ipcRenderer.invoke('ports:get', stackId),
+    expose: (stackId, service, containerPort) =>
+      ipcRenderer.invoke('stack:expose-port', stackId, service, containerPort),
+    unexpose: (stackId, service, containerPort) =>
+      ipcRenderer.invoke('stack:unexpose-port', stackId, service, containerPort),
+    cleanupLegacy: (directory) =>
+      ipcRenderer.invoke('ports:cleanupLegacy', directory),
   },
   logs: {
     stream: (containerId, runtime) =>

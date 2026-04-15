@@ -24,7 +24,7 @@ export class PortAllocator {
   ): Promise<Map<string, number>> {
     const allocated = new Set(this.registry.getAllAllocatedPorts());
     const result = new Map<string, number>();
-    const newPorts: { service: string; host_port: number; container_port: number }[] = [];
+    const newPorts: { service: string; host_port: number; container_port: number; proxy_container_id: null }[] = [];
 
     for (const svc of services) {
       const port = await this.findAvailablePort(allocated);
@@ -34,11 +34,22 @@ export class PortAllocator {
         service: svc.service,
         host_port: port,
         container_port: svc.containerPort,
+        proxy_container_id: null,
       });
     }
 
     this.registry.setPorts(stackId, newPorts);
     return result;
+  }
+
+  /**
+   * Allocate a single host port for a specific service port (on-demand exposure).
+   */
+  async allocateOne(stackId: string, service: string, containerPort: number): Promise<number> {
+    const allocated = new Set(this.registry.getAllAllocatedPorts());
+    const port = await this.findAvailablePort(allocated);
+    this.registry.setPort(stackId, service, port, containerPort);
+    return port;
   }
 
   release(stackId: string): void {

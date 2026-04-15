@@ -192,10 +192,9 @@ describe('StackManager', () => {
         expect(stack!.status).toBe('up');
       }, { timeout: 5000 });
 
-      // Ports should have been allocated after stack creation (FK: stack exists first)
+      // Ports are now allocated on-demand via proxy containers, not at stack creation
       const ports = registry.getPorts('fk-test');
-      expect(ports).toHaveLength(1);
-      expect(ports[0].container_port).toBe(3000);
+      expect(ports).toHaveLength(0);
     });
 
     it('creates a stack with optional fields', () => {
@@ -265,7 +264,9 @@ describe('StackManager', () => {
       expect(args).toContain('PROJ-1');
       expect(args).toContain('--branch');
       expect(args).toContain('feature/test');
-      expect(env).toHaveProperty('SANDSTORM_PORT_app_0');
+      // Port env vars are no longer set at stack creation (on-demand proxy model)
+      expect(env).not.toHaveProperty('SANDSTORM_PORT_app_0');
+      expect(env).toHaveProperty('SANDSTORM_APP_VERSION');
     });
 
     it('calls onStackUpdate callback when build completes', async () => {

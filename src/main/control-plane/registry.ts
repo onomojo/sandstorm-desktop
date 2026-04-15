@@ -82,6 +82,7 @@ export interface PortMapping {
   service: string;
   host_port: number;
   container_port: number;
+  proxy_container_id: string | null;
 }
 
 export type HistoryStatus = 'completed' | 'failed' | 'torn_down';
@@ -472,8 +473,31 @@ export class Registry {
       this.setSchemaVersion(12);
     }
 
+    if (currentVersion < 13) {
+      // Add proxy_container_id to ports table for on-demand proxy-based port exposure
+      try { this.db.exec('ALTER TABLE ports ADD COLUMN proxy_container_id TEXT'); } catch { /* exists */ }
+      // Change composite PK to allow multiple ports per service (drop old constraint, recreate table)
+      // SQLite doesn't support ALTER TABLE DROP CONSTRAINT, so we migrate data
+      try {
+        this.db.exec(`
+          CREATE TABLE IF NOT EXISTS ports_new (
+            stack_id           TEXT NOT NULL REFERENCES stacks(id) ON DELETE CASCADE,
+            service            TEXT NOT NULL,
+            host_port          INTEGER NOT NULL UNIQUE,
+            container_port     INTEGER NOT NULL,
+            proxy_container_id TEXT,
+            PRIMARY KEY (stack_id, service, container_port)
+          );
+          INSERT OR IGNORE INTO ports_new SELECT stack_id, service, host_port, container_port, proxy_container_id FROM ports;
+          DROP TABLE ports;
+          ALTER TABLE ports_new RENAME TO ports;
+        `);
+      } catch { /* migration already applied */ }
+      this.setSchemaVersion(13);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 13) { ... this.setSchemaVersion(13); }
+    // if (currentVersion < 14) { ... this.setSchemaVersion(14); }
   }
 
   // --- Projects ---
@@ -880,6 +904,30 @@ export class Registry {
 
   releasePorts(stackId: string): void {
     this.db.prepare('DELETE FROM ports WHERE stack_id = ?').run(stackId);
+  }
+
+  getPortByService(stackId: string, service: string, containerPort: number): PortMapping | undefined {
+    return this.db.prepare(
+      'SELECT * FROM ports WHERE stack_id = ? AND service = ? AND container_port = ?'
+    ).get(stackId, service, containerPort) as PortMapping | undefined;
+  }
+
+  setPort(stackId: string, service: string, hostPort: number, containerPort: number): void {
+    this.db.prepare(
+      'INSERT INTO ports (stack_id, service, host_port, container_port) VALUES (?, ?, ?, ?)'
+    ).run(stackId, service, hostPort, containerPort);
+  }
+
+  setProxyContainerId(stackId: string, service: string, containerPort: number, proxyContainerId: string): void {
+    this.db.prepare(
+      'UPDATE ports SET proxy_container_id = ? WHERE stack_id = ? AND service = ? AND container_port = ?'
+    ).run(proxyContainerId, stackId, service, containerPort);
+  }
+
+  releasePort(stackId: string, service: string, containerPort: number): void {
+    this.db.prepare(
+      'DELETE FROM ports WHERE stack_id = ? AND service = ? AND container_port = ?'
+    ).run(stackId, service, containerPort);
   }
 
   // --- Stack History ---

@@ -2,6 +2,7 @@ import { app, BrowserWindow, nativeTheme } from 'electron';
 import path from 'path';
 import { Registry } from './control-plane/registry';
 import { PortAllocator } from './control-plane/port-allocator';
+import { PortProxy } from './control-plane/port-proxy';
 import { TaskWatcher } from './control-plane/task-watcher';
 import { StackManager } from './control-plane/stack-manager';
 import { DockerRuntime } from './runtime/docker';
@@ -105,6 +106,7 @@ async function initializeApp(): Promise<void> {
 
 
   portAllocator = new PortAllocator(registry);
+  const portProxy = new PortProxy(registry, portAllocator);
   taskWatcher = new TaskWatcher(registry, dockerRuntime, podmanRuntime);
   stackManager = new StackManager(
     registry,
@@ -114,6 +116,7 @@ async function initializeApp(): Promise<void> {
     podmanRuntime,
     cliDir
   );
+  stackManager.setPortProxy(portProxy);
 
   // Set up Docker connection manager for health monitoring
   if (dockerRuntime instanceof DockerRuntime) {
