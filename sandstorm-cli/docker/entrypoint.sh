@@ -44,7 +44,7 @@ fi
 # -------------------------------------------------------------------
 # 2.5. Configure Chrome DevTools MCP for Claude Code
 # -------------------------------------------------------------------
-# Write MCP config to .mcp.json at project root (Claude Code reads this, not settings.json)
+# Write MCP config to /tmp/sandstorm-mcp.json (outside workspace, so it never appears in git)
 # Chrome flags explanation:
 #   --acceptInsecureCerts: Chromium in Docker auto-upgrades HTTP to HTTPS for
 #     internal hostnames (e.g., http://app:3000 -> https://app:3000), which fails
@@ -52,7 +52,7 @@ fi
 #   --no-sandbox: Required when running as root or in containers without a sandbox namespace.
 #   --disable-dev-shm-usage: Prevents crashes from /dev/shm being too small in containers.
 #   --allow-insecure-localhost: Allows HTTP connections to localhost/internal hostnames.
-cat > /app/.mcp.json << 'MCPEOF'
+cat > /tmp/sandstorm-mcp.json << 'MCPEOF'
 {
   "mcpServers": {
     "chrome-devtools": {
@@ -146,7 +146,7 @@ if [ -S /var/run/docker.sock ]; then
 fi
 
 # Signal to other services that the repo is ready
-touch /app/.sandstorm-ready
+touch /tmp/.sandstorm-ready
 
 echo ""
 echo "=========================================="

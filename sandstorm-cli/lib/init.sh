@@ -402,7 +402,7 @@ HEADER
       - \${SANDSTORM_CONTEXT}:/sandstorm-context:ro
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
-      test: ["CMD", "test", "-f", "/app/.sandstorm-ready"]
+      test: ["CMD", "test", "-f", "/tmp/.sandstorm-ready"]
       interval: 3s
       timeout: 2s
       retries: 60

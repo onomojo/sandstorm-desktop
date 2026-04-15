@@ -47,6 +47,7 @@ run_claude() {
 
   cat "$prompt_file" \
     | claude --dangerously-skip-permissions --verbose --output-format stream-json \
+        --mcp-config /tmp/sandstorm-mcp.json --strict-mcp-config \
         "${extra_args[@]}" \
         --include-partial-messages --print -p - 2>&1 \
     | stdbuf -o0 tee -a "$raw_log" \

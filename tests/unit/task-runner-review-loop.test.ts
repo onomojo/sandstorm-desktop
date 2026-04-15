@@ -331,6 +331,14 @@ describe('task-runner.sh dual-loop workflow', () => {
       expect(taskRunner).toContain('local task_log="${3:-/tmp/claude-task.log}"')
     })
 
+    it('passes --mcp-config pointing to /tmp/sandstorm-mcp.json', () => {
+      expect(taskRunner).toContain('--mcp-config /tmp/sandstorm-mcp.json')
+    })
+
+    it('passes --strict-mcp-config to prevent loading workspace .mcp.json', () => {
+      expect(taskRunner).toContain('--strict-mcp-config')
+    })
+
     it('writes raw log for token parsing (append mode)', () => {
       expect(taskRunner).toContain('tee -a "$raw_log"')
     })
