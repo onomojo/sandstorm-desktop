@@ -409,4 +409,124 @@ describe('parsePhaseTokenSteps', () => {
     expect(result).toHaveLength(1);
     expect(result[0].input_tokens).toBe(500);
   });
+
+  it('tracks latest partial entry per key (not summing partials)', () => {
+    // Multiple partial entries for same key — only the latest should count
+    const execOutput = [
+      '{"in":100,"out":0,"iter":1,"phase":"execution","partial":true}',
+      '{"in":100,"out":50,"iter":1,"phase":"execution","partial":true}',
+      '{"in":100,"out":120,"iter":1,"phase":"execution","partial":true}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    // Should use only the latest partial, not sum all three
+    expect(result[0].input_tokens).toBe(100);
+    expect(result[0].output_tokens).toBe(120);
+  });
+
+  it('resets partial when result arrives (no double-counting)', () => {
+    // message_start partial → message_delta partial → result
+    const execOutput = [
+      '{"in":500,"out":0,"iter":1,"phase":"execution","partial":true}',
+      '{"in":500,"out":200,"iter":1,"phase":"execution","partial":true}',
+      '{"in":500,"out":200,"iter":1,"phase":"execution"}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    // Only the result entry should count — partial is reset when result arrives
+    expect(result[0].input_tokens).toBe(500);
+    expect(result[0].output_tokens).toBe(200);
+  });
+
+  it('adds latest partial to result totals for multi-turn phases', () => {
+    // Turn 1 complete (result), Turn 2 in progress (partial only)
+    const execOutput = [
+      '{"in":500,"out":200,"iter":1,"phase":"execution"}',
+      '{"in":800,"out":0,"iter":1,"phase":"execution","partial":true}',
+      '{"in":800,"out":350,"iter":1,"phase":"execution","partial":true}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    // result total (500/200) + latest partial (800/350)
+    expect(result[0].input_tokens).toBe(1300);
+    expect(result[0].output_tokens).toBe(550);
+  });
+
+  it('shows partial-only entry when phase has no completed turn yet', () => {
+    // Phase just started — only message_start partial, no result yet
+    const execOutput = '{"in":2000,"out":0,"iter":1,"phase":"execution","partial":true}\n';
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    expect(result[0]).toEqual({
+      iteration: 1,
+      phase: 'execution',
+      input_tokens: 2000,
+      output_tokens: 0,
+    });
+  });
+
+  it('handles multiple API turns: partial for new turn does not conflict with prior results', () => {
+    // Turn 1 result, Turn 2 result, Turn 3 in progress (partial)
+    const execOutput = [
+      '{"in":300,"out":100,"iter":1,"phase":"execution"}',
+      '{"in":400,"out":150,"iter":1,"phase":"execution"}',
+      '{"in":600,"out":0,"iter":1,"phase":"execution","partial":true}',
+      '{"in":600,"out":250,"iter":1,"phase":"execution","partial":true}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    // Two results summed (700/250) + latest partial (600/250)
+    expect(result[0].input_tokens).toBe(1300);
+    expect(result[0].output_tokens).toBe(500);
+  });
+
+  it('partial entries in one phase do not affect other phases', () => {
+    const execOutput = [
+      '{"in":1000,"out":400,"iter":1,"phase":"execution"}',
+      '{"in":1500,"out":0,"iter":1,"phase":"execution","partial":true}',
+    ].join('\n');
+    const reviewOutput = '{"in":800,"out":300,"iter":1,"phase":"review"}\n';
+    const result = parsePhaseTokenSteps(execOutput, reviewOutput);
+    expect(result).toHaveLength(2);
+    expect(result[0]).toEqual({ iteration: 1, phase: 'execution', input_tokens: 2500, output_tokens: 400 });
+    expect(result[1]).toEqual({ iteration: 1, phase: 'review', input_tokens: 800, output_tokens: 300 });
+  });
+
+  it('skips zero-token partial entries', () => {
+    // message_start with 0 tokens (edge case) should be skipped
+    const execOutput = [
+      '{"in":0,"out":0,"iter":1,"phase":"execution","partial":true}',
+      '{"in":500,"out":200,"iter":1,"phase":"execution"}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    expect(result[0].input_tokens).toBe(500);
+    expect(result[0].output_tokens).toBe(200);
+  });
+});
+
+describe('parsePhaseTokenTotals with partial entries', () => {
+  it('skips partial entries to avoid double-counting', () => {
+    const output = [
+      '{"in":100,"out":0,"partial":true}',
+      '{"in":100,"out":50,"partial":true}',
+      '{"in":100,"out":50}',
+    ].join('\n');
+    const result = parsePhaseTokenTotals(output);
+    // Only the non-partial result entry should be summed
+    expect(result.input_tokens).toBe(100);
+    expect(result.output_tokens).toBe(50);
+  });
+
+  it('sums multiple result entries while ignoring partials', () => {
+    const output = [
+      '{"in":500,"out":200,"iter":1,"phase":"execution","partial":true}',
+      '{"in":500,"out":200,"iter":1,"phase":"execution"}',
+      '{"in":800,"out":0,"iter":1,"phase":"execution","partial":true}',
+      '{"in":800,"out":300,"iter":1,"phase":"execution"}',
+    ].join('\n');
+    const result = parsePhaseTokenTotals(output);
+    expect(result.input_tokens).toBe(1300);
+    expect(result.output_tokens).toBe(500);
+  });
 });

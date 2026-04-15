@@ -28,7 +28,8 @@ export interface TokenStep {
 /**
  * Parse phase token totals from a file written by token-counter.sh.
  * Each line is a JSON object: {"in":N,"out":N}
- * Returns the sum of all lines.
+ * Returns the sum of all non-partial lines (partial:true entries are intermediate
+ * running totals and must not be summed to avoid double-counting with result entries).
  */
 export function parsePhaseTokenTotals(output: string): PhaseTokenTotals {
   let input_tokens = 0;
@@ -38,6 +39,8 @@ export function parsePhaseTokenTotals(output: string): PhaseTokenTotals {
     if (!line.trim()) continue;
     try {
       const parsed = JSON.parse(line);
+      // Skip partial entries — they are intermediate running totals, not final counts
+      if (parsed.partial === true) continue;
       input_tokens += parsed.in ?? 0;
       output_tokens += parsed.out ?? 0;
     } catch {
@@ -51,17 +54,25 @@ export function parsePhaseTokenTotals(output: string): PhaseTokenTotals {
 /**
  * Parse per-step token data from files written by token-counter.sh.
  * Each line may include iteration and phase metadata:
- *   {"in":N,"out":N,"iter":I,"phase":"P"}
+ *   {"in":N,"out":N,"iter":I,"phase":"P"}            — final (result) entry
+ *   {"in":N,"out":N,"iter":I,"phase":"P","partial":true} — intermediate running total
  * Lines without metadata are treated as iteration 1 with the given default phase.
  *
- * Returns individual steps (one per API turn) grouped by iteration and phase.
- * Multiple API turns within the same iteration+phase are summed into one step.
+ * Returns individual steps (one per iteration+phase) with totals computed as:
+ *   sum(non-partial result entries) + latest(partial entry)
+ *
+ * Partial entries are running totals for the current in-progress API turn, so we
+ * track only the latest partial per key (do not sum them). When a result entry
+ * arrives, it supersedes the partial — the partial is reset to avoid double-counting.
  */
 export function parsePhaseTokenSteps(
   executionOutput: string,
   reviewOutput: string
 ): TokenStep[] {
-  const stepMap = new Map<string, TokenStep>();
+  // Sum of completed (non-partial) result entries per key
+  const stepTotals = new Map<string, { iteration: number; phase: string; input_tokens: number; output_tokens: number }>();
+  // Latest partial entry per key — running total for in-progress API turn
+  const latestPartial = new Map<string, { input_tokens: number; output_tokens: number }>();
 
   function processLines(output: string, defaultPhase: string): void {
     for (const line of output.split('\n')) {
@@ -72,16 +83,28 @@ export function parsePhaseTokenSteps(
         const phase = parsed.phase ?? defaultPhase;
         const inTokens = parsed.in ?? 0;
         const outTokens = parsed.out ?? 0;
-
-        if (inTokens === 0 && outTokens === 0) continue;
+        const isPartial = parsed.partial === true;
 
         const key = `${iteration}:${phase}`;
-        const existing = stepMap.get(key);
-        if (existing) {
-          existing.input_tokens += inTokens;
-          existing.output_tokens += outTokens;
+
+        if (isPartial) {
+          // Track only the latest partial per key — it's a running total, not an increment
+          if (inTokens > 0 || outTokens > 0) {
+            latestPartial.set(key, { input_tokens: inTokens, output_tokens: outTokens });
+          }
         } else {
-          stepMap.set(key, { iteration, phase, input_tokens: inTokens, output_tokens: outTokens });
+          // Non-partial (result) entry: add to completed totals for this key
+          if (inTokens === 0 && outTokens === 0) continue;
+
+          const existing = stepTotals.get(key);
+          if (existing) {
+            existing.input_tokens += inTokens;
+            existing.output_tokens += outTokens;
+          } else {
+            stepTotals.set(key, { iteration, phase, input_tokens: inTokens, output_tokens: outTokens });
+          }
+          // Result supersedes its preceding partials — reset to avoid double-counting
+          latestPartial.delete(key);
         }
       } catch {
         // Not JSON — skip
@@ -91,6 +114,28 @@ export function parsePhaseTokenSteps(
 
   processLines(executionOutput, 'execution');
   processLines(reviewOutput, 'review');
+
+  // Build final step map: completed totals + latest partial for in-progress turns
+  const stepMap = new Map<string, TokenStep>();
+
+  for (const [key, step] of stepTotals) {
+    stepMap.set(key, { ...step });
+  }
+
+  for (const [key, partial] of latestPartial) {
+    const existing = stepMap.get(key);
+    if (existing) {
+      // Phase has completed turns + an in-progress turn — add the partial
+      existing.input_tokens += partial.input_tokens;
+      existing.output_tokens += partial.output_tokens;
+    } else {
+      // Phase has only partial data — no completed turn yet
+      const colonIdx = key.indexOf(':');
+      const iteration = parseInt(key.slice(0, colonIdx), 10);
+      const phase = key.slice(colonIdx + 1);
+      stepMap.set(key, { iteration, phase, input_tokens: partial.input_tokens, output_tokens: partial.output_tokens });
+    }
+  }
 
   // Sort by iteration then phase order (execution < review < verify)
   const phaseOrder: Record<string, number> = { execution: 0, review: 1, verify: 2 };
