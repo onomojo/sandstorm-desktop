@@ -270,18 +270,12 @@ case "$COMMAND" in
       for f in "$PROJECT_ROOT"/.env*; do
         [ -f "$f" ] && cp "$f" "$WORKSPACE/" 2>/dev/null
       done
-      # Inject host .sandstorm/ config files into the workspace clone so that
-      # verify.sh, review-prompt.md, scripts/, context/, etc. are available
-      # inside the container at /app/.sandstorm/. workspaces/ and stacks/ are
-      # workspace-specific and must not be copied.
-      SANDSTORM_INJECT_ITEMS="verify.sh review-prompt.md docker-compose.yml scripts context spec-quality-gate.md config"
-      for item in $SANDSTORM_INJECT_ITEMS; do
-        src="$PROJECT_ROOT/.sandstorm/$item"
-        if [ -e "$src" ]; then
-          mkdir -p "$WORKSPACE/.sandstorm"
-          cp -r "$src" "$WORKSPACE/.sandstorm/" 2>/dev/null || true
-        fi
-      done
+      # Inject verify.sh from host .sandstorm/ into the workspace clone so the
+      # verify step has the script available inside the container at /app/.sandstorm/.
+      if [ -f "$PROJECT_ROOT/.sandstorm/verify.sh" ]; then
+        mkdir -p "$WORKSPACE/.sandstorm"
+        cp "$PROJECT_ROOT/.sandstorm/verify.sh" "$WORKSPACE/.sandstorm/verify.sh" 2>/dev/null || true
+      fi
       # Remap ports in env files to match sandstorm stack offsets
       if [ -n "${PORT_MAP:-}" ]; then
         IFS=',' read -ra ENTRIES <<< "$PORT_MAP"

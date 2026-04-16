@@ -8,68 +8,32 @@ describe('stack.sh .sandstorm/ config injection', () => {
 
   it('injects verify.sh into workspace .sandstorm/', () => {
     expect(stackSh).toContain('verify.sh');
-    expect(stackSh).toContain('SANDSTORM_INJECT_ITEMS');
+    expect(stackSh).toContain('$PROJECT_ROOT/.sandstorm/verify.sh');
+    expect(stackSh).toContain('$WORKSPACE/.sandstorm/verify.sh');
   });
 
-  it('injects review-prompt.md into workspace .sandstorm/', () => {
-    expect(stackSh).toContain('review-prompt.md');
+  it('does NOT inject other files (review-prompt.md, scripts/, context/, etc.)', () => {
+    expect(stackSh).not.toContain('review-prompt.md');
+    expect(stackSh).not.toContain('SANDSTORM_INJECT_ITEMS');
+    expect(stackSh).not.toMatch(/cp.*\.sandstorm\/scripts/);
+    expect(stackSh).not.toMatch(/cp.*\.sandstorm\/context/);
+    expect(stackSh).not.toMatch(/cp.*spec-quality-gate/);
   });
 
-  it('injects docker-compose.yml into workspace .sandstorm/', () => {
-    // The injected docker-compose.yml is the sandstorm one, not the project one
-    expect(stackSh).toContain('SANDSTORM_INJECT_ITEMS');
-    expect(stackSh).toMatch(/SANDSTORM_INJECT_ITEMS=.*docker-compose\.yml/);
-  });
-
-  it('injects scripts/ directory recursively', () => {
-    expect(stackSh).toMatch(/SANDSTORM_INJECT_ITEMS=.*scripts/);
-    expect(stackSh).toContain('cp -r');
-  });
-
-  it('injects context/ directory recursively', () => {
-    expect(stackSh).toMatch(/SANDSTORM_INJECT_ITEMS=.*context/);
-  });
-
-  it('injects spec-quality-gate.md', () => {
-    expect(stackSh).toMatch(/SANDSTORM_INJECT_ITEMS=.*spec-quality-gate\.md/);
-  });
-
-  it('injects config file', () => {
-    expect(stackSh).toMatch(/SANDSTORM_INJECT_ITEMS=.*\bconfig\b/);
-  });
-
-  it('does NOT inject workspaces/ directory', () => {
-    // workspaces/ is workspace-specific and must not be copied
-    expect(stackSh).not.toMatch(/SANDSTORM_INJECT_ITEMS=.*workspaces/);
-  });
-
-  it('does NOT inject stacks/ directory', () => {
-    // stacks/ is workspace-specific and must not be copied
-    expect(stackSh).not.toMatch(/SANDSTORM_INJECT_ITEMS=.*\bstacks\b/);
-  });
-
-  it('skips missing files silently (uses -e check and || true)', () => {
-    // Should use [ -e "$src" ] to check existence before copying
-    expect(stackSh).toContain('[ -e "$src" ]');
-    // Should suppress errors from cp
-    expect(stackSh).toMatch(/cp -r.*\|\| true/);
+  it('skips injection silently if verify.sh does not exist', () => {
+    // Uses -f check before copying
+    expect(stackSh).toContain('[ -f "$PROJECT_ROOT/.sandstorm/verify.sh" ]');
   });
 
   it('creates .sandstorm directory in workspace before copying', () => {
     expect(stackSh).toContain('mkdir -p "$WORKSPACE/.sandstorm"');
   });
 
-  it('copies from $PROJECT_ROOT/.sandstorm/ as source', () => {
-    expect(stackSh).toContain('$PROJECT_ROOT/.sandstorm/');
-  });
-
   it('only injects on initial clone (inside the "if no .git" block)', () => {
-    // The injection must be inside the workspace clone block
-    // Verify the structure: injection code appears between clone_workspace call and port remapping
     const cloneBlock = stackSh.match(
       /if \[ ! -d "\$WORKSPACE\/\.git" \]([\s\S]*?)fi\s*\n\s*#\s*Make workspace world-readable/
     );
     expect(cloneBlock).not.toBeNull();
-    expect(cloneBlock![1]).toContain('SANDSTORM_INJECT_ITEMS');
+    expect(cloneBlock![1]).toContain('verify.sh');
   });
 });
