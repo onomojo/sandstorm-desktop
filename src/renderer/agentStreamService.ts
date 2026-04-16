@@ -11,7 +11,7 @@
  * accumulated state immediately on remount regardless of when the events arrived.
  */
 
-import { useAppStore } from './store';
+import { useAppStore, OuterClaudeSessionTokens } from './store';
 
 const registeredTabs = new Set<string>();
 
@@ -63,6 +63,10 @@ export function registerAgentStreamListeners(tabId: string): void {
         { role: 'assistant', content: errorMsg.trim() },
       ],
     });
+  });
+
+  window.sandstorm.on(`agent:token-usage:${tabId}`, (tokens: unknown) => {
+    useAppStore.getState().setOuterClaudeTokens(tabId, tokens as OuterClaudeSessionTokens);
   });
 
   window.sandstorm.on(`agent:user-message:${tabId}`, (message: unknown) => {

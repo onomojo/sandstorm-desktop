@@ -123,14 +123,15 @@ async function initializeApp(): Promise<void> {
     dockerConnectionManager = (dockerRuntime as DockerRuntime).getConnectionManager();
   }
 
-  // Initialize agent backend (currently Claude — swappable in future)
+  // Initialize agent backend (currently Claude — swappable in future).
+  // Orchestrator token usage is tracked per-session (per-tab) inside the
+  // backend; the renderer reads it via `agent:tokenUsage` / listens to
+  // `agent:token-usage:<tabId>` events. No DB persistence — "New Session"
+  // resets the counter by design.
   agentBackend = new ClaudeBackend(
     undefined,
     (projectDir) => registry.getEffectiveModels(projectDir).outer_model
   );
-  agentBackend.setTokenUsageCallback?.((projectDir: string, inputTokens: number, outputTokens: number) => {
-    registry.addProjectTokenUsage(projectDir, inputTokens, outputTokens);
-  });
   await agentBackend.initialize();
 
   // Initialize session monitor with persisted settings
