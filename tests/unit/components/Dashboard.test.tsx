@@ -344,35 +344,74 @@ describe('Dashboard', () => {
     expect(document.body.style.userSelect).toBe('');
   });
 
-  it('shows outer Claude token usage when project is selected', async () => {
-    api.stats.outerClaudeTokens.mockResolvedValue([
-      { project_dir: '/a', input_tokens: 10000, output_tokens: 5000 },
-    ]);
-    api.projects.checkInit.mockResolvedValue({ state: 'full' });
+  describe('New Stack block at >=250K orchestrator tokens (issue #238)', () => {
+    it('opens the New Stack dialog normally when under 250K', () => {
+      useAppStore.setState({
+        outerClaudeTokens: {
+          all: { input_tokens: 100_000, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        },
+      });
 
-    useAppStore.setState({
-      projects: [{ id: 1, name: 'proj-a', directory: '/a', added_at: '' }],
-      activeProjectId: 1,
-      stacks: [],
+      render(<Dashboard />);
+      fireEvent.click(screen.getByTestId('new-stack-btn'));
+
+      expect(useAppStore.getState().showNewStackDialog).toBe(true);
+      expect(screen.queryByTestId('orchestrator-over-limit-modal')).toBeNull();
     });
 
-    render(<Dashboard />);
-    // Wait for async fetch
-    const el = await screen.findByTestId('outer-claude-tokens');
-    expect(el).toBeDefined();
-    expect(el.textContent).toContain('Orchestrator');
-    expect(el.textContent).toContain('15.0k');
-  });
+    it('blocks the New Stack dialog and shows the over-limit modal at exactly 250K', () => {
+      useAppStore.setState({
+        outerClaudeTokens: {
+          all: { input_tokens: 250_000, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        },
+      });
 
-  it('does not show outer Claude tokens when no project selected', () => {
-    useAppStore.setState({
-      projects: [],
-      activeProjectId: null,
-      stacks: [],
+      render(<Dashboard />);
+      fireEvent.click(screen.getByTestId('new-stack-btn'));
+
+      expect(useAppStore.getState().showNewStackDialog).toBe(false);
+      expect(screen.getByTestId('orchestrator-over-limit-modal')).toBeDefined();
     });
 
-    render(<Dashboard />);
-    expect(screen.queryByTestId('outer-claude-tokens')).toBeNull();
+    it('keeps block in place after dismissing the modal (dismiss does NOT unblock)', () => {
+      useAppStore.setState({
+        outerClaudeTokens: {
+          all: { input_tokens: 300_000, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        },
+      });
+
+      render(<Dashboard />);
+      fireEvent.click(screen.getByTestId('new-stack-btn'));
+      expect(screen.getByTestId('orchestrator-over-limit-modal')).toBeDefined();
+
+      fireEvent.click(screen.getByTestId('orchestrator-over-limit-dismiss'));
+      expect(screen.queryByTestId('orchestrator-over-limit-modal')).toBeNull();
+      // Stack dialog is still blocked after dismiss
+      expect(useAppStore.getState().showNewStackDialog).toBe(false);
+
+      // And trying again still blocks
+      fireEvent.click(screen.getByTestId('new-stack-btn'));
+      expect(screen.getByTestId('orchestrator-over-limit-modal')).toBeDefined();
+      expect(useAppStore.getState().showNewStackDialog).toBe(false);
+    });
+
+    it('reads tokens for the active project tab (not the "all" tab) when a project is selected', () => {
+      api.projects.checkInit.mockResolvedValue({ state: 'full' });
+      useAppStore.setState({
+        projects: [{ id: 7, name: 'proj', directory: '/p', added_at: '' }],
+        activeProjectId: 7,
+        outerClaudeTokens: {
+          'project-7': { input_tokens: 250_000, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+          // "all" tab is well under the limit — it must NOT leak into a project view.
+          all: { input_tokens: 0, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 },
+        },
+      });
+
+      render(<Dashboard />);
+      fireEvent.click(screen.getByTestId('new-stack-btn'));
+      expect(screen.getByTestId('orchestrator-over-limit-modal')).toBeDefined();
+      expect(useAppStore.getState().showNewStackDialog).toBe(false);
+    });
   });
 
   it('filters stacks by active project', () => {

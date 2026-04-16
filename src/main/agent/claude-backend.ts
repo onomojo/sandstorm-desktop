@@ -19,13 +19,12 @@ import {
   ChatMessage,
   AuthStatus,
   AgentSessionHistory,
+  OuterClaudeSessionTokens,
   StackInfo,
+  zeroSessionTokens,
 } from './types';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — must be longer than MCP tool chain (300s ephemeral + 310s bridge)
-
-/** Callback for reporting outer Claude token usage per project */
-export type TokenUsageCallback = (projectDir: string, inputTokens: number, outputTokens: number) => void;
 
 interface ClaudeSession {
   tabId: string;
@@ -66,6 +65,13 @@ export class ClaudeBackend implements AgentBackend {
   readonly name = 'Claude';
 
   private sessions = new Map<string, ClaudeSession>();
+  /**
+   * Per-tab token totals for the CURRENT orchestrator session.
+   * Resets to zero whenever `resetSession(tabId)` is called ("New Session").
+   * This is the single source of truth for the orchestrator token counter in
+   * the UI — never a cumulative aggregate across sessions.
+   */
+  private sessionTokens = new Map<string, OuterClaudeSessionTokens>();
   private bridgeServer: Server | null = null;
   private bridgePort = 0;
   private bridgeToken: string;
@@ -74,7 +80,6 @@ export class ClaudeBackend implements AgentBackend {
   private logStream: fs.WriteStream | null = null;
   private timeoutMs: number;
   private modelResolver?: (projectDir: string) => string;
-  private tokenUsageCallback?: TokenUsageCallback;
 
   constructor(
     timeoutMs?: number,
@@ -86,9 +91,14 @@ export class ClaudeBackend implements AgentBackend {
     this.initLogger();
   }
 
-  /** Register a callback to receive outer Claude token usage reports per project */
-  setTokenUsageCallback(callback: TokenUsageCallback): void {
-    this.tokenUsageCallback = callback;
+  getSessionTokens(tabId: string): OuterClaudeSessionTokens {
+    return this.sessionTokens.get(tabId) ?? zeroSessionTokens();
+  }
+
+  /** Push the current session token totals to the renderer for the given tab. */
+  private emitSessionTokens(tabId: string): void {
+    const tokens = this.getSessionTokens(tabId);
+    this.mainWindow?.webContents.send(`agent:token-usage:${tabId}`, tokens);
   }
 
   private initLogger(): void {
@@ -377,6 +387,11 @@ rl.on('line', async (line) => {
       }
     }
     this.sessions.delete(tabId);
+
+    // Reset token counter to zero for the new session — and push the zero
+    // value to the renderer immediately so the UI updates without a poll.
+    this.sessionTokens.delete(tabId);
+    this.emitSessionTokens(tabId);
   }
 
   // --- Ephemeral agent (one-shot Claude process) ---
@@ -737,13 +752,30 @@ rl.on('line', async (line) => {
               continue;
             }
 
-            // Report token usage for this turn
-            if (parsed.usage && session.projectDir && this.tokenUsageCallback) {
-              const inTokens = parsed.usage.input_tokens ?? 0;
-              const outTokens = parsed.usage.output_tokens ?? 0;
-              if (inTokens > 0 || outTokens > 0) {
-                this.tokenUsageCallback(session.projectDir, inTokens, outTokens);
-              }
+            // Accumulate token usage for this turn into the current
+            // orchestrator session's running totals. Include cache
+            // creation/read tokens so the counter reflects honest usage.
+            const usage = parsed.usage as
+              | {
+                  input_tokens?: number;
+                  output_tokens?: number;
+                  cache_creation_input_tokens?: number;
+                  cache_read_input_tokens?: number;
+                }
+              | undefined;
+            if (usage) {
+              const prev = this.sessionTokens.get(tabId) ?? zeroSessionTokens();
+              // Copy-on-write: avoid mutating the previously-emitted object so
+              // downstream consumers always see a fresh reference.
+              this.sessionTokens.set(tabId, {
+                input_tokens: prev.input_tokens + (usage.input_tokens ?? 0),
+                output_tokens: prev.output_tokens + (usage.output_tokens ?? 0),
+                cache_creation_input_tokens:
+                  prev.cache_creation_input_tokens + (usage.cache_creation_input_tokens ?? 0),
+                cache_read_input_tokens:
+                  prev.cache_read_input_tokens + (usage.cache_read_input_tokens ?? 0),
+              });
+              this.emitSessionTokens(tabId);
             }
 
             if (session.fullResponse) {

@@ -821,3 +821,180 @@ describe('ClaudeBackend.runEphemeralAgent — promise settlement', () => {
     backendUnderTest.destroy();
   });
 });
+
+describe('Outer-Claude session token accumulation (agent:token-usage IPC)', () => {
+  let backend: AgentBackend;
+  let mockWindow: { webContents: { send: ReturnType<typeof vi.fn> } };
+  let sentMessages: Array<{ channel: string; args: unknown[] }>;
+
+  beforeEach(async () => {
+    spawnedProcesses.length = 0;
+    sentMessages = [];
+    mockWindow = {
+      webContents: {
+        send: vi.fn((...args: unknown[]) => {
+          sentMessages.push({ channel: args[0] as string, args: args.slice(1) });
+        }),
+      },
+    };
+    backend = new ClaudeBackend(60_000);
+    backend.setMainWindow(mockWindow as never);
+    await backend.initialize();
+  });
+
+  afterEach(() => {
+    backend.destroy();
+    vi.clearAllMocks();
+  });
+
+  function findMessages(channelPattern: string): Array<{ channel: string; args: unknown[] }> {
+    return sentMessages.filter((m) => m.channel.includes(channelPattern));
+  }
+
+  /** Emit a result event with an optional usage payload. */
+  function emitResultWithUsage(
+    proc: MockChildProcess,
+    usage?: {
+      input_tokens?: number;
+      output_tokens?: number;
+      cache_creation_input_tokens?: number;
+      cache_read_input_tokens?: number;
+    }
+  ): void {
+    const event: Record<string, unknown> = { type: 'result', result: 'ok', total_cost_usd: 0.01 };
+    if (usage) event.usage = usage;
+    proc.stdout.emit('data', Buffer.from(JSON.stringify(event) + '\n'));
+  }
+
+  function emitInit(proc: MockChildProcess): void {
+    const initEvent = JSON.stringify({ type: 'system', subtype: 'init', session_id: 'test-session' });
+    proc.stdout.emit('data', Buffer.from(initEvent + '\n'));
+  }
+
+  it('emits accumulated token usage on agent:token-usage:<tabId> across multiple result events', () => {
+    backend.sendMessage('tab1', 'first', '/tmp');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    emitInit(proc);
+
+    // Turn 1
+    emitResultWithUsage(proc, {
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_creation_input_tokens: 10,
+      cache_read_input_tokens: 5,
+    });
+
+    // Turn 2
+    backend.sendMessage('tab1', 'second', '/tmp');
+    emitResultWithUsage(proc, {
+      input_tokens: 200,
+      output_tokens: 75,
+      cache_creation_input_tokens: 20,
+      cache_read_input_tokens: 15,
+    });
+
+    const usageMessages = findMessages('agent:token-usage:tab1');
+    expect(usageMessages.length).toBe(2);
+
+    // First emission: just turn 1's totals
+    expect(usageMessages[0].args[0]).toEqual({
+      input_tokens: 100,
+      output_tokens: 50,
+      cache_creation_input_tokens: 10,
+      cache_read_input_tokens: 5,
+    });
+
+    // Second emission: accumulated across both turns
+    expect(usageMessages[1].args[0]).toEqual({
+      input_tokens: 300,
+      output_tokens: 125,
+      cache_creation_input_tokens: 30,
+      cache_read_input_tokens: 20,
+    });
+  });
+
+  it('resetSession emits a zero-token payload on agent:token-usage:<tabId>', () => {
+    backend.sendMessage('tab1', 'hello', '/tmp');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    emitInit(proc);
+
+    // Seed non-zero session tokens
+    emitResultWithUsage(proc, {
+      input_tokens: 1234,
+      output_tokens: 567,
+      cache_creation_input_tokens: 89,
+      cache_read_input_tokens: 42,
+    });
+
+    const beforeReset = findMessages('agent:token-usage:tab1');
+    expect(beforeReset.length).toBe(1);
+    expect(beforeReset[0].args[0]).toEqual({
+      input_tokens: 1234,
+      output_tokens: 567,
+      cache_creation_input_tokens: 89,
+      cache_read_input_tokens: 42,
+    });
+
+    backend.resetSession('tab1');
+
+    const afterReset = findMessages('agent:token-usage:tab1');
+    expect(afterReset.length).toBe(2);
+    // Last emission must be zeros — this is what the renderer relies on
+    // to clear the counter when the user clicks "New Session".
+    expect(afterReset[afterReset.length - 1].args[0]).toEqual({
+      input_tokens: 0,
+      output_tokens: 0,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+    });
+  });
+
+  it('passes through cache_creation_input_tokens and cache_read_input_tokens fields', () => {
+    backend.sendMessage('tab1', 'cache-heavy', '/tmp');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    emitInit(proc);
+
+    // Cache fields are the newly-wired layer — verify each is summed
+    // independently. Use distinct values so a regression that drops
+    // one field (or aliases two together) is caught.
+    emitResultWithUsage(proc, {
+      input_tokens: 1,
+      output_tokens: 2,
+      cache_creation_input_tokens: 4444,
+      cache_read_input_tokens: 8888,
+    });
+
+    const usageMessages = findMessages('agent:token-usage:tab1');
+    expect(usageMessages.length).toBe(1);
+    const payload = usageMessages[0].args[0] as {
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens: number;
+      cache_read_input_tokens: number;
+    };
+    expect(payload.cache_creation_input_tokens).toBe(4444);
+    expect(payload.cache_read_input_tokens).toBe(8888);
+    expect(payload.input_tokens).toBe(1);
+    expect(payload.output_tokens).toBe(2);
+  });
+
+  it('isolates token totals per tabId — emissions on one tab do not leak into another', () => {
+    backend.sendMessage('tabA', 'hello', '/tmp');
+    const procA = spawnedProcesses[spawnedProcesses.length - 1];
+    emitInit(procA);
+
+    backend.sendMessage('tabB', 'hello', '/tmp');
+    const procB = spawnedProcesses[spawnedProcesses.length - 1];
+    emitInit(procB);
+
+    emitResultWithUsage(procA, { input_tokens: 100, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+    emitResultWithUsage(procB, { input_tokens: 999, output_tokens: 0, cache_creation_input_tokens: 0, cache_read_input_tokens: 0 });
+
+    const aMessages = findMessages('agent:token-usage:tabA');
+    const bMessages = findMessages('agent:token-usage:tabB');
+    expect(aMessages.length).toBe(1);
+    expect(bMessages.length).toBe(1);
+    expect((aMessages[0].args[0] as { input_tokens: number }).input_tokens).toBe(100);
+    expect((bMessages[0].args[0] as { input_tokens: number }).input_tokens).toBe(999);
+  });
+});

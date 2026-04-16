@@ -23,6 +23,28 @@ export interface AgentSessionHistory {
   processing: boolean;
 }
 
+/**
+ * Token usage totals for the current orchestrator session.
+ * Reset to zero when the session is reset (e.g. via "New Session").
+ * Cache reads/writes are included honestly — they can be non-zero on turn 1
+ * if prompt caching hits an existing cached prefix.
+ */
+export interface OuterClaudeSessionTokens {
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
+
+export function zeroSessionTokens(): OuterClaudeSessionTokens {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  };
+}
+
 export interface StackServiceInfo {
   name: string;
   status: string;
@@ -61,6 +83,9 @@ export interface AgentBackend {
   /** Reset (delete) the session for a tab */
   resetSession(tabId: string): void;
 
+  /** Get the current orchestrator session token totals for a tab */
+  getSessionTokens(tabId: string): OuterClaudeSessionTokens;
+
   // --- Ephemeral agents ---
 
   /** Spawn a one-shot agent process that evaluates a prompt and returns the text result */
@@ -77,6 +102,4 @@ export interface AgentBackend {
   /** Sync credentials to running stack containers */
   syncCredentials(stacks: StackInfo[]): Promise<void>;
 
-  /** Register a callback to receive token usage reports per project (optional) */
-  setTokenUsageCallback?(callback: (projectDir: string, inputTokens: number, outputTokens: number) => void): void;
 }

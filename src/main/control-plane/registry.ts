@@ -121,14 +121,6 @@ export interface TaskTokenStep {
   output_tokens: number;
 }
 
-export interface ProjectTokenUsageRecord {
-  id: number;
-  project_dir: string;
-  input_tokens: number;
-  output_tokens: number;
-  updated_at: string;
-}
-
 export interface TokenValidationResult {
   valid: boolean;
   stepTotal: { input: number; output: number };
@@ -413,17 +405,6 @@ export class Registry {
       `);
       this.db.exec(`
         CREATE INDEX IF NOT EXISTS idx_task_token_steps_task_id ON task_token_steps(task_id);
-      `);
-
-      // Outer Claude token tracking per project
-      this.db.exec(`
-        CREATE TABLE IF NOT EXISTS project_token_usage (
-          id            INTEGER PRIMARY KEY AUTOINCREMENT,
-          project_dir   TEXT NOT NULL UNIQUE,
-          input_tokens  INTEGER NOT NULL DEFAULT 0,
-          output_tokens INTEGER NOT NULL DEFAULT 0,
-          updated_at    TEXT NOT NULL DEFAULT (datetime('now'))
-        );
       `);
 
       this.setSchemaVersion(10);
@@ -826,38 +807,6 @@ export class Registry {
       },
       taskTotal: { input: task.input_tokens, output: task.output_tokens },
     };
-  }
-
-  // --- Project Token Usage (Outer Claude) ---
-
-  getProjectTokenUsage(projectDir: string): ProjectTokenUsageRecord | undefined {
-    const normalizedDir = path.resolve(projectDir);
-    return this.db.prepare(
-      'SELECT * FROM project_token_usage WHERE project_dir = ?'
-    ).get(normalizedDir) as ProjectTokenUsageRecord | undefined;
-  }
-
-  addProjectTokenUsage(projectDir: string, inputTokens: number, outputTokens: number): void {
-    const normalizedDir = path.resolve(projectDir);
-    const existing = this.db.prepare(
-      'SELECT id FROM project_token_usage WHERE project_dir = ?'
-    ).get(normalizedDir) as { id: number } | undefined;
-
-    if (existing) {
-      this.db.prepare(
-        "UPDATE project_token_usage SET input_tokens = input_tokens + ?, output_tokens = output_tokens + ?, updated_at = datetime('now') WHERE project_dir = ?"
-      ).run(inputTokens, outputTokens, normalizedDir);
-    } else {
-      this.db.prepare(
-        'INSERT INTO project_token_usage (project_dir, input_tokens, output_tokens) VALUES (?, ?, ?)'
-      ).run(normalizedDir, inputTokens, outputTokens);
-    }
-  }
-
-  listProjectTokenUsage(): ProjectTokenUsageRecord[] {
-    return this.db.prepare(
-      'SELECT * FROM project_token_usage ORDER BY updated_at DESC'
-    ).all() as ProjectTokenUsageRecord[];
   }
 
   interruptTask(taskId: number): void {

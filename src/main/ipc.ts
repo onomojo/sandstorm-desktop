@@ -169,6 +169,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   ipcMain.handle('agent:history', (_event, tabId: string) => {
     return agentBackend.getHistory(tabId);
   });
+
+  ipcMain.handle('agent:tokenUsage', (_event, tabId: string) => {
+    return agentBackend.getSessionTokens(tabId);
+  });
   // --- Projects ---
 
   ipcMain.handle('projects:list', async () => {
@@ -657,10 +661,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stats:account-usage', async () => {
     return fetchAccountUsage();
-  });
-
-  ipcMain.handle('stats:outer-claude-tokens', async () => {
-    return registry.listProjectTokenUsage();
   });
 
   // --- Custom Context ---

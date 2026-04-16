@@ -127,10 +127,55 @@ export interface WorkflowProgress {
   model: string | null;
 }
 
-export interface OuterClaudeTokenUsage {
-  project_dir: string;
+/**
+ * Token totals for the CURRENT orchestrator session — the single source of
+ * truth for the orchestrator token counter in the UI. Reset to zero when the
+ * user clicks "New Session". Keyed by the renderer's agent tab id.
+ *
+ * Cache creation/read tokens are included honestly — on turn 1 of a new
+ * session, cache_read_input_tokens may be non-zero if the prompt hits a
+ * previously-cached prefix.
+ */
+export interface OuterClaudeSessionTokens {
   input_tokens: number;
   output_tokens: number;
+  cache_creation_input_tokens: number;
+  cache_read_input_tokens: number;
+}
+
+export function zeroOuterClaudeSessionTokens(): OuterClaudeSessionTokens {
+  return {
+    input_tokens: 0,
+    output_tokens: 0,
+    cache_creation_input_tokens: 0,
+    cache_read_input_tokens: 0,
+  };
+}
+
+export function outerClaudeTotal(t: OuterClaudeSessionTokens | null | undefined): number {
+  if (!t) return 0;
+  return (
+    t.input_tokens +
+    t.output_tokens +
+    t.cache_creation_input_tokens +
+    t.cache_read_input_tokens
+  );
+}
+
+/** Color tier for the orchestrator token counter based on session total. */
+export type OuterClaudeTokenTier = 'normal' | 'warning' | 'danger' | 'critical' | 'blocked';
+
+export const OUTER_CLAUDE_WARNING_THRESHOLD = 100_000;
+export const OUTER_CLAUDE_DANGER_THRESHOLD = 150_000;
+export const OUTER_CLAUDE_CRITICAL_THRESHOLD = 200_000;
+export const OUTER_CLAUDE_BLOCK_THRESHOLD = 250_000;
+
+export function outerClaudeTier(total: number): OuterClaudeTokenTier {
+  if (total >= OUTER_CLAUDE_BLOCK_THRESHOLD) return 'blocked';
+  if (total >= OUTER_CLAUDE_CRITICAL_THRESHOLD) return 'critical';
+  if (total >= OUTER_CLAUDE_DANGER_THRESHOLD) return 'danger';
+  if (total >= OUTER_CLAUDE_WARNING_THRESHOLD) return 'warning';
+  return 'normal';
 }
 
 export interface TokenUsageStats {
@@ -303,6 +348,11 @@ interface AppState {
   updateAgentSession: (tabId: string, update: Partial<AgentSessionState>) => void;
   clearAgentSession: (tabId: string) => void;
 
+  // Orchestrator token usage (per-tab, current session only)
+  outerClaudeTokens: Record<string, OuterClaudeSessionTokens>;
+  setOuterClaudeTokens: (tabId: string, tokens: OuterClaudeSessionTokens) => void;
+  clearOuterClaudeTokens: (tabId: string) => void;
+
   // Live workflow progress (per-stack)
   workflowProgress: Record<string, WorkflowProgress>;
   updateWorkflowProgress: (stackId: string, progress: WorkflowProgress) => void;
@@ -457,7 +507,6 @@ declare global {
         globalTokenUsage: () => Promise<GlobalTokenUsage>;
         rateLimit: () => Promise<RateLimitState>;
         accountUsage: () => Promise<UsageSnapshot | null>;
-        outerClaudeTokens: () => Promise<OuterClaudeTokenUsage[]>;
       };
       runtime: {
         available: () => Promise<{ docker: boolean; podman: boolean }>;
@@ -467,6 +516,7 @@ declare global {
         cancel: (tabId: string) => Promise<void>;
         reset: (tabId: string) => Promise<void>;
         history: (tabId: string) => Promise<{ messages: Array<{ role: string; content: string }>; processing: boolean }>;
+        tokenUsage: (tabId: string) => Promise<OuterClaudeSessionTokens>;
       };
       context: {
         get: (projectDir: string) => Promise<{ instructions: string; skills: string[]; settings: string }>;
@@ -591,6 +641,18 @@ export const useAppStore = create<AppState>((set, get) => ({
     set((state) => {
       const { [tabId]: _, ...rest } = state.agentSessions;
       return { agentSessions: rest };
+    }),
+
+  // Orchestrator token usage (per-tab, current session only)
+  outerClaudeTokens: {},
+  setOuterClaudeTokens: (tabId, tokens) =>
+    set((state) => ({
+      outerClaudeTokens: { ...state.outerClaudeTokens, [tabId]: tokens },
+    })),
+  clearOuterClaudeTokens: (tabId) =>
+    set((state) => {
+      const { [tabId]: _, ...rest } = state.outerClaudeTokens;
+      return { outerClaudeTokens: rest };
     }),
 
   // Live workflow progress

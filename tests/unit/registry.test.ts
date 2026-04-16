@@ -1140,43 +1140,4 @@ describe('Registry', () => {
     });
   });
 
-  // ===========================================
-  // Project Token Usage (Outer Claude)
-  // ===========================================
-  describe('project token usage', () => {
-    it('adds token usage for a new project', () => {
-      registry.addProjectTokenUsage('/test/project', 1000, 500);
-      const usage = registry.getProjectTokenUsage('/test/project');
-      expect(usage).toBeDefined();
-      expect(usage!.input_tokens).toBe(1000);
-      expect(usage!.output_tokens).toBe(500);
-    });
-
-    it('accumulates token usage for existing project', () => {
-      registry.addProjectTokenUsage('/test/project', 1000, 500);
-      registry.addProjectTokenUsage('/test/project', 2000, 800);
-      const usage = registry.getProjectTokenUsage('/test/project');
-      expect(usage!.input_tokens).toBe(3000);
-      expect(usage!.output_tokens).toBe(1300);
-    });
-
-    it('returns undefined for unknown project', () => {
-      expect(registry.getProjectTokenUsage('/nonexistent')).toBeUndefined();
-    });
-
-    it('lists all project token usage records', () => {
-      registry.addProjectTokenUsage('/proj1', 1000, 500);
-      registry.addProjectTokenUsage('/proj2', 2000, 800);
-      const list = registry.listProjectTokenUsage();
-      expect(list).toHaveLength(2);
-    });
-
-    it('normalizes project directory paths', () => {
-      registry.addProjectTokenUsage('/test/project', 1000, 500);
-      registry.addProjectTokenUsage('/test/project', 500, 200);
-      const list = registry.listProjectTokenUsage();
-      expect(list).toHaveLength(1);
-      expect(list[0].input_tokens).toBe(1500);
-    });
-  });
 });

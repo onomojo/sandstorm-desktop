@@ -81,7 +81,6 @@ export interface SandstormAPI {
     globalTokenUsage: () => Promise<unknown>;
     rateLimit: () => Promise<unknown>;
     accountUsage: () => Promise<unknown>;
-    outerClaudeTokens: () => Promise<unknown[]>;
   };
   runtime: {
     available: () => Promise<{ docker: boolean; podman: boolean }>;
@@ -91,6 +90,12 @@ export interface SandstormAPI {
     cancel: (tabId: string) => Promise<void>;
     reset: (tabId: string) => Promise<void>;
     history: (tabId: string) => Promise<{ messages: Array<{ role: string; content: string }>; processing: boolean }>;
+    tokenUsage: (tabId: string) => Promise<{
+      input_tokens: number;
+      output_tokens: number;
+      cache_creation_input_tokens: number;
+      cache_read_input_tokens: number;
+    }>;
   };
   context: {
     get: (projectDir: string) => Promise<{ instructions: string; skills: string[]; settings: string }>;
@@ -209,7 +214,6 @@ const api: SandstormAPI = {
     globalTokenUsage: () => ipcRenderer.invoke('stats:global-token-usage'),
     rateLimit: () => ipcRenderer.invoke('stats:rate-limit'),
     accountUsage: () => ipcRenderer.invoke('stats:account-usage'),
-    outerClaudeTokens: () => ipcRenderer.invoke('stats:outer-claude-tokens'),
   },
   runtime: {
     available: () => ipcRenderer.invoke('runtime:available'),
@@ -220,6 +224,7 @@ const api: SandstormAPI = {
     cancel: (tabId) => ipcRenderer.invoke('agent:cancel', tabId),
     reset: (tabId) => ipcRenderer.invoke('agent:reset', tabId),
     history: (tabId) => ipcRenderer.invoke('agent:history', tabId),
+    tokenUsage: (tabId) => ipcRenderer.invoke('agent:tokenUsage', tabId),
   },
   context: {
     get: (projectDir) => ipcRenderer.invoke('context:get', projectDir),

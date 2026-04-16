@@ -1,6 +1,7 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAppStore } from '../store';
 import { registerAgentStreamListeners } from '../agentStreamService';
+import { OuterClaudeTokenCounter } from './OuterClaudeTokenCounter';
 
 interface AgentSessionProps {
   tabId: string;
@@ -10,7 +11,21 @@ interface AgentSessionProps {
 export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
   const updateAgentSession = useAppStore((s) => s.updateAgentSession);
   const clearAgentSession = useAppStore((s) => s.clearAgentSession);
+  const setOuterClaudeTokens = useAppStore((s) => s.setOuterClaudeTokens);
+  const clearOuterClaudeTokens = useAppStore((s) => s.clearOuterClaudeTokens);
   const sessionState = useAppStore((s) => s.agentSessions[tabId]);
+
+  // Sync current orchestrator session tokens on mount so the counter reflects
+  // the authoritative backend total (not a stale renderer snapshot) after tab
+  // switches or app reload. The cancel flag prevents a late-resolving IPC call
+  // from writing stale data if the tab is unmounted or the tabId changes.
+  useEffect(() => {
+    let cancelled = false;
+    window.sandstorm.agent.tokenUsage(tabId).then((tokens) => {
+      if (!cancelled) setOuterClaudeTokens(tabId, tokens);
+    });
+    return () => { cancelled = true; };
+  }, [tabId, setOuterClaudeTokens]);
 
   const messages = sessionState?.messages ?? [];
   const streamingContent = sessionState?.streamingContent ?? '';
@@ -107,6 +122,7 @@ export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
               Cancel
             </button>
           )}
+          <OuterClaudeTokenCounter tabId={tabId} />
           <button
             onClick={async () => {
               if (isLoading) {
@@ -114,6 +130,7 @@ export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
               }
               await window.sandstorm.agent.reset(tabId);
               clearAgentSession(tabId);
+              clearOuterClaudeTokens(tabId);
             }}
             title="Start a new session (clears conversation history to reduce token usage)"
             className="text-[10px] px-2 py-0.5 rounded bg-sandstorm-surface text-sandstorm-muted hover:text-sandstorm-text hover:bg-sandstorm-border transition-colors border border-sandstorm-border"

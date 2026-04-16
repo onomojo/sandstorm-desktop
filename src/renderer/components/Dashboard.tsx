@@ -1,5 +1,12 @@
 import React, { useEffect, useState, useCallback, useRef, useMemo } from 'react';
-import { useAppStore, StackHistoryRecord, GlobalTokenUsage, Task, OuterClaudeTokenUsage } from '../store';
+import {
+  useAppStore,
+  StackHistoryRecord,
+  GlobalTokenUsage,
+  Task,
+  outerClaudeTotal,
+  OUTER_CLAUDE_BLOCK_THRESHOLD,
+} from '../store';
 import { StackCard } from './StackCard';
 import { StackTableRow } from './StackTableRow';
 import { TicketView } from './TicketView';
@@ -10,6 +17,7 @@ import { AgentSession } from './AgentSession';
 import { AuthIndicator } from './AuthIndicator';
 import { ProjectContext } from './ProjectContext';
 import { ModelSettingsModal } from './ModelSettings';
+import { OrchestratorOverLimitModal } from './OrchestratorOverLimitModal';
 import { ResizableTableHeader } from './ResizableTableHeader';
 import { StaleWorkspaces } from './StaleWorkspaces';
 import { useResizableColumns, ColumnDef } from '../hooks/useResizableColumns';
@@ -344,42 +352,26 @@ function TokenUsageSummary({ usage }: { usage: GlobalTokenUsage }) {
   );
 }
 
-function OuterClaudeTokensSummary({ projectDir }: { projectDir: string }) {
-  const [usage, setUsage] = useState<OuterClaudeTokenUsage | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    window.sandstorm.stats.outerClaudeTokens().then((all) => {
-      if (cancelled) return;
-      const match = all.find((u: OuterClaudeTokenUsage) => u.project_dir === projectDir);
-      setUsage(match ?? null);
-    }).catch(() => {});
-    return () => { cancelled = true; };
-  }, [projectDir]);
-
-  if (!usage || (usage.input_tokens === 0 && usage.output_tokens === 0)) return null;
-
-  const total = usage.input_tokens + usage.output_tokens;
-  return (
-    <div className="flex items-center gap-2 text-[11px] text-sandstorm-muted" data-testid="outer-claude-tokens">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="opacity-60">
-        <path d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 002 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0022 16z"/>
-      </svg>
-      <span className="tabular-nums" title={`Orchestrator — Input: ${usage.input_tokens.toLocaleString()} / Output: ${usage.output_tokens.toLocaleString()}`}>
-        Orchestrator: {formatTokenCount(total)}
-      </span>
-      <span className="text-sandstorm-muted/50">
-        ({formatTokenCount(usage.input_tokens)} in / {formatTokenCount(usage.output_tokens)} out)
-      </span>
-    </div>
-  );
-}
-
 export function Dashboard() {
   const { setShowNewStackDialog, setShowModelSettings, showModelSettings, filteredStacks, filteredStackHistory, activeProject, globalTokenUsage } = useAppStore();
   const stacks = filteredStacks();
   const history = filteredStackHistory();
   const project = activeProject();
+
+  // Orchestrator session tokens for the currently visible tab — used to block
+  // "New Stack" when the session exceeds the hard limit (issue #238).
+  const claudeTabId = project ? `project-${project.id}` : 'all';
+  const orchestratorTokens = useAppStore((s) => s.outerClaudeTokens[claudeTabId]);
+  const orchestratorTotal = outerClaudeTotal(orchestratorTokens);
+  const [showOverLimitModal, setShowOverLimitModal] = useState(false);
+
+  const handleNewStackClick = useCallback(() => {
+    if (orchestratorTotal >= OUTER_CLAUDE_BLOCK_THRESHOLD) {
+      setShowOverLimitModal(true);
+      return;
+    }
+    setShowNewStackDialog(true);
+  }, [orchestratorTotal, setShowNewStackDialog]);
 
   const [dashboardTab, setDashboardTab] = useState<DashboardTab>('active');
   const [projectInitState, setProjectInitState] = useState<'uninitialized' | 'partial' | 'full' | null>(null);
@@ -489,9 +481,6 @@ export function Dashboard() {
     };
   }, []);
 
-  // Derive a stable tab ID for the Claude session
-  const claudeTabId = project ? `project-${project.id}` : 'all';
-
   // If we have a selected project that isn't initialized, show that state
   if (project && projectInitState === 'uninitialized') {
     return (
@@ -555,7 +544,7 @@ export function Dashboard() {
             </button>
           )}
           <button
-            onClick={() => setShowNewStackDialog(true)}
+            onClick={handleNewStackClick}
             className="flex items-center gap-1.5 px-4 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white rounded-lg transition-all text-sm font-medium shadow-glow hover:shadow-lg active:scale-[0.98]"
             data-testid="new-stack-btn"
           >
@@ -634,7 +623,6 @@ export function Dashboard() {
               </span>
             )}
             {globalTokenUsage && <TokenUsageSummary usage={globalTokenUsage} />}
-            {project && <OuterClaudeTokensSummary projectDir={project.directory} />}
             {dashboardTab === 'active' && (
               <div className="ml-auto flex items-center gap-2">
                 {/* Stack View / Ticket View toggle */}
@@ -830,6 +818,11 @@ export function Dashboard() {
           }}
           onDismiss={() => setShowComposeSetup(false)}
         />
+      )}
+
+      {/* Orchestrator over-limit modal — blocks new stack creation at >=250K */}
+      {showOverLimitModal && (
+        <OrchestratorOverLimitModal onDismiss={() => setShowOverLimitModal(false)} />
       )}
     </div>
   );
