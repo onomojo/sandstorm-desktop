@@ -257,7 +257,7 @@ export function generateComposeYaml(analysis: ComposeAnalysis): string {
   lines.push('      - ${SANDSTORM_CONTEXT}:/sandstorm-context:ro');
   lines.push('      - /var/run/docker.sock:/var/run/docker.sock');
   lines.push('    healthcheck:');
-  lines.push('      test: ["CMD", "test", "-f", "/app/.sandstorm-ready"]');
+  lines.push('      test: ["CMD", "test", "-f", "/tmp/.sandstorm-ready"]');
   lines.push('      interval: 3s');
   lines.push('      timeout: 2s');
   lines.push('      retries: 60');

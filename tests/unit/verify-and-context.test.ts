@@ -96,6 +96,16 @@ describe('entrypoint.sh service label injection', () => {
   it('filters out the claude container from service list', () => {
     expect(entrypoint).toContain('grep -v -- "-claude-"');
   });
+
+  it('writes MCP config to /tmp/sandstorm-mcp.json, not /app/.mcp.json', () => {
+    expect(entrypoint).toContain('/tmp/sandstorm-mcp.json');
+    expect(entrypoint).not.toContain('/app/.mcp.json');
+  });
+
+  it('writes .sandstorm-ready sentinel to /tmp/, not /app/', () => {
+    expect(entrypoint).toContain('touch /tmp/.sandstorm-ready');
+    expect(entrypoint).not.toContain('touch /app/.sandstorm-ready');
+  });
 });
 
 describe('Dockerfile includes sandstorm-exec', () => {
