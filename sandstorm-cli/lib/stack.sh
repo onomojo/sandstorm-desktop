@@ -270,6 +270,12 @@ case "$COMMAND" in
       for f in "$PROJECT_ROOT"/.env*; do
         [ -f "$f" ] && cp "$f" "$WORKSPACE/" 2>/dev/null
       done
+      # Inject verify.sh from host .sandstorm/ into the workspace clone so the
+      # verify step has the script available inside the container at /app/.sandstorm/.
+      if [ -f "$PROJECT_ROOT/.sandstorm/verify.sh" ]; then
+        mkdir -p "$WORKSPACE/.sandstorm"
+        cp "$PROJECT_ROOT/.sandstorm/verify.sh" "$WORKSPACE/.sandstorm/verify.sh" 2>/dev/null || true
+      fi
       # Remap ports in env files to match sandstorm stack offsets
       if [ -n "${PORT_MAP:-}" ]; then
         IFS=',' read -ra ENTRIES <<< "$PORT_MAP"
