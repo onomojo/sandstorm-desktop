@@ -48,6 +48,9 @@ export function mockSandstormApi() {
     },
     ports: {
       get: vi.fn().mockResolvedValue([]),
+      expose: vi.fn().mockResolvedValue(12345),
+      unexpose: vi.fn().mockResolvedValue(undefined),
+      cleanupLegacy: vi.fn().mockResolvedValue({ success: true }),
     },
     logs: {
       stream: vi.fn().mockResolvedValue(''),

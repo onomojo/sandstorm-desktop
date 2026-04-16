@@ -33,6 +33,8 @@ import {
   generateSandstormCompose,
   saveComposeSetup,
   validateComposeYaml,
+  hasLegacyPortMappings,
+  cleanupLegacyPorts,
 } from './compose-generator';
 import {
   getSpecQualityGate,
@@ -373,14 +375,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
       const missingSpecQualityGate = isSpecQualityGateMissing(directory);
       const missingReviewPrompt = isReviewPromptMissing(directory);
+      const legacyPortMappings = hasLegacyPortMappings(directory);
 
       return {
-        needsMigration: !hasVerifyScript || !hasServiceLabels || missingSpecQualityGate || missingReviewPrompt,
+        needsMigration: !hasVerifyScript || !hasServiceLabels || missingSpecQualityGate || missingReviewPrompt || legacyPortMappings,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
         missingSpecQualityGate,
         missingReviewPrompt,
         networksMigrated,
+        legacyPortMappings,
       };
     } catch {
       return { needsMigration: false };
@@ -591,6 +595,24 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('ports:get', async (_event, stackId: string) => {
     return registry.getPorts(stackId);
+  });
+
+  ipcMain.handle(
+    'stack:expose-port',
+    async (_event, stackId: string, service: string, containerPort: number) => {
+      return stackManager.exposePort(stackId, service, containerPort);
+    }
+  );
+
+  ipcMain.handle(
+    'stack:unexpose-port',
+    async (_event, stackId: string, service: string, containerPort: number) => {
+      await stackManager.unexposePort(stackId, service, containerPort);
+    }
+  );
+
+  ipcMain.handle('ports:cleanupLegacy', async (_event, directory: string) => {
+    return cleanupLegacyPorts(directory);
   });
 
   // --- Logs ---

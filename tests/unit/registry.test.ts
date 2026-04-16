@@ -501,6 +501,49 @@ describe('Registry', () => {
     it('releasing ports for non-existent stack is a no-op', () => {
       expect(() => registry.releasePorts('ghost')).not.toThrow();
     });
+
+    it('setPort inserts a single port', () => {
+      registry.setPort('port-stack', 'app', 10010, 3000);
+      const ports = registry.getPorts('port-stack');
+      expect(ports).toHaveLength(1);
+      expect(ports[0].service).toBe('app');
+      expect(ports[0].host_port).toBe(10010);
+      expect(ports[0].container_port).toBe(3000);
+    });
+
+    it('getPortByService retrieves a specific port', () => {
+      registry.setPort('port-stack', 'app', 10010, 3000);
+      const port = registry.getPortByService('port-stack', 'app', 3000);
+      expect(port).toBeDefined();
+      expect(port!.host_port).toBe(10010);
+    });
+
+    it('getPortByService returns undefined for nonexistent port', () => {
+      expect(registry.getPortByService('port-stack', 'app', 3000)).toBeUndefined();
+    });
+
+    it('setProxyContainerId updates the proxy container id', () => {
+      registry.setPort('port-stack', 'app', 10010, 3000);
+      registry.setProxyContainerId('port-stack', 'app', 3000, 'proxy-123');
+      const port = registry.getPortByService('port-stack', 'app', 3000);
+      expect(port!.proxy_container_id).toBe('proxy-123');
+    });
+
+    it('releasePort removes a single port entry', () => {
+      registry.setPort('port-stack', 'app', 10010, 3000);
+      registry.setPort('port-stack', 'db', 10011, 5432);
+      registry.releasePort('port-stack', 'app', 3000);
+      const ports = registry.getPorts('port-stack');
+      expect(ports).toHaveLength(1);
+      expect(ports[0].service).toBe('db');
+    });
+
+    it('supports multiple container ports for same service', () => {
+      registry.setPort('port-stack', 'app', 10010, 3000);
+      registry.setPort('port-stack', 'app', 10011, 8080);
+      const ports = registry.getPorts('port-stack');
+      expect(ports).toHaveLength(2);
+    });
   });
 
   // ===========================================

@@ -134,4 +134,25 @@ describe('PortAllocator', () => {
     // but it should successfully allocate
     expect(ports2.size).toBe(1);
   });
+
+  it('allocateOne allocates a single port on demand', async () => {
+    const port = await allocator.allocateOne('alloc-test-1', 'app', 3000);
+
+    expect(port).toBeGreaterThanOrEqual(30000);
+    expect(port).toBeLessThanOrEqual(30099);
+
+    const storedPorts = registry.getPorts('alloc-test-1');
+    expect(storedPorts).toHaveLength(1);
+    expect(storedPorts[0].service).toBe('app');
+    expect(storedPorts[0].container_port).toBe(3000);
+    expect(storedPorts[0].host_port).toBe(port);
+  });
+
+  it('allocateOne does not conflict with already allocated ports', async () => {
+    const port1 = await allocator.allocateOne('alloc-test-1', 'app', 3000);
+    const port2 = await allocator.allocateOne('alloc-test-1', 'db', 5432);
+
+    expect(port1).not.toBe(port2);
+    expect(registry.getPorts('alloc-test-1')).toHaveLength(2);
+  });
 });

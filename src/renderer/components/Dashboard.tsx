@@ -389,6 +389,7 @@ export function Dashboard() {
     missingServiceLabels: boolean;
     missingSpecQualityGate: boolean;
     missingReviewPrompt: boolean;
+    legacyPortMappings: boolean;
   } | null>(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
   const [showComposeSetup, setShowComposeSetup] = useState(false);
@@ -441,6 +442,7 @@ export function Dashboard() {
               missingServiceLabels: migration.missingServiceLabels ?? false,
               missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
               missingReviewPrompt: migration.missingReviewPrompt ?? false,
+              legacyPortMappings: migration.legacyPortMappings ?? false,
             } : null);
             if (migration.needsMigration) {
               setShowMigrationModal(true);
@@ -795,6 +797,7 @@ export function Dashboard() {
           missingServiceLabels={migrationState.missingServiceLabels}
           missingSpecQualityGate={migrationState.missingSpecQualityGate}
           missingReviewPrompt={migrationState.missingReviewPrompt}
+          legacyPortMappings={migrationState.legacyPortMappings}
           onComplete={() => {
             setShowMigrationModal(false);
             setMigrationState(null);
@@ -818,6 +821,8 @@ export function Dashboard() {
                   missingVerifyScript: migration.missingVerifyScript ?? false,
                   missingServiceLabels: migration.missingServiceLabels ?? false,
                   missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
+                  missingReviewPrompt: migration.missingReviewPrompt ?? false,
+                  legacyPortMappings: migration.legacyPortMappings ?? false,
                 });
                 setShowMigrationModal(true);
               }

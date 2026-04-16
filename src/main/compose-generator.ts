@@ -205,11 +205,11 @@ export function buildPortMap(services: ServiceAnalysis[]): string {
  */
 export function generateComposeYaml(analysis: ComposeAnalysis): string {
   const lines: string[] = [
-    '# Sandstorm stack override — adds Claude workspace + remaps ports.',
+    '# Sandstorm stack override — adds Claude workspace, disables static port mapping.',
     '#',
     '# All project services run untouched from the project\'s docker-compose.yml.',
     '# Bind mounts resolve to the workspace clone (not the host project).',
-    '# Port mappings are offset by stack ID to avoid conflicts.',
+    '# Ports are exposed on-demand via proxy containers (no static host mapping).',
     '#',
     '# Image names are pinned to sandstorm-<project>-<service> so all stacks',
     '# share the same images. Rebuild once, all stacks inherit the update.',
@@ -227,12 +227,10 @@ export function generateComposeYaml(analysis: ComposeAnalysis): string {
       lines.push(`    image: sandstorm-${analysis.projectName}-${svc.name}`);
     }
 
-    // Remap ports using environment variables
+    // Ports are exposed on-demand via proxy containers — no static port mapping.
+    // If the original service has ports, override with empty to prevent host binding.
     if (svc.ports.length > 0) {
-      lines.push('    ports: !override');
-      svc.ports.forEach((port, idx) => {
-        lines.push(`      - "\${SANDSTORM_PORT_${svc.name}_${idx}}:${port.container}"`);
-      });
+      lines.push('    ports: !override []');
     }
 
     // Service description label
@@ -297,12 +295,8 @@ export function generateConfig(analysis: ComposeAnalysis): string {
     `COMPOSE_FILE=${analysis.composeFile}`,
     '',
     '# Port mappings — service:host_port:container_port:index (comma-separated)',
-    '# Host ports are remapped by adding (stack_id * PORT_OFFSET) at runtime',
+    '# Lists known internal ports per service. Ports are exposed on-demand via proxy containers.',
     `PORT_MAP=${portMap}`,
-    '',
-    '# Port offset multiplier per stack (default: 10)',
-    '# Stack 1 gets +10, stack 2 gets +20, etc.',
-    'PORT_OFFSET=10',
     '',
     '# Optional: ticket prefix for branch safety checks (e.g., PROJ)',
     '# TICKET_PREFIX=',
@@ -417,4 +411,36 @@ export function validateComposeYaml(yaml: string): { valid: boolean; error?: str
   }
 
   return { valid: true };
+}
+
+/**
+ * Detect whether a sandstorm compose file has legacy static port mappings.
+ * Legacy files have `ports: !override` sections with SANDSTORM_PORT_* variables.
+ */
+export function hasLegacyPortMappings(projectDir: string): boolean {
+  const composePath = path.join(projectDir, '.sandstorm', 'docker-compose.yml');
+  if (!fs.existsSync(composePath)) return false;
+
+  const content = fs.readFileSync(composePath, 'utf-8');
+  return /ports:\s*!override\s*\n\s+-\s+"\$\{SANDSTORM_PORT_/m.test(content);
+}
+
+/**
+ * Clean up legacy port mappings by regenerating the compose file.
+ */
+export function cleanupLegacyPorts(projectDir: string): { success: boolean; error?: string } {
+  try {
+    const configComposeFile = readComposeFileFromConfig(projectDir);
+    const composeFile = findProjectComposeFile(projectDir, configComposeFile);
+    if (!composeFile) {
+      return { success: false, error: 'No project compose file found' };
+    }
+
+    const analysis = parseProjectCompose(projectDir, composeFile);
+    const yaml = generateComposeYaml(analysis);
+    return saveComposeSetup(projectDir, yaml, false);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { success: false, error: msg };
+  }
 }

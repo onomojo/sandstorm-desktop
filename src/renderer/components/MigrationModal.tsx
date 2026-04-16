@@ -6,6 +6,7 @@ interface MigrationModalProps {
   missingServiceLabels: boolean;
   missingSpecQualityGate?: boolean;
   missingReviewPrompt?: boolean;
+  legacyPortMappings?: boolean;
   onComplete: () => void;
   onDismiss: () => void;
 }
@@ -16,6 +17,7 @@ export function MigrationModal({
   missingServiceLabels,
   missingSpecQualityGate,
   missingReviewPrompt,
+  legacyPortMappings,
   onComplete,
   onDismiss,
 }: MigrationModalProps) {
@@ -69,6 +71,14 @@ export function MigrationModal({
       if (missingReviewPrompt && reviewPrompt) {
         await window.sandstorm.reviewPrompt.save(projectDir, reviewPrompt);
       }
+      // Clean up legacy port mappings
+      if (legacyPortMappings) {
+        const portResult = await window.sandstorm.ports.cleanupLegacy(projectDir);
+        if (!portResult.success) {
+          setError(portResult.error || 'Failed to clean up legacy port mappings');
+          return;
+        }
+      }
       onComplete();
     } catch (err) {
       setError(String(err));
@@ -94,6 +104,7 @@ export function MigrationModal({
               missingServiceLabels && 'service descriptions',
               missingSpecQualityGate && 'a spec quality gate',
               missingReviewPrompt && 'a review prompt',
+              legacyPortMappings && 'legacy port mapping cleanup',
             ].filter(Boolean).join(', ')
             .replace(/, ([^,]*)$/, ' and $1')}{' '}
             to work with the stack system.
@@ -172,6 +183,18 @@ export function MigrationModal({
                     spellCheck={false}
                     data-testid="spec-quality-gate-editor"
                   />
+                </div>
+              )}
+
+              {/* Legacy port mappings notice */}
+              {legacyPortMappings && (
+                <div>
+                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-1.5">
+                    Legacy Port Mappings
+                  </label>
+                  <p className="text-[11px] text-sandstorm-muted mb-2">
+                    This project has static port mappings in its sandstorm compose file. Ports are now exposed on demand via proxy containers. Saving will remove the static port mappings.
+                  </p>
                 </div>
               )}
 

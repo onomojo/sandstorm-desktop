@@ -44,6 +44,12 @@ export interface Stack {
   services: ServiceInfo[];
 }
 
+export interface PortExposure {
+  containerPort: number;
+  hostPort?: number;
+  exposed: boolean;
+}
+
 export interface ServiceInfo {
   name: string;
   status: string;
@@ -51,6 +57,7 @@ export interface ServiceInfo {
   hostPort?: number;
   containerPort?: number;
   containerId: string;
+  ports: PortExposure[];
 }
 
 export interface Task {
@@ -383,6 +390,7 @@ declare global {
           missingServiceLabels?: boolean;
           missingSpecQualityGate?: boolean;
           missingReviewPrompt?: boolean;
+          legacyPortMappings?: boolean;
         }>;
         autoDetectVerify: (directory: string) => Promise<{
           verifyScript: string;
@@ -434,6 +442,9 @@ declare global {
       };
       ports: {
         get: (stackId: string) => Promise<PortMapping[]>;
+        expose: (stackId: string, service: string, containerPort: number) => Promise<number>;
+        unexpose: (stackId: string, service: string, containerPort: number) => Promise<void>;
+        cleanupLegacy: (directory: string) => Promise<{ success: boolean; error?: string }>;
       };
       logs: {
         stream: (containerId: string, runtime: string) => Promise<string>;

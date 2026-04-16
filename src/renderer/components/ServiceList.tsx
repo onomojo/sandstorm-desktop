@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { ServiceInfo, ContainerStatsEntry, useAppStore } from '../store';
 
 function formatBytes(bytes: number): string {
@@ -21,8 +21,47 @@ export function ServiceList({
   stackId?: string;
 }) {
   const stackMetrics = useAppStore((s) => s.stackMetrics);
+  const refreshStacks = useAppStore((s) => s.refreshStacks);
   const containerStats: ContainerStatsEntry[] = stackId ? stackMetrics[stackId]?.containers ?? [] : [];
   const statsMap = new Map(containerStats.map((c) => [c.containerId, c]));
+  const [loadingPorts, setLoadingPorts] = useState<Set<string>>(new Set());
+
+  const handleExpose = async (service: string, containerPort: number) => {
+    if (!stackId) return;
+    const key = `${service}:${containerPort}`;
+    setLoadingPorts((prev) => new Set(prev).add(key));
+    try {
+      await window.sandstorm.ports.expose(stackId, service, containerPort);
+      await refreshStacks();
+    } catch (err) {
+      console.error('Failed to expose port:', err);
+    } finally {
+      setLoadingPorts((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
+  const handleUnexpose = async (service: string, containerPort: number) => {
+    if (!stackId) return;
+    const key = `${service}:${containerPort}`;
+    setLoadingPorts((prev) => new Set(prev).add(key));
+    try {
+      await window.sandstorm.ports.unexpose(stackId, service, containerPort);
+      await refreshStacks();
+    } catch (err) {
+      console.error('Failed to unexpose port:', err);
+    } finally {
+      setLoadingPorts((prev) => {
+        const next = new Set(prev);
+        next.delete(key);
+        return next;
+      });
+    }
+  };
+
   if (services.length === 0) {
     return (
       <div className="px-5 py-3 text-xs text-sandstorm-muted border-b border-sandstorm-border">
@@ -76,7 +115,45 @@ export function ServiceList({
                 }
                 return null;
               })()}
-              {svc.hostPort && (
+              {svc.ports && svc.ports.length > 0 && svc.ports.map((port) => {
+                const key = `${svc.name}:${port.containerPort}`;
+                const isLoading = loadingPorts.has(key);
+
+                if (port.exposed && port.hostPort) {
+                  return (
+                    <span key={key} className="flex items-center gap-1">
+                      <button
+                        onClick={() =>
+                          window.open(`http://localhost:${port.hostPort}`, '_blank')
+                        }
+                        className="text-[11px] text-sandstorm-accent hover:text-sandstorm-accent-hover transition-colors font-mono"
+                      >
+                        :{port.hostPort}
+                      </button>
+                      <button
+                        onClick={() => handleUnexpose(svc.name, port.containerPort)}
+                        disabled={isLoading}
+                        className="text-[10px] px-1.5 py-0.5 rounded text-red-400 hover:text-red-300 hover:bg-red-400/10 transition-colors disabled:opacity-50"
+                      >
+                        {isLoading ? '...' : 'Unexpose'}
+                      </button>
+                    </span>
+                  );
+                }
+
+                return (
+                  <button
+                    key={key}
+                    onClick={() => handleExpose(svc.name, port.containerPort)}
+                    disabled={isLoading}
+                    className="text-[10px] px-1.5 py-0.5 rounded font-mono text-sandstorm-muted hover:text-sandstorm-text-secondary hover:bg-sandstorm-surface-hover transition-colors disabled:opacity-50"
+                  >
+                    {isLoading ? '...' : `${port.containerPort} Expose`}
+                  </button>
+                );
+              })}
+              {/* Fallback for legacy stacks that still have hostPort set directly */}
+              {(!svc.ports || svc.ports.length === 0) && svc.hostPort && (
                 <button
                   onClick={() =>
                     window.open(`http://localhost:${svc.hostPort}`, '_blank')

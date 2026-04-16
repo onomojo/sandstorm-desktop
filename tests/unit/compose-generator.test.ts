@@ -13,6 +13,8 @@ import {
   checkInitState,
   saveComposeSetup,
   validateComposeYaml,
+  hasLegacyPortMappings,
+  cleanupLegacyPorts,
 } from '../../src/main/compose-generator';
 
 describe('compose-generator', () => {
@@ -241,17 +243,16 @@ describe('compose-generator', () => {
       // Check header
       expect(yaml).toContain('# Sandstorm stack override');
 
-      // Check app service with image pin and port remap
+      // Check app service with image pin and empty port override (on-demand proxy)
       expect(yaml).toContain('  app:');
       expect(yaml).toContain('    image: sandstorm-test-project-app');
-      expect(yaml).toContain('    ports: !override');
-      expect(yaml).toContain('      - "${SANDSTORM_PORT_app_0}:3000"');
+      expect(yaml).toContain('    ports: !override []');
+      expect(yaml).not.toContain('SANDSTORM_PORT');
       expect(yaml).toContain('      sandstorm.description: "Application service"');
 
       // Check db service (no image pin since not built)
       expect(yaml).toContain('  db:');
       expect(yaml).not.toContain('    image: sandstorm-test-project-db');
-      expect(yaml).toContain('      - "${SANDSTORM_PORT_db_0}:5432"');
       expect(yaml).toContain('      sandstorm.description: "PostgreSQL database"');
 
       // Check claude service
@@ -303,7 +304,7 @@ describe('compose-generator', () => {
       expect(config).toContain('PROJECT_NAME=my-project');
       expect(config).toContain('COMPOSE_FILE=docker-compose.yml');
       expect(config).toContain('PORT_MAP=app:3000:3000:0,db:5432:5432:0');
-      expect(config).toContain('PORT_OFFSET=10');
+      expect(config).not.toContain('PORT_OFFSET');
     });
   });
 
@@ -409,6 +410,73 @@ describe('compose-generator', () => {
       const result = validateComposeYaml('services:\n  app:\n    image: "node\n');
       expect(result.valid).toBe(false);
       expect(result.error).toContain('quotes');
+    });
+  });
+
+  describe('hasLegacyPortMappings', () => {
+    it('returns false when no sandstorm compose exists', () => {
+      expect(hasLegacyPortMappings(tmpDir)).toBe(false);
+    });
+
+    it('returns false when compose has no legacy port mappings', () => {
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sandstormDir, 'docker-compose.yml'),
+        'services:\n  app:\n    ports: !override []\n    labels:\n      sandstorm.description: "App"\n'
+      );
+      expect(hasLegacyPortMappings(tmpDir)).toBe(false);
+    });
+
+    it('returns true when compose has SANDSTORM_PORT_ variables', () => {
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sandstormDir, 'docker-compose.yml'),
+        'services:\n  app:\n    ports: !override\n      - "${SANDSTORM_PORT_app_0}:3000"\n'
+      );
+      expect(hasLegacyPortMappings(tmpDir)).toBe(true);
+    });
+  });
+
+  describe('cleanupLegacyPorts', () => {
+    it('regenerates compose without port mappings', () => {
+      // Set up a project with compose file and config
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, 'docker-compose.yml'),
+        'services:\n  app:\n    image: node\n    ports:\n      - "3000:3000"\n'
+      );
+      fs.writeFileSync(
+        path.join(sandstormDir, 'config'),
+        'PROJECT_NAME=test\nCOMPOSE_FILE=docker-compose.yml\nPORT_MAP=app:3000:3000:0\n'
+      );
+      // Write a legacy compose with SANDSTORM_PORT_ vars
+      fs.writeFileSync(
+        path.join(sandstormDir, 'docker-compose.yml'),
+        'services:\n  app:\n    ports: !override\n      - "${SANDSTORM_PORT_app_0}:3000"\n'
+      );
+
+      const result = cleanupLegacyPorts(tmpDir);
+      expect(result.success).toBe(true);
+
+      // Verify the regenerated compose has no SANDSTORM_PORT_ vars
+      const newCompose = fs.readFileSync(path.join(sandstormDir, 'docker-compose.yml'), 'utf-8');
+      expect(newCompose).not.toContain('SANDSTORM_PORT');
+      expect(newCompose).toContain('ports: !override []');
+    });
+
+    it('returns error when no project compose file exists', () => {
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sandstormDir, 'config'),
+        'PROJECT_NAME=test\nCOMPOSE_FILE=nonexistent.yml\n'
+      );
+
+      const result = cleanupLegacyPorts(tmpDir);
+      expect(result.success).toBe(false);
     });
   });
 });

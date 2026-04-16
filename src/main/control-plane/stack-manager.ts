@@ -3,6 +3,7 @@ import path from 'path';
 import fs from 'fs';
 import { Registry, Stack, StackHistoryRecord, Task, TokenUsage } from './registry';
 import { PortAllocator, ServicePort } from './port-allocator';
+import { PortProxy } from './port-proxy';
 import { TaskWatcher, WorkflowProgressData } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
@@ -27,6 +28,12 @@ export interface StackWithServices extends Stack {
   services: ServiceInfo[];
 }
 
+export interface PortExposure {
+  containerPort: number;
+  hostPort?: number;
+  exposed: boolean;
+}
+
 export interface ServiceInfo {
   name: string;
   status: string;
@@ -34,6 +41,7 @@ export interface ServiceInfo {
   hostPort?: number;
   containerPort?: number;
   containerId: string;
+  ports: PortExposure[];
 }
 
 export interface ContainerStatsEntry {
@@ -120,6 +128,7 @@ interface CliResult {
 export class StackManager {
   private onStackUpdate?: () => void;
   private appVersion: string;
+  private portProxy?: PortProxy;
 
   constructor(
     private registry: Registry,
@@ -159,6 +168,27 @@ export class StackManager {
 
   setOnStackUpdate(callback: () => void): void {
     this.onStackUpdate = callback;
+  }
+
+  setPortProxy(proxy: PortProxy): void {
+    this.portProxy = proxy;
+  }
+
+  async exposePort(stackId: string, service: string, containerPort: number): Promise<number> {
+    if (!this.portProxy) throw new SandstormError(ErrorCode.INTERNAL_ERROR, 'PortProxy not initialized');
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    await this.portProxy.ensureImage();
+    const hostPort = await this.portProxy.expose(stackId, stack.project, service, containerPort);
+    this.notifyUpdate();
+    return hostPort;
+  }
+
+  async unexposePort(stackId: string, service: string, containerPort: number): Promise<void> {
+    if (!this.portProxy) throw new SandstormError(ErrorCode.INTERNAL_ERROR, 'PortProxy not initialized');
+    await this.portProxy.unexpose(stackId, service, containerPort);
+    this.notifyUpdate();
   }
 
   private notifyUpdate(): void {
@@ -326,15 +356,8 @@ export class StackManager {
         this.notifyUpdate();
       }
 
-      // Allocate ports via PortAllocator (tracks in SQLite, finds free ports)
-      const servicePorts = await this.discoverServicePorts(opts.projectDir);
-      const portMap = await this.portAllocator.allocate(opts.name, servicePorts);
-
-      // Build port env vars in the format the CLI/compose expects: SANDSTORM_PORT_<service>_<index>
+      // Ports are now exposed on-demand via proxy containers — no static allocation at creation time.
       const portEnv: Record<string, string> = {};
-      for (const [serviceKey, hostPort] of portMap) {
-        portEnv[`SANDSTORM_PORT_${serviceKey}`] = String(hostPort);
-      }
 
       // Pass the app version so the CLI can stamp the Docker image label
       portEnv['SANDSTORM_APP_VERSION'] = this.appVersion;
@@ -516,6 +539,13 @@ export class StackManager {
       stack.status === 'failed' ? 'failed' :
       'torn_down' as const;
     this.registry.archiveStack(stackId, finalStatus);
+
+    // Remove proxy containers before releasing ports
+    if (this.portProxy) {
+      await this.portProxy.removeAllForStack(stackId).catch(() => {
+        // Best effort — proxy containers may already be gone
+      });
+    }
 
     // Delete from registry and release ports immediately so the UI updates
     this.portAllocator.release(stackId);
@@ -1033,22 +1063,86 @@ export class StackManager {
       name: composeProjectName,
     });
 
-    const ports = this.registry.getPorts(stack.id);
-    const portMap = new Map(ports.map((p) => [p.service, p]));
+    // Get exposed ports from registry (only ports that have been exposed via proxy)
+    const exposedPorts = this.registry.getPorts(stack.id);
+    const exposedByService = new Map<string, Array<{ host_port: number; container_port: number; proxy_container_id: string | null }>>();
+    for (const p of exposedPorts) {
+      const list = exposedByService.get(p.service) ?? [];
+      list.push(p);
+      exposedByService.set(p.service, list);
+    }
+
+    // Get known internal ports from PORT_MAP in config
+    const knownPorts = this.discoverKnownPorts(stack.project_dir);
 
     return containers.map((c) => {
       const serviceName = this.extractServiceName(c.name, composeProjectName);
-      const portInfo = portMap.get(serviceName);
+      const exposed = exposedByService.get(serviceName) ?? [];
+      const known = knownPorts.get(serviceName) ?? [];
+
+      // Build port exposure list: merge known internal ports with exposed state
+      const portExposures: PortExposure[] = [];
+      const seenPorts = new Set<number>();
+
+      for (const exp of exposed) {
+        seenPorts.add(exp.container_port);
+        portExposures.push({
+          containerPort: exp.container_port,
+          hostPort: exp.host_port,
+          exposed: !!exp.proxy_container_id,
+        });
+      }
+
+      for (const cp of known) {
+        if (!seenPorts.has(cp)) {
+          portExposures.push({ containerPort: cp, exposed: false });
+        }
+      }
+
+      // Legacy compat: pick the first exposed port for hostPort/containerPort
+      const firstExposed = exposed.find(e => !!e.proxy_container_id);
 
       return {
         name: serviceName,
         status: c.status,
         exitCode: c.status === 'exited' ? undefined : undefined,
-        hostPort: portInfo?.host_port,
-        containerPort: portInfo?.container_port,
+        hostPort: firstExposed?.host_port,
+        containerPort: firstExposed?.container_port,
         containerId: c.id,
+        ports: portExposures,
       };
     });
+  }
+
+  /**
+   * Read known internal ports per service from .sandstorm/config PORT_MAP.
+   */
+  private discoverKnownPorts(projectDir: string): Map<string, number[]> {
+    const result = new Map<string, number[]>();
+    try {
+      const configPath = path.join(projectDir, '.sandstorm', 'config');
+      if (!fs.existsSync(configPath)) return result;
+
+      const config = fs.readFileSync(configPath, 'utf-8');
+      const portMapLine = config.split('\n').find((l) => l.startsWith('PORT_MAP='));
+      if (!portMapLine) return result;
+
+      const portMapValue = portMapLine.split('=')[1]?.replace(/"/g, '');
+      if (!portMapValue) return result;
+
+      for (const entry of portMapValue.split(',')) {
+        const [service, , containerPort] = entry.split(':');
+        const cp = parseInt(containerPort, 10);
+        if (service && !isNaN(cp)) {
+          const list = result.get(service) ?? [];
+          list.push(cp);
+          result.set(service, list);
+        }
+      }
+    } catch {
+      // Best effort
+    }
+    return result;
   }
 
   private async findClaudeContainer(stack: Stack, runtime?: ContainerRuntime): Promise<Container> {
