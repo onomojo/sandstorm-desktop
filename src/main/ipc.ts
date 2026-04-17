@@ -297,50 +297,61 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       );
 
       const composePath = path.join(sandstormDir, 'docker-compose.yml');
-      fs.writeFileSync(
-        composePath,
-        [
-          '# Sandstorm stack override — Claude workspace only.',
-          '# This project has no docker-compose services of its own.',
-          '#',
-          '# Do not run standalone. Sandstorm chains it automatically.',
-          '',
-          'services:',
-          '  claude:',
-          `    image: sandstorm-${projectName}-claude`,
-          '    build:',
-          '      context: ${SANDSTORM_DIR}',
-          '      dockerfile: docker/Dockerfile',
-          '      args:',
-          '        SANDSTORM_APP_VERSION: ${SANDSTORM_APP_VERSION:-unknown}',
-          '    environment:',
-          '      - GIT_USER_NAME',
-          '      - GIT_USER_EMAIL',
-          '      - SANDSTORM_PROJECT',
-          '      - SANDSTORM_STACK_ID',
-          '    volumes:',
-          '      - ${SANDSTORM_WORKSPACE}:/app',
-          '      - /var/run/docker.sock:/var/run/docker.sock',
-          '    healthcheck:',
-          '      test: ["CMD", "test", "-f", "/tmp/.sandstorm-ready"]',
-          '      interval: 3s',
-          '      timeout: 2s',
-          '      retries: 60',
-          '    tty: true',
-          '    stdin_open: true',
-          '',
-        ].join('\n'),
-      );
+      const skippedFiles: string[] = [];
+      if (fs.existsSync(composePath)) {
+        console.info('[projects:initialize] docker-compose.yml already exists — not overwriting');
+        skippedFiles.push('docker-compose.yml');
+      } else {
+        fs.writeFileSync(
+          composePath,
+          [
+            '# Sandstorm stack override — Claude workspace only.',
+            '# This project has no docker-compose services of its own.',
+            '#',
+            '# Do not run standalone. Sandstorm chains it automatically.',
+            '',
+            'services:',
+            '  claude:',
+            `    image: sandstorm-${projectName}-claude`,
+            '    build:',
+            '      context: ${SANDSTORM_DIR}',
+            '      dockerfile: docker/Dockerfile',
+            '      args:',
+            '        SANDSTORM_APP_VERSION: ${SANDSTORM_APP_VERSION:-unknown}',
+            '    environment:',
+            '      - GIT_USER_NAME',
+            '      - GIT_USER_EMAIL',
+            '      - SANDSTORM_PROJECT',
+            '      - SANDSTORM_STACK_ID',
+            '    volumes:',
+            '      - ${SANDSTORM_WORKSPACE}:/app',
+            '      - /var/run/docker.sock:/var/run/docker.sock',
+            '    healthcheck:',
+            '      test: ["CMD", "test", "-f", "/tmp/.sandstorm-ready"]',
+            '      interval: 3s',
+            '      timeout: 2s',
+            '      retries: 60',
+            '    tty: true',
+            '    stdin_open: true',
+            '',
+          ].join('\n'),
+        );
+      }
 
       // Generate verify.sh based on project files (shared auto-detection)
       const verifyLines = autoDetectVerifyLines(directory);
       const verifyPath = path.join(sandstormDir, 'verify.sh');
-      fs.writeFileSync(verifyPath, verifyLines.join('\n') + '\n', { mode: 0o755 });
+      if (fs.existsSync(verifyPath)) {
+        console.info('[projects:initialize] verify.sh already exists — not overwriting');
+        skippedFiles.push('verify.sh');
+      } else {
+        fs.writeFileSync(verifyPath, verifyLines.join('\n') + '\n', { mode: 0o755 });
+      }
 
       // Generate spec quality gate with default criteria
       saveSpecQualityGate(directory, getDefaultSpecQualityGate());
 
-      return { success: true };
+      return { success: true, skippedFiles: skippedFiles.length > 0 ? skippedFiles : undefined };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { success: false, error: `Failed to create .sandstorm config: ${msg}` };
@@ -431,9 +442,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       try {
         const sandstormDir = path.join(directory, '.sandstorm');
 
-        // Save verify.sh
+        // Save verify.sh — only write if it doesn't already exist; the migration
+        // UI shows auto-detected content, not the existing file, so overwriting
+        // here would silently destroy user customizations.
         const verifyPath = path.join(sandstormDir, 'verify.sh');
-        fs.writeFileSync(verifyPath, verifyScript, { mode: 0o755 });
+        if (!fs.existsSync(verifyPath)) {
+          fs.writeFileSync(verifyPath, verifyScript, { mode: 0o755 });
+        }
 
         // Ensure spec quality gate exists
         ensureSpecQualityGate(directory);

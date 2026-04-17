@@ -7,7 +7,7 @@ export interface SandstormAPI {
     remove: (id: number) => Promise<void>;
     browse: () => Promise<string | null>;
     checkInit: (directory: string) => Promise<{ state: 'uninitialized' | 'partial' | 'full' }>;
-    initialize: (directory: string) => Promise<{ success: boolean; error?: string }>;
+    initialize: (directory: string) => Promise<{ success: boolean; error?: string; skippedFiles?: string[] }>;
     checkMigration: (directory: string) => Promise<{
       needsMigration: boolean;
       missingVerifyScript?: boolean;

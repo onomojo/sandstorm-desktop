@@ -607,6 +607,134 @@ describe('IPC Handlers', () => {
         // Cleanup
         fs.rmSync(tmpDir, { recursive: true, force: true });
       });
+
+      describe('overwrite guard — fallback path (no project compose file)', () => {
+        let tmpDir: string;
+
+        beforeEach(() => {
+          tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-init-guard-'));
+          // Ensure .sandstorm/ exists so the fallback can be exercised
+          fs.mkdirSync(path.join(tmpDir, '.sandstorm', 'stacks'), { recursive: true });
+        });
+
+        afterEach(() => {
+          fs.rmSync(tmpDir, { recursive: true, force: true });
+        });
+
+        /** Trigger the fallback by simulating a CLI failure on a dir with no project compose file */
+        async function runFallback(dir: string) {
+          const child = new EventEmitter();
+          const stdout = new EventEmitter();
+          const stderr = new EventEmitter();
+          Object.assign(child, { stdout, stderr, stdin: null });
+          mockSpawn.mockReturnValue(child);
+
+          const promise = invokeHandler('projects:initialize', dir);
+          child.emit('close', 1); // CLI fails → fallback runs
+          return promise;
+        }
+
+        it('does not overwrite an existing verify.sh', async () => {
+          const verifyPath = path.join(tmpDir, '.sandstorm', 'verify.sh');
+          const originalContent = '#!/bin/bash\nsandstorm-exec app bunx jest\n';
+          fs.writeFileSync(verifyPath, originalContent, { mode: 0o755 });
+
+          const result = await runFallback(tmpDir);
+
+          expect(result).toMatchObject({ success: true });
+          expect(fs.readFileSync(verifyPath, 'utf-8')).toBe(originalContent);
+        });
+
+        it('reports skippedFiles when verify.sh already exists', async () => {
+          const verifyPath = path.join(tmpDir, '.sandstorm', 'verify.sh');
+          fs.writeFileSync(verifyPath, '#!/bin/bash\necho hi\n', { mode: 0o755 });
+
+          const result = (await runFallback(tmpDir)) as { success: boolean; skippedFiles?: string[] };
+
+          expect(result.success).toBe(true);
+          expect(result.skippedFiles).toContain('verify.sh');
+        });
+
+        it('does not overwrite an existing docker-compose.yml', async () => {
+          const composePath = path.join(tmpDir, '.sandstorm', 'docker-compose.yml');
+          const originalContent = 'services:\n  myservice:\n    image: myimage\n';
+          fs.writeFileSync(composePath, originalContent);
+
+          const result = await runFallback(tmpDir);
+
+          expect(result).toMatchObject({ success: true });
+          expect(fs.readFileSync(composePath, 'utf-8')).toBe(originalContent);
+        });
+
+        it('reports skippedFiles when docker-compose.yml already exists', async () => {
+          const composePath = path.join(tmpDir, '.sandstorm', 'docker-compose.yml');
+          fs.writeFileSync(composePath, 'services: {}');
+
+          const result = (await runFallback(tmpDir)) as { success: boolean; skippedFiles?: string[] };
+
+          expect(result.success).toBe(true);
+          expect(result.skippedFiles).toContain('docker-compose.yml');
+        });
+
+        it('writes verify.sh when it does not exist', async () => {
+          const verifyPath = path.join(tmpDir, '.sandstorm', 'verify.sh');
+          expect(fs.existsSync(verifyPath)).toBe(false);
+
+          const result = await runFallback(tmpDir);
+
+          expect(result).toMatchObject({ success: true });
+          expect(fs.existsSync(verifyPath)).toBe(true);
+          const skipped = (result as { skippedFiles?: string[] }).skippedFiles ?? [];
+          expect(skipped).not.toContain('verify.sh');
+        });
+
+        it('writes docker-compose.yml when it does not exist', async () => {
+          const composePath = path.join(tmpDir, '.sandstorm', 'docker-compose.yml');
+          expect(fs.existsSync(composePath)).toBe(false);
+
+          const result = await runFallback(tmpDir);
+
+          expect(result).toMatchObject({ success: true });
+          expect(fs.existsSync(composePath)).toBe(true);
+          const skipped = (result as { skippedFiles?: string[] }).skippedFiles ?? [];
+          expect(skipped).not.toContain('docker-compose.yml');
+        });
+      });
+    });
+
+    describe('projects:saveMigration', () => {
+      let tmpDir: string;
+
+      beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-migration-test-'));
+        fs.mkdirSync(path.join(tmpDir, '.sandstorm'), { recursive: true });
+      });
+
+      afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      });
+
+      it('does not overwrite an existing verify.sh', async () => {
+        const verifyPath = path.join(tmpDir, '.sandstorm', 'verify.sh');
+        const originalContent = '#!/bin/bash\nsandstorm-exec app npm test\n';
+        fs.writeFileSync(verifyPath, originalContent, { mode: 0o755 });
+
+        const result = await invokeHandler('projects:saveMigration', tmpDir, '#!/bin/bash\necho replaced\n', {});
+
+        expect(result).toMatchObject({ success: true });
+        expect(fs.readFileSync(verifyPath, 'utf-8')).toBe(originalContent);
+      });
+
+      it('writes verify.sh when it does not exist', async () => {
+        const verifyPath = path.join(tmpDir, '.sandstorm', 'verify.sh');
+        expect(fs.existsSync(verifyPath)).toBe(false);
+
+        const newContent = '#!/bin/bash\necho ok\n';
+        const result = await invokeHandler('projects:saveMigration', tmpDir, newContent, {});
+
+        expect(result).toMatchObject({ success: true });
+        expect(fs.readFileSync(verifyPath, 'utf-8')).toBe(newContent);
+      });
     });
   });
 
