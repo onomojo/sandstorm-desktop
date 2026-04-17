@@ -5,6 +5,7 @@ export function UninitializedProject({ project }: { project: Project }) {
   const [initializing, setInitializing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [initialized, setInitialized] = useState(false);
+  const [skippedFiles, setSkippedFiles] = useState<string[]>([]);
 
   const handleInitialize = async () => {
     setInitializing(true);
@@ -12,6 +13,7 @@ export function UninitializedProject({ project }: { project: Project }) {
     try {
       const result = await window.sandstorm.projects.initialize(project.directory);
       if (result.success) {
+        setSkippedFiles(result.skippedFiles ?? []);
         setInitialized(true);
       } else {
         setError(result.error || 'Initialization failed');
@@ -33,6 +35,16 @@ export function UninitializedProject({ project }: { project: Project }) {
         </div>
         <p className="text-sm font-medium text-sandstorm-text mb-1">Sandstorm initialized!</p>
         <p className="text-xs text-sandstorm-muted">You can now create stacks for this project.</p>
+        {skippedFiles.length > 0 && (
+          <div className="mt-4 text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5 max-w-xs">
+            <p className="font-medium mb-1">Some files already existed and were not overwritten:</p>
+            <ul className="list-disc list-inside space-y-0.5">
+              {skippedFiles.map((f) => (
+                <li key={f} className="font-mono">{f}</li>
+              ))}
+            </ul>
+          </div>
+        )}
       </div>
     );
   }

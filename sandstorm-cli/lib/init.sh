@@ -429,56 +429,60 @@ echo "  Created .sandstorm/docker-compose.yml"
 # ---------------------------------------------------------------------------
 VERIFY_SCRIPT="$SANDSTORM_CONFIG_DIR/verify.sh"
 
-# Auto-detect verify commands based on project files
-{
-  echo "#!/bin/bash"
-  echo "#"
-  echo "# Sandstorm verify script — commands run during the verification step."
-  echo "# Each command runs in sequence. If any fails, verification fails."
-  echo "#"
-  echo "# Use 'sandstorm-exec <service> <command>' to run on service containers."
-  echo "# Edit this file to match your project's test/lint/build commands."
-  echo "#"
-  echo "set -e"
-  echo ""
+if [ -f "$VERIFY_SCRIPT" ]; then
+  echo "  Skipping .sandstorm/verify.sh — already exists (preserving user edits)"
+else
+  # Auto-detect verify commands based on project files
+  {
+    echo "#!/bin/bash"
+    echo "#"
+    echo "# Sandstorm verify script — commands run during the verification step."
+    echo "# Each command runs in sequence. If any fails, verification fails."
+    echo "#"
+    echo "# Use 'sandstorm-exec <service> <command>' to run on service containers."
+    echo "# Edit this file to match your project's test/lint/build commands."
+    echo "#"
+    echo "set -e"
+    echo ""
 
-  # Check for Node.js project indicators
-  if [ -f "$PROJECT_ROOT/package.json" ]; then
-    # Read package.json scripts to determine what's available
-    HAS_TEST=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'test' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
-    HAS_BUILD=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'build' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
-    HAS_TYPECHECK=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'typecheck' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
-    HAS_TSCONFIG=$([ -f "$PROJECT_ROOT/tsconfig.json" ] && echo "yes" || echo "no")
+    # Check for Node.js project indicators
+    if [ -f "$PROJECT_ROOT/package.json" ]; then
+      # Read package.json scripts to determine what's available
+      HAS_TEST=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'test' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
+      HAS_BUILD=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'build' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
+      HAS_TYPECHECK=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'typecheck' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
+      HAS_TSCONFIG=$([ -f "$PROJECT_ROOT/tsconfig.json" ] && echo "yes" || echo "no")
 
-    if [ "$HAS_TEST" = "yes" ]; then echo "npm test"; fi
-    if [ "$HAS_TYPECHECK" = "yes" ]; then
-      echo "npm run typecheck"
-    elif [ "$HAS_TSCONFIG" = "yes" ]; then
-      echo "npx tsc --noEmit"
+      if [ "$HAS_TEST" = "yes" ]; then echo "npm test"; fi
+      if [ "$HAS_TYPECHECK" = "yes" ]; then
+        echo "npm run typecheck"
+      elif [ "$HAS_TSCONFIG" = "yes" ]; then
+        echo "npx tsc --noEmit"
+      fi
+      if [ "$HAS_BUILD" = "yes" ]; then echo "npm run build"; fi
     fi
-    if [ "$HAS_BUILD" = "yes" ]; then echo "npm run build"; fi
-  fi
 
-  # Check for Ruby/Rails
-  if [ -f "$PROJECT_ROOT/Gemfile" ]; then
-    if [ -f "$PROJECT_ROOT/bin/rails" ]; then
-      echo "# sandstorm-exec api bash -c 'cd /rails && bin/rails test'"
+    # Check for Ruby/Rails
+    if [ -f "$PROJECT_ROOT/Gemfile" ]; then
+      if [ -f "$PROJECT_ROOT/bin/rails" ]; then
+        echo "# sandstorm-exec api bash -c 'cd /rails && bin/rails test'"
+      fi
     fi
-  fi
 
-  # Check for Python
-  if [ -f "$PROJECT_ROOT/requirements.txt" ] || [ -f "$PROJECT_ROOT/pyproject.toml" ]; then
-    echo "# sandstorm-exec app pytest"
-  fi
+    # Check for Python
+    if [ -f "$PROJECT_ROOT/requirements.txt" ] || [ -f "$PROJECT_ROOT/pyproject.toml" ]; then
+      echo "# sandstorm-exec app pytest"
+    fi
 
-  # Check for Go
-  if [ -f "$PROJECT_ROOT/go.mod" ]; then
-    echo "# sandstorm-exec app go test ./..."
-  fi
-} > "$VERIFY_SCRIPT"
+    # Check for Go
+    if [ -f "$PROJECT_ROOT/go.mod" ]; then
+      echo "# sandstorm-exec app go test ./..."
+    fi
+  } > "$VERIFY_SCRIPT"
 
-chmod +x "$VERIFY_SCRIPT"
-echo "  Created .sandstorm/verify.sh"
+  chmod +x "$VERIFY_SCRIPT"
+  echo "  Created .sandstorm/verify.sh"
+fi
 
 # ---------------------------------------------------------------------------
 # Generate .sandstorm/spec-quality-gate.md (ticket readiness criteria)
