@@ -28,6 +28,49 @@ export interface StackWithServices extends Stack {
   services: ServiceInfo[];
 }
 
+/**
+ * Trimmed response for the `dispatch_task` MCP tool. A subset of `Task`
+ * that does not echo the `prompt` (or any fetched ticket body) back to the
+ * outer Claude — those are already in the prior turn's transcript. See #255.
+ */
+export interface DispatchTaskResult {
+  id: number;
+  stack_id: string;
+  status: string;
+}
+
+/**
+ * Trimmed response for the `get_task_status` MCP tool. A subset of `Task`
+ * that omits `prompt` and token fields so repeated polling does not re-paste
+ * those blocks into the transcript. See #255.
+ */
+export interface TaskStatusResult {
+  status: string;
+  id?: number;
+  started_at?: string;
+  finished_at?: string | null;
+  exit_code?: number | null;
+}
+
+/** Byte caps for MCP tool response payloads. See #255. */
+export const TASK_OUTPUT_MAX_BYTES = 4096;
+export const LOGS_PER_CONTAINER_MAX_BYTES = 8192;
+export const LOGS_TOTAL_MAX_BYTES = 32768;
+
+/**
+ * Truncate a UTF-8 string to its last `maxBytes` bytes, prefixing a marker
+ * that records how many bytes were dropped. When the byte length is at or
+ * below the cap, the string is returned unchanged. Safe for multi-byte
+ * characters: invalid leading bytes are replaced by U+FFFD on decode.
+ */
+export function tailBytes(s: string, maxBytes: number): string {
+  const buf = Buffer.from(s, 'utf8');
+  if (buf.byteLength <= maxBytes) return s;
+  const dropped = buf.byteLength - maxBytes;
+  const tail = buf.subarray(buf.byteLength - maxBytes).toString('utf8');
+  return `...[truncated ${dropped} earlier bytes]...\n${tail}`;
+}
+
 export interface PortExposure {
   containerPort: number;
   hostPort?: number;
@@ -613,7 +656,7 @@ export class StackManager {
     prompt: string,
     model?: string,
     opts?: { gateApproved?: boolean; forceBypass?: boolean }
-  ): Promise<Task> {
+  ): Promise<DispatchTaskResult> {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
@@ -678,7 +721,7 @@ export class StackManager {
       // Stream live output to renderer (fire-and-forget)
       this.taskWatcher.streamOutput(stackId, claudeContainer.id, () => {}).catch(() => {});
 
-      return task;
+      return { id: task.id, stack_id: stackId, status: task.status };
     } catch (err) {
       // Task was created but dispatch failed — mark it as failed so the
       // stack doesn't stay stuck in 'running' status forever.
@@ -740,18 +783,31 @@ export class StackManager {
     this.notifyUpdate();
   }
 
-  getTaskStatus(stackId: string): { status: string; task?: Task } {
+  getTaskStatus(stackId: string): TaskStatusResult {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     const runningTask = this.registry.getRunningTask(stackId);
     if (runningTask) {
-      return { status: 'running', task: runningTask };
+      return {
+        status: 'running',
+        id: runningTask.id,
+        started_at: runningTask.started_at,
+        finished_at: runningTask.finished_at,
+        exit_code: runningTask.exit_code,
+      };
     }
 
     const tasks = this.registry.getTasksForStack(stackId);
     if (tasks.length > 0) {
-      return { status: tasks[0].status, task: tasks[0] };
+      const t = tasks[0];
+      return {
+        status: t.status,
+        id: t.id,
+        started_at: t.started_at,
+        finished_at: t.finished_at,
+        exit_code: t.exit_code,
+      };
     }
 
     return { status: 'idle' };
@@ -768,7 +824,7 @@ export class StackManager {
       const result = await runtime.exec(claudeContainer.id, [
         'tail', '-n', String(lines), '/tmp/claude-task.log',
       ]);
-      return result.stdout;
+      return tailBytes(result.stdout, TASK_OUTPUT_MAX_BYTES);
     } catch {
       return '(no task output available)';
     }
@@ -796,10 +852,11 @@ export class StackManager {
         chunks.push(chunk);
       }
       const serviceName = this.extractServiceName(c.name, composeProjectName);
-      logParts.push(`=== ${serviceName} ===\n${chunks.join('')}`);
+      const capped = tailBytes(chunks.join(''), LOGS_PER_CONTAINER_MAX_BYTES);
+      logParts.push(`=== ${serviceName} ===\n${capped}`);
     }
 
-    return logParts.join('\n\n');
+    return tailBytes(logParts.join('\n\n'), LOGS_TOTAL_MAX_BYTES);
   }
 
   getTasksForStack(stackId: string): Task[] {

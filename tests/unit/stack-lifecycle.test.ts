@@ -97,7 +97,8 @@ describe('Stack Lifecycle Integration', () => {
       const task = await manager.dispatchTask('lifecycle-1', 'Fix the login bug');
 
       expect(task.status).toBe('running');
-      expect(task.prompt).toBe('Fix the login bug');
+      // Trimmed MCP response (#255) no longer echoes the prompt; verify via registry
+      expect(registry.getRunningTask('lifecycle-1')!.prompt).toBe('Fix the login bug');
       expect(registry.getStack('lifecycle-1')!.status).toBe('running');
 
       // 3. Simulate task completion via TaskWatcher event
@@ -156,8 +157,10 @@ describe('Stack Lifecycle Integration', () => {
 
       // Dispatch task
       const task = await manager.dispatchTask('token-lifecycle', 'Add feature');
-      expect(task.input_tokens).toBe(0);
-      expect(task.output_tokens).toBe(0);
+      // Trimmed MCP response (#255) omits token fields; verify via registry
+      const freshTask = registry.getRunningTask('token-lifecycle')!;
+      expect(freshTask.input_tokens).toBe(0);
+      expect(freshTask.output_tokens).toBe(0);
 
       // Simulate token updates (as TaskWatcher would do via readTaskTokens)
       registry.updateTaskTokens(task.id, 1500, 800);
@@ -190,7 +193,8 @@ describe('Stack Lifecycle Integration', () => {
 
       // Dispatch task 1
       const task1 = await manager.dispatchTask('multi-task', 'Task 1: fix bug');
-      expect(task1.prompt).toBe('Task 1: fix bug');
+      // Trimmed MCP response (#255) no longer echoes the prompt; verify via registry
+      expect(registry.getRunningTask('multi-task')!.prompt).toBe('Task 1: fix bug');
       expect(registry.getStack('multi-task')!.status).toBe('running');
 
       // Complete task 1
@@ -199,7 +203,7 @@ describe('Stack Lifecycle Integration', () => {
 
       // Dispatch task 2 — this is the scenario that keeps breaking
       const task2 = await manager.dispatchTask('multi-task', 'Task 2: add tests');
-      expect(task2.prompt).toBe('Task 2: add tests');
+      expect(registry.getRunningTask('multi-task')!.prompt).toBe('Task 2: add tests');
       expect(task2.id).not.toBe(task1.id);
       expect(registry.getStack('multi-task')!.status).toBe('running');
 
