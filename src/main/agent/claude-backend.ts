@@ -24,6 +24,7 @@ import {
   zeroSessionTokens,
 } from './types';
 import { resolveOuterClaudeTools } from './tools-allowlist';
+import { TokenTelemetry, isTelemetryEnabled } from './token-telemetry';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — must be longer than MCP tool chain (300s ephemeral + 310s bridge)
 
@@ -41,6 +42,8 @@ interface ClaudeSession {
   stderrBuffer: string;
   cancelledTurn: boolean;   // true when the user cancelled the current turn (process kept alive)
   cancelFallback: ReturnType<typeof setTimeout> | null; // fallback kill timer after cancel
+  turnIndex: number;            // 0-based index of completed turns in this session
+  lastResultAt: number | null;  // Date.now() of the previous `type:"result"` event, for telemetry deltas
 }
 
 function getClaudeBin(): string {
@@ -81,6 +84,7 @@ export class ClaudeBackend implements AgentBackend {
   private logStream: fs.WriteStream | null = null;
   private timeoutMs: number;
   private modelResolver?: (projectDir: string) => string;
+  private telemetry: TokenTelemetry;
 
   constructor(
     timeoutMs?: number,
@@ -90,6 +94,24 @@ export class ClaudeBackend implements AgentBackend {
     this.timeoutMs = timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.modelResolver = modelResolver;
     this.initLogger();
+    this.telemetry = this.initTelemetry();
+  }
+
+  /**
+   * Opt-in per-turn token telemetry (#262 tactic A). Off unless
+   * `SANDSTORM_TOKEN_TELEMETRY=1` is set. Writes JSONL to the app's userData
+   * dir so it sits next to the existing claude log.
+   */
+  private initTelemetry(): TokenTelemetry {
+    const enabled = isTelemetryEnabled();
+    let filePath = '';
+    try {
+      const dir = typeof app !== 'undefined' && app.getPath ? app.getPath('userData') : os.tmpdir();
+      filePath = path.join(dir, 'sandstorm-desktop-token-telemetry.jsonl');
+    } catch {
+      filePath = path.join(os.tmpdir(), 'sandstorm-desktop-token-telemetry.jsonl');
+    }
+    return new TokenTelemetry({ filePath, enabled });
   }
 
   getSessionTokens(tabId: string): OuterClaudeSessionTokens {
@@ -304,6 +326,8 @@ rl.on('line', async (line) => {
         stderrBuffer: '',
         cancelledTurn: false,
         cancelFallback: null,
+        turnIndex: 0,
+        lastResultAt: null,
       };
       this.sessions.set(tabId, session);
     }
@@ -781,6 +805,30 @@ rl.on('line', async (line) => {
                   prev.cache_read_input_tokens + (usage.cache_read_input_tokens ?? 0),
               });
               this.emitSessionTokens(tabId);
+
+              // Per-turn telemetry (#262 tactic A). No-op when the opt-in
+              // env flag is off. Measurement lands first so later tactics
+              // have a baseline.
+              if (this.telemetry.active) {
+                const now = Date.now();
+                const secondsSincePrev =
+                  session.lastResultAt === null
+                    ? null
+                    : (now - session.lastResultAt) / 1000;
+                this.telemetry.record({
+                  ts: new Date(now).toISOString(),
+                  tabId,
+                  projectDir: session.projectDir,
+                  turn_index: session.turnIndex,
+                  seconds_since_prev_turn: secondsSincePrev,
+                  input_tokens: usage.input_tokens ?? 0,
+                  output_tokens: usage.output_tokens ?? 0,
+                  cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
+                  cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+                });
+              }
+              session.turnIndex += 1;
+              session.lastResultAt = Date.now();
             }
 
             if (session.fullResponse) {
@@ -914,6 +962,7 @@ rl.on('line', async (line) => {
     this.bridgeServer?.close();
     this.logStream?.end();
     this.logStream = null;
+    this.telemetry.close();
     if (this.mcpConfigPath) {
       const tmpDir = path.dirname(this.mcpConfigPath);
       try {

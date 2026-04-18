@@ -65,6 +65,7 @@ vi.mock('fs', async (importOriginal) => {
     existsSync: vi.fn().mockReturnValue(false),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    appendFileSync: vi.fn(),
     readFileSync: vi.fn().mockImplementation(() => {
       throw new Error('File not found');
     }),
@@ -685,6 +686,95 @@ describe('Watchdog timeout is longer than MCP tool chain', () => {
     const timeoutMs = (backend as unknown as { timeoutMs: number }).timeoutMs;
     expect(timeoutMs).toBe(600_000);
     expect(timeoutMs).toBeGreaterThan(310_000); // Must exceed bridge timeout
+    backend.destroy();
+  });
+});
+
+describe('Token telemetry wiring (#262 tactic A)', () => {
+  let origFlag: string | undefined;
+
+  beforeEach(() => {
+    origFlag = process.env.SANDSTORM_TOKEN_TELEMETRY;
+  });
+
+  afterEach(() => {
+    if (origFlag === undefined) delete process.env.SANDSTORM_TOKEN_TELEMETRY;
+    else process.env.SANDSTORM_TOKEN_TELEMETRY = origFlag;
+  });
+
+  it('does not emit telemetry appends when the flag is off', async () => {
+    delete process.env.SANDSTORM_TOKEN_TELEMETRY;
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    // A full turn lifecycle — any telemetry append would happen inside the
+    // result handler. With the flag off, zero appends to the telemetry path.
+    backend.sendMessage('tel-off', 'hi', '/tmp');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    proc.stdout.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({
+          type: 'result',
+          result: 'ok',
+          usage: {
+            input_tokens: 10,
+            output_tokens: 2,
+            cache_creation_input_tokens: 100,
+            cache_read_input_tokens: 0,
+          },
+        }) + '\n'
+      )
+    );
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    expect(telemetryAppends.length).toBe(0);
+
+    backend.destroy();
+  });
+
+  it('writes a per-turn telemetry line when the flag is on', async () => {
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-on', 'hi', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    proc.stdout.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({
+          type: 'result',
+          result: 'ok',
+          usage: {
+            input_tokens: 1234,
+            output_tokens: 56,
+            cache_creation_input_tokens: 28_000,
+            cache_read_input_tokens: 0,
+          },
+        }) + '\n'
+      )
+    );
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    expect(telemetryAppends.length).toBe(1);
+    const jsonLine = telemetryAppends[0][1] as string;
+    const event = JSON.parse(jsonLine.trim());
+    expect(event.tabId).toBe('tel-on');
+    expect(event.projectDir).toBe('/proj');
+    expect(event.turn_index).toBe(0);
+    expect(event.seconds_since_prev_turn).toBeNull();
+    expect(event.input_tokens).toBe(1234);
+    expect(event.output_tokens).toBe(56);
+    expect(event.cache_creation_input_tokens).toBe(28_000);
+    expect(event.cache_read_input_tokens).toBe(0);
+
     backend.destroy();
   });
 });
