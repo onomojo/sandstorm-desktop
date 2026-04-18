@@ -549,6 +549,79 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
     });
   });
 
+  describe('--tools allowlist (#256)', () => {
+    it('passes --tools with the default allowlist (comma-separated)', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-tools-default', 'hello', '/tmp');
+
+      const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+      const toolsIdx = spawnedArgs.indexOf('--tools');
+      expect(toolsIdx).toBeGreaterThan(-1);
+      expect(spawnedArgs[toolsIdx + 1]).toBe('Bash,Read,Grep,Glob');
+    });
+
+    it('places --tools before --system-prompt-file and --mcp-config', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-tools-order', 'hello', '/tmp');
+
+      const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+      const toolsIdx = spawnedArgs.indexOf('--tools');
+      const mcpIdx = spawnedArgs.indexOf('--mcp-config');
+      expect(toolsIdx).toBeGreaterThan(-1);
+      expect(mcpIdx).toBeGreaterThan(-1);
+      // --tools comes before --mcp-config so it lives in the stable prefix
+      // that cache-hits turn-to-turn.
+      expect(toolsIdx).toBeLessThan(mcpIdx);
+    });
+
+    it('does not include denied tools in the --tools arg', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-tools-deny', 'hello', '/tmp');
+
+      const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+      const toolsArg = spawnedArgs[spawnedArgs.indexOf('--tools') + 1];
+      for (const denied of [
+        'Edit',
+        'Write',
+        'MultiEdit',
+        'NotebookEdit',
+        'Agent',
+        'TaskCreate',
+        'TaskUpdate',
+        'TaskList',
+        'TaskGet',
+        'TaskStop',
+        'TaskOutput',
+        'WebFetch',
+        'WebSearch',
+        'LSP',
+      ]) {
+        expect(toolsArg).not.toContain(denied);
+      }
+    });
+
+    it('falls back to defaults when no projectDir is given', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-tools-noproj', 'hello');
+
+      const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+      const toolsIdx = spawnedArgs.indexOf('--tools');
+      expect(spawnedArgs[toolsIdx + 1]).toBe('Bash,Read,Grep,Glob');
+    });
+  });
+
   describe('initLogger error handling', () => {
     it('does not throw when createWriteStream fails', () => {
       expect(() => new ClaudeBackend(1000)).not.toThrow();
