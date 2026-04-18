@@ -1,5 +1,13 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { StackManager, sanitizeComposeName, referencesGitHubIssue } from '../../src/main/control-plane/stack-manager';
+import {
+  StackManager,
+  sanitizeComposeName,
+  referencesGitHubIssue,
+  tailBytes,
+  TASK_OUTPUT_MAX_BYTES,
+  LOGS_PER_CONTAINER_MAX_BYTES,
+  LOGS_TOTAL_MAX_BYTES,
+} from '../../src/main/control-plane/stack-manager';
 import { Registry } from '../../src/main/control-plane/registry';
 import { PortAllocator } from '../../src/main/control-plane/port-allocator';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
@@ -295,9 +303,15 @@ describe('StackManager', () => {
         exitCode: 0,
       });
 
-      const task = await manager.dispatchTask('dispatch-test', 'Fix the bug');
-      expect(task.prompt).toBe('Fix the bug');
-      expect(task.status).toBe('running');
+      const result = await manager.dispatchTask('dispatch-test', 'Fix the bug');
+      expect(result.status).toBe('running');
+      expect(result.stack_id).toBe('dispatch-test');
+      expect(typeof result.id).toBe('number');
+      // Verify trimmed shape — prompt is NOT echoed in the MCP response (#255)
+      expect(result).not.toHaveProperty('prompt');
+      // The prompt is still persisted in the registry
+      const persisted = registry.getTasksForStack('dispatch-test');
+      expect(persisted[0].prompt).toBe('Fix the bug');
 
       // Should delegate to CLI `task` command (handles cred sync + user perms)
       // When no model is specified, the effective default (sonnet) is used
@@ -343,8 +357,12 @@ describe('StackManager', () => {
         exitCode: 0,
       });
 
-      const task = await manager.dispatchTask('model-test', 'Complex task', 'opus');
-      expect(task.model).toBe('opus');
+      const result = await manager.dispatchTask('model-test', 'Complex task', 'opus');
+      expect(result.status).toBe('running');
+      // The model is persisted on the Task in the registry even though the MCP
+      // response no longer echoes it.
+      const persisted = registry.getTasksForStack('model-test');
+      expect(persisted[0].model).toBe('opus');
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
         ['task', 'model-test', '--model', 'opus', 'Complex task']
@@ -359,9 +377,11 @@ describe('StackManager', () => {
         exitCode: 0,
       });
 
-      const task = await manager.dispatchTask('auto-model', 'Simple task', 'auto');
+      const result = await manager.dispatchTask('auto-model', 'Simple task', 'auto');
+      expect(result.status).toBe('running');
       // "auto" should resolve to null in the DB (undefined → null via registry)
-      expect(task.model).toBeNull();
+      const persisted = registry.getTasksForStack('auto-model');
+      expect(persisted[0].model).toBeNull();
       // CLI args should NOT contain --model
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
@@ -377,9 +397,12 @@ describe('StackManager', () => {
         exitCode: 0,
       });
 
-      const task = await manager.dispatchTask('no-model', 'Simple task');
-      // Effective default is 'sonnet' from global model settings
-      expect(task.model).toBe('sonnet');
+      const result = await manager.dispatchTask('no-model', 'Simple task');
+      expect(result.status).toBe('running');
+      // Effective default is 'sonnet' from global model settings — persisted
+      // on the registry Task, not echoed in the MCP response.
+      const persisted = registry.getTasksForStack('no-model');
+      expect(persisted[0].model).toBe('sonnet');
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
         ['task', 'no-model', '--model', 'sonnet', 'Simple task']
@@ -503,7 +526,7 @@ describe('StackManager', () => {
       vi.spyOn(manager, 'dispatchTask').mockImplementation(async () => {
         dispatchCalls++;
         if (dispatchCalls === 1) throw new Error('not ready');
-        return { id: 1, stack_id: 'retry-test', prompt: 'task', model: null, status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null };
+        return { id: 1, stack_id: 'retry-test', status: 'running' };
       });
 
       manager.createStack({ name: 'retry-test', projectDir: tmpDir, runtime: 'docker', task: 'do work' });
@@ -534,8 +557,7 @@ describe('StackManager', () => {
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
       const dispatchSpy = vi.spyOn(manager, 'dispatchTask').mockResolvedValue({
-        id: 1, stack_id: 'bypass-prop', prompt: 'Fix issue #99', model: null,
-        status: 'running', exit_code: null, warnings: null, started_at: '', finished_at: null,
+        id: 1, stack_id: 'bypass-prop', status: 'running',
       });
 
       manager.createStack({
@@ -1067,14 +1089,17 @@ describe('StackManager', () => {
   });
 
   describe('getTaskStatus', () => {
-    it('returns running status with task when a task is running', () => {
+    it('returns running status with task metadata when a task is running', () => {
       registry.createStack(makeStack('status-test'));
-      registry.createTask('status-test', 'do work');
+      const task = registry.createTask('status-test', 'do work');
 
       const result = manager.getTaskStatus('status-test');
       expect(result.status).toBe('running');
-      expect(result.task).toBeDefined();
-      expect(result.task!.prompt).toBe('do work');
+      expect(result.id).toBe(task.id);
+      expect(typeof result.started_at).toBe('string');
+      // Trimmed response does NOT echo the prompt back to outer Claude (#255)
+      expect(result).not.toHaveProperty('prompt');
+      expect(result).not.toHaveProperty('task');
     });
 
     it('returns latest completed task status when no running task', () => {
@@ -1084,7 +1109,9 @@ describe('StackManager', () => {
 
       const result = manager.getTaskStatus('status-done');
       expect(result.status).toBe('completed');
-      expect(result.task).toBeDefined();
+      expect(result.id).toBe(task.id);
+      expect(result.exit_code).toBe(0);
+      expect(result).not.toHaveProperty('prompt');
     });
 
     it('returns idle when stack has no tasks', () => {
@@ -1092,7 +1119,8 @@ describe('StackManager', () => {
 
       const result = manager.getTaskStatus('status-idle');
       expect(result.status).toBe('idle');
-      expect(result.task).toBeUndefined();
+      expect(result.id).toBeUndefined();
+      expect(result).not.toHaveProperty('prompt');
     });
 
     it('throws for non-existent stack', () => {
@@ -1163,6 +1191,24 @@ describe('StackManager', () => {
     it('throws for non-existent stack', async () => {
       await expect(manager.getTaskOutput('ghost')).rejects.toThrow('not found');
     });
+
+    it('caps output at TASK_OUTPUT_MAX_BYTES with a truncation marker (#255)', async () => {
+      registry.createStack(makeStack('output-huge'));
+      const huge = 'x'.repeat(TASK_OUTPUT_MAX_BYTES * 3); // 12 KB
+      (runtime.exec as ReturnType<typeof vi.fn>).mockImplementation(
+        async (_id: string, cmd: string[]) => {
+          if (cmd.includes('/tmp/claude-task.log')) {
+            return { exitCode: 0, stdout: huge, stderr: '' };
+          }
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+      );
+
+      const output = await manager.getTaskOutput('output-huge');
+      expect(output).toContain('...[truncated');
+      // Marker adds a bit of overhead, but total is bounded
+      expect(Buffer.byteLength(output, 'utf8')).toBeLessThan(TASK_OUTPUT_MAX_BYTES + 100);
+    });
   });
 
   describe('getLogs', () => {
@@ -1217,6 +1263,45 @@ describe('StackManager', () => {
 
     it('throws for non-existent stack', async () => {
       await expect(manager.getLogs('ghost')).rejects.toThrow('not found');
+    });
+
+    it('caps per-container output at LOGS_PER_CONTAINER_MAX_BYTES (#255)', async () => {
+      registry.createStack(makeStack('logs-huge'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce([
+        {
+          id: 'c1', name: 'sandstorm-proj-logs-huge-claude-1',
+          image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+        },
+      ]);
+      const bigChunk = 'y'.repeat(LOGS_PER_CONTAINER_MAX_BYTES * 3); // 24 KB from the container
+      (runtime.logs as ReturnType<typeof vi.fn>).mockImplementation(async function* () {
+        yield bigChunk;
+      });
+
+      const logs = await manager.getLogs('logs-huge');
+      expect(logs).toContain('=== claude ===');
+      expect(logs).toContain('...[truncated');
+      // Overall result is bounded: header + per-container cap + marker, still < 32 KB.
+      expect(Buffer.byteLength(logs, 'utf8')).toBeLessThan(LOGS_TOTAL_MAX_BYTES + 200);
+    });
+
+    it('caps total size across many containers at LOGS_TOTAL_MAX_BYTES (#255)', async () => {
+      registry.createStack(makeStack('logs-many'));
+      // Eight containers, each producing exactly the per-container cap after trimming.
+      const containers = Array.from({ length: 8 }).map((_, i) => ({
+        id: `c${i}`, name: `sandstorm-proj-logs-many-svc${i}-1`,
+        image: 'img', status: 'running', state: 'running', ports: [], labels: {}, created: '',
+      }));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValueOnce(containers);
+      const bigChunk = 'z'.repeat(LOGS_PER_CONTAINER_MAX_BYTES);
+      (runtime.logs as ReturnType<typeof vi.fn>).mockImplementation(async function* () {
+        yield bigChunk;
+      });
+
+      const logs = await manager.getLogs('logs-many');
+      // 8 × 8 KB per-container = 64 KB of raw content; must be capped below 32 KB + overhead.
+      expect(Buffer.byteLength(logs, 'utf8')).toBeLessThan(LOGS_TOTAL_MAX_BYTES + 200);
+      expect(logs).toContain('...[truncated');
     });
   });
 
@@ -1850,12 +1935,15 @@ describe('spec quality gate enforcement', () => {
       registry.createStack(stackWithTicket);
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
-      const task = await manager.dispatchTask('dispatch-approved', 'Do the work', undefined, {
+      const result = await manager.dispatchTask('dispatch-approved', 'Do the work', undefined, {
         gateApproved: true,
       });
 
-      expect(task).toBeDefined();
-      expect(task.prompt).toContain('Do the work');
+      expect(result).toBeDefined();
+      expect(result.status).toBe('running');
+      // Trimmed MCP response does not echo the prompt; verify via registry
+      const persisted = registry.getTasksForStack('dispatch-approved');
+      expect(persisted[0].prompt).toContain('Do the work');
     });
 
     it('throws GATE_CHECK_REQUIRED when prompt contains issue reference', async () => {
@@ -1871,8 +1959,9 @@ describe('spec quality gate enforcement', () => {
       registry.createStack(makeStack('dispatch-adhoc'));
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
-      const task = await manager.dispatchTask('dispatch-adhoc', 'Refactor the login flow');
-      expect(task).toBeDefined();
+      const result = await manager.dispatchTask('dispatch-adhoc', 'Refactor the login flow');
+      expect(result).toBeDefined();
+      expect(result.status).toBe('running');
     });
 
     it('allows dispatch with forceBypass', async () => {
@@ -1880,11 +1969,50 @@ describe('spec quality gate enforcement', () => {
       registry.createStack(stackWithTicket);
       vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
 
-      const task = await manager.dispatchTask('dispatch-force', 'Do the work', undefined, {
+      const result = await manager.dispatchTask('dispatch-force', 'Do the work', undefined, {
         forceBypass: true,
       });
 
-      expect(task).toBeDefined();
+      expect(result).toBeDefined();
+      expect(result.status).toBe('running');
     });
+  });
+});
+
+describe('tailBytes', () => {
+  it('returns the string unchanged when under the cap', () => {
+    expect(tailBytes('hello', 100)).toBe('hello');
+  });
+
+  it('returns the string unchanged when at the cap exactly', () => {
+    const s = 'a'.repeat(10);
+    expect(tailBytes(s, 10)).toBe(s);
+  });
+
+  it('truncates to last N bytes with a marker when over the cap', () => {
+    const s = 'a'.repeat(1000);
+    const out = tailBytes(s, 100);
+    // Last 100 bytes of "a"s are preserved
+    expect(out.endsWith('a'.repeat(100))).toBe(true);
+    // Marker records the 900 dropped bytes
+    expect(out).toContain('...[truncated 900 earlier bytes]...');
+    // The marker itself adds a bit of overhead, but the body is exactly 100 bytes
+    expect(Buffer.byteLength(out, 'utf8')).toBeGreaterThan(100);
+    expect(Buffer.byteLength(out, 'utf8')).toBeLessThan(200);
+  });
+
+  it('preserves UTF-8 decodability when cutting mid-codepoint', () => {
+    // Multi-byte characters intentionally placed around the byte boundary
+    const s = '€'.repeat(100); // 3 bytes each → 300 bytes
+    const out = tailBytes(s, 50);
+    // Decodes without throwing; any invalid leading bytes become U+FFFD
+    expect(typeof out).toBe('string');
+    expect(out).toContain('...[truncated');
+  });
+
+  it('exports sane default cap constants', () => {
+    expect(TASK_OUTPUT_MAX_BYTES).toBe(4096);
+    expect(LOGS_PER_CONTAINER_MAX_BYTES).toBe(8192);
+    expect(LOGS_TOTAL_MAX_BYTES).toBe(32768);
   });
 });
