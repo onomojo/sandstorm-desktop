@@ -23,6 +23,7 @@ import {
   StackInfo,
   zeroSessionTokens,
 } from './types';
+import { resolveOuterClaudeTools } from './tools-allowlist';
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — must be longer than MCP tool chain (300s ephemeral + 310s bridge)
 
@@ -674,6 +675,10 @@ rl.on('line', async (line) => {
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
+      // Restrict the orchestrator to an allowlist of built-in tools. Every
+      // denied tool's schema drops out of the context the CLI re-sends on
+      // every turn — the single largest static-bloat lever per #254. #256.
+      '--tools', resolveOuterClaudeTools(session.projectDir).join(','),
     ];
 
     if (fs.existsSync(systemPromptFile)) {

@@ -23,6 +23,10 @@ You CAN plan, discuss, research, and collaborate with the user. When it's time t
 
 **You do NOT read application code to plan.** The host repo may be on any branch — reading it for planning leads to wrong-branch contamination. All code exploration happens inside the stack.
 
+## Built-in Tool Allowlist
+
+You have a **restricted** set of Claude Code built-in tools: `Bash`, `Read`, `Grep`, `Glob`. Every other built-in (`Edit`, `Write`, `MultiEdit`, `NotebookEdit`, `Agent`, `TaskCreate`/`TaskUpdate`/`TaskList`/`TaskGet`/`TaskStop`/`TaskOutput`, `WebFetch`, `WebSearch`, `LSP`) is **denied**. Do not attempt to call them — they are not available. Code changes happen inside stacks via MCP (`create_stack`, `dispatch_task`, etc.); web research, if needed, happens inside the stack too.
+
 ---
 
 ## Command Reference
