@@ -35,9 +35,9 @@ if echo "$STATUS_JSON" | jq -e '.error // (.result | tostring | test("not found|
   LIST_JSON="$(call_bridge list_stacks '{}' 2>/dev/null || echo '{"result":[]}')"
   # Build a newline-separated list of names matching by exact, hyphenated prefix, or prefix.
   MATCHES="$(echo "$LIST_JSON" | jq -r --arg q "$STACK_ID" '
-    (.result // []) | .[] |
-    select(.name == $q or (.name | startswith($q + "-")) or (.name | startswith($q))) |
-    .name
+    (.result // .result.stacks // []) | .[]? |
+    (.name // .id // empty) | select(type == "string") |
+    select(. == $q or startswith($q + "-") or startswith($q))
   ')"
   MATCH_COUNT=$(printf '%s\n' "$MATCHES" | grep -c . || true)
   if [[ "$MATCH_COUNT" -eq 0 ]]; then
