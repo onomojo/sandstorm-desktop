@@ -15,12 +15,17 @@ import path from 'path';
  * outer Claude's job is to delegate to stacks via MCP, not to edit code or
  * fetch the web itself. Denying them strips their schemas from the context
  * re-sent on every outer turn.
+ *
+ * `Skill` is on the list so the orchestrator can invoke project-local skills
+ * enumerated at spawn time (#266). Skill descriptions ride in the system
+ * prompt; skill bodies load lazily when the tool is called.
  */
 export const DEFAULT_OUTER_CLAUDE_TOOLS: readonly string[] = Object.freeze([
   'Bash',
   'Read',
   'Grep',
   'Glob',
+  'Skill',
 ]);
 
 /**

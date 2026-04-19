@@ -24,6 +24,7 @@ import {
   zeroSessionTokens,
 } from './types';
 import { resolveOuterClaudeTools } from './tools-allowlist';
+import { composeSystemPromptWithSkills } from './skill-enumeration';
 import { TokenTelemetry, ToolCallRecord, isTelemetryEnabled } from './token-telemetry';
 
 /** In-flight per-cycle tracking; tool_use_id is only retained in memory. */
@@ -693,6 +694,39 @@ rl.on('line', async (line) => {
   }
 
   /**
+   * Compose the orchestrator system prompt with a per-project skills
+   * enumeration (#266). `--system-prompt-file` replaces Claude Code's
+   * default system prompt and thereby suppresses the built-in
+   * "Available Skills" reminder; this helper re-injects it by reading
+   * `.claude/skills/<name>/SKILL.md` frontmatter at spawn time and
+   * appending a skills section to SANDSTORM_OUTER.md. Writes the
+   * composed prompt to a tmp file and returns its path, or returns the
+   * original path if composition fails. Returns null when the base
+   * prompt file doesn't exist, so the caller can fall through to the
+   * CLI's default system prompt.
+   */
+  private resolveSystemPromptFile(
+    basePath: string,
+    projectDir: string,
+    tabId: string
+  ): string | null {
+    if (!fs.existsSync(basePath)) return null;
+    try {
+      const base = fs.readFileSync(basePath, 'utf-8');
+      const composed = composeSystemPromptWithSkills(base, projectDir);
+      if (composed === base) return basePath;
+      const tmpDir = path.join(os.tmpdir(), `sandstorm-orchestrator-${process.pid}`);
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const safeTab = tabId.replace(/[^A-Za-z0-9._-]/g, '_');
+      const outPath = path.join(tmpDir, `system-prompt-${safeTab}.md`);
+      fs.writeFileSync(outPath, composed, 'utf-8');
+      return outPath;
+    } catch {
+      return basePath;
+    }
+  }
+
+  /**
    * Ensure a persistent Claude process is running for the given tab.
    * Spawns one if none exists. The process stays alive across messages.
    */
@@ -702,6 +736,7 @@ rl.on('line', async (line) => {
 
     const systemPromptFile = path.join(cliDir, 'SANDSTORM_OUTER.md');
     const claudeBin = getClaudeBin();
+    const cwd = session.projectDir || process.cwd();
 
     const args: string[] = [
       '--print',
@@ -714,8 +749,9 @@ rl.on('line', async (line) => {
       '--tools', resolveOuterClaudeTools(session.projectDir).join(','),
     ];
 
-    if (fs.existsSync(systemPromptFile)) {
-      args.push('--system-prompt-file', systemPromptFile);
+    const resolvedPromptFile = this.resolveSystemPromptFile(systemPromptFile, cwd, tabId);
+    if (resolvedPromptFile) {
+      args.push('--system-prompt-file', resolvedPromptFile);
     }
 
     if (this.mcpConfigPath) {
@@ -726,8 +762,6 @@ rl.on('line', async (line) => {
       const outerModel = this.modelResolver(session.projectDir);
       args.push('--model', outerModel);
     }
-
-    const cwd = session.projectDir || process.cwd();
 
     const child = spawn(claudeBin, args, {
       cwd,

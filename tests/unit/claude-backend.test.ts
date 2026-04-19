@@ -561,7 +561,7 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
       const toolsIdx = spawnedArgs.indexOf('--tools');
       expect(toolsIdx).toBeGreaterThan(-1);
-      expect(spawnedArgs[toolsIdx + 1]).toBe('Bash,Read,Grep,Glob');
+      expect(spawnedArgs[toolsIdx + 1]).toBe('Bash,Read,Grep,Glob,Skill');
     });
 
     it('places --tools before --system-prompt-file and --mcp-config', async () => {
@@ -619,7 +619,7 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
 
       const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
       const toolsIdx = spawnedArgs.indexOf('--tools');
-      expect(spawnedArgs[toolsIdx + 1]).toBe('Bash,Read,Grep,Glob');
+      expect(spawnedArgs[toolsIdx + 1]).toBe('Bash,Read,Grep,Glob,Skill');
     });
   });
 
