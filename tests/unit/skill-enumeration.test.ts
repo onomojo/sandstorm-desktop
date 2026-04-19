@@ -4,6 +4,8 @@ import path from 'path';
 import os from 'os';
 import {
   enumerateProjectSkills,
+  enumerateSkillsFromDir,
+  enumerateSkills,
   formatSkillsSection,
   composeSystemPromptWithSkills,
 } from '../../src/main/agent/skill-enumeration';
@@ -104,6 +106,106 @@ describe('enumerateProjectSkills (#266)', () => {
     writeSkill('folder', 'name: folder\ndescription: Picked up');
     const skills = enumerateProjectSkills(tmpDir);
     expect(skills.map((s) => s.name)).toEqual(['folder']);
+  });
+});
+
+describe('enumerateSkills — bundled + project merge (#268)', () => {
+  let tmpDir: string;
+  let projectDir: string;
+  let bundledDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sandstorm-skill-merge-'));
+    projectDir = path.join(tmpDir, 'project');
+    bundledDir = path.join(tmpDir, 'bundled');
+    fs.mkdirSync(path.join(projectDir, '.claude', 'skills'), { recursive: true });
+    fs.mkdirSync(bundledDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function writeProjectSkill(name: string, description: string): void {
+    const dir = path.join(projectDir, '.claude', 'skills', name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n`, 'utf-8');
+  }
+
+  function writeBundledSkill(name: string, description: string): void {
+    const dir = path.join(bundledDir, name);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'SKILL.md'), `---\nname: ${name}\ndescription: ${description}\n---\n`, 'utf-8');
+  }
+
+  it('returns bundled skills when no project skills exist', () => {
+    writeBundledSkill('check-and-resume', 'bundled desc');
+    const skills = enumerateSkills({ projectDir, bundledSkillsDir: bundledDir });
+    expect(skills.map((s) => s.name)).toEqual(['check-and-resume']);
+    expect(skills[0].description).toBe('bundled desc');
+  });
+
+  it('returns project skills when no bundled dir is given', () => {
+    writeProjectSkill('proj-only', 'project desc');
+    const skills = enumerateSkills({ projectDir });
+    expect(skills.map((s) => s.name)).toEqual(['proj-only']);
+  });
+
+  it('merges bundled + project, project wins on name collision', () => {
+    writeBundledSkill('shared', 'bundled version');
+    writeProjectSkill('shared', 'project version');
+    writeBundledSkill('bundled-only', 'bundled description');
+    writeProjectSkill('project-only', 'project description');
+    const skills = enumerateSkills({ projectDir, bundledSkillsDir: bundledDir });
+    expect(skills.map((s) => s.name)).toEqual(['bundled-only', 'project-only', 'shared']);
+    const shared = skills.find((s) => s.name === 'shared');
+    expect(shared?.description).toBe('project version');
+  });
+
+  it('returns empty array when both dirs are absent', () => {
+    expect(
+      enumerateSkills({
+        projectDir: path.join(tmpDir, 'no-such-project'),
+        bundledSkillsDir: path.join(tmpDir, 'no-such-bundled'),
+      })
+    ).toEqual([]);
+  });
+
+  it('enumerateSkillsFromDir: direct reading of a skills root', () => {
+    writeBundledSkill('a', 'A');
+    writeBundledSkill('b', 'B');
+    const skills = enumerateSkillsFromDir(bundledDir);
+    expect(skills.map((s) => s.name).sort()).toEqual(['a', 'b']);
+  });
+});
+
+describe('composeSystemPromptWithSkills with bundledSkillsDir (#268)', () => {
+  let tmpDir: string;
+  let projectDir: string;
+  let bundledDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sandstorm-skill-compose-bundled-'));
+    projectDir = path.join(tmpDir, 'project');
+    bundledDir = path.join(tmpDir, 'bundled');
+    fs.mkdirSync(path.join(projectDir, '.claude', 'skills'), { recursive: true });
+    fs.mkdirSync(bundledDir, { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('includes bundled skill in the composed prompt', () => {
+    const dir = path.join(bundledDir, 'check-and-resume-stack');
+    fs.mkdirSync(dir);
+    fs.writeFileSync(
+      path.join(dir, 'SKILL.md'),
+      '---\nname: check-and-resume-stack\ndescription: Check and resume a stack\n---\n',
+      'utf-8'
+    );
+    const composed = composeSystemPromptWithSkills('BASE\n', projectDir, bundledDir);
+    expect(composed).toContain('- check-and-resume-stack: Check and resume a stack');
   });
 });
 
