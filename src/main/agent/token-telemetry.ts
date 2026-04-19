@@ -5,7 +5,7 @@
  * tests can target a temp file without any mocking. The production wiring
  * lives in claude-backend.ts.
  *
- * Schema (one line per completed turn):
+ * Schema (one line per completed user-message cycle):
  *   {
  *     "ts": ISO-8601,
  *     "tabId": string,
@@ -15,13 +15,22 @@
  *     "input_tokens": number,
  *     "output_tokens": number,
  *     "cache_creation_input_tokens": number,
- *     "cache_read_input_tokens": number
+ *     "cache_read_input_tokens": number,
+ *     "sub_turn_count": number (count of type:"assistant" events = API calls in the tool-use chain),
+ *     "tool_calls": [{ "name": string, "tool_result_bytes": number }]
  *   }
  *
  * Off by default. Opt in with the env var `SANDSTORM_TOKEN_TELEMETRY=1`.
  */
 
 import { appendFileSync } from 'fs';
+
+export interface ToolCallRecord {
+  /** MCP tool name invoked by the model (e.g. "get_diff", "dispatch_task"). */
+  name: string;
+  /** UTF-8 byte length of the tool_result text returned to the model. */
+  tool_result_bytes: number;
+}
 
 export interface TokenTelemetryEvent {
   ts: string;
@@ -33,6 +42,20 @@ export interface TokenTelemetryEvent {
   output_tokens: number;
   cache_creation_input_tokens: number;
   cache_read_input_tokens: number;
+  /**
+   * Number of type:"assistant" events emitted by the CLI between the user
+   * message being written to stdin and the type:"result" that produced this
+   * telemetry line. Each assistant event corresponds to one API response, so
+   * this is the sub-API-call count for a tool-use chain. `1` means "direct
+   * reply, no tool use"; `>= 2` means the model ran tools.
+   */
+  sub_turn_count: number;
+  /**
+   * Ordered list of MCP tool calls made during this cycle. Each entry pairs
+   * the tool name (captured from content_block_start) with the UTF-8 byte
+   * length of the tool_result the bridge returned.
+   */
+  tool_calls: ToolCallRecord[];
 }
 
 export interface TokenTelemetryOptions {

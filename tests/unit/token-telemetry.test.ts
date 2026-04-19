@@ -37,6 +37,8 @@ describe('TokenTelemetry (#262 tactic A)', () => {
       output_tokens: 20,
       cache_creation_input_tokens: 30000,
       cache_read_input_tokens: 0,
+      sub_turn_count: 1,
+      tool_calls: [],
       ...partial,
     };
   }
@@ -93,6 +95,41 @@ describe('TokenTelemetry (#262 tactic A)', () => {
     expect(event.output_tokens).toBe(56);
     expect(event.cache_creation_input_tokens).toBe(28_000);
     expect(event.cache_read_input_tokens).toBe(2_000);
+  });
+
+  it('round-trips sub_turn_count and tool_calls (#262 sub-turn instrumentation)', () => {
+    const tel = new TokenTelemetry({ filePath: sinkPath, enabled: true });
+    tel.record(
+      sampleEvent({
+        turn_index: 0,
+        sub_turn_count: 5,
+        tool_calls: [
+          { name: 'list_stacks', tool_result_bytes: 512 },
+          { name: 'get_task_status', tool_result_bytes: 180 },
+          { name: 'get_diff', tool_result_bytes: 42_000 },
+          { name: 'dispatch_task', tool_result_bytes: 120 },
+        ],
+      })
+    );
+    tel.close();
+
+    const [event] = readEvents();
+    expect(event.sub_turn_count).toBe(5);
+    expect(event.tool_calls).toHaveLength(4);
+    expect(event.tool_calls[2]).toEqual({
+      name: 'get_diff',
+      tool_result_bytes: 42_000,
+    });
+  });
+
+  it('round-trips an empty tool_calls list and sub_turn_count=1 for a direct reply', () => {
+    const tel = new TokenTelemetry({ filePath: sinkPath, enabled: true });
+    tel.record(sampleEvent({ sub_turn_count: 1, tool_calls: [] }));
+    tel.close();
+
+    const [event] = readEvents();
+    expect(event.sub_turn_count).toBe(1);
+    expect(event.tool_calls).toEqual([]);
   });
 
   it('appends to an existing file rather than truncating', () => {
