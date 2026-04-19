@@ -13,13 +13,16 @@ The user has named a specific stack ID (e.g. `250`, `homepage-launch`) and wants
 - Its current status
 - If it's not finished AND they asked to resume: pick up where it left off
 
-Extract the stack ID from the user's message. If you don't see one, ask the user for it — do NOT call `list_stacks` to guess.
+Extract the stack ID from the user's message. If you don't see an ID anywhere in the message, ask the user for it — do NOT call `list_stacks` to guess.
 
 ## The minimum viable sequence
 
 Call tools in this order. Do not skip steps, do not add extra steps.
 
-1. **`mcp__sandstorm-tools__get_task_status({ stackId: "<id>" })`** — exactly ONE call. This returns the task state plus the stack's current state.
+1. **`mcp__sandstorm-tools__get_task_status({ stackId: "<id>" })`** — first try with the literal ID from the user's message.
+
+   - **If it returns a valid status**, go to step 2.
+   - **If it returns not-found / unknown-stack**, the user may have typed a partial ID (e.g. `250` meaning `250-scheduled-automation`). Allow exactly ONE recovery call: `mcp__sandstorm-tools__list_stacks()`. Look for a stack whose name *starts with* or *contains* the user's ID. If exactly one match, retry `get_task_status` with the matched ID and continue. If zero or multiple matches, tell the user what you found and ask them to disambiguate. Do NOT guess — and do NOT exceed one `list_stacks` call.
 
 2. **Interpret the status once.** Based on the returned state:
 
@@ -37,8 +40,8 @@ Call tools in this order. Do not skip steps, do not add extra steps.
 
 ## Hard rules — these are the consolidation
 
-- **NEVER call `list_stacks`** when the user named a stack ID. The status call already tells you everything.
-- **NEVER call `get_task_status` more than once.** One status check per invocation.
+- **At most ONE `list_stacks` call**, used only as a recovery step after `get_task_status` returned not-found. Never upfront.
+- **At most TWO `get_task_status` calls** total: the literal-ID attempt, plus an optional retry with the resolved ID after a `list_stacks` recovery. No status polling.
 - **NEVER call `get_task_output`, `get_logs`, or `get_diff`** unless the user explicitly asked for output / logs / changes.
 - **NEVER shell out** with Bash to probe container state. The status call covers it.
 - **NEVER run the spec quality gate** on resume — the user is continuing existing work, not dispatching a new ticket.
@@ -50,7 +53,11 @@ Call tools in this order. Do not skip steps, do not add extra steps.
 Baseline for the canonical "check-and-resume" scenario was 11 tool calls across 22 internal API rounds (get_task_status, list_stacks, get_task_status, get_task_output, get_diff, get_logs, Bash, dispatch_task, Bash, Bash, dispatch_task). Using this skill, the expected shape is:
 
 - 1× `Skill` tool call (the invocation of this skill)
-- 1× `get_task_status`
+- 1× `get_task_status` with the literal ID (happy path)
+- 0–1× `list_stacks` (only if the literal ID didn't resolve — a prefix/partial match recovery)
+- 0–1× second `get_task_status` with the resolved ID (only after a `list_stacks` recovery)
 - 0–1× `dispatch_task` (only if resume is called for)
+
+Happy-path total: 2 tool calls. Recovery-path total: 4 tool calls + resume = 5. Baseline was 11. Either way, no `get_task_output`, no `get_logs`, no `get_diff`, no `Bash`.
 
 If you find yourself reaching for a second status check or a `get_diff` the user didn't ask for, stop — that's the old behavior this skill exists to replace.
