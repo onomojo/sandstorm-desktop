@@ -24,7 +24,12 @@ import {
   zeroSessionTokens,
 } from './types';
 import { resolveOuterClaudeTools } from './tools-allowlist';
-import { TokenTelemetry, isTelemetryEnabled } from './token-telemetry';
+import { TokenTelemetry, ToolCallRecord, isTelemetryEnabled } from './token-telemetry';
+
+/** In-flight per-cycle tracking; tool_use_id is only retained in memory. */
+interface InFlightToolCall extends ToolCallRecord {
+  tool_use_id: string;
+}
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — must be longer than MCP tool chain (300s ephemeral + 310s bridge)
 
@@ -44,6 +49,8 @@ interface ClaudeSession {
   cancelFallback: ReturnType<typeof setTimeout> | null; // fallback kill timer after cancel
   turnIndex: number;            // 0-based index of completed turns in this session
   lastResultAt: number | null;  // Date.now() of the previous `type:"result"` event, for telemetry deltas
+  subTurnCount: number;         // count of type:"assistant" events since the last type:"result" (= API calls in the current tool-use chain)
+  toolCallsInCycle: InFlightToolCall[]; // MCP tool calls made since the last type:"result"; reset on record
 }
 
 function getClaudeBin(): string {
@@ -328,6 +335,8 @@ rl.on('line', async (line) => {
         cancelFallback: null,
         turnIndex: 0,
         lastResultAt: null,
+        subTurnCount: 0,
+        toolCallsInCycle: [],
       };
       this.sessions.set(tabId, session);
     }
@@ -825,10 +834,18 @@ rl.on('line', async (line) => {
                   output_tokens: usage.output_tokens ?? 0,
                   cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
                   cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+                  sub_turn_count: session.subTurnCount,
+                  tool_calls: session.toolCallsInCycle.map((c) => ({
+                    name: c.name,
+                    tool_result_bytes: c.tool_result_bytes,
+                  })),
                 });
               }
               session.turnIndex += 1;
               session.lastResultAt = Date.now();
+              // Reset per-cycle counters for the next user-message turn.
+              session.subTurnCount = 0;
+              session.toolCallsInCycle = [];
             }
 
             if (session.fullResponse) {
@@ -856,16 +873,62 @@ rl.on('line', async (line) => {
             continue;
           }
 
-          // Log tool_use events for observability
+          // Log tool_use events for observability + telemetry (#262 sub-turn instrumentation)
           if (parsed.type === 'content_block_start') {
             const contentBlock = (parsed as { content_block?: { type?: string; name?: string; id?: string } }).content_block;
             if (contentBlock?.type === 'tool_use') {
               this.log(`Tool call: tab=${tabId} tool=${contentBlock.name} id=${contentBlock.id}`);
+              if (contentBlock.name && contentBlock.id) {
+                session.toolCallsInCycle.push({
+                  name: contentBlock.name,
+                  tool_use_id: contentBlock.id,
+                  tool_result_bytes: 0,
+                });
+              }
             }
           }
           if (parsed.type === 'content_block_stop') {
             const idx = (parsed as { index?: number }).index;
             this.log(`Tool call ended: tab=${tabId} block_index=${idx}`);
+          }
+
+          // Count sub-API-calls: each type:"assistant" event is one API response.
+          // A direct reply has sub_turn_count=1; a tool-use chain produces >= 2.
+          if (parsed.type === 'assistant') {
+            session.subTurnCount += 1;
+          }
+
+          // type:"user" carries tool_result blocks that the bridge returned to
+          // the model. Associate each tool_result's text size with its
+          // originating tool_use_id so we can see which tools fed the biggest
+          // payloads into the transcript.
+          if (parsed.type === 'user') {
+            const msg = (parsed as { message?: { content?: unknown } }).message;
+            const content = msg?.content;
+            if (Array.isArray(content)) {
+              for (const block of content as Array<Record<string, unknown>>) {
+                if (block?.type !== 'tool_result') continue;
+                const toolUseId = block.tool_use_id as string | undefined;
+                if (!toolUseId) continue;
+                const record = session.toolCallsInCycle.find(
+                  (c) => c.tool_use_id === toolUseId
+                );
+                if (!record) continue;
+                const blockContent = block.content;
+                let bytes = 0;
+                if (typeof blockContent === 'string') {
+                  bytes = Buffer.byteLength(blockContent, 'utf8');
+                } else if (Array.isArray(blockContent)) {
+                  for (const inner of blockContent as Array<Record<string, unknown>>) {
+                    if (typeof inner?.text === 'string') {
+                      bytes += Buffer.byteLength(inner.text, 'utf8');
+                    }
+                  }
+                }
+                // Accumulate in case a tool_result arrives in chunks
+                record.tool_result_bytes += bytes;
+              }
+            }
           }
 
           // Extract text for streaming output

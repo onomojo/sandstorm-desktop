@@ -774,6 +774,163 @@ describe('Token telemetry wiring (#262 tactic A)', () => {
     expect(event.output_tokens).toBe(56);
     expect(event.cache_creation_input_tokens).toBe(28_000);
     expect(event.cache_read_input_tokens).toBe(0);
+    // Direct reply (no tool chain): sub_turn_count defaults to 0 because no
+    // assistant events were streamed before the result in this test, and
+    // tool_calls is the empty list.
+    expect(event.sub_turn_count).toBe(0);
+    expect(event.tool_calls).toEqual([]);
+
+    backend.destroy();
+  });
+
+  it('captures sub_turn_count and tool_calls for a tool-use chain (#262 sub-turn instrumentation)', async () => {
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-chain', 'check stack 1', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+
+    const emit = (obj: unknown): void => {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    };
+
+    // Simulate the exact stream-json event sequence a multi-tool chain would
+    // produce: assistant (1st API call — emits tool_use), user (tool_result
+    // for that tool), assistant (2nd API call — emits 2nd tool_use), user
+    // (2nd tool_result), assistant (3rd API call — final text), result.
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'content_block_start',
+      content_block: { type: 'tool_use', name: 'list_stacks', id: 'tu_1' },
+    });
+    const listStacksResult = 'x'.repeat(512);
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: listStacksResult }],
+      },
+    });
+
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'content_block_start',
+      content_block: { type: 'tool_use', name: 'get_diff', id: 'tu_2' },
+    });
+    const getDiffResult = 'y'.repeat(42_000);
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tu_2',
+            // tool_result content may also arrive as an array of text blocks
+            content: [{ type: 'text', text: getDiffResult }],
+          },
+        ],
+      },
+    });
+
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 17,
+        output_tokens: 280,
+        cache_creation_input_tokens: 3_200,
+        cache_read_input_tokens: 156_000,
+      },
+    });
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    expect(telemetryAppends.length).toBe(1);
+    const event = JSON.parse((telemetryAppends[0][1] as string).trim());
+
+    expect(event.tabId).toBe('tel-chain');
+    expect(event.cache_read_input_tokens).toBe(156_000);
+    // Three assistant events = three sub-API-calls
+    expect(event.sub_turn_count).toBe(3);
+    // Two tools called, in order, with their tool_result byte sizes
+    expect(event.tool_calls).toEqual([
+      { name: 'list_stacks', tool_result_bytes: 512 },
+      { name: 'get_diff', tool_result_bytes: 42_000 },
+    ]);
+
+    backend.destroy();
+  });
+
+  it('resets sub_turn_count and tool_calls between successive user messages', async () => {
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-reset', 'first', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    const emit = (obj: unknown): void => {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    };
+
+    // First message: 1 tool call, 2 assistant events
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'content_block_start',
+      content_block: { type: 'tool_use', name: 'list_stacks', id: 'a1' },
+    });
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'a1', content: 'stacks' }],
+      },
+    });
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 50,
+        cache_creation_input_tokens: 100,
+        cache_read_input_tokens: 50_000,
+      },
+    });
+
+    // Second message: 1 assistant event, no tool calls
+    backend.sendMessage('tel-reset', 'second', '/proj');
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 100,
+        cache_creation_input_tokens: 200,
+        cache_read_input_tokens: 50_000,
+      },
+    });
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    expect(telemetryAppends.length).toBe(2);
+
+    const first = JSON.parse((telemetryAppends[0][1] as string).trim());
+    const second = JSON.parse((telemetryAppends[1][1] as string).trim());
+
+    expect(first.sub_turn_count).toBe(2);
+    expect(first.tool_calls).toEqual([{ name: 'list_stacks', tool_result_bytes: 6 }]);
+
+    // Second turn must be independent — cycle counters reset on result.
+    expect(second.sub_turn_count).toBe(1);
+    expect(second.tool_calls).toEqual([]);
 
     backend.destroy();
   });
