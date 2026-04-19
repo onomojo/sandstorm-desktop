@@ -894,8 +894,29 @@ rl.on('line', async (line) => {
 
           // Count sub-API-calls: each type:"assistant" event is one API response.
           // A direct reply has sub_turn_count=1; a tool-use chain produces >= 2.
+          // Also walk the assistant message content for tool_use blocks —
+          // some CLI builds (observed on the orchestrator path) emit tool_use
+          // here instead of via separate content_block_start events, so we
+          // capture from both paths and dedupe by tool_use_id.
           if (parsed.type === 'assistant') {
             session.subTurnCount += 1;
+            const assistantMsg = (parsed as { message?: { content?: unknown } }).message;
+            const assistantContent = assistantMsg?.content;
+            if (Array.isArray(assistantContent)) {
+              for (const block of assistantContent as Array<Record<string, unknown>>) {
+                if (block?.type !== 'tool_use') continue;
+                const id = typeof block.id === 'string' ? block.id : undefined;
+                const name = typeof block.name === 'string' ? block.name : undefined;
+                if (!id || !name) continue;
+                if (session.toolCallsInCycle.some((c) => c.tool_use_id === id)) continue;
+                session.toolCallsInCycle.push({
+                  name,
+                  tool_use_id: id,
+                  tool_result_bytes: 0,
+                });
+                this.log(`Tool call: tab=${tabId} tool=${name} id=${id}`);
+              }
+            }
           }
 
           // type:"user" carries tool_result blocks that the bridge returned to
