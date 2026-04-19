@@ -8,7 +8,7 @@ description: "Use this skill whenever the user asks to CHECK the status of an ex
 Extract the stack ID from the user's message, then run the script exactly once:
 
 ```bash
-.claude/skills/check-and-resume-stack/scripts/check-and-resume.sh <stack-id>
+bash "$SANDSTORM_SKILLS_DIR/check-and-resume-stack/scripts/check-and-resume.sh" <stack-id>
 ```
 
 The script prints one summary line. Relay it to the user. Do not make any other tool calls.

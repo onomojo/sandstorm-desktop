@@ -64,13 +64,11 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
 }
 
 /**
- * Enumerate skills at `<projectDir>/.claude/skills/<name>/SKILL.md`.
- * Returns only entries whose SKILL.md has non-empty `name` and
- * `description` in the frontmatter; other files are silently skipped.
- * Results sorted by name for deterministic system-prompt output.
+ * Enumerate folder-pattern skills under a given directory. Each
+ * `<skillsRoot>/<name>/SKILL.md` with valid `name` + `description`
+ * frontmatter is returned; anything else is silently skipped.
  */
-export function enumerateProjectSkills(projectDir: string): SkillDescriptor[] {
-  const skillsRoot = path.join(projectDir, '.claude', 'skills');
+export function enumerateSkillsFromDir(skillsRoot: string): SkillDescriptor[] {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(skillsRoot, { withFileTypes: true });
@@ -92,8 +90,38 @@ export function enumerateProjectSkills(projectDir: string): SkillDescriptor[] {
     if (!fm || !fm.name || !fm.description) continue;
     descriptors.push({ name: fm.name, description: fm.description, path: skillPath });
   }
-  descriptors.sort((a, b) => a.name.localeCompare(b.name));
   return descriptors;
+}
+
+/**
+ * Enumerate project-level skills at `<projectDir>/.claude/skills/`.
+ * Kept for back-compat; prefer `enumerateSkills` which also includes
+ * the Sandstorm-bundled skills.
+ */
+export function enumerateProjectSkills(projectDir: string): SkillDescriptor[] {
+  const skills = enumerateSkillsFromDir(path.join(projectDir, '.claude', 'skills'));
+  skills.sort((a, b) => a.name.localeCompare(b.name));
+  return skills;
+}
+
+/**
+ * Enumerate skills from the Sandstorm-bundled skills dir and the
+ * project's `.claude/skills/` merged together. On name collisions the
+ * project skill wins (mirrors Claude Code's project > bundled
+ * precedence). Results sorted by name for deterministic output.
+ */
+export function enumerateSkills(options: {
+  projectDir?: string;
+  bundledSkillsDir?: string;
+}): SkillDescriptor[] {
+  const bundled = options.bundledSkillsDir ? enumerateSkillsFromDir(options.bundledSkillsDir) : [];
+  const project = options.projectDir
+    ? enumerateSkillsFromDir(path.join(options.projectDir, '.claude', 'skills'))
+    : [];
+  const byName = new Map<string, SkillDescriptor>();
+  for (const skill of bundled) byName.set(skill.name, skill);
+  for (const skill of project) byName.set(skill.name, skill); // project overrides bundled
+  return [...byName.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 /**
@@ -111,11 +139,16 @@ export function formatSkillsSection(skills: SkillDescriptor[]): string {
 
 /**
  * Compose a full system prompt: base text, then the skills section if
- * any skills are present. Returns the base unchanged when the project
- * has no registered skills.
+ * any skills are present. Merges Sandstorm-bundled skills with the
+ * project's `.claude/skills/` (project wins on name collisions).
+ * Returns the base unchanged when there are no registered skills.
  */
-export function composeSystemPromptWithSkills(basePrompt: string, projectDir: string): string {
-  const skills = enumerateProjectSkills(projectDir);
+export function composeSystemPromptWithSkills(
+  basePrompt: string,
+  projectDir: string,
+  bundledSkillsDir?: string
+): string {
+  const skills = enumerateSkills({ projectDir, bundledSkillsDir });
   const section = formatSkillsSection(skills);
   if (!section) return basePrompt;
   const separator = basePrompt.endsWith('\n') ? '\n' : '\n\n';

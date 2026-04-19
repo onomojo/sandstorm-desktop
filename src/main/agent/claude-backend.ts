@@ -713,7 +713,7 @@ rl.on('line', async (line) => {
     if (!fs.existsSync(basePath)) return null;
     try {
       const base = fs.readFileSync(basePath, 'utf-8');
-      const composed = composeSystemPromptWithSkills(base, projectDir);
+      const composed = composeSystemPromptWithSkills(base, projectDir, path.join(cliDir, 'skills'));
       if (composed === base) return basePath;
       const tmpDir = path.join(os.tmpdir(), `sandstorm-orchestrator-${process.pid}`);
       fs.mkdirSync(tmpDir, { recursive: true });
@@ -766,10 +766,14 @@ rl.on('line', async (line) => {
     // Expose the in-process MCP bridge to script-backed skills (#268). The
     // bridge already exists for the MCP server; scripts call the same
     // endpoint via curl and go through the control plane, not raw CLI.
+    // SANDSTORM_SKILLS_DIR points at the bundled skills dir so SKILL.md
+    // bodies can reference their own `scripts/*.sh` no matter which
+    // project is open.
     const env = {
       ...getClaudeEnv(),
       SANDSTORM_BRIDGE_URL: `http://127.0.0.1:${this.bridgePort}`,
       SANDSTORM_BRIDGE_TOKEN: this.bridgeToken,
+      SANDSTORM_SKILLS_DIR: path.join(cliDir, 'skills'),
     };
 
     const child = spawn(claudeBin, args, {
