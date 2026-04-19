@@ -763,9 +763,18 @@ rl.on('line', async (line) => {
       args.push('--model', outerModel);
     }
 
+    // Expose the in-process MCP bridge to script-backed skills (#268). The
+    // bridge already exists for the MCP server; scripts call the same
+    // endpoint via curl and go through the control plane, not raw CLI.
+    const env = {
+      ...getClaudeEnv(),
+      SANDSTORM_BRIDGE_URL: `http://127.0.0.1:${this.bridgePort}`,
+      SANDSTORM_BRIDGE_TOKEN: this.bridgeToken,
+    };
+
     const child = spawn(claudeBin, args, {
       cwd,
-      env: getClaudeEnv(),
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
