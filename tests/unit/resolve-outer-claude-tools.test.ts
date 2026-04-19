@@ -29,8 +29,8 @@ describe('resolveOuterClaudeTools (#256)', () => {
     fs.writeFileSync(path.join(dir, 'settings.json'), content, 'utf-8');
   }
 
-  it('default allowlist is exactly Bash, Read, Grep, Glob', () => {
-    expect([...DEFAULT_OUTER_CLAUDE_TOOLS]).toEqual(['Bash', 'Read', 'Grep', 'Glob']);
+  it('default allowlist is exactly Bash, Read, Grep, Glob, Skill', () => {
+    expect([...DEFAULT_OUTER_CLAUDE_TOOLS]).toEqual(['Bash', 'Read', 'Grep', 'Glob', 'Skill']);
   });
 
   it('returns the default allowlist when no projectDir is provided', () => {
