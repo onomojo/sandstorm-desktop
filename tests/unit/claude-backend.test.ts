@@ -866,6 +866,130 @@ describe('Token telemetry wiring (#262 tactic A)', () => {
     backend.destroy();
   });
 
+  it('captures tool_use blocks embedded in type:"assistant" message content (#262 instrumentation fix)', async () => {
+    // Some Claude CLI builds emit tool_use inline on type:"assistant" events
+    // instead of via separate content_block_start events. We must capture
+    // them on both paths — this test exercises the assistant-only path.
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-assistant-tool-use', 'check it', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    const emit = (obj: unknown): void => {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    };
+
+    emit({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'Checking...' },
+          { type: 'tool_use', name: 'Bash', id: 'tu_a', input: { command: 'docker ps' } },
+        ],
+      },
+    });
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_a', content: 'CONTAINER ID   ...' }],
+      },
+    });
+
+    emit({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', name: 'Bash', id: 'tu_b', input: { command: 'git diff' } },
+        ],
+      },
+    });
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_b', content: 'diff --git ...' }],
+      },
+    });
+
+    emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 5,
+        output_tokens: 50,
+        cache_creation_input_tokens: 100,
+        cache_read_input_tokens: 45_000,
+      },
+    });
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    const event = JSON.parse((telemetryAppends[0][1] as string).trim());
+
+    expect(event.sub_turn_count).toBe(3);
+    expect(event.tool_calls).toEqual([
+      { name: 'Bash', tool_result_bytes: Buffer.byteLength('CONTAINER ID   ...', 'utf8') },
+      { name: 'Bash', tool_result_bytes: Buffer.byteLength('diff --git ...', 'utf8') },
+    ]);
+
+    backend.destroy();
+  });
+
+  it('does not double-count when tool_use appears in both content_block_start and assistant content (#262 dedupe)', async () => {
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-dedupe', 'x', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    const emit = (obj: unknown): void => {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    };
+
+    // Same tool_use id arrives via both content_block_start AND assistant.content
+    emit({ type: 'content_block_start', content_block: { type: 'tool_use', name: 'Bash', id: 'dup' } });
+    emit({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', name: 'Bash', id: 'dup', input: {} }],
+      },
+    });
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'dup', content: 'result' }],
+      },
+    });
+    emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 10,
+      },
+    });
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    const event = JSON.parse((telemetryAppends[0][1] as string).trim());
+
+    expect(event.tool_calls).toHaveLength(1);
+    expect(event.tool_calls[0]).toEqual({ name: 'Bash', tool_result_bytes: 6 });
+
+    backend.destroy();
+  });
+
   it('resets sub_turn_count and tool_calls between successive user messages', async () => {
     process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
     const fs = await import('fs');
