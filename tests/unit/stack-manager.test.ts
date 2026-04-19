@@ -410,6 +410,144 @@ describe('StackManager', () => {
     });
   });
 
+  describe('dispatchTask env-friction fixes (spec-gate resume exemption + container auto-start)', () => {
+    function makeTicketStack(id: string, ticket = '250') {
+      return {
+        ...makeStack(id),
+        ticket,
+      };
+    }
+
+    it('enforces the spec gate on the FIRST dispatch when the stack has a ticket and no approval', async () => {
+      registry.createStack(makeTicketStack('gate-first'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      await expect(
+        manager.dispatchTask('gate-first', 'Continue work')
+      ).rejects.toThrow(/gateApproved|spec.?check/i);
+    });
+
+    it('SKIPS the spec gate on subsequent dispatches when the stack has prior task history (resume)', async () => {
+      registry.createStack(makeTicketStack('gate-resume'));
+      // Seed a prior task → stack has been dispatched to before.
+      registry.createTask('gate-resume', 'initial prompt', 'sonnet');
+
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'ok',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      // No gateApproved, no forceBypass — but should succeed because it's a resume.
+      await expect(
+        manager.dispatchTask('gate-resume', 'Continue from where you left off')
+      ).resolves.toEqual(expect.objectContaining({ stack_id: 'gate-resume' }));
+
+      // Verify we reached the CLI dispatch, i.e. we didn't bail early on the gate.
+      expect(runCliSpy).toHaveBeenCalledWith(
+        '/proj',
+        expect.arrayContaining(['task', 'gate-resume'])
+      );
+    });
+
+    it('still honors forceBypass on the first dispatch when gate is not approved', async () => {
+      registry.createStack(makeTicketStack('gate-bypass'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      await expect(
+        manager.dispatchTask('gate-bypass', 'New work', undefined, { forceBypass: true })
+      ).resolves.toBeDefined();
+    });
+
+    it('starts the stack containers via the CLI when the claude container is not running at dispatch time', async () => {
+      registry.createStack(makeStack('autostart'));
+
+      // First listContainers call returns a STOPPED claude container. After
+      // the auto-start runs, listContainers returns a running one.
+      let call = 0;
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+        call++;
+        return [
+          {
+            id: 'claude-container-1',
+            name: 'sandstorm-proj-autostart-claude-1',
+            image: 'sandstorm-claude',
+            status: call === 1 ? 'exited' : ('running' as const),
+            state: call === 1 ? 'exited' : 'running',
+            ports: [],
+            labels: {},
+            created: new Date().toISOString(),
+          },
+        ];
+      });
+
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await manager.dispatchTask('autostart', 'resume');
+
+      // The CLI should have been invoked to start the stack BEFORE the dispatch call.
+      const startCall = runCliSpy.mock.calls.find(
+        ([, args]) => Array.isArray(args) && args[0] === 'start'
+      );
+      expect(startCall).toBeDefined();
+      expect(startCall![1]).toEqual(['start', 'autostart']);
+
+      // Dispatch itself still runs after the start.
+      const taskCall = runCliSpy.mock.calls.find(
+        ([, args]) => Array.isArray(args) && args[0] === 'task'
+      );
+      expect(taskCall).toBeDefined();
+    });
+
+    it('does NOT run the start CLI when the claude container is already running', async () => {
+      registry.createStack(makeStack('already-up'));
+      // Default mock returns status: 'running' already.
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await manager.dispatchTask('already-up', 'go');
+
+      const startCall = runCliSpy.mock.calls.find(
+        ([, args]) => Array.isArray(args) && args[0] === 'start'
+      );
+      expect(startCall).toBeUndefined();
+    });
+
+    it('surfaces a COMPOSE_FAILED error when the auto-start CLI call fails', async () => {
+      registry.createStack(makeStack('autostart-fail'));
+      (runtime.listContainers as ReturnType<typeof vi.fn>).mockResolvedValue([
+        {
+          id: 'claude-container-1',
+          name: 'sandstorm-proj-autostart-fail-claude-1',
+          image: 'sandstorm-claude',
+          status: 'exited' as const,
+          state: 'exited',
+          ports: [],
+          labels: {},
+          created: new Date().toISOString(),
+        },
+      ]);
+
+      vi.spyOn(manager, 'runCli').mockImplementation(async (_dir, args) => {
+        if (args[0] === 'start') {
+          return { stdout: '', stderr: 'start failed: docker daemon unavailable', exitCode: 1 };
+        }
+        return { stdout: '', stderr: '', exitCode: 0 };
+      });
+
+      await expect(
+        manager.dispatchTask('autostart-fail', 'resume')
+      ).rejects.toThrow(/start failed|docker daemon/);
+    });
+  });
+
   describe('waitForClaudeReady', () => {
     it('resolves immediately when readiness file exists', async () => {
       registry.createStack(makeStack('ready-test'));

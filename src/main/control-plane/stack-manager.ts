@@ -477,6 +477,24 @@ export class StackManager {
     this.startInBackground(stack, stackId).catch(() => {});
   }
 
+  /**
+   * Synchronously bring the stack's containers up. Used by `dispatchTask`
+   * to recover from a paused-stack state (env-friction fix, #273). Unlike
+   * `startInBackground`, this awaits completion and re-throws so the
+   * caller can surface failure to the user.
+   */
+  private async ensureStackContainersRunning(stack: Stack, stackId: string): Promise<void> {
+    const result = await this.runCli(stack.project_dir, ['start', stackId]);
+    if (result.exitCode !== 0) {
+      throw new SandstormError(
+        ErrorCode.COMPOSE_FAILED,
+        result.stderr.trim() || result.stdout.trim() || 'Failed to start stack containers before dispatch'
+      );
+    }
+    this.registry.updateStackStatus(stackId, 'up');
+    this.notifyUpdate();
+  }
+
   private async startInBackground(stack: Stack, stackId: string): Promise<void> {
     try {
       const result = await this.runCli(stack.project_dir, ['start', stackId]);
@@ -671,14 +689,21 @@ export class StackManager {
       model = undefined;
     }
 
-    // Enforce spec quality gate when dispatching to a stack with a ticket
-    // or when the prompt references a GitHub issue
-    this.enforceSpecGate({
-      ticket: stack.ticket ?? undefined,
-      task: prompt,
-      gateApproved: opts?.gateApproved,
-      forceBypass: opts?.forceBypass,
-    });
+    // Spec quality gate: enforced on the FIRST dispatch (usually the one
+    // `createStack` issues with the ticket body). If the stack already has
+    // prior task history, treat this call as a resume/continuation — the
+    // gate ran at creation time, and re-enforcing it now would block every
+    // legitimate resume. This is the #273 env-friction fix.
+    const priorTasks = this.registry.getTasksForStack(stackId);
+    const isResume = priorTasks.length > 0;
+    if (!isResume) {
+      this.enforceSpecGate({
+        ticket: stack.ticket ?? undefined,
+        task: prompt,
+        gateApproved: opts?.gateApproved,
+        forceBypass: opts?.forceBypass,
+      });
+    }
 
     // If the stack has a ticket number, fetch the full ticket context
     // via the project's fetch-ticket script and prepend it to the prompt
@@ -694,7 +719,16 @@ export class StackManager {
     const runtime = this.getRuntimeForStack(stack);
 
     try {
-      const claudeContainer = await this.findClaudeContainer(stack, runtime);
+      let claudeContainer = await this.findClaudeContainer(stack, runtime);
+
+      // Env-friction fix: if containers are exited (common pause/resume
+      // scenario), bring the stack up synchronously before dispatching
+      // rather than failing and forcing the caller to re-probe. Status is
+      // re-checked after the start so we act on the fresh container.
+      if (claudeContainer.status !== 'running') {
+        await this.ensureStackContainersRunning(stack, stackId);
+        claudeContainer = await this.findClaudeContainer(stack, runtime);
+      }
 
       // Wait for the inner Claude agent to be ready before dispatching
       await this.waitForClaudeReady(claudeContainer.id, runtime);
