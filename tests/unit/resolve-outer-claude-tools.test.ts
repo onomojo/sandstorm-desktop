@@ -5,6 +5,7 @@ import os from 'os';
 import {
   resolveOuterClaudeTools,
   DEFAULT_OUTER_CLAUDE_TOOLS,
+  EXPERIMENT_EXPANDED_TOOLS,
 } from '../../src/main/agent/tools-allowlist';
 
 /**
@@ -91,5 +92,39 @@ describe('resolveOuterClaudeTools (#256)', () => {
     expect(a).toEqual(b);
     expect(a).not.toBe(b);
     expect(() => a.push('X')).not.toThrow();
+  });
+
+  it('SANDSTORM_EXP_ENABLE_AGENT=1 returns the expanded experiment allowlist', () => {
+    const env = { SANDSTORM_EXP_ENABLE_AGENT: '1' } as NodeJS.ProcessEnv;
+    expect(resolveOuterClaudeTools(tmpDir, env)).toEqual([
+      ...EXPERIMENT_EXPANDED_TOOLS,
+    ]);
+  });
+
+  it('SANDSTORM_EXP_ENABLE_AGENT=1 overrides a project-settings override', () => {
+    writeSettings(JSON.stringify({ outerClaudeTools: ['Bash', 'Read'] }));
+    const env = { SANDSTORM_EXP_ENABLE_AGENT: '1' } as NodeJS.ProcessEnv;
+    expect(resolveOuterClaudeTools(tmpDir, env)).toEqual([
+      ...EXPERIMENT_EXPANDED_TOOLS,
+    ]);
+  });
+
+  it('SANDSTORM_EXP_ENABLE_AGENT set to anything other than "1" falls back to defaults', () => {
+    for (const value of ['0', 'true', 'yes', '']) {
+      const env = { SANDSTORM_EXP_ENABLE_AGENT: value } as NodeJS.ProcessEnv;
+      expect(resolveOuterClaudeTools(undefined, env)).toEqual([
+        ...DEFAULT_OUTER_CLAUDE_TOOLS,
+      ]);
+    }
+  });
+
+  it('expanded allowlist contains Agent and Task*', () => {
+    for (const name of ['Agent', 'Task', 'TaskCreate', 'TaskUpdate']) {
+      expect(EXPERIMENT_EXPANDED_TOOLS).toContain(name);
+    }
+    // Still keeps the basic tools
+    for (const name of ['Bash', 'Read', 'Grep', 'Glob']) {
+      expect(EXPERIMENT_EXPANDED_TOOLS).toContain(name);
+    }
   });
 });

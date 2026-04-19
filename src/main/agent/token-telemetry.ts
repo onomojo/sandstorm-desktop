@@ -56,6 +56,13 @@ export interface TokenTelemetryEvent {
    * length of the tool_result the bridge returned.
    */
   tool_calls: ToolCallRecord[];
+  /**
+   * Freeform label identifying which investigation-experiment produced this
+   * row (e.g. "exp1-baseline", "exp4-no-mcp"). Read from the
+   * SANDSTORM_TOKEN_TELEMETRY_EXPERIMENT env var. Omitted entirely when the
+   * env var is unset, so existing downstream parsers are unaffected.
+   */
+  experiment?: string;
 }
 
 export interface TokenTelemetryOptions {
@@ -103,4 +110,19 @@ export class TokenTelemetry {
  */
 export function isTelemetryEnabled(env: NodeJS.ProcessEnv = process.env): boolean {
   return env.SANDSTORM_TOKEN_TELEMETRY === '1';
+}
+
+/**
+ * Read the current experiment label from an environment bag. Returns
+ * `undefined` when the env var is unset or empty. The returned label is
+ * written verbatim into the telemetry event so downstream analysis can group
+ * runs by experiment.
+ */
+export function currentExperimentLabel(
+  env: NodeJS.ProcessEnv = process.env
+): string | undefined {
+  const raw = env.SANDSTORM_TOKEN_TELEMETRY_EXPERIMENT;
+  if (typeof raw !== 'string') return undefined;
+  const trimmed = raw.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
 }

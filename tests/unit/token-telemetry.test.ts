@@ -5,6 +5,7 @@ import os from 'os';
 import {
   TokenTelemetry,
   isTelemetryEnabled,
+  currentExperimentLabel,
   type TokenTelemetryEvent,
 } from '../../src/main/agent/token-telemetry';
 
@@ -197,5 +198,92 @@ describe('isTelemetryEnabled (#262 tactic A)', () => {
     expect(isTelemetryEnabled({ SANDSTORM_TOKEN_TELEMETRY: 'on' })).toBe(false);
     expect(isTelemetryEnabled({ SANDSTORM_TOKEN_TELEMETRY: '0' })).toBe(false);
     expect(isTelemetryEnabled({ SANDSTORM_TOKEN_TELEMETRY: '' })).toBe(false);
+  });
+});
+
+describe('currentExperimentLabel (orchestrator-delta investigation)', () => {
+  it('returns the env var value when set', () => {
+    expect(
+      currentExperimentLabel({ SANDSTORM_TOKEN_TELEMETRY_EXPERIMENT: 'exp4-no-mcp' })
+    ).toBe('exp4-no-mcp');
+  });
+
+  it('returns undefined when the env var is unset', () => {
+    expect(currentExperimentLabel({})).toBeUndefined();
+  });
+
+  it('returns undefined when the env var is empty or whitespace', () => {
+    expect(
+      currentExperimentLabel({ SANDSTORM_TOKEN_TELEMETRY_EXPERIMENT: '' })
+    ).toBeUndefined();
+    expect(
+      currentExperimentLabel({ SANDSTORM_TOKEN_TELEMETRY_EXPERIMENT: '   ' })
+    ).toBeUndefined();
+  });
+
+  it('trims whitespace from the label', () => {
+    expect(
+      currentExperimentLabel({
+        SANDSTORM_TOKEN_TELEMETRY_EXPERIMENT: '  exp1-baseline  ',
+      })
+    ).toBe('exp1-baseline');
+  });
+});
+
+describe('TokenTelemetryEvent schema (orchestrator-delta investigation)', () => {
+  let tmpDir: string;
+  let sinkPath: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'sandstorm-telemetry-exp-'));
+    sinkPath = path.join(tmpDir, 'telemetry.jsonl');
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('round-trips an optional experiment label', () => {
+    const tel = new TokenTelemetry({ filePath: sinkPath, enabled: true });
+    tel.record({
+      ts: '2026-04-19T00:00:00.000Z',
+      tabId: 't-exp',
+      projectDir: '/proj',
+      turn_index: 0,
+      seconds_since_prev_turn: null,
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      sub_turn_count: 1,
+      tool_calls: [],
+      experiment: 'exp4-no-mcp',
+    });
+    tel.close();
+
+    const line = fs.readFileSync(sinkPath, 'utf-8').trim();
+    const event = JSON.parse(line);
+    expect(event.experiment).toBe('exp4-no-mcp');
+  });
+
+  it('omits experiment field when not provided (back-compat with existing consumers)', () => {
+    const tel = new TokenTelemetry({ filePath: sinkPath, enabled: true });
+    tel.record({
+      ts: '2026-04-19T00:00:00.000Z',
+      tabId: 't-noexp',
+      turn_index: 0,
+      seconds_since_prev_turn: null,
+      input_tokens: 1,
+      output_tokens: 1,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 0,
+      sub_turn_count: 1,
+      tool_calls: [],
+    });
+    tel.close();
+
+    const line = fs.readFileSync(sinkPath, 'utf-8').trim();
+    const event = JSON.parse(line);
+    expect(event).not.toHaveProperty('experiment');
   });
 });

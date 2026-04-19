@@ -24,7 +24,12 @@ import {
   zeroSessionTokens,
 } from './types';
 import { resolveOuterClaudeTools } from './tools-allowlist';
-import { TokenTelemetry, ToolCallRecord, isTelemetryEnabled } from './token-telemetry';
+import {
+  TokenTelemetry,
+  ToolCallRecord,
+  isTelemetryEnabled,
+  currentExperimentLabel,
+} from './token-telemetry';
 
 /** In-flight per-cycle tracking; tool_use_id is only retained in memory. */
 interface InFlightToolCall extends ToolCallRecord {
@@ -703,6 +708,10 @@ rl.on('line', async (line) => {
     const systemPromptFile = path.join(cliDir, 'SANDSTORM_OUTER.md');
     const claudeBin = getClaudeBin();
 
+    // Investigation switches — throwaway branch only. Set via env var.
+    const skipSystemPrompt = process.env.SANDSTORM_EXP_NO_SYSTEM_PROMPT === '1';
+    const skipMcp = process.env.SANDSTORM_EXP_NO_MCP === '1';
+
     const args: string[] = [
       '--print',
       '--input-format', 'stream-json',
@@ -711,14 +720,15 @@ rl.on('line', async (line) => {
       // Restrict the orchestrator to an allowlist of built-in tools. Every
       // denied tool's schema drops out of the context the CLI re-sends on
       // every turn — the single largest static-bloat lever per #254. #256.
+      // SANDSTORM_EXP_ENABLE_AGENT=1 expands the allowlist for experiment 2/5.
       '--tools', resolveOuterClaudeTools(session.projectDir).join(','),
     ];
 
-    if (fs.existsSync(systemPromptFile)) {
+    if (!skipSystemPrompt && fs.existsSync(systemPromptFile)) {
       args.push('--system-prompt-file', systemPromptFile);
     }
 
-    if (this.mcpConfigPath) {
+    if (!skipMcp && this.mcpConfigPath) {
       args.push('--mcp-config', this.mcpConfigPath);
     }
 
@@ -824,6 +834,7 @@ rl.on('line', async (line) => {
                   session.lastResultAt === null
                     ? null
                     : (now - session.lastResultAt) / 1000;
+                const experiment = currentExperimentLabel();
                 this.telemetry.record({
                   ts: new Date(now).toISOString(),
                   tabId,
@@ -839,6 +850,7 @@ rl.on('line', async (line) => {
                     name: c.name,
                     tool_result_bytes: c.tool_result_bytes,
                   })),
+                  ...(experiment !== undefined ? { experiment } : {}),
                 });
               }
               session.turnIndex += 1;

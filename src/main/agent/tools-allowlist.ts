@@ -24,6 +24,28 @@ export const DEFAULT_OUTER_CLAUDE_TOOLS: readonly string[] = Object.freeze([
 ]);
 
 /**
+ * Expanded allowlist used by investigation Experiment 2 (tests hypothesis H-A:
+ * does re-enabling in-process sub-agent delegation collapse the tool-use chain
+ * down to one or two sub-calls?). Adds Agent + all Task* tools so the model
+ * can offload analytical work to a fresh-context sub-process instead of doing
+ * it inline.
+ */
+export const EXPERIMENT_EXPANDED_TOOLS: readonly string[] = Object.freeze([
+  'Bash',
+  'Read',
+  'Grep',
+  'Glob',
+  'Agent',
+  'Task',
+  'TaskCreate',
+  'TaskUpdate',
+  'TaskList',
+  'TaskGet',
+  'TaskStop',
+  'TaskOutput',
+]);
+
+/**
  * Resolve the effective tool allowlist for the outer orchestrator.
  * A project can override via `.sandstorm/context/settings.json`:
  *   { "outerClaudeTools": ["Bash", "Read", "Edit"] }
@@ -31,7 +53,17 @@ export const DEFAULT_OUTER_CLAUDE_TOOLS: readonly string[] = Object.freeze([
  * else (malformed JSON, missing file, missing key, wrong type, empty array,
  * non-string entries) falls back to the default.
  */
-export function resolveOuterClaudeTools(projectDir?: string): string[] {
+export function resolveOuterClaudeTools(
+  projectDir?: string,
+  env: NodeJS.ProcessEnv = process.env
+): string[] {
+  // Investigation override: SANDSTORM_EXP_ENABLE_AGENT=1 forces the expanded
+  // allowlist (adds Agent + Task*). Takes precedence over project settings so
+  // the investigation branch can compare tool-surface variants deterministically.
+  if (env.SANDSTORM_EXP_ENABLE_AGENT === '1') {
+    return [...EXPERIMENT_EXPANDED_TOOLS];
+  }
+
   if (projectDir) {
     const settingsPath = path.join(projectDir, '.sandstorm', 'context', 'settings.json');
     try {
