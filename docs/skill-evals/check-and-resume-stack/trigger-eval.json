@@ -1,0 +1,21 @@
+[
+  { "query": "what's the status of stack 243", "should_trigger": true },
+  { "query": "what's the status of ticket 24", "should_trigger": true, "notes": "User uses 'stack' and 'ticket' interchangeably" },
+  { "query": "Can you tell me what the current state of ticket 43 is?", "should_trigger": true },
+  { "query": "Can you tell me the current state of stack abc?", "should_trigger": true, "notes": "Non-numeric stack name" },
+  { "query": "Can you check the status of stack 43 and if it's finished or not, if it's not can you resume from where it left off?", "should_trigger": true },
+  { "query": "Stack 23 was halted because of token limits. Can you pick up where it left off? Tokens have refreshed.", "should_trigger": true },
+  { "query": "Can you take a look at stack 43 and see what's going on? I think something happened, like halted or something. I don't know what the state is or if it finished. Take a look, and if it finished, great; if it didn't, fire up a stack and finish it. If it is finished then go ahead and make a pull request.", "should_trigger": true, "notes": "Compound: status → maybe resume → maybe PR. Leading intent is status check; skill reports state and orchestrator handles PR branch after." },
+  { "query": "Something happened to stack 43, it crashed or something. Take a look and see if it finished what it was supposed to do. If not, fire it back up and finish whatever it was doing, pick up where it left off. Don't tear down the stack, just resume it.", "should_trigger": true },
+
+  { "query": "Let me know what the status is of all the stacks.", "should_trigger": false, "notes": "Plural → list-stacks" },
+  { "query": "I'm just curious what the status of everything is. Something weird happened.", "should_trigger": false, "notes": "Plural → list-stacks" },
+  { "query": "The app crashed, I'm not sure if the state listed is correct. Can you verify the state is correct on all of the stacks?", "should_trigger": false, "notes": "Plural → list-stacks" },
+  { "query": "Let's start ticket 151.", "should_trigger": false, "notes": "New-work intent → spec-and-dispatch" },
+  { "query": "Take a look at ticket 144. Looks ready to go. Take a look and see how it looks to you. If it passes all our checks, let's go ahead and work on that.", "should_trigger": false, "notes": "Ticket readiness + new stack → spec-and-dispatch" },
+  { "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.", "should_trigger": false, "notes": "PR intent → review-and-pr" },
+  { "query": "Take a pull request out of stack 232.", "should_trigger": false, "notes": "PR intent → review-and-pr" },
+  { "query": "Let's go ahead and tear down stack 420.", "should_trigger": false, "notes": "Destructive → stack-teardown" },
+  { "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not. If not, let's go ahead and flesh out the details.", "should_trigger": false, "notes": "Ticket-only (no stack) → sandstorm-spec" },
+  { "query": "Take a look at stack 275. Seems to be using a ton of tokens, I'm not sure what it's doing.", "should_trigger": false, "notes": "Info-only diagnosis, no resume intent → stack-inspect. Borderline — model may confuse with this skill." }
+]
