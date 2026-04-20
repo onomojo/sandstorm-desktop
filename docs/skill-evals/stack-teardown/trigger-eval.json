@@ -1,0 +1,15 @@
+[
+  { "query": "Let's go ahead and tear down stack 420.", "should_trigger": true, "notes": "User confirmed this is essentially the only way they invoke teardown. Skill's main bar is the negative set — must NEVER over-trigger. Asymmetric cost: false-positives destroy work." },
+
+  { "query": "what's the status of stack 243", "should_trigger": false, "notes": "Status → check-and-resume-stack" },
+  { "query": "Can you tell me the current state of stack abc?", "should_trigger": false, "notes": "Status → check-and-resume-stack" },
+  { "query": "Stack 23 was halted. Can you pick up where it left off?", "should_trigger": false, "notes": "Resume → check-and-resume-stack. Must not interpret 'halted' as teardown-worthy." },
+  { "query": "Take a look at stack 42, seems to be running for a while. Stuck in a loop or something?", "should_trigger": false, "notes": "Diagnosis → stack-inspect. User is NOT asking to kill it." },
+  { "query": "Stack 43 looks like it's finished. Can you take a look and see how everything is and make a pull request out of that.", "should_trigger": false, "notes": "'Finished' → review-and-pr, NOT teardown. Historical failure mode: orchestrator tore down post-push." },
+  { "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.", "should_trigger": false, "notes": "PR → review-and-pr" },
+  { "query": "Let me know what the status is of all the stacks.", "should_trigger": false, "notes": "List → list-stacks" },
+  { "query": "Take a look at stack 275. Seems to be using a ton of tokens.", "should_trigger": false, "notes": "Diagnosis → stack-inspect. 'Too many tokens' is NOT a teardown signal." },
+  { "query": "Something happened to stack 43, it crashed. Take a look and fire it back up, pick up where it left off. Don't tear down the stack, just resume it.", "should_trigger": false, "notes": "Explicit anti-signal: user says 'don't tear down'. Must not misfire on the literal word 'tear down'." },
+  { "query": "Let's start ticket 151.", "should_trigger": false, "notes": "New work → spec-and-dispatch" },
+  { "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not.", "should_trigger": false, "notes": "Spec → sandstorm-spec" }
+]

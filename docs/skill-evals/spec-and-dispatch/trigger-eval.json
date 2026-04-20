@@ -1,0 +1,15 @@
+[
+  { "query": "Start with an idea: I want to let users pin notes to the top. Make a ticket, make it pass our quality gates, then if everything's good, fire up a stack and get it done.", "should_trigger": true, "notes": "Idea-first → spec → dispatch" },
+  { "query": "Take a look at ticket 149. Basically I want this. Let's flesh out the details. Once it passes our quality checks, let's fire up a stack. Start a stack and make it happen.", "should_trigger": true },
+  { "query": "Let's start ticket 151.", "should_trigger": true, "notes": "Terse: implicit spec + new stack" },
+  { "query": "Take a look at ticket 144. Looks ready to go. Take a look and see how it looks to you. If it passes all our checks, let's go ahead and work on that.", "should_trigger": true },
+  { "query": "Take a look at ticket 250. It looks like this is all spec'd out. If that looks good to you, let's go ahead and kick off a stack with it. If not, let's figure out what else we need.", "should_trigger": true },
+
+  { "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not. If not, let's flesh out the details.", "should_trigger": false, "notes": "Spec-only, no dispatch → sandstorm-spec" },
+  { "query": "Take a look at ticket 275. I want you to help me spec this ticket out a little bit further. We want to make sure it passes our quality checks.", "should_trigger": false, "notes": "Spec-only → sandstorm-spec" },
+  { "query": "what's the status of stack 243", "should_trigger": false, "notes": "Existing stack status → check-and-resume-stack" },
+  { "query": "Stack 23 was halted because of token limits. Can you pick up where it left off?", "should_trigger": false, "notes": "Resume existing → check-and-resume-stack" },
+  { "query": "Let me know what the status is of all the stacks.", "should_trigger": false, "notes": "List → list-stacks" },
+  { "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.", "should_trigger": false, "notes": "PR → review-and-pr" },
+  { "query": "Let's go ahead and tear down stack 420.", "should_trigger": false, "notes": "Destructive → stack-teardown" }
+]

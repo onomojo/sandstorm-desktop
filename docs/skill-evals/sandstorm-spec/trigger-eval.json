@@ -1,0 +1,15 @@
+[
+  { "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not. If not, let's go ahead and flesh out the details.", "should_trigger": true },
+  { "query": "Take a look at ticket 275. Basically I want to do this stuff and here's some extra context. I want you to help me spec this ticket out a little bit further. We want to make sure it passes our quality checks.", "should_trigger": true },
+  { "query": "Take a look at ticket 159. We have some issues, some extra context. Help me figure out how to shape this idea a little bit better. Here's some rough idea of what I want. Can you help me think through it and make a high quality ticket that passes our spec gates or quality gates?", "should_trigger": true },
+
+  { "query": "Take a look at ticket 144. Looks ready to go. Take a look and see how it looks to you. If it passes all our checks, let's go ahead and work on that.", "should_trigger": false, "notes": "'Work on that' = dispatch → spec-and-dispatch" },
+  { "query": "Let's start ticket 151.", "should_trigger": false, "notes": "Dispatch intent → spec-and-dispatch" },
+  { "query": "Start with an idea: I want to let users pin notes to the top. Make a ticket, make it pass our quality gates, then if everything's good, fire up a stack and get it done.", "should_trigger": false, "notes": "Compound → spec-and-dispatch (stack creation follows)" },
+  { "query": "Take a look at ticket 149. Let's try to flesh out the details. Once it passes our quality checks, let's fire up a stack.", "should_trigger": false, "notes": "Spec + dispatch compound → spec-and-dispatch" },
+  { "query": "what's the status of stack 243", "should_trigger": false, "notes": "Stack status, not ticket spec → check-and-resume-stack" },
+  { "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.", "should_trigger": false, "notes": "PR intent → review-and-pr" },
+  { "query": "Let me know what the status is of all the stacks.", "should_trigger": false, "notes": "List → list-stacks" },
+  { "query": "Let's go ahead and tear down stack 420.", "should_trigger": false, "notes": "Destructive → stack-teardown" },
+  { "query": "Take a look at stack 275. Seems to be using a ton of tokens.", "should_trigger": false, "notes": "Stack-level diagnosis → stack-inspect" }
+]

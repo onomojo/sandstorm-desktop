@@ -1,0 +1,16 @@
+[
+  { "query": "Take a look at stack 42, seems to be running for a while. I'm not sure what's going on. Stuck in a loop or something? It's been thinking for too long.", "should_trigger": true },
+  { "query": "Take a look at stack 212. Let me know what's going on. Is it something weird going on? Just let me know what the status is.", "should_trigger": true },
+  { "query": "Let me know what the status of 200 is, it seems to be taking longer than I thought.", "should_trigger": true },
+  { "query": "Take a look at stack 275. Seems to be using a ton of tokens, I'm not sure what it's doing.", "should_trigger": true },
+  { "query": "Take a look at stack off-a-branch. We ran out of tokens and I'm not sure where we left off. Can you take a look? I don't know if it's finished or what's going on.", "should_trigger": true, "notes": "Borderline: no explicit resume request, just info" },
+  { "query": "Take a look at stack my-feature. Something crashed, sandstorm I just restarted it, lost context, I want to know where we're at.", "should_trigger": true, "notes": "Info only: 'I want to know where we're at'" },
+
+  { "query": "Stack 23 was halted because of token limits. Can you pick up where it left off?", "should_trigger": false, "notes": "Explicit resume intent → check-and-resume-stack" },
+  { "query": "Can you check the status of stack 43 and if it's finished or not, if it's not can you resume from where it left off?", "should_trigger": false, "notes": "Explicit resume → check-and-resume-stack" },
+  { "query": "Let me know what the status is of all the stacks.", "should_trigger": false, "notes": "Plural → list-stacks" },
+  { "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.", "should_trigger": false, "notes": "PR → review-and-pr" },
+  { "query": "Let's go ahead and tear down stack 420.", "should_trigger": false, "notes": "Destructive → stack-teardown" },
+  { "query": "Let's start ticket 151.", "should_trigger": false, "notes": "New stack → spec-and-dispatch" },
+  { "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not.", "should_trigger": false, "notes": "Ticket spec, not stack → sandstorm-spec" }
+]

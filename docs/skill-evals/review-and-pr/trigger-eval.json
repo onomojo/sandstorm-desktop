@@ -1,0 +1,15 @@
+[
+  { "query": "Stack 43 looks like it's finished. Can you take a look and see how everything is and if everything looks good? Let's go ahead and make a pull request out of that.", "should_trigger": true },
+  { "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.", "should_trigger": true },
+  { "query": "Looks like stack user-avatars is finished. Can you take a look and see if it did what it was supposed to do and make a pull request?", "should_trigger": true, "notes": "Named stack, not numeric" },
+  { "query": "Take a pull request out of stack 232.", "should_trigger": true, "notes": "Terse" },
+  { "query": "Ticket 43 is done. Go ahead and make a pull request.", "should_trigger": true, "notes": "User uses 'ticket' for stack here" },
+
+  { "query": "what's the status of stack 243", "should_trigger": false, "notes": "Status only → check-and-resume-stack" },
+  { "query": "Can you tell me the current state of stack abc?", "should_trigger": false, "notes": "Status only → check-and-resume-stack" },
+  { "query": "Take a look at stack 42, seems to be running for a while. I'm not sure what's going on, stuck in a loop or something.", "should_trigger": false, "notes": "Diagnostic info → stack-inspect" },
+  { "query": "Let me know what the status is of all the stacks.", "should_trigger": false, "notes": "List → list-stacks" },
+  { "query": "Let's go ahead and tear down stack 420.", "should_trigger": false, "notes": "Destructive → stack-teardown" },
+  { "query": "Let's start ticket 151.", "should_trigger": false, "notes": "Dispatch new → spec-and-dispatch" },
+  { "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not.", "should_trigger": false, "notes": "Spec → sandstorm-spec" }
+]
