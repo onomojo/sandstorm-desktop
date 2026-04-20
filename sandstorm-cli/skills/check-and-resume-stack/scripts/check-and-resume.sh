@@ -55,23 +55,59 @@ fi
 # Pull a state label from common response shapes.
 STATE="$(echo "$STATUS_JSON" | jq -r '.result.state // .result.status // .result.taskState // "unknown"')"
 
+# Before trusting a "running" verdict from the DB, verify the containers
+# actually are up. The DB status can drift stale when the user pauses
+# (docker stop) or the OS kills containers — the tasks row stays
+# 'running' but the claude/app containers are exited. Treating that as
+# running leads to the skill silently no-op'ing on what the user actually
+# sees as a paused stack.
+CONTAINERS_LIVE="unknown"
+if [[ "$STATE" == "running" ]]; then
+  LIST_JSON="$(call_bridge list_stacks '{}' 2>/dev/null || echo '{"result":[]}')"
+  # Collect service statuses for THIS stack. Accept either .name or .id
+  # as the match key since different call shapes may carry one or both.
+  SERVICES_STATUSES="$(echo "$LIST_JSON" | jq -r --arg id "$RESOLVED_ID" '
+    (.result // .result.stacks // []) | .[]? |
+    select((.name // "") == $id or (.id // "") == $id) |
+    (.services // []) | .[]? |
+    (.status // .state // "unknown")
+  ')"
+  if [[ -z "${SERVICES_STATUSES//[[:space:]]/}" ]]; then
+    # No services info returned — can't verify. Fall through and trust
+    # the DB state rather than second-guessing.
+    CONTAINERS_LIVE="unknown"
+  elif printf '%s\n' "$SERVICES_STATUSES" | grep -qv '^running$'; then
+    # At least one service is not 'running' → DB is stale.
+    CONTAINERS_LIVE="stale"
+  else
+    CONTAINERS_LIVE="live"
+  fi
+fi
+
 case "$STATE" in
   running)
-    echo "STATE=running id=$RESOLVED_ID action=none"
+    if [[ "$CONTAINERS_LIVE" == "stale" ]]; then
+      # DB said running but containers are down → treat as resumable.
+      # Fall through to the resumable branch below.
+      STATE="paused_stale"
+    else
+      echo "STATE=running id=$RESOLVED_ID action=none containers=$CONTAINERS_LIVE"
+      exit 0
+    fi
     ;;
   completed)
     echo "STATE=completed id=$RESOLVED_ID action=none"
-    ;;
-  *)
-    # idle / paused / failed / unknown — treat as resumable.
-    RESUME_INPUT='{"stackId":"'"$RESOLVED_ID"'","prompt":"Continue from where you left off. Do not redo completed work. Pick up the next unfinished step.","forceBypass":true}'
-    DISPATCH_JSON="$(call_bridge dispatch_task "$RESUME_INPUT" 2>/dev/null || echo '{"error":"dispatch_failed"}')"
-    if echo "$DISPATCH_JSON" | jq -e '.error' >/dev/null 2>&1; then
-      REASON="$(echo "$DISPATCH_JSON" | jq -r '.error')"
-      echo "STATE=$STATE id=$RESOLVED_ID action=resume_failed reason=\"$REASON\""
-      exit 0
-    fi
-    TASK_ID="$(echo "$DISPATCH_JSON" | jq -r '.result.taskId // .result.id // .result // "unknown"' | head -c 48)"
-    echo "STATE=$STATE id=$RESOLVED_ID action=resumed task=$TASK_ID"
+    exit 0
     ;;
 esac
+
+# idle / paused / failed / paused_stale / unknown — treat as resumable.
+RESUME_INPUT='{"stackId":"'"$RESOLVED_ID"'","prompt":"Continue from where you left off. Do not redo completed work. Pick up the next unfinished step.","forceBypass":true}'
+DISPATCH_JSON="$(call_bridge dispatch_task "$RESUME_INPUT" 2>/dev/null || echo '{"error":"dispatch_failed"}')"
+if echo "$DISPATCH_JSON" | jq -e '.error' >/dev/null 2>&1; then
+  REASON="$(echo "$DISPATCH_JSON" | jq -r '.error')"
+  echo "STATE=$STATE id=$RESOLVED_ID action=resume_failed reason=\"$REASON\""
+  exit 0
+fi
+TASK_ID="$(echo "$DISPATCH_JSON" | jq -r '.result.taskId // .result.id // .result // "unknown"' | head -c 48)"
+echo "STATE=$STATE id=$RESOLVED_ID action=resumed task=$TASK_ID"
