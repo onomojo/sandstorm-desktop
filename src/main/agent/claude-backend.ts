@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import { BrowserWindow, shell } from 'electron';
 import { app } from 'electron';
-import { handleToolCall, tools } from '../claude/tools';
+import { handleToolCall } from '../claude/tools';
 import { cliDir } from '../index';
 import {
   AgentBackend,
@@ -87,7 +87,6 @@ export class ClaudeBackend implements AgentBackend {
   private bridgeServer: Server | null = null;
   private bridgePort = 0;
   private bridgeToken: string;
-  private mcpConfigPath: string | null = null;
   private mainWindow: BrowserWindow | null = null;
   private logStream: fs.WriteStream | null = null;
   private timeoutMs: number;
@@ -161,7 +160,6 @@ export class ClaudeBackend implements AgentBackend {
 
   async initialize(): Promise<void> {
     await this.startBridgeServer();
-    this.writeMcpConfig();
   }
 
   private startBridgeServer(): Promise<void> {
@@ -203,111 +201,6 @@ export class ClaudeBackend implements AgentBackend {
         resolve();
       });
     });
-  }
-
-  private writeMcpConfig(): void {
-    const tmpDir = path.join(os.tmpdir(), `sandstorm-mcp-${process.pid}`);
-    fs.mkdirSync(tmpDir, { recursive: true });
-
-    const serverScriptPath = path.join(tmpDir, 'mcp-server.mjs');
-    const serverScript = `import http from 'http';
-import { createInterface } from 'readline';
-
-const BRIDGE_PORT = ${this.bridgePort};
-const BRIDGE_TOKEN = '${this.bridgeToken}';
-const TOOLS = ${JSON.stringify(tools)};
-
-const rl = createInterface({ input: process.stdin });
-
-function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + '\\n');
-}
-
-async function callBridge(name, input) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({ name, input });
-    const req = http.request({
-      hostname: '127.0.0.1',
-      port: BRIDGE_PORT,
-      path: '/tool-call',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Auth-Token': BRIDGE_TOKEN,
-        'Content-Length': Buffer.byteLength(data),
-      },
-      timeout: 310_000,
-    }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(body);
-          if (parsed.error) reject(new Error(parsed.error));
-          else resolve(parsed.result);
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Bridge request timed out after 310s'));
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
-}
-
-rl.on('line', async (line) => {
-  try {
-    const msg = JSON.parse(line);
-    if (msg.method === 'initialize') {
-      send({ jsonrpc: '2.0', id: msg.id, result: {
-        protocolVersion: '2024-11-05',
-        capabilities: { tools: {} },
-        serverInfo: { name: 'sandstorm-tools', version: '1.0.0' },
-      }});
-    } else if (msg.method === 'notifications/initialized') {
-      // No response needed
-    } else if (msg.method === 'tools/list') {
-      send({ jsonrpc: '2.0', id: msg.id, result: {
-        tools: TOOLS.map(t => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: t.inputSchema,
-        })),
-      }});
-    } else if (msg.method === 'tools/call') {
-      const { name, arguments: args } = msg.params;
-      try {
-        const result = await callBridge(name, args || {});
-        send({ jsonrpc: '2.0', id: msg.id, result: {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-        }});
-      } catch (err) {
-        send({ jsonrpc: '2.0', id: msg.id, result: {
-          content: [{ type: 'text', text: 'Error: ' + err.message }],
-          isError: true,
-        }});
-      }
-    }
-  } catch {
-    // Ignore malformed input
-  }
-});
-`;
-    fs.writeFileSync(serverScriptPath, serverScript);
-
-    this.mcpConfigPath = path.join(tmpDir, 'mcp-config.json');
-    const mcpConfig = {
-      mcpServers: {
-        'sandstorm-tools': {
-          command: 'node',
-          args: [serverScriptPath],
-        },
-      },
-    };
-    fs.writeFileSync(this.mcpConfigPath, JSON.stringify(mcpConfig));
   }
 
   // --- Session management (AgentBackend interface) ---
@@ -754,10 +647,6 @@ rl.on('line', async (line) => {
       args.push('--system-prompt-file', resolvedPromptFile);
     }
 
-    if (this.mcpConfigPath) {
-      args.push('--mcp-config', this.mcpConfigPath);
-    }
-
     if (this.modelResolver && session.projectDir) {
       const outerModel = this.modelResolver(session.projectDir);
       args.push('--model', outerModel);
@@ -1094,13 +983,5 @@ rl.on('line', async (line) => {
     this.logStream?.end();
     this.logStream = null;
     this.telemetry.close();
-    if (this.mcpConfigPath) {
-      const tmpDir = path.dirname(this.mcpConfigPath);
-      try {
-        fs.rmSync(tmpDir, { recursive: true });
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
   }
 }

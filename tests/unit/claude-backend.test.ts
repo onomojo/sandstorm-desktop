@@ -564,21 +564,17 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       expect(spawnedArgs[toolsIdx + 1]).toBe('Bash,Read,Grep,Glob,Skill');
     });
 
-    it('places --tools before --system-prompt-file and --mcp-config', async () => {
+    it('does not pass --mcp-config (MCP layer removed in Ticket D-final)', async () => {
       const { spawn } = await import('child_process');
       const spawnMock = spawn as ReturnType<typeof vi.fn>;
       spawnMock.mockClear();
 
-      backend.sendMessage('tab-tools-order', 'hello', '/tmp');
+      backend.sendMessage('tab-no-mcp', 'hello', '/tmp');
 
       const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
-      const toolsIdx = spawnedArgs.indexOf('--tools');
-      const mcpIdx = spawnedArgs.indexOf('--mcp-config');
-      expect(toolsIdx).toBeGreaterThan(-1);
-      expect(mcpIdx).toBeGreaterThan(-1);
-      // --tools comes before --mcp-config so it lives in the stable prefix
-      // that cache-hits turn-to-turn.
-      expect(toolsIdx).toBeLessThan(mcpIdx);
+      expect(spawnedArgs).not.toContain('--mcp-config');
+      // --tools is still present as the built-in allowlist.
+      expect(spawnedArgs).toContain('--tools');
     });
 
     it('does not include denied tools in the --tools arg', async () => {

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { tools, handleToolCall, validateProjectDir } from '../../src/main/claude/tools';
+import { handleToolCall, validateProjectDir } from '../../src/main/claude/tools';
 
 // Mock the stackManager and agentBackend imports
 vi.mock('../../src/main/index', () => ({
@@ -31,28 +31,6 @@ describe('MCP tools', () => {
     vi.clearAllMocks();
     // Default: script exists and is executable (individual tests override as needed)
     vi.mocked(getScriptStatus).mockReturnValue('ok');
-  });
-
-  describe('tool definitions', () => {
-    it('create_stack model enum includes auto, sonnet, opus', () => {
-      const createStack = tools.find((t) => t.name === 'create_stack')!;
-      const modelProp = (createStack.inputSchema.properties as Record<string, { enum?: string[] }>).model;
-      expect(modelProp.enum).toEqual(['auto', 'sonnet', 'opus']);
-    });
-
-    it('dispatch_task model enum includes auto, sonnet, opus', () => {
-      const dispatchTask = tools.find((t) => t.name === 'dispatch_task')!;
-      const modelProp = (dispatchTask.inputSchema.properties as Record<string, { enum?: string[] }>).model;
-      expect(modelProp.enum).toEqual(['auto', 'sonnet', 'opus']);
-    });
-
-    it('create_stack model description mentions triage and complexity signals', () => {
-      const createStack = tools.find((t) => t.name === 'create_stack')!;
-      const modelProp = (createStack.inputSchema.properties as Record<string, { description?: string }>).model;
-      expect(modelProp.description).toContain('triage');
-      expect(modelProp.description).toContain('architectural');
-      expect(modelProp.description).toContain('Security');
-    });
   });
 
   describe('handleToolCall — model passthrough', () => {
@@ -122,20 +100,6 @@ describe('MCP tools', () => {
         undefined,
         { gateApproved: undefined, forceBypass: undefined }
       );
-    });
-  });
-
-  describe('tool definitions — spec tools', () => {
-    it('spec_check tool is defined with required ticketId and projectDir', () => {
-      const specCheck = tools.find((t) => t.name === 'spec_check');
-      expect(specCheck).toBeDefined();
-      expect(specCheck!.inputSchema.required).toEqual(['ticketId', 'projectDir']);
-    });
-
-    it('spec_refine tool is defined with required ticketId and projectDir', () => {
-      const specRefine = tools.find((t) => t.name === 'spec_refine');
-      expect(specRefine).toBeDefined();
-      expect(specRefine!.inputSchema.required).toEqual(['ticketId', 'projectDir']);
     });
   });
 
