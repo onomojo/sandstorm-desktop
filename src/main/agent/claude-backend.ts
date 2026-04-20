@@ -606,7 +606,19 @@ export class ClaudeBackend implements AgentBackend {
     if (!fs.existsSync(basePath)) return null;
     try {
       const base = fs.readFileSync(basePath, 'utf-8');
-      const composed = composeSystemPromptWithSkills(base, projectDir, path.join(cliDir, 'skills'));
+      // Skills bundled under `sandstorm-cli/skills/` are exposed to the
+      // subprocess as a Claude Code plugin via `--plugin-dir` (added to
+      // spawn args below). The CLI registers them under the
+      // plugin-name:skill-name pattern, so the injected system-prompt
+      // description has to use the same prefix or the model will call a
+      // name the CLI doesn't recognize (70-byte "skill not found"
+      // error, debugged post-D-final).
+      const composed = composeSystemPromptWithSkills(
+        base,
+        projectDir,
+        path.join(cliDir, 'skills'),
+        path.basename(cliDir)
+      );
       if (composed === base) return basePath;
       const tmpDir = path.join(os.tmpdir(), `sandstorm-orchestrator-${process.pid}`);
       fs.mkdirSync(tmpDir, { recursive: true });
@@ -645,6 +657,15 @@ export class ClaudeBackend implements AgentBackend {
     const resolvedPromptFile = this.resolveSystemPromptFile(systemPromptFile, cwd, tabId);
     if (resolvedPromptFile) {
       args.push('--system-prompt-file', resolvedPromptFile);
+    }
+
+    // Register the Sandstorm-bundled skills with the CLI as a plugin.
+    // Without this, `Skill(name=…)` invocations fail with "skill not
+    // found" even though the description is advertised in the prompt.
+    // `cliDir` contains a top-level `skills/` dir, which is exactly the
+    // plugin-root layout Claude Code expects.
+    if (fs.existsSync(path.join(cliDir, 'skills'))) {
+      args.push('--plugin-dir', cliDir);
     }
 
     if (this.modelResolver && session.projectDir) {

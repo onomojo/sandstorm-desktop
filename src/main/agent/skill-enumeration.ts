@@ -67,8 +67,18 @@ function parseFrontmatter(content: string): { name?: string; description?: strin
  * Enumerate folder-pattern skills under a given directory. Each
  * `<skillsRoot>/<name>/SKILL.md` with valid `name` + `description`
  * frontmatter is returned; anything else is silently skipped.
+ *
+ * When `namespace` is provided, returned skill names are prefixed
+ * `<namespace>:<raw-name>` so the injected prompt matches exactly how
+ * Claude Code registers plugin-provided skills (plugin `sandstorm-cli`
+ * surfaces `check-and-resume-stack` as
+ * `sandstorm-cli:check-and-resume-stack` in the `init.skills` list).
+ * The returned `path` always points at the unprefixed SKILL.md on disk.
  */
-export function enumerateSkillsFromDir(skillsRoot: string): SkillDescriptor[] {
+export function enumerateSkillsFromDir(
+  skillsRoot: string,
+  namespace?: string
+): SkillDescriptor[] {
   let entries: fs.Dirent[];
   try {
     entries = fs.readdirSync(skillsRoot, { withFileTypes: true });
@@ -88,7 +98,8 @@ export function enumerateSkillsFromDir(skillsRoot: string): SkillDescriptor[] {
     }
     const fm = parseFrontmatter(content);
     if (!fm || !fm.name || !fm.description) continue;
-    descriptors.push({ name: fm.name, description: fm.description, path: skillPath });
+    const displayName = namespace ? `${namespace}:${fm.name}` : fm.name;
+    descriptors.push({ name: displayName, description: fm.description, path: skillPath });
   }
   return descriptors;
 }
@@ -106,15 +117,20 @@ export function enumerateProjectSkills(projectDir: string): SkillDescriptor[] {
 
 /**
  * Enumerate skills from the Sandstorm-bundled skills dir and the
- * project's `.claude/skills/` merged together. On name collisions the
- * project skill wins (mirrors Claude Code's project > bundled
- * precedence). Results sorted by name for deterministic output.
+ * project's `.claude/skills/` merged together. When
+ * `bundledNamespace` is set, bundled skill names are prefixed so the
+ * injected description matches what the CLI registers under
+ * `--plugin-dir` (plugin-name:skill-name). Project-local skills are
+ * never prefixed. Results sorted by name for deterministic output.
  */
 export function enumerateSkills(options: {
   projectDir?: string;
   bundledSkillsDir?: string;
+  bundledNamespace?: string;
 }): SkillDescriptor[] {
-  const bundled = options.bundledSkillsDir ? enumerateSkillsFromDir(options.bundledSkillsDir) : [];
+  const bundled = options.bundledSkillsDir
+    ? enumerateSkillsFromDir(options.bundledSkillsDir, options.bundledNamespace)
+    : [];
   const project = options.projectDir
     ? enumerateSkillsFromDir(path.join(options.projectDir, '.claude', 'skills'))
     : [];
@@ -146,9 +162,10 @@ export function formatSkillsSection(skills: SkillDescriptor[]): string {
 export function composeSystemPromptWithSkills(
   basePrompt: string,
   projectDir: string,
-  bundledSkillsDir?: string
+  bundledSkillsDir?: string,
+  bundledNamespace?: string
 ): string {
-  const skills = enumerateSkills({ projectDir, bundledSkillsDir });
+  const skills = enumerateSkills({ projectDir, bundledSkillsDir, bundledNamespace });
   const section = formatSkillsSection(skills);
   if (!section) return basePrompt;
   const separator = basePrompt.endsWith('\n') ? '\n' : '\n\n';

@@ -177,6 +177,46 @@ describe('enumerateSkills — bundled + project merge (#268)', () => {
     const skills = enumerateSkillsFromDir(bundledDir);
     expect(skills.map((s) => s.name).sort()).toEqual(['a', 'b']);
   });
+
+  it('prefixes bundled skill names with the namespace when provided (#plugin-dir)', () => {
+    writeBundledSkill('check-and-resume-stack', 'desc');
+    writeBundledSkill('list-stacks', 'desc2');
+    const skills = enumerateSkills({
+      projectDir,
+      bundledSkillsDir: bundledDir,
+      bundledNamespace: 'sandstorm-cli',
+    });
+    expect(skills.map((s) => s.name).sort()).toEqual([
+      'sandstorm-cli:check-and-resume-stack',
+      'sandstorm-cli:list-stacks',
+    ]);
+  });
+
+  it('does NOT prefix project-local skills even when a bundledNamespace is provided', () => {
+    writeBundledSkill('b-skill', 'bundled');
+    writeProjectSkill('p-skill', 'project');
+    const skills = enumerateSkills({
+      projectDir,
+      bundledSkillsDir: bundledDir,
+      bundledNamespace: 'sandstorm-cli',
+    });
+    // Project name is unprefixed; bundled is prefixed.
+    expect(skills.map((s) => s.name).sort()).toEqual([
+      'p-skill',
+      'sandstorm-cli:b-skill',
+    ]);
+  });
+
+  it('SkillDescriptor.path still points at the unprefixed SKILL.md on disk', () => {
+    writeBundledSkill('my-skill', 'desc');
+    const skills = enumerateSkills({
+      projectDir,
+      bundledSkillsDir: bundledDir,
+      bundledNamespace: 'ns',
+    });
+    expect(skills[0].name).toBe('ns:my-skill');
+    expect(skills[0].path.endsWith(path.join('my-skill', 'SKILL.md'))).toBe(true);
+  });
 });
 
 describe('composeSystemPromptWithSkills with bundledSkillsDir (#268)', () => {
