@@ -491,10 +491,10 @@ describe('StackManager', () => {
 
       // The CLI should have been invoked to start the stack BEFORE the dispatch call.
       const startCall = runCliSpy.mock.calls.find(
-        ([, args]) => Array.isArray(args) && args[0] === 'start'
+        ([, args]) => Array.isArray(args) && args[0] === 'up'
       );
       expect(startCall).toBeDefined();
-      expect(startCall![1]).toEqual(['start', 'autostart']);
+      expect(startCall![1]).toEqual(['up', 'autostart']);
 
       // Dispatch itself still runs after the start.
       const taskCall = runCliSpy.mock.calls.find(
@@ -515,7 +515,7 @@ describe('StackManager', () => {
       await manager.dispatchTask('already-up', 'go');
 
       const startCall = runCliSpy.mock.calls.find(
-        ([, args]) => Array.isArray(args) && args[0] === 'start'
+        ([, args]) => Array.isArray(args) && args[0] === 'up'
       );
       expect(startCall).toBeUndefined();
     });
@@ -536,7 +536,7 @@ describe('StackManager', () => {
       ]);
 
       vi.spyOn(manager, 'runCli').mockImplementation(async (_dir, args) => {
-        if (args[0] === 'start') {
+        if (args[0] === 'up') {
           return { stdout: '', stderr: 'start failed: docker daemon unavailable', exitCode: 1 };
         }
         return { stdout: '', stderr: '', exitCode: 0 };
@@ -812,7 +812,7 @@ describe('StackManager', () => {
       manager.startStack('start-bg');
 
       await vi.waitFor(() => {
-        expect(runCliSpy).toHaveBeenCalledWith('/proj', ['start', 'start-bg']);
+        expect(runCliSpy).toHaveBeenCalledWith('/proj', ['up', 'start-bg']);
       }, { timeout: 5000 });
     });
 

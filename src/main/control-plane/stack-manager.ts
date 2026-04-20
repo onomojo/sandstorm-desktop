@@ -484,7 +484,7 @@ export class StackManager {
    * caller can surface failure to the user.
    */
   private async ensureStackContainersRunning(stack: Stack, stackId: string): Promise<void> {
-    const result = await this.runCli(stack.project_dir, ['start', stackId]);
+    const result = await this.runCli(stack.project_dir, ['up', stackId]);
     if (result.exitCode !== 0) {
       throw new SandstormError(
         ErrorCode.COMPOSE_FAILED,
@@ -497,7 +497,7 @@ export class StackManager {
 
   private async startInBackground(stack: Stack, stackId: string): Promise<void> {
     try {
-      const result = await this.runCli(stack.project_dir, ['start', stackId]);
+      const result = await this.runCli(stack.project_dir, ['up', stackId]);
       if (result.exitCode !== 0) {
         throw new SandstormError(ErrorCode.COMPOSE_FAILED, result.stderr.trim() || result.stdout.trim() || 'Stack start failed');
       }
