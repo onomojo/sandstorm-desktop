@@ -1438,3 +1438,57 @@ describe('Outer-Claude session token accumulation (agent:token-usage IPC)', () =
     expect((bMessages[0].args[0] as { input_tokens: number }).input_tokens).toBe(999);
   });
 });
+
+describe('Raw API-request capture wiring (#299)', () => {
+  let origFlag: string | undefined;
+
+  beforeEach(() => {
+    origFlag = process.env.SANDSTORM_RAW_REQUEST_CAPTURE;
+    spawnedProcesses.length = 0;
+  });
+
+  afterEach(() => {
+    if (origFlag === undefined) delete process.env.SANDSTORM_RAW_REQUEST_CAPTURE;
+    else process.env.SANDSTORM_RAW_REQUEST_CAPTURE = origFlag;
+  });
+
+  it('does NOT set ANTHROPIC_BASE_URL in spawn env when the flag is off', async () => {
+    delete process.env.SANDSTORM_RAW_REQUEST_CAPTURE;
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const mockWindow = { webContents: { send: vi.fn() } };
+    const backend = new ClaudeBackend(1000);
+    backend.setMainWindow(mockWindow as never);
+    await backend.initialize();
+
+    backend.sendMessage('tab-no-cap', 'hi', '/tmp');
+
+    const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const spawnOptions = callArgs[2] as { env: Record<string, string | undefined> };
+    expect(spawnOptions.env.ANTHROPIC_BASE_URL).toBeUndefined();
+
+    backend.destroy();
+  });
+
+  it('rawCapture supervisor reports disabled when flag is off', () => {
+    delete process.env.SANDSTORM_RAW_REQUEST_CAPTURE;
+    const backend = new ClaudeBackend(1000);
+    const supervisor = (backend as unknown as {
+      rawCapture: { enabled: boolean };
+    }).rawCapture;
+    expect(supervisor.enabled).toBe(false);
+    backend.destroy();
+  });
+
+  it('rawCapture supervisor reports enabled when flag is set to "1"', () => {
+    process.env.SANDSTORM_RAW_REQUEST_CAPTURE = '1';
+    const backend = new ClaudeBackend(1000);
+    const supervisor = (backend as unknown as {
+      rawCapture: { enabled: boolean };
+    }).rawCapture;
+    expect(supervisor.enabled).toBe(true);
+    backend.destroy();
+  });
+});

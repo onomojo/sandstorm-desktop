@@ -145,3 +145,29 @@ mv ~/.claude/projects/-home-onomojo-Work-sandstorm-desktop/memory.bak \
 ## Experiment 6 — Fresh Claude Code (I run this, no user action)
 
 External baseline via a raw `claude -p` subprocess against the project, parsing the stream-json `type:"result"` usage block. I'll do this in parallel with your runs and merge the result into the analysis table.
+
+---
+
+## Raw API-request capture (#299)
+
+When telemetry is not enough — you want to see exactly what bytes the CLI is sending to `api.anthropic.com` — set this env var on the app launch:
+
+```bash
+SANDSTORM_RAW_REQUEST_CAPTURE=1 \
+"/home/onomojo/Work/sandstorm-desktop/release/sandstorm-desktop-0.1.0-linux.AppImage"
+```
+
+A localhost HTTP proxy is stood up per tab; the child `claude` process is pointed at it via `ANTHROPIC_BASE_URL`. Every outbound request body is dumped (headers redacted) under:
+
+```
+~/.config/sandstorm-desktop/raw-api-capture/<sessionStartIso>/
+```
+
+Analyze with:
+
+```bash
+node scripts/analyze-raw-capture.mjs \
+  ~/.config/sandstorm-desktop/raw-api-capture/<sessionStartIso>
+```
+
+The script prints a per-request summary table, a system-prompt composition breakdown (with the skill-catalog system-reminder flagged explicitly), tool-schema inventory, and net byte deltas between adjacent requests. Clean up the capture dir manually after — no rotation.

@@ -26,6 +26,12 @@ import {
 import { resolveOuterClaudeTools } from './tools-allowlist';
 import { composeSystemPromptWithSkills } from './skill-enumeration';
 import { TokenTelemetry, ToolCallRecord, isTelemetryEnabled } from './token-telemetry';
+import {
+  RawCaptureSession,
+  RawCaptureSupervisor,
+  createRawCaptureSupervisor,
+  isRawCaptureEnabled,
+} from './raw-request-capture';
 
 /** In-flight per-cycle tracking; tool_use_id is only retained in memory. */
 interface InFlightToolCall extends ToolCallRecord {
@@ -92,6 +98,8 @@ export class ClaudeBackend implements AgentBackend {
   private timeoutMs: number;
   private modelResolver?: (projectDir: string) => string;
   private telemetry: TokenTelemetry;
+  private rawCapture: RawCaptureSupervisor;
+  private rawCaptureByTab = new Map<string, RawCaptureSession>();
 
   constructor(
     timeoutMs?: number,
@@ -102,6 +110,25 @@ export class ClaudeBackend implements AgentBackend {
     this.modelResolver = modelResolver;
     this.initLogger();
     this.telemetry = this.initTelemetry();
+    this.rawCapture = this.initRawCapture();
+  }
+
+  /**
+   * Opt-in raw API-request capture (#299). Off unless
+   * `SANDSTORM_RAW_REQUEST_CAPTURE=1` is set. Stands up one HTTP proxy per
+   * tab, dumps outbound request bodies to disk next to the telemetry log.
+   */
+  private initRawCapture(): RawCaptureSupervisor {
+    const enabled = isRawCaptureEnabled();
+    let baseDir: string;
+    try {
+      baseDir = typeof app !== 'undefined' && app.getPath ? app.getPath('userData') : os.tmpdir();
+    } catch {
+      baseDir = os.tmpdir();
+    }
+    const sessionId = new Date().toISOString().replace(/[:.]/g, '-');
+    const rootDir = path.join(baseDir, 'raw-api-capture', sessionId);
+    return createRawCaptureSupervisor({ rootDir, enabled });
   }
 
   /**
@@ -256,6 +283,30 @@ export class ClaudeBackend implements AgentBackend {
     // Note: Claude CLI with --input-format stream-json does NOT emit the
     // system init event until it receives input on stdin, so we must write
     // the message first — not wait for init.
+    //
+    // Default (capture off) path stays fully synchronous so no spawn
+    // latency is introduced. Capture on (#299) defers spawn+write until
+    // the loopback proxy has bound an ephemeral port.
+    if (this.rawCapture.enabled) {
+      void this.rawCapture
+        .registerTab(tabId)
+        .then((captureSession) => {
+          const extraEnv: Record<string, string> = {};
+          if (captureSession.baseUrl) {
+            extraEnv.ANTHROPIC_BASE_URL = captureSession.baseUrl;
+            this.rawCaptureByTab.set(tabId, captureSession);
+            this.log(`Raw request capture active for tab=${tabId} at ${captureSession.baseUrl}`);
+          }
+          this.ensureProcess(tabId, extraEnv);
+          this.writeMessage(tabId, message);
+        })
+        .catch((err) => {
+          this.log(`Raw request capture failed to start for tab=${tabId}: ${String(err)}`);
+          this.ensureProcess(tabId);
+          this.writeMessage(tabId, message);
+        });
+      return;
+    }
     this.ensureProcess(tabId);
     this.writeMessage(tabId, message);
   }
@@ -315,6 +366,14 @@ export class ClaudeBackend implements AgentBackend {
       }
     }
     this.sessions.delete(tabId);
+
+    // Tear down the per-tab raw-capture proxy (#299). A fresh one will be
+    // created on the next sendMessage via ensureProcess.
+    const capture = this.rawCaptureByTab.get(tabId);
+    if (capture) {
+      this.rawCaptureByTab.delete(tabId);
+      capture.close().catch(() => { /* best effort */ });
+    }
 
     // Reset token counter to zero for the new session — and push the zero
     // value to the renderer immediately so the UI updates without a poll.
@@ -634,8 +693,12 @@ export class ClaudeBackend implements AgentBackend {
   /**
    * Ensure a persistent Claude process is running for the given tab.
    * Spawns one if none exists. The process stays alive across messages.
+   *
+   * `extraEnv` is merged into the spawn env. Used by the raw-capture
+   * path (#299) to inject `ANTHROPIC_BASE_URL` pointing at the loopback
+   * proxy. When capture is off this is an empty object.
    */
-  private ensureProcess(tabId: string): void {
+  private ensureProcess(tabId: string, extraEnv: Record<string, string> = {}): void {
     const session = this.sessions.get(tabId);
     if (!session || session.process) return;
 
@@ -679,11 +742,12 @@ export class ClaudeBackend implements AgentBackend {
     // SANDSTORM_SKILLS_DIR points at the bundled skills dir so SKILL.md
     // bodies can reference their own `scripts/*.sh` no matter which
     // project is open.
-    const env = {
+    const env: Record<string, string | undefined> = {
       ...getClaudeEnv(),
       SANDSTORM_BRIDGE_URL: `http://127.0.0.1:${this.bridgePort}`,
       SANDSTORM_BRIDGE_TOKEN: this.bridgeToken,
       SANDSTORM_SKILLS_DIR: path.join(cliDir, 'skills'),
+      ...extraEnv,
     };
 
     const child = spawn(claudeBin, args, {
@@ -803,6 +867,10 @@ export class ClaudeBackend implements AgentBackend {
               // Reset per-cycle counters for the next user-message turn.
               session.subTurnCount = 0;
               session.toolCallsInCycle = [];
+              // Advance the raw-capture turn boundary in lock-step with
+              // our internal turn counter. Dumps for the next turn land
+              // in files tagged with the incremented turn index (#299).
+              this.rawCaptureByTab.get(tabId)?.markTurnComplete();
             }
 
             if (session.fullResponse) {
@@ -1004,5 +1072,9 @@ export class ClaudeBackend implements AgentBackend {
     this.logStream?.end();
     this.logStream = null;
     this.telemetry.close();
+    // Close all raw-capture listeners (#299). Fire-and-forget — we don't
+    // block shutdown on proxy drain.
+    this.rawCapture.closeAll().catch(() => { /* ignore */ });
+    this.rawCaptureByTab.clear();
   }
 }
