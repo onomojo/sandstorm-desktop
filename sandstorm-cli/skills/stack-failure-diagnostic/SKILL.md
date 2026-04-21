@@ -1,0 +1,16 @@
+---
+name: stack-failure-diagnostic
+description: "Use this skill when the user reports a stack appears broken, stuck, looping, failed, or otherwise not working — and wants to understand WHY (not just restart it). Trigger phrases include: 'stack N doesn't seem to be working', 'stack N isn't working', 'stack N failed for some reason / why did stack N fail / what went wrong with stack N', 'stack N seems stuck / got stuck / stuck in an infinite loop / keeps looping / did N loops and failed', 'take a look at stack N, something went wrong / it's broken / something's clearly wrong', 'stack N hit NEEDS HUMAN INTERVENTION / keeps failing / errored out', 'figure out what's happening / going on with stack N', 'give me a summary of what happened with stack N / diagnose stack N'. The skill reads the stack's dual-loop artifacts (phase timings, review verdicts, execution summaries) from inside its container and returns one structured report — avoiding the 40+ Bash-exploration sub-turns the orchestrator would otherwise make. Make sure to use this skill for ANY request that involves diagnosing a stack's failure, loop behavior, or why it stopped working — even when the user phrases it gently (e.g., 'doesn't seem to be working', 'not sure what's going on', 'can you take a look') as long as there is a failure or malfunction signal present. Falling back to raw Bash exploration of the stack's internals costs 1M+ tokens. Do NOT trigger for: status-only 'is stack N done?' / 'what's the status of stack N' (that's check-and-resume-stack), diff/logs inspection on a working stack with no failure signal (stack-inspect), or creating a new stack."
+---
+
+# /stack-failure-diagnostic
+
+Extract the stack ID from the user's message, then run the script exactly once:
+
+```bash
+bash "$SANDSTORM_SKILLS_DIR/stack-failure-diagnostic/scripts/diagnose.sh" <stack-id>
+```
+
+The script prints a structured multi-section report. Relay the relevant parts to the user — do NOT re-read the underlying files yourself, do NOT run additional Bash/Grep/Read against the stack's container. The report already has everything you need to answer "what went wrong".
+
+If the script prints `NOT_FOUND`, report it and ask for the exact ID. If it prints `NO_ARTIFACTS`, the stack has no dual-loop artifacts yet (never ran or was just created); tell the user that and stop.
