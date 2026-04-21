@@ -1,6 +1,6 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { useAppStore } from '../store';
-import { registerAgentStreamListeners } from '../agentStreamService';
+import { registerAgentStreamListeners, registerScheduledDispatchListener } from '../agentStreamService';
 import { OuterClaudeTokenCounter } from './OuterClaudeTokenCounter';
 
 interface AgentSessionProps {
@@ -40,6 +40,7 @@ export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
   // history from the backend on every mount so state is always up to date.
   useEffect(() => {
     registerAgentStreamListeners(tabId);
+    registerScheduledDispatchListener();
 
     window.sandstorm.agent.history(tabId).then((result) => {
       const typed = result.messages.map((m) => ({
@@ -152,14 +153,24 @@ export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
             key={i}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
-            <div
-              className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
-                msg.role === 'user'
-                  ? 'bg-sandstorm-accent/90 text-white'
-                  : 'bg-sandstorm-surface text-sandstorm-text border border-sandstorm-border'
-              }`}
-            >
-              {msg.content}
+            <div className={`max-w-[85%] ${msg.role === 'user' ? 'flex flex-col items-end' : ''}`}>
+              {msg.scheduled && (
+                <span
+                  data-testid="scheduled-badge"
+                  className="inline-block text-[10px] font-semibold uppercase tracking-wide px-1.5 py-0.5 mb-1 rounded bg-amber-500/20 text-amber-400 border border-amber-500/30"
+                >
+                  Scheduled
+                </span>
+              )}
+              <div
+                className={`rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+                  msg.role === 'user'
+                    ? 'bg-sandstorm-accent/90 text-white'
+                    : 'bg-sandstorm-surface text-sandstorm-text border border-sandstorm-border'
+                }`}
+              >
+                {msg.content}
+              </div>
             </div>
           </div>
         ))}

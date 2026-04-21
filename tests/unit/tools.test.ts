@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { tools, handleToolCall, validateProjectDir } from '../../src/main/claude/tools';
 
-// Mock the stackManager and agentBackend imports
+// Mock the stackManager, agentBackend, and registry imports
 vi.mock('../../src/main/index', () => ({
   stackManager: {
     createStack: vi.fn().mockResolvedValue({ id: 'test', status: 'building', services: [] }),
@@ -11,6 +11,32 @@ vi.mock('../../src/main/index', () => ({
   agentBackend: {
     runEphemeralAgent: vi.fn().mockResolvedValue(''),
   },
+  registry: {},
+}));
+
+vi.mock('../../src/main/scheduler', () => ({
+  createSchedule: vi.fn().mockReturnValue({
+    id: 'sch_abc123456789',
+    cronExpression: '0 * * * *',
+    prompt: 'Do stuff',
+    enabled: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }),
+  listSchedules: vi.fn().mockReturnValue([]),
+  updateSchedule: vi.fn().mockReturnValue({
+    id: 'sch_abc123456789',
+    cronExpression: '*/5 * * * *',
+    prompt: 'Do stuff',
+    enabled: true,
+    createdAt: '2026-01-01T00:00:00Z',
+    updatedAt: '2026-01-01T00:00:00Z',
+  }),
+  deleteSchedule: vi.fn(),
+}));
+
+vi.mock('../../src/main/scheduler/scheduler-manager', () => ({
+  syncAllProjectsCrontab: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../src/main/control-plane/ticket-fetcher', () => ({
@@ -25,6 +51,8 @@ vi.mock('../../src/main/spec-quality-gate', () => ({
 import { stackManager, agentBackend } from '../../src/main/index';
 import { fetchTicketContext, getScriptStatus } from '../../src/main/control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../../src/main/spec-quality-gate';
+import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from '../../src/main/scheduler';
+import { syncAllProjectsCrontab } from '../../src/main/scheduler/scheduler-manager';
 
 describe('MCP tools', () => {
   beforeEach(() => {
@@ -300,6 +328,17 @@ describe('MCP tools', () => {
       expect(validateProjectDir(true)).not.toBeNull();
       expect(validateProjectDir({})).not.toBeNull();
     });
+
+    it('returns error for paths with traversal sequences', () => {
+      const result = validateProjectDir('/home/user/../etc/passwd');
+      expect(result).not.toBeNull();
+      expect(result!.error).toContain('traversal');
+    });
+
+    it('returns null for valid paths that contain no traversal sequences', () => {
+      expect(validateProjectDir('/home/user/projects/my-app')).toBeNull();
+      expect(validateProjectDir('/tmp/sandstorm')).toBeNull();
+    });
   });
 
   describe('handleToolCall — projectDir validation', () => {
@@ -418,6 +457,128 @@ describe('MCP tools', () => {
         projectDir: '/home/user/my-project',
       }) as { error: string };
       expect(result.error).toContain('/home/user/my-project/.sandstorm/spec-quality-gate.md');
+    });
+  });
+
+  describe('handleToolCall — schedule tools', () => {
+    it('schedule_create rejects empty projectDir', async () => {
+      const result = await handleToolCall('schedule_create', {
+        projectDir: '',
+        cronExpression: '0 * * * *',
+        prompt: 'Do stuff',
+      }) as { error: string };
+      expect(result.error).toContain('required');
+    });
+
+    it('schedule_create rejects relative projectDir', async () => {
+      const result = await handleToolCall('schedule_create', {
+        projectDir: './my-project',
+        cronExpression: '0 * * * *',
+        prompt: 'Do stuff',
+      }) as { error: string };
+      expect(result.error).toContain('absolute path');
+    });
+
+    it('schedule_create calls createSchedule and syncAllProjectsCrontab', async () => {
+      const result = await handleToolCall('schedule_create', {
+        projectDir: '/proj',
+        cronExpression: '0 * * * *',
+        prompt: 'Do stuff',
+        enabled: true,
+      }) as { id: string };
+
+      expect(createSchedule).toHaveBeenCalledWith(
+        expect.objectContaining({
+          projectDir: '/proj',
+          cronExpression: '0 * * * *',
+          prompt: 'Do stuff',
+          enabled: true,
+        })
+      );
+      expect(syncAllProjectsCrontab).toHaveBeenCalled();
+      expect(result.id).toBe('sch_abc123456789');
+    });
+
+    it('schedule_create still returns id when syncAllProjectsCrontab fails', async () => {
+      vi.mocked(syncAllProjectsCrontab).mockRejectedValueOnce(new Error('crontab unavailable'));
+
+      const result = await handleToolCall('schedule_create', {
+        projectDir: '/proj',
+        cronExpression: '0 * * * *',
+        prompt: 'Do stuff',
+      }) as { id: string };
+
+      expect(result.id).toBe('sch_abc123456789');
+    });
+
+    it('schedule_list rejects empty projectDir', async () => {
+      const result = await handleToolCall('schedule_list', {
+        projectDir: '',
+      }) as { error: string };
+      expect(result.error).toContain('required');
+    });
+
+    it('schedule_list calls listSchedules and returns schedules array', async () => {
+      const mockSchedules = [{ id: 'sch_abc123456789', cronExpression: '0 * * * *', prompt: 'Do stuff', enabled: true, createdAt: '', updatedAt: '' }];
+      vi.mocked(listSchedules).mockReturnValueOnce(mockSchedules);
+
+      const result = await handleToolCall('schedule_list', {
+        projectDir: '/proj',
+      }) as { schedules: unknown[] };
+
+      expect(listSchedules).toHaveBeenCalledWith('/proj');
+      expect(result.schedules).toEqual(mockSchedules);
+    });
+
+    it('schedule_update rejects empty projectDir', async () => {
+      const result = await handleToolCall('schedule_update', {
+        projectDir: '',
+        id: 'sch_abc123456789',
+        patch: { enabled: false },
+      }) as { error: string };
+      expect(result.error).toContain('required');
+    });
+
+    it('schedule_update calls updateSchedule and syncAllProjectsCrontab', async () => {
+      const result = await handleToolCall('schedule_update', {
+        projectDir: '/proj',
+        id: 'sch_abc123456789',
+        patch: { enabled: false },
+      }) as { schedule: unknown };
+
+      expect(updateSchedule).toHaveBeenCalledWith('/proj', 'sch_abc123456789', { enabled: false });
+      expect(syncAllProjectsCrontab).toHaveBeenCalled();
+      expect(result.schedule).toBeDefined();
+    });
+
+    it('schedule_delete rejects empty projectDir', async () => {
+      const result = await handleToolCall('schedule_delete', {
+        projectDir: '',
+        id: 'sch_abc123456789',
+      }) as { error: string };
+      expect(result.error).toContain('required');
+    });
+
+    it('schedule_delete calls deleteSchedule and syncAllProjectsCrontab', async () => {
+      const result = await handleToolCall('schedule_delete', {
+        projectDir: '/proj',
+        id: 'sch_abc123456789',
+      }) as { ok: boolean };
+
+      expect(deleteSchedule).toHaveBeenCalledWith('/proj', 'sch_abc123456789');
+      expect(syncAllProjectsCrontab).toHaveBeenCalled();
+      expect(result.ok).toBe(true);
+    });
+
+    it('schedule_delete still returns ok when syncAllProjectsCrontab fails', async () => {
+      vi.mocked(syncAllProjectsCrontab).mockRejectedValueOnce(new Error('crontab unavailable'));
+
+      const result = await handleToolCall('schedule_delete', {
+        projectDir: '/proj',
+        id: 'sch_abc123456789',
+      }) as { ok: boolean };
+
+      expect(result.ok).toBe(true);
     });
   });
 

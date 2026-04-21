@@ -135,6 +135,13 @@ export function mockSandstormApi() {
       }),
       reportActivity: vi.fn(),
     },
+    schedules: {
+      list: vi.fn().mockResolvedValue([]),
+      create: vi.fn().mockResolvedValue({ id: 'sch_test', cronExpression: '0 * * * *', prompt: 'Test', enabled: true, createdAt: '', updatedAt: '' }),
+      update: vi.fn().mockResolvedValue({ id: 'sch_test', cronExpression: '0 * * * *', prompt: 'Test', enabled: true, createdAt: '', updatedAt: '' }),
+      delete: vi.fn().mockResolvedValue(undefined),
+      cronHealth: vi.fn().mockResolvedValue({ running: true }),
+    },
     auth: {
       status: vi.fn().mockResolvedValue({ loggedIn: false, expired: false }),
       login: vi.fn().mockResolvedValue({ success: true }),

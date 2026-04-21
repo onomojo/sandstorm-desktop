@@ -16,6 +16,10 @@ extraResources:
     to: sandstorm-cli
     filter:
       - "**/*"
+  - from: resources/bin
+    to: bin
+    filter:
+      - "sandstorm-scheduled-run.sh"
 mac:
   target: [dmg]
   icon: resources/icon.icns

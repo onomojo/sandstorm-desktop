@@ -19,6 +19,7 @@ const {
   mockCustomContext,
   mockSpawn,
   mockFetchAccountUsage,
+  mockRemoveProjectFromCrontab,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 
@@ -26,6 +27,7 @@ const {
     listProjects: vi.fn(),
     addProject: vi.fn(),
     removeProject: vi.fn(),
+    getProject: vi.fn(),
     getPorts: vi.fn(),
   };
 
@@ -91,6 +93,7 @@ const {
 
   const mockSpawn = vi.fn();
   const mockFetchAccountUsage = vi.fn();
+  const mockRemoveProjectFromCrontab = vi.fn();
 
   return {
     registeredHandlers,
@@ -103,6 +106,7 @@ const {
     mockCustomContext,
     mockSpawn,
     mockFetchAccountUsage,
+    mockRemoveProjectFromCrontab,
   };
 });
 
@@ -145,6 +149,23 @@ vi.mock('../../src/main/control-plane/account-usage', () => ({
 
 vi.mock('child_process', () => ({
   spawn: mockSpawn,
+}));
+
+vi.mock('../../src/main/scheduler', () => ({
+  createSchedule: vi.fn().mockReturnValue({ id: 'sch_test', cronExpression: '0 * * * *', prompt: 'Test', enabled: true }),
+  listSchedules: vi.fn().mockReturnValue([]),
+  updateSchedule: vi.fn().mockReturnValue({ id: 'sch_test', cronExpression: '0 * * * *', prompt: 'Test', enabled: true }),
+  deleteSchedule: vi.fn(),
+  isCronRunning: vi.fn().mockReturnValue(true),
+  removeProjectFromCrontab: (...args: unknown[]) => mockRemoveProjectFromCrontab(...args),
+}));
+
+vi.mock('../../src/main/scheduler/scheduler-manager', () => ({
+  syncAllProjectsCrontab: vi.fn().mockResolvedValue(undefined),
+  projectIdFromDir: vi.fn().mockImplementation((dir: string) => {
+    const parts = dir.split('/');
+    return parts[parts.length - 1].toLowerCase().replace(/[^a-z0-9_-]/g, '-');
+  }),
 }));
 
 // ---------------------------------------------------------------------------
@@ -457,7 +478,23 @@ describe('IPC Handlers', () => {
     });
 
     it('projects:remove delegates to registry.removeProject', async () => {
+      mockRegistry.getProject.mockReturnValue(undefined);
       await invokeHandler('projects:remove', 1);
+      expect(mockRegistry.removeProject).toHaveBeenCalledWith(1);
+    });
+
+    it('projects:remove cleans up crontab entries for the removed project', async () => {
+      mockRegistry.getProject.mockReturnValue({ id: 1, directory: '/home/user/my-project', name: 'my-project' });
+      await invokeHandler('projects:remove', 1);
+      expect(mockRegistry.removeProject).toHaveBeenCalledWith(1);
+      expect(mockRemoveProjectFromCrontab).toHaveBeenCalledWith('my-project');
+    });
+
+    it('projects:remove does not crash if crontab cleanup fails', async () => {
+      mockRegistry.getProject.mockReturnValue({ id: 1, directory: '/home/user/my-project', name: 'my-project' });
+      mockRemoveProjectFromCrontab.mockImplementation(() => { throw new Error('crontab not available'); });
+      // Should not throw
+      await expect(invokeHandler('projects:remove', 1)).resolves.not.toThrow();
       expect(mockRegistry.removeProject).toHaveBeenCalledWith(1);
     });
 
@@ -966,6 +1003,95 @@ describe('IPC Handlers', () => {
   });
 
   // =========================================================================
+  // Schedules
+  // =========================================================================
+  describe('schedules', () => {
+    it('schedules:list delegates to listSchedules', async () => {
+      const { listSchedules } = await import('../../src/main/scheduler');
+      (listSchedules as Mock).mockReturnValue([{ id: 'sch_1', cronExpression: '0 * * * *' }]);
+
+      const result = await invokeHandler('schedules:list', '/home/user/proj');
+      expect(listSchedules).toHaveBeenCalledWith('/home/user/proj');
+      expect(result).toEqual([{ id: 'sch_1', cronExpression: '0 * * * *' }]);
+    });
+
+    it('schedules:create delegates to createSchedule and syncs crontab', async () => {
+      const { createSchedule } = await import('../../src/main/scheduler');
+      const { syncAllProjectsCrontab } = await import('../../src/main/scheduler/scheduler-manager');
+
+      const result = await invokeHandler('schedules:create', '/home/user/proj', {
+        label: 'Test',
+        cronExpression: '0 * * * *',
+        prompt: 'Run tests',
+        enabled: true,
+      });
+
+      expect(createSchedule).toHaveBeenCalledWith({
+        projectDir: '/home/user/proj',
+        label: 'Test',
+        cronExpression: '0 * * * *',
+        prompt: 'Run tests',
+        enabled: true,
+      });
+      expect(syncAllProjectsCrontab).toHaveBeenCalled();
+      expect((result as { id: string }).id).toBe('sch_test');
+    });
+
+    it('schedules:update delegates to updateSchedule and syncs crontab', async () => {
+      const { updateSchedule } = await import('../../src/main/scheduler');
+      const { syncAllProjectsCrontab } = await import('../../src/main/scheduler/scheduler-manager');
+
+      const result = await invokeHandler('schedules:update', '/home/user/proj', 'sch_test', {
+        enabled: false,
+      });
+
+      expect(updateSchedule).toHaveBeenCalledWith('/home/user/proj', 'sch_test', { enabled: false });
+      expect(syncAllProjectsCrontab).toHaveBeenCalled();
+      expect((result as { id: string }).id).toBe('sch_test');
+    });
+
+    it('schedules:delete delegates to deleteSchedule and syncs crontab', async () => {
+      const { deleteSchedule } = await import('../../src/main/scheduler');
+      const { syncAllProjectsCrontab } = await import('../../src/main/scheduler/scheduler-manager');
+
+      await invokeHandler('schedules:delete', '/home/user/proj', 'sch_test');
+
+      expect(deleteSchedule).toHaveBeenCalledWith('/home/user/proj', 'sch_test');
+      expect(syncAllProjectsCrontab).toHaveBeenCalled();
+    });
+
+    it('schedules:list rejects relative projectDir', async () => {
+      await expect(invokeHandler('schedules:list', './relative')).rejects.toThrow(/absolute path/);
+    });
+
+    it('schedules:create rejects empty projectDir', async () => {
+      await expect(
+        invokeHandler('schedules:create', '', { cronExpression: '0 * * * *', prompt: 'test' })
+      ).rejects.toThrow(/projectDir is required/);
+    });
+
+    it('schedules:update rejects relative projectDir', async () => {
+      await expect(
+        invokeHandler('schedules:update', 'relative', 'sch_test', { enabled: false })
+      ).rejects.toThrow(/absolute path/);
+    });
+
+    it('schedules:delete rejects relative projectDir', async () => {
+      await expect(
+        invokeHandler('schedules:delete', 'relative', 'sch_test')
+      ).rejects.toThrow(/absolute path/);
+    });
+
+    it('schedules:cronHealth returns cron daemon status', async () => {
+      const { isCronRunning } = await import('../../src/main/scheduler');
+      (isCronRunning as Mock).mockReturnValue(false);
+
+      const result = await invokeHandler('schedules:cronHealth');
+      expect(result).toEqual({ running: false });
+    });
+  });
+
+  // =========================================================================
   // Handler Registration Completeness
   // =========================================================================
   describe('handler registration', () => {
@@ -1046,6 +1172,11 @@ describe('IPC Handlers', () => {
       'session:resumeStack',
       'session:forcePoll',
       'docker:status',
+      'schedules:list',
+      'schedules:create',
+      'schedules:update',
+      'schedules:delete',
+      'schedules:cronHealth',
       'auth:status',
       'auth:login',
     ];

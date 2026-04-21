@@ -5,31 +5,20 @@
  */
 
 import path from 'path';
-import { stackManager, agentBackend } from '../index';
+import { stackManager, agentBackend, registry } from '../index';
 import { fetchTicketContext, getScriptStatus } from '../control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../spec-quality-gate';
+import {
+  createSchedule,
+  listSchedules,
+  updateSchedule,
+  deleteSchedule,
+} from '../scheduler';
+import { syncAllProjectsCrontab } from '../scheduler/scheduler-manager';
+import type { UpdateSchedulePatch } from '../scheduler/schedule-service';
+import { validateProjectDir } from '../validation';
 
-/**
- * Validate that projectDir is a non-empty absolute path.
- * Returns an error object if invalid, or null if valid.
- */
-export function validateProjectDir(projectDir: unknown): { error: string } | null {
-  if (!projectDir || typeof projectDir !== 'string' || !projectDir.trim()) {
-    return {
-      error:
-        'projectDir is required and must be a non-empty string. ' +
-        'Pass the absolute path to the project directory (e.g., "/home/user/my-project").',
-    };
-  }
-  if (!path.isAbsolute(projectDir)) {
-    return {
-      error:
-        `projectDir must be an absolute path, got relative path: "${projectDir}". ` +
-        'Use the full path (e.g., "/home/user/my-project") instead of a relative path like "." or "./project".',
-    };
-  }
-  return null;
-}
+export { validateProjectDir };
 
 export interface ToolDefinition {
   name: string;
@@ -211,6 +200,67 @@ export const tools: ToolDefinition[] = [
       required: ['ticketId', 'projectDir'],
     },
   },
+  {
+    name: 'schedule_create',
+    description:
+      'Create a scheduled automation for a project. The schedule fires on a cron expression and dispatches the prompt to the orchestrator.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
+        label: { type: 'string', description: 'Human-readable label for the schedule. If omitted, the schedule ID is used as the display label.' },
+        cronExpression: { type: 'string', description: 'Standard 5-field cron expression (minute hour day-of-month month day-of-week)' },
+        prompt: { type: 'string', description: 'The prompt to dispatch when the schedule fires' },
+        enabled: { type: 'boolean', description: 'Whether the schedule is enabled (default: true)' },
+      },
+      required: ['projectDir', 'cronExpression', 'prompt'],
+    },
+  },
+  {
+    name: 'schedule_list',
+    description: 'List all schedules for a project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
+      },
+      required: ['projectDir'],
+    },
+  },
+  {
+    name: 'schedule_update',
+    description: 'Update an existing schedule. Only the fields in `patch` are modified.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
+        id: { type: 'string', description: 'Schedule ID' },
+        patch: {
+          type: 'object',
+          description: 'Fields to update',
+          properties: {
+            label: { type: 'string' },
+            cronExpression: { type: 'string' },
+            prompt: { type: 'string' },
+            enabled: { type: 'boolean' },
+          },
+        },
+      },
+      required: ['projectDir', 'id', 'patch'],
+    },
+  },
+  {
+    name: 'schedule_delete',
+    description: 'Delete a schedule from a project.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
+        id: { type: 'string', description: 'Schedule ID' },
+      },
+      required: ['projectDir', 'id'],
+    },
+  },
 ];
 
 export async function handleToolCall(
@@ -303,6 +353,58 @@ export async function handleToolCall(
         input.projectDir as string,
         input.userAnswers as string | undefined
       );
+    }
+
+    case 'schedule_create': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
+      const schedule = createSchedule({
+        projectDir: input.projectDir as string,
+        label: input.label as string | undefined,
+        cronExpression: input.cronExpression as string,
+        prompt: input.prompt as string,
+        enabled: input.enabled as boolean | undefined,
+      });
+      try {
+        await syncAllProjectsCrontab(registry);
+      } catch (err) {
+        console.warn('[scheduler] Crontab sync failed (non-fatal):', err);
+      }
+      return { id: schedule.id };
+    }
+
+    case 'schedule_list': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
+      return { schedules: listSchedules(input.projectDir as string) };
+    }
+
+    case 'schedule_update': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
+      const schedule = updateSchedule(
+        input.projectDir as string,
+        input.id as string,
+        input.patch as UpdateSchedulePatch
+      );
+      try {
+        await syncAllProjectsCrontab(registry);
+      } catch (err) {
+        console.warn('[scheduler] Crontab sync failed (non-fatal):', err);
+      }
+      return { schedule };
+    }
+
+    case 'schedule_delete': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
+      deleteSchedule(input.projectDir as string, input.id as string);
+      try {
+        await syncAllProjectsCrontab(registry);
+      } catch (err) {
+        console.warn('[scheduler] Crontab sync failed (non-fatal):', err);
+      }
+      return { ok: true };
     }
 
     default:

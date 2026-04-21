@@ -20,6 +20,7 @@ import { ModelSettingsModal } from './ModelSettings';
 import { OrchestratorOverLimitModal } from './OrchestratorOverLimitModal';
 import { ResizableTableHeader } from './ResizableTableHeader';
 import { StaleWorkspaces } from './StaleWorkspaces';
+import { SchedulerPanel } from './SchedulerPanel';
 import { useResizableColumns, ColumnDef } from '../hooks/useResizableColumns';
 import { formatTokenCount } from '../utils/format';
 
@@ -403,8 +404,11 @@ export function Dashboard() {
     _setDashboardView(view);
   };
   const [leftWidth, setLeftWidth] = useState(55); // percentage
+  const [rightTopHeight, setRightTopHeight] = useState(65); // percentage for stacks panel
   const dragging = useRef(false);
+  const vertDragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
+  const rightColRef = useRef<HTMLDivElement>(null);
   const { columnWidths, startResize } = useResizableColumns('stack-table', TABLE_COLUMNS);
 
   useEffect(() => {
@@ -453,16 +457,30 @@ export function Dashboard() {
     document.body.style.userSelect = 'none';
   }, []);
 
+  const handleVertMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    vertDragging.current = true;
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  }, []);
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
-      if (!dragging.current || !containerRef.current) return;
-      const rect = containerRef.current.getBoundingClientRect();
-      const pct = ((e.clientX - rect.left) / rect.width) * 100;
-      setLeftWidth(Math.min(80, Math.max(20, pct)));
+      if (dragging.current && containerRef.current) {
+        const rect = containerRef.current.getBoundingClientRect();
+        const pct = ((e.clientX - rect.left) / rect.width) * 100;
+        setLeftWidth(Math.min(80, Math.max(20, pct)));
+      }
+      if (vertDragging.current && rightColRef.current) {
+        const rect = rightColRef.current.getBoundingClientRect();
+        const pct = ((e.clientY - rect.top) / rect.height) * 100;
+        setRightTopHeight(Math.min(85, Math.max(25, pct)));
+      }
     };
     const handleMouseUp = () => {
-      if (dragging.current) {
+      if (dragging.current || vertDragging.current) {
         dragging.current = false;
+        vertDragging.current = false;
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
       }
@@ -472,9 +490,9 @@ export function Dashboard() {
     return () => {
       window.removeEventListener('mousemove', handleMouseMove);
       window.removeEventListener('mouseup', handleMouseUp);
-      // Clean up body styles if component unmounts mid-drag
-      if (dragging.current) {
+      if (dragging.current || vertDragging.current) {
         dragging.current = false;
+        vertDragging.current = false;
         document.body.style.cursor = '';
         document.body.style.userSelect = '';
       }
@@ -571,8 +589,9 @@ export function Dashboard() {
           <div className="absolute inset-y-0 -left-1 -right-1" />
         </div>
 
-        {/* Right column — Stacks panel */}
-        <div className="flex-1 flex flex-col min-h-0 min-w-0">
+        {/* Right column — Stacks panel (top) + Scheduler panel (bottom) */}
+        <div className="flex-1 flex flex-col min-h-0 min-w-0" ref={rightColRef}>
+          <div style={{ height: project ? `${rightTopHeight}%` : '100%' }} className="flex flex-col min-h-0">
           <div className="flex items-center gap-3 px-4 border-b border-sandstorm-border shrink-0 h-10">
             {/* Active / History tabs */}
             <div className="flex gap-0.5">
@@ -763,6 +782,23 @@ export function Dashboard() {
             )
           )}
           </div>
+          </div>{/* end stacks top section */}
+
+          {/* Horizontal divider + Scheduler panel (only when project is selected) */}
+          {project && (
+            <>
+              <div
+                className="h-1 shrink-0 cursor-row-resize hover:bg-sandstorm-accent/30 active:bg-sandstorm-accent/50 transition-colors relative group border-t border-sandstorm-border"
+                onMouseDown={handleVertMouseDown}
+                data-testid="scheduler-divider"
+              >
+                <div className="absolute inset-x-0 -top-1 -bottom-1" />
+              </div>
+              <div className="flex-1 min-h-0 border-t border-sandstorm-border" style={{ height: `${100 - rightTopHeight}%` }}>
+                <SchedulerPanel projectDir={project.directory} />
+              </div>
+            </>
+          )}
         </div>
       </div>
 

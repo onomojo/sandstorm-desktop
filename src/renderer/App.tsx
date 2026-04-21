@@ -112,11 +112,18 @@ export default function App() {
       refreshSessionState();
     });
 
+    // Proactive cron health push from main process at app launch
+    const unsubCronHealth = window.sandstorm.on('scheduler:cronHealth', (data: unknown) => {
+      const { running } = data as { running: boolean };
+      useAppStore.setState({ cronHealthy: running });
+    });
+
     return () => {
       unsubThreshold();
       unsubHalted();
       unsubReset();
       unsubState();
+      unsubCronHealth();
     };
   }, [refreshSessionState, refreshStacks]);
 

@@ -39,9 +39,13 @@ export function registerAgentStreamListeners(tabId: string): void {
     });
     // Re-fetch authoritative history from backend (handles queued messages too)
     window.sandstorm.agent.history(tabId).then((result) => {
-      const messages = result.messages.map((m) => ({
+      // Preserve renderer-only annotations (e.g. scheduled: true) that the backend
+      // does not store. Match by index since history is append-only.
+      const existing = useAppStore.getState().agentSessions[tabId]?.messages ?? [];
+      const messages = result.messages.map((m, i) => ({
         role: m.role as 'user' | 'assistant',
         content: m.content,
+        ...(existing[i]?.scheduled ? { scheduled: true } : {}),
       }));
       useAppStore.getState().updateAgentSession(tabId, {
         messages,
@@ -85,7 +89,46 @@ export function registerAgentStreamListeners(tabId: string): void {
   });
 }
 
+// Registered once per renderer lifetime; cleaned up on app quit via _resetForTesting in tests.
+// In tests, call _resetForTesting() in beforeEach to reset between test cases.
+let scheduledListenerRegistered = false;
+let scheduledDispatchCleanup: (() => void) | null = null;
+
+/**
+ * Register a global listener for schedule:dispatched events.
+ * When a scheduled dispatch is accepted, the most recent user message
+ * in the corresponding tab is marked with `scheduled: true` for badge rendering.
+ *
+ * NOTE: The `scheduled: true` flag is session-scoped in-memory state only.
+ * It is not persisted to disk. On app restart, previously scheduled messages
+ * will appear without the "Scheduled" badge — this is intentional and acceptable.
+ */
+export function registerScheduledDispatchListener(): void {
+  if (scheduledListenerRegistered) return;
+  scheduledListenerRegistered = true;
+
+  scheduledDispatchCleanup = window.sandstorm.on('schedule:dispatched', (data: unknown) => {
+    const { tabId } = data as { tabId: string; scheduleLabel: string };
+    const current = useAppStore.getState().agentSessions[tabId];
+    if (!current) return;
+    const msgs = [...current.messages];
+    // Walk backwards to find the last user message and mark it as scheduled
+    for (let i = msgs.length - 1; i >= 0; i--) {
+      if (msgs[i].role === 'user' && !msgs[i].scheduled) {
+        msgs[i] = { ...msgs[i], scheduled: true };
+        break;
+      }
+    }
+    useAppStore.getState().updateAgentSession(tabId, { messages: msgs });
+  });
+}
+
 /** Reset registered tab tracking — for test isolation only. */
 export function _resetForTesting(): void {
   registeredTabs.clear();
+  if (scheduledDispatchCleanup) {
+    scheduledDispatchCleanup();
+    scheduledDispatchCleanup = null;
+  }
+  scheduledListenerRegistered = false;
 }
