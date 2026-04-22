@@ -1,0 +1,17 @@
+[
+  { "query": "Ticket 84 is already specced out, just fire up a stack for it.", "should_trigger": true, "notes": "Explicit 'already specced' → direct dispatch" },
+  { "query": "The gate passed for #203, let's kick it off.", "should_trigger": true, "notes": "Gate passed → direct dispatch" },
+  { "query": "Dispatch ticket 11 — no need to re-run the gate.", "should_trigger": true, "notes": "Explicit skip-gate language → direct dispatch" },
+  { "query": "Start stack for ticket 342, it's ready.", "should_trigger": true, "notes": "Ticket-ready signal → direct dispatch" },
+  { "query": "Fire up the stack for 75. It's been gated.", "should_trigger": true, "notes": "Gated affirmation → direct dispatch" },
+
+  { "query": "Take a look at ticket 43 — let me know if it passes our quality gates.", "should_trigger": false, "notes": "Gate check → sandstorm-spec" },
+  { "query": "Spec out ticket 159 and then ship it.", "should_trigger": false, "notes": "Compound (gate + dispatch) → spec-and-dispatch" },
+  { "query": "Let's work on #77.", "should_trigger": false, "notes": "Ambiguous — might need spec first → spec-and-dispatch (which handles both paths)" },
+  { "query": "Take ticket 18 and build it.", "should_trigger": false, "notes": "Compound → spec-and-dispatch" },
+  { "query": "Start ticket 42.", "should_trigger": false, "notes": "Ambiguous — default to spec-and-dispatch for safety" },
+  { "query": "What's the status of stack 19?", "should_trigger": false, "notes": "Status → check-and-resume-stack" },
+  { "query": "Refine the spec for ticket 88 with these answers.", "should_trigger": false, "notes": "Refinement → sandstorm-spec" },
+  { "query": "Tear down stack 12.", "should_trigger": false, "notes": "Destructive → stack-teardown" },
+  { "query": "Make a PR for stack 50.", "should_trigger": false, "notes": "PR flow → review-and-pr" }
+]
