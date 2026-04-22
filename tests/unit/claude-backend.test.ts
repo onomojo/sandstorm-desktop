@@ -1492,3 +1492,69 @@ describe('Raw API-request capture wiring (#299)', () => {
     backend.destroy();
   });
 });
+
+describe('Outer Claude context-bloat suppression (#302, #303)', () => {
+  beforeEach(() => {
+    spawnedProcesses.length = 0;
+  });
+
+  it('spawns with CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 (#302 — suppress project CLAUDE.md auto-injection)', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backend = new ClaudeBackend(1000);
+    backend.setMainWindow({ webContents: { send: vi.fn() } } as never);
+    await backend.initialize();
+
+    backend.sendMessage('tab-claudemd', 'hi', '/tmp');
+
+    const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const env = (callArgs[2] as { env: Record<string, string | undefined> }).env;
+    expect(env.CLAUDE_CODE_DISABLE_CLAUDE_MDS).toBe('1');
+
+    backend.destroy();
+  });
+
+  it('spawns with CLAUDE_CODE_PLUGIN_CACHE_DIR pointing at a sandbox empty dir (#303 — suppress global MCP/LSP)', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backend = new ClaudeBackend(1000);
+    backend.setMainWindow({ webContents: { send: vi.fn() } } as never);
+    await backend.initialize();
+
+    backend.sendMessage('tab-plugincache', 'hi', '/tmp');
+
+    const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const env = (callArgs[2] as { env: Record<string, string | undefined> }).env;
+    expect(env.CLAUDE_CODE_PLUGIN_CACHE_DIR).toBeDefined();
+    expect(env.CLAUDE_CODE_PLUGIN_CACHE_DIR).toContain('sandstorm-empty-plugins');
+    // Must not be the user's real Claude plugin dir
+    expect(env.CLAUDE_CODE_PLUGIN_CACHE_DIR).not.toContain('.claude/plugins');
+
+    backend.destroy();
+  });
+
+  it('plugin cache dir is stable across multiple sendMessage calls in the same backend', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backend = new ClaudeBackend(1000);
+    backend.setMainWindow({ webContents: { send: vi.fn() } } as never);
+    await backend.initialize();
+
+    backend.sendMessage('tab-a', 'hi', '/tmp');
+    backend.sendMessage('tab-b', 'hi', '/tmp');
+
+    const callA = spawnMock.mock.calls[spawnMock.mock.calls.length - 2];
+    const callB = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const envA = (callA[2] as { env: Record<string, string | undefined> }).env;
+    const envB = (callB[2] as { env: Record<string, string | undefined> }).env;
+    expect(envA.CLAUDE_CODE_PLUGIN_CACHE_DIR).toBe(envB.CLAUDE_CODE_PLUGIN_CACHE_DIR);
+
+    backend.destroy();
+  });
+});

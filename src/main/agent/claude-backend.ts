@@ -114,6 +114,29 @@ export class ClaudeBackend implements AgentBackend {
   }
 
   /**
+   * Per-process empty directory used as `CLAUDE_CODE_PLUGIN_CACHE_DIR` for
+   * outer Claude subprocess spawns (#303). Pointing the CLI's plugin cache
+   * at a pristine empty dir prevents globally-installed Claude Code plugins
+   * (Gmail/Gcal/Gdrive MCPs, LSP, skill-creator, etc.) from registering
+   * themselves in the subprocess while our Sandstorm skills continue to
+   * load via `--plugin-dir`. Created lazily on first `ensureProcess` call.
+   */
+  private emptyPluginCacheDir: string | null = null;
+
+  private ensureEmptyPluginCacheDir(): string {
+    if (this.emptyPluginCacheDir) return this.emptyPluginCacheDir;
+    const dir = path.join(os.tmpdir(), `sandstorm-empty-plugins-${process.pid}`);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      // If the mkdir fails we still return the path — the CLI will just
+      // see a missing dir and treat it as empty, which is fine.
+    }
+    this.emptyPluginCacheDir = dir;
+    return dir;
+  }
+
+  /**
    * Opt-in raw API-request capture (#299). Off unless
    * `SANDSTORM_RAW_REQUEST_CAPTURE=1` is set. Stands up one HTTP proxy per
    * tab, dumps outbound request bodies to disk next to the telemetry log.
@@ -742,11 +765,29 @@ export class ClaudeBackend implements AgentBackend {
     // SANDSTORM_SKILLS_DIR points at the bundled skills dir so SKILL.md
     // bodies can reference their own `scripts/*.sh` no matter which
     // project is open.
+    //
+    // `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` (#302) — stops Claude Code from
+    // auto-injecting the project's CLAUDE.md into every user message as
+    // a `<system-reminder>`. The outer orchestrator already gets its
+    // instructions from SANDSTORM_OUTER.md; the per-project CLAUDE.md is
+    // for the inner stack Claude, not the outer. Without this flag every
+    // outbound API request carries ~10 KB of redundant context per turn.
+    //
+    // `CLAUDE_CODE_PLUGIN_CACHE_DIR` (#303) — points the CLI's plugin
+    // discovery at an empty sandbox dir so globally-installed Claude
+    // Code plugins (frontend-design, skill-creator, Gmail/Gcal/Gdrive
+    // MCPs, LSP, etc.) don't register themselves. Our Sandstorm skills
+    // still load via `--plugin-dir`. Saves several KB of tool schemas
+    // on every API request and prevents unrelated MCP tools from
+    // advertising auth flows to the orchestrator model.
+    const emptyPluginDir = this.ensureEmptyPluginCacheDir();
     const env: Record<string, string | undefined> = {
       ...getClaudeEnv(),
       SANDSTORM_BRIDGE_URL: `http://127.0.0.1:${this.bridgePort}`,
       SANDSTORM_BRIDGE_TOKEN: this.bridgeToken,
       SANDSTORM_SKILLS_DIR: path.join(cliDir, 'skills'),
+      CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+      CLAUDE_CODE_PLUGIN_CACHE_DIR: emptyPluginDir,
       ...extraEnv,
     };
 
