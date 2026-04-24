@@ -1,16 +1,20 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store';
 
 export function CreatePRDialog({ stackId }: { stackId: string }) {
-  const { setShowCreatePRDialog, refreshStacks } = useAppStore();
+  const { setShowCreatePRDialog, refreshStacks, prDraftCache, setPrDraft, clearPrDraft } = useAppStore();
+  const cached = prDraftCache[stackId];
 
-  const [title, setTitle] = useState('');
-  const [body, setBody] = useState('');
-  const [drafting, setDrafting] = useState(true);
+  const [title, setTitle] = useState(cached?.title ?? '');
+  const [body, setBody] = useState(cached?.body ?? '');
+  const [drafting, setDrafting] = useState(!cached);
   const [creating, setCreating] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  // Don't re-draft on reopen — hydrate from the store-level cache instead.
+  // Only call draftBody when nothing is cached for this stack yet (#320).
   useEffect(() => {
+    if (cached) return;
     let cancelled = false;
     setDrafting(true);
     setError(null);
@@ -20,6 +24,7 @@ export function CreatePRDialog({ stackId }: { stackId: string }) {
         if (cancelled) return;
         setTitle(drafted.title);
         setBody(drafted.body);
+        setPrDraft(stackId, drafted);
         setDrafting(false);
       })
       .catch((err) => {
@@ -28,7 +33,25 @@ export function CreatePRDialog({ stackId }: { stackId: string }) {
         setError(err instanceof Error ? err.message : String(err));
       });
     return () => { cancelled = true; };
+    // `cached` is intentionally omitted — we only want to kick off a draft
+    // once per mount when the cache was empty at mount time. Later edits
+    // shouldn't retrigger the LLM call.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stackId]);
+
+  // Persist edits to the store-level cache so closing + reopening the
+  // dialog restores the in-progress draft (#320). Skip the very first
+  // render when we're still drafting and `title`/`body` are empty strings.
+  const firstPersistRef = useRef(true);
+  useEffect(() => {
+    if (drafting) return;
+    if (!title && !body) return;
+    if (firstPersistRef.current) {
+      firstPersistRef.current = false;
+      return;
+    }
+    setPrDraft(stackId, { title, body });
+  }, [title, body, drafting, stackId, setPrDraft]);
 
   const close = () => setShowCreatePRDialog(null);
 
@@ -41,6 +64,7 @@ export function CreatePRDialog({ stackId }: { stackId: string }) {
     setError(null);
     try {
       const result = await window.sandstorm.pr.create(stackId, title.trim(), body.trim());
+      clearPrDraft(stackId);
       await refreshStacks();
       window.open(result.url, '_blank');
       close();
@@ -61,7 +85,8 @@ export function CreatePRDialog({ stackId }: { stackId: string }) {
           <div>
             <h2 className="text-base font-semibold text-sandstorm-text">Create Pull Request</h2>
             <p className="text-[11px] text-sandstorm-muted mt-0.5">
-              Stack <span className="font-mono">{stackId}</span> — drafted by one ephemeral Claude call
+              Stack <span className="font-mono">{stackId}</span>
+              {cached && !drafting ? ' — draft restored' : ' — drafted by one ephemeral Claude call'}
             </p>
           </div>
           <button
@@ -118,6 +143,9 @@ export function CreatePRDialog({ stackId }: { stackId: string }) {
                   data-testid="pr-body"
                 />
               </div>
+              <p className="text-[10px] text-sandstorm-muted">
+                Creating the PR also commits and pushes any uncommitted work in this stack's branch.
+              </p>
             </>
           )}
         </div>

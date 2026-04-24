@@ -60,6 +60,7 @@ import {
 import {
   draftPullRequest,
   createPullRequest,
+  commitAndPush,
   workspacePathFor,
 } from './control-plane/pr-creator';
 import { createTicket } from './control-plane/ticket-creator';
@@ -994,11 +995,12 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     async (_event, stackId: string, title: string, body: string) => {
       const stack = await stackManager.getStackWithServices(stackId);
       if (!stack) throw new Error(`Stack "${stackId}" not found`);
-      const result = await createPullRequest({
-        workspace: workspacePathFor(stack.project_dir, stackId),
-        title,
-        body,
-      });
+      const workspace = workspacePathFor(stack.project_dir, stackId);
+      // Make PR is one button — commit any dirty workspace + push the
+      // branch before gh pr create. Without this, gh fails with
+      // "uncommitted changes" / "must first push the branch" (#320).
+      await commitAndPush({ workspace, commitMessage: title });
+      const result = await createPullRequest({ workspace, title, body });
       stackManager.setPullRequest(stackId, result.url, result.number);
       return result;
     },
