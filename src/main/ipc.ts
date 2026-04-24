@@ -50,6 +50,19 @@ import {
   ensureReviewPrompt,
   isReviewPromptMissing,
 } from './review-prompt';
+import {
+  defaultSpecGateDeps,
+  fetchTicketForRenderer,
+  runSpecCheck,
+  runSpecRefine,
+  type SpecGateReport,
+} from './control-plane/ticket-spec';
+import {
+  draftPullRequest,
+  createPullRequest,
+  workspacePathFor,
+} from './control-plane/pr-creator';
+import { handleToolCall } from './claude/tools';
 
 /**
  * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
@@ -885,5 +898,66 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
     return result;
   });
+
+  // --- Tickets (deterministic UI for refine workflow, #310) ---
+  // These IPC handlers route the renderer straight to the same ticket-fetcher
+  // and spec-gate primitives that the `sandstorm-spec` skill uses, but in
+  // process — no orchestrator round-trip, no skill catalog.
+
+  const specDeps = defaultSpecGateDeps(
+    (ticketId, projectDir) =>
+      handleToolCall('spec_check', { ticketId, projectDir }) as Promise<SpecGateReport>,
+    (ticketId, projectDir, userAnswers) =>
+      handleToolCall('spec_refine', { ticketId, projectDir, userAnswers }) as Promise<SpecGateReport>,
+  );
+
+  ipcMain.handle('tickets:fetch', async (_event, ticketId: string, projectDir: string) => {
+    return fetchTicketForRenderer(ticketId, projectDir);
+  });
+
+  ipcMain.handle('tickets:specCheck', async (_event, ticketId: string, projectDir: string) => {
+    return runSpecCheck(ticketId, projectDir, specDeps);
+  });
+
+  ipcMain.handle(
+    'tickets:specRefine',
+    async (_event, ticketId: string, projectDir: string, userAnswers: string) => {
+      return runSpecRefine(ticketId, projectDir, userAnswers, specDeps);
+    },
+  );
+
+  // --- PR creation (deterministic UI for make-PR workflow, #310) ---
+
+  ipcMain.handle('pr:draftBody', async (_event, stackId: string) => {
+    const stack = await stackManager.getStackWithServices(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    return draftPullRequest(
+      {
+        stackId,
+        workspace: workspacePathFor(stack.project_dir, stackId),
+        ticket: stack.ticket,
+      },
+      {
+        runEphemeral: (prompt, projectDir, timeoutMs) =>
+          agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs),
+        fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
+      },
+    );
+  });
+
+  ipcMain.handle(
+    'pr:create',
+    async (_event, stackId: string, title: string, body: string) => {
+      const stack = await stackManager.getStackWithServices(stackId);
+      if (!stack) throw new Error(`Stack "${stackId}" not found`);
+      const result = await createPullRequest({
+        workspace: workspacePathFor(stack.project_dir, stackId),
+        title,
+        body,
+      });
+      stackManager.setPullRequest(stackId, result.url, result.number);
+      return result;
+    },
+  );
 
 }

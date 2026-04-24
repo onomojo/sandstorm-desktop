@@ -74,7 +74,7 @@ function formatMs(ms: number): string {
 }
 
 export function StackCard({ stack, showProject }: { stack: Stack; showProject?: boolean }) {
-  const { selectStack, refreshStacks, stackMetrics } = useAppStore();
+  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
 
   const runningCount = stack.services.filter(
@@ -291,6 +291,13 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
             <ActionButton label="View Diff" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
             <ActionButton label="Push" onClick={(e) => { e.stopPropagation(); window.sandstorm.push.execute(stack.id); }} primary />
           </>
+        )}
+        {(stack.status === 'completed' || stack.status === 'pushed') && !stack.pr_url && (
+          <ActionButton
+            label="Make PR"
+            onClick={(e) => { e.stopPropagation(); setShowCreatePRDialog({ stackId: stack.id }); }}
+            primary
+          />
         )}
         {stack.status === 'running' && (
           <ActionButton label="View Output" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />

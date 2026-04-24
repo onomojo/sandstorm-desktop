@@ -145,6 +145,10 @@ vi.mock('../../src/main/control-plane/account-usage', () => ({
 
 vi.mock('child_process', () => ({
   spawn: mockSpawn,
+  // ticket-spec / pr-creator use execFile via promisify; promisify only needs
+  // the function to exist + be callable, so a no-op stub is enough for the
+  // existing IPC handler tests (none of them exercise the new tickets/pr paths).
+  execFile: vi.fn(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -1048,6 +1052,11 @@ describe('IPC Handlers', () => {
       'docker:status',
       'auth:status',
       'auth:login',
+      'tickets:fetch',
+      'tickets:specCheck',
+      'tickets:specRefine',
+      'pr:draftBody',
+      'pr:create',
     ];
 
     it('registers all expected IPC channels', () => {

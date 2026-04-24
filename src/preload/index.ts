@@ -145,6 +145,15 @@ export interface SandstormAPI {
   docker: {
     status: () => Promise<{ connected: boolean }>;
   };
+  tickets: {
+    fetch: (ticketId: string, projectDir: string) => Promise<{ body: string; url: string | null }>;
+    specCheck: (ticketId: string, projectDir: string) => Promise<unknown>;
+    specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<unknown>;
+  };
+  pr: {
+    draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
+    create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
+  };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
@@ -282,6 +291,19 @@ const api: SandstormAPI = {
   },
   docker: {
     status: () => ipcRenderer.invoke('docker:status'),
+  },
+  tickets: {
+    fetch: (ticketId, projectDir) =>
+      ipcRenderer.invoke('tickets:fetch', ticketId, projectDir),
+    specCheck: (ticketId, projectDir) =>
+      ipcRenderer.invoke('tickets:specCheck', ticketId, projectDir),
+    specRefine: (ticketId, projectDir, userAnswers) =>
+      ipcRenderer.invoke('tickets:specRefine', ticketId, projectDir, userAnswers),
+  },
+  pr: {
+    draftBody: (stackId) => ipcRenderer.invoke('pr:draftBody', stackId),
+    create: (stackId, title, body) =>
+      ipcRenderer.invoke('pr:create', stackId, title, body),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

@@ -334,6 +334,8 @@ interface AppState {
   stackHistory: StackHistoryRecord[];
   selectedStackId: string | null;
   showNewStackDialog: boolean;
+  showRefineTicketDialog: boolean;
+  showCreatePRDialog: { stackId: string } | null;
   stackMetrics: Record<string, StackMetrics>;
   loading: boolean;
   error: string | null;
@@ -409,6 +411,8 @@ interface AppState {
   setStacks: (stacks: Stack[]) => void;
   selectStack: (id: string | null) => void;
   setShowNewStackDialog: (show: boolean) => void;
+  setShowRefineTicketDialog: (show: boolean) => void;
+  setShowCreatePRDialog: (state: { stackId: string } | null) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   refreshStacks: () => Promise<void>;
@@ -566,9 +570,28 @@ declare global {
       docker: {
         status: () => Promise<{ connected: boolean }>;
       };
+      tickets: {
+        fetch: (ticketId: string, projectDir: string) => Promise<{ body: string; url: string | null }>;
+        specCheck: (ticketId: string, projectDir: string) => Promise<SpecGateResult>;
+        specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<SpecGateResult>;
+      };
+      pr: {
+        draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
+        create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
+      };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
   }
+}
+
+/** Renderer-side mirror of `SpecGateResult` from main/control-plane/ticket-spec.ts. */
+export interface SpecGateResult {
+  passed: boolean;
+  questions: string[];
+  gateSummary: string;
+  ticketUrl: string | null;
+  cached: boolean;
+  error?: string;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -612,6 +635,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   stackMetrics: {},
   selectedStackId: null,
   showNewStackDialog: false,
+  showRefineTicketDialog: false,
+  showCreatePRDialog: null,
   loading: false,
   error: null,
 
@@ -795,6 +820,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   setStacks: (stacks) => set({ stacks }),
   selectStack: (id) => set({ selectedStackId: id }),
   setShowNewStackDialog: (show) => set({ showNewStackDialog: show }),
+  setShowRefineTicketDialog: (show) => set({ showRefineTicketDialog: show }),
+  setShowCreatePRDialog: (state) => set({ showCreatePRDialog: state }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
 
