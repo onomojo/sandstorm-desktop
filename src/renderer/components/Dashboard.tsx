@@ -400,6 +400,7 @@ export function Dashboard() {
     missingReviewPrompt: boolean;
     legacyPortMappings: boolean;
     missingUpdateScript: boolean;
+    missingCreatePrScript: boolean;
     detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
   } | null>(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
@@ -455,6 +456,7 @@ export function Dashboard() {
               missingReviewPrompt: migration.missingReviewPrompt ?? false,
               legacyPortMappings: migration.legacyPortMappings ?? false,
               missingUpdateScript: migration.missingUpdateScript ?? false,
+              missingCreatePrScript: migration.missingCreatePrScript ?? false,
               detectedTicketProvider: migration.detectedTicketProvider,
             } : null);
             if (migration.needsMigration) {
@@ -859,6 +861,7 @@ export function Dashboard() {
           missingReviewPrompt={migrationState.missingReviewPrompt}
           legacyPortMappings={migrationState.legacyPortMappings}
           missingUpdateScript={migrationState.missingUpdateScript}
+          missingCreatePrScript={migrationState.missingCreatePrScript}
           detectedTicketProvider={migrationState.detectedTicketProvider}
           onComplete={() => {
             setShowMigrationModal(false);
@@ -886,6 +889,7 @@ export function Dashboard() {
                   missingReviewPrompt: migration.missingReviewPrompt ?? false,
                   legacyPortMappings: migration.legacyPortMappings ?? false,
                   missingUpdateScript: migration.missingUpdateScript ?? false,
+                  missingCreatePrScript: migration.missingCreatePrScript ?? false,
                   detectedTicketProvider: migration.detectedTicketProvider,
                 });
                 setShowMigrationModal(true);

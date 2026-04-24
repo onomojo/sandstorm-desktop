@@ -468,6 +468,7 @@ declare global {
           missingReviewPrompt?: boolean;
           legacyPortMappings?: boolean;
           missingUpdateScript?: boolean;
+          missingCreatePrScript?: boolean;
           detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
         }>;
         autoDetectVerify: (directory: string) => Promise<{
@@ -480,6 +481,10 @@ declare global {
           serviceDescriptions: Record<string, string>,
         ) => Promise<{ success: boolean; error?: string }>;
         installUpdateScript: (
+          directory: string,
+          provider: 'github' | 'jira' | 'skeleton',
+        ) => Promise<{ success: boolean; path?: string; error?: string }>;
+        installCreatePrScript: (
           directory: string,
           provider: 'github' | 'jira' | 'skeleton',
         ) => Promise<{ success: boolean; path?: string; error?: string }>;

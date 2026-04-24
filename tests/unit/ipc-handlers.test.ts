@@ -1063,6 +1063,7 @@ describe('IPC Handlers', () => {
       'pr:draftBody',
       'pr:create',
       'projects:installUpdateScript',
+      'projects:installCreatePrScript',
       'projects:detectTicketProvider',
     ];
 

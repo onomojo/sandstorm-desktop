@@ -793,12 +793,19 @@ export class StackManager {
     return result.stdout;
   }
 
-  async push(stackId: string, message?: string): Promise<void> {
+  async push(
+    stackId: string,
+    message?: string,
+    opts?: { prTitle?: string; prBodyFile?: string },
+  ): Promise<{ stdout: string; stderr: string }> {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    const args = ['push', stackId];
-    if (message) args.push(message);
+    // Always include the message positionally so flags can follow without
+    // colliding with `${POSITIONAL[2]}` in the bash arg parser.
+    const args = ['push', stackId, message ?? `Changes from Sandstorm stack ${stackId}`];
+    if (opts?.prTitle) args.push('--pr-title', opts.prTitle);
+    if (opts?.prBodyFile) args.push('--pr-body-file', opts.prBodyFile);
 
     const result = await this.runCli(stack.project_dir, args);
     if (result.exitCode !== 0) {
@@ -807,6 +814,7 @@ export class StackManager {
 
     this.registry.updateStackStatus(stackId, 'pushed');
     this.notifyUpdate();
+    return { stdout: result.stdout, stderr: result.stderr };
   }
 
   setPullRequest(stackId: string, prUrl: string, prNumber: number): void {

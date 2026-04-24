@@ -69,28 +69,42 @@ export function templateScriptPath(
 }
 
 /**
- * Install `update-ticket.sh` from the selected provider template into the
+ * Install a named script from the selected provider template into the
  * project's `.sandstorm/scripts/` directory, creating the directory if
- * needed. Overwrites any existing file — callers typically guard with
- * `getUpdateScriptStatus` or confirm in the UI before calling.
+ * needed. Overwrites any existing file — callers typically check script
+ * status or confirm in the UI before calling.
  *
  * Returns the destination path on success.
+ */
+export function installScript(opts: {
+  projectDir: string;
+  cliDir: string;
+  provider: TicketProvider;
+  scriptName: string;
+}): string {
+  const src = templateScriptPath(opts.cliDir, opts.provider, opts.scriptName);
+  if (!fs.existsSync(src)) {
+    throw new Error(
+      `${opts.scriptName} template not found for provider '${opts.provider}' at ${src}`,
+    );
+  }
+  const destDir = path.join(opts.projectDir, '.sandstorm', 'scripts');
+  fs.mkdirSync(destDir, { recursive: true });
+  const dest = path.join(destDir, opts.scriptName);
+  fs.copyFileSync(src, dest);
+  fs.chmodSync(dest, 0o755);
+  return dest;
+}
+
+/**
+ * Back-compat wrapper for the update-ticket.sh install flow shipped in #319.
+ * Keeps the narrower IPC signature unchanged while routing through the
+ * generic installer.
  */
 export function installUpdateScript(opts: {
   projectDir: string;
   cliDir: string;
   provider: TicketProvider;
 }): string {
-  const src = templateScriptPath(opts.cliDir, opts.provider, 'update-ticket.sh');
-  if (!fs.existsSync(src)) {
-    throw new Error(
-      `update-ticket.sh template not found for provider '${opts.provider}' at ${src}`,
-    );
-  }
-  const destDir = path.join(opts.projectDir, '.sandstorm', 'scripts');
-  fs.mkdirSync(destDir, { recursive: true });
-  const dest = path.join(destDir, 'update-ticket.sh');
-  fs.copyFileSync(src, dest);
-  fs.chmodSync(dest, 0o755);
-  return dest;
+  return installScript({ ...opts, scriptName: 'update-ticket.sh' });
 }
