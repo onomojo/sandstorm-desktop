@@ -84,3 +84,4 @@ describe('createTicket', () => {
     expect(args).toEqual(['issue', 'create', '--title', 'My Title', '--body', 'My Body']);
   });
 });
+

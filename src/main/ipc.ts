@@ -63,6 +63,12 @@ import {
   workspacePathFor,
 } from './control-plane/pr-creator';
 import { createTicket } from './control-plane/ticket-creator';
+import { getUpdateScriptStatus } from './control-plane/ticket-updater';
+import {
+  detectTicketProvider,
+  installUpdateScript,
+  type TicketProvider,
+} from './control-plane/ticket-provider';
 import { handleToolCall } from './claude/tools';
 
 /**
@@ -405,19 +411,49 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       const missingSpecQualityGate = isSpecQualityGateMissing(directory);
       const missingReviewPrompt = isReviewPromptMissing(directory);
       const legacyPortMappings = hasLegacyPortMappings(directory);
+      const missingUpdateScript = getUpdateScriptStatus(directory) !== 'ok';
+      const detectedProvider = missingUpdateScript ? detectTicketProvider(directory) : undefined;
 
       return {
-        needsMigration: !hasVerifyScript || !hasServiceLabels || missingSpecQualityGate || missingReviewPrompt || legacyPortMappings,
+        needsMigration:
+          !hasVerifyScript ||
+          !hasServiceLabels ||
+          missingSpecQualityGate ||
+          missingReviewPrompt ||
+          legacyPortMappings ||
+          missingUpdateScript,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
         missingSpecQualityGate,
         missingReviewPrompt,
         networksMigrated,
         legacyPortMappings,
+        missingUpdateScript,
+        detectedTicketProvider: detectedProvider,
       };
     } catch {
       return { needsMigration: false };
     }
+  });
+
+  // Install the update-ticket.sh template for the chosen provider into
+  // .sandstorm/scripts/. Used by the migration modal when an existing
+  // project lacks the script (initialized before #318 landed).
+  ipcMain.handle(
+    'projects:installUpdateScript',
+    async (_event, directory: string, provider: TicketProvider) => {
+      try {
+        const dest = installUpdateScript({ projectDir: directory, cliDir, provider });
+        return { success: true, path: dest };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    },
+  );
+
+  ipcMain.handle('projects:detectTicketProvider', (_event, directory: string) => {
+    return { provider: detectTicketProvider(directory) };
   });
 
   ipcMain.handle('projects:autoDetectVerify', async (_event, directory: string) => {

@@ -15,6 +15,8 @@ export interface SandstormAPI {
       missingSpecQualityGate?: boolean;
       missingReviewPrompt?: boolean;
       networksMigrated?: boolean;
+      missingUpdateScript?: boolean;
+      detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
     }>;
     autoDetectVerify: (directory: string) => Promise<{
       verifyScript: string;
@@ -25,6 +27,13 @@ export interface SandstormAPI {
       verifyScript: string,
       serviceDescriptions: Record<string, string>,
     ) => Promise<{ success: boolean; error?: string }>;
+    installUpdateScript: (
+      directory: string,
+      provider: 'github' | 'jira' | 'skeleton',
+    ) => Promise<{ success: boolean; path?: string; error?: string }>;
+    detectTicketProvider: (
+      directory: string,
+    ) => Promise<{ provider: 'github' | 'jira' | 'skeleton' }>;
     generateCompose: (directory: string) => Promise<{
       success: boolean;
       yaml?: string;
@@ -170,6 +179,10 @@ const api: SandstormAPI = {
     autoDetectVerify: (directory) => ipcRenderer.invoke('projects:autoDetectVerify', directory),
     saveMigration: (directory: string, verifyScript: string, serviceDescriptions: Record<string, string>) =>
       ipcRenderer.invoke('projects:saveMigration', directory, verifyScript, serviceDescriptions),
+    installUpdateScript: (directory: string, provider: 'github' | 'jira' | 'skeleton') =>
+      ipcRenderer.invoke('projects:installUpdateScript', directory, provider),
+    detectTicketProvider: (directory: string) =>
+      ipcRenderer.invoke('projects:detectTicketProvider', directory),
     generateCompose: (directory: string) =>
       ipcRenderer.invoke('projects:generateCompose', directory),
     saveComposeSetup: (directory: string, composeYaml: string, composeFile: string) =>

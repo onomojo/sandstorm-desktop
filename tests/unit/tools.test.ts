@@ -22,9 +22,15 @@ vi.mock('../../src/main/spec-quality-gate', () => ({
   getSpecQualityGate: vi.fn().mockReturnValue(''),
 }));
 
+vi.mock('../../src/main/control-plane/ticket-updater', () => ({
+  updateTicketBody: vi.fn().mockResolvedValue(undefined),
+  getUpdateScriptStatus: vi.fn().mockReturnValue('ok'),
+}));
+
 import { stackManager, agentBackend } from '../../src/main/index';
 import { fetchTicketContext, getScriptStatus } from '../../src/main/control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../../src/main/spec-quality-gate';
+import { updateTicketBody } from '../../src/main/control-plane/ticket-updater';
 
 describe('MCP tools', () => {
   beforeEach(() => {
@@ -442,6 +448,100 @@ describe('MCP tools', () => {
       );
       expect(result.passed).toBe(true);
       expect(result.updatedBody).toContain('Better spec');
+    });
+
+    // #318 — refine must write the updated body back to GitHub. Without
+    // this, refinements live only in the renderer's transient state and
+    // are lost between sessions.
+    describe('GitHub write-back (#318)', () => {
+      beforeEach(() => {
+        vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: stale');
+        vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement');
+      });
+
+      it('calls updateTicketBody with the refined body when refinement produces one', async () => {
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Updated Ticket Body\n\n# Issue: Refined\nWith answers.\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|',
+        );
+
+        await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+          userAnswers: 'My answer',
+        });
+
+        expect(updateTicketBody).toHaveBeenCalledTimes(1);
+        expect(updateTicketBody).toHaveBeenCalledWith(
+          '42',
+          '/proj',
+          '# Issue: Refined\nWith answers.',
+        );
+      });
+
+      it('writes back even when the refinement still FAILs (so iterative loops build on each other)', async () => {
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Updated Ticket Body\n\n# Issue: Refined v1\nPartial.\n\n## Spec Quality Gate: FAIL\n\n### Questions to Resolve Remaining Gaps\n1. Still need X?',
+        );
+
+        const result = await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+          userAnswers: 'Partial answer',
+        }) as { passed: boolean; updatedBody: string | null };
+
+        expect(updateTicketBody).toHaveBeenCalledOnce();
+        expect(updateTicketBody).toHaveBeenCalledWith('42', '/proj', '# Issue: Refined v1\nPartial.');
+        expect(result.passed).toBe(false);
+        expect(result.updatedBody).toContain('Refined v1');
+      });
+
+      it('does NOT call updateTicketBody on the initial call (no userAnswers, no updatedBody)', async () => {
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Spec Quality Gate: FAIL\n\n### Questions to Resolve Gaps\n1. What problem?',
+        );
+
+        await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+        });
+
+        expect(updateTicketBody).not.toHaveBeenCalled();
+      });
+
+      it('returns an error when gh write-back fails so the renderer can surface it', async () => {
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Updated Ticket Body\n\n# Issue: Refined\n\n## Spec Quality Gate: PASS',
+        );
+        vi.mocked(updateTicketBody).mockRejectedValueOnce(new Error('gh: not authenticated'));
+
+        const result = await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+          userAnswers: 'A',
+        }) as { passed: boolean; updatedBody: string | null; error?: string };
+
+        expect(result.passed).toBe(false);
+        expect(result.error).toMatch(/gh: not authenticated/);
+        expect(result.updatedBody).toContain('Refined');
+      });
+
+      it('returns an error when refinement should have produced an updatedBody but did not', async () => {
+        // Agent ignored the format and skipped the "## Updated Ticket Body" section.
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|',
+        );
+
+        const result = await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+          userAnswers: 'A',
+        }) as { passed: boolean; updatedBody: string | null; error?: string };
+
+        expect(updateTicketBody).not.toHaveBeenCalled();
+        expect(result.passed).toBe(false);
+        expect(result.error).toMatch(/did not produce/i);
+        expect(result.updatedBody).toBeNull();
+      });
     });
 
     it('spec_refine initial prompt includes assumption resolution and enhanced checks', async () => {

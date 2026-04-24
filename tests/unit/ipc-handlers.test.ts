@@ -145,10 +145,14 @@ vi.mock('../../src/main/control-plane/account-usage', () => ({
 
 vi.mock('child_process', () => ({
   spawn: mockSpawn,
-  // ticket-spec / pr-creator use execFile via promisify; promisify only needs
-  // the function to exist + be callable, so a no-op stub is enough for the
-  // existing IPC handler tests (none of them exercise the new tickets/pr paths).
+  // ticket-spec / pr-creator / ticket-updater use execFile via promisify;
+  // promisify only needs the function to exist + be callable, so a no-op
+  // stub is enough — the IPC handler tests don't exercise these paths.
   execFile: vi.fn(),
+  // ticket-provider uses spawnSync for `gh --version` and `git remote -v`
+  // detection. Return a non-zero exit so detection returns 'skeleton' for
+  // the IPC handler tests (no assertions depend on the detected value).
+  spawnSync: vi.fn(() => ({ status: 1, stdout: '', stderr: '' })),
 }));
 
 // ---------------------------------------------------------------------------
@@ -1058,6 +1062,8 @@ describe('IPC Handlers', () => {
       'tickets:create',
       'pr:draftBody',
       'pr:create',
+      'projects:installUpdateScript',
+      'projects:detectTicketProvider',
     ];
 
     it('registers all expected IPC channels', () => {

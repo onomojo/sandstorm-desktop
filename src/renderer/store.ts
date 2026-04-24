@@ -449,6 +449,8 @@ declare global {
           missingSpecQualityGate?: boolean;
           missingReviewPrompt?: boolean;
           legacyPortMappings?: boolean;
+          missingUpdateScript?: boolean;
+          detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
         }>;
         autoDetectVerify: (directory: string) => Promise<{
           verifyScript: string;
@@ -459,6 +461,13 @@ declare global {
           verifyScript: string,
           serviceDescriptions: Record<string, string>,
         ) => Promise<{ success: boolean; error?: string }>;
+        installUpdateScript: (
+          directory: string,
+          provider: 'github' | 'jira' | 'skeleton',
+        ) => Promise<{ success: boolean; path?: string; error?: string }>;
+        detectTicketProvider: (
+          directory: string,
+        ) => Promise<{ provider: 'github' | 'jira' | 'skeleton' }>;
         generateCompose: (directory: string) => Promise<{
           success: boolean;
           yaml?: string;
