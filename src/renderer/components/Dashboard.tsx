@@ -26,13 +26,16 @@ import { formatTokenCount } from '../utils/format';
 // Trimmed table layout (#315). Dropped columns: description, services bubbles,
 // resources — all moved into the row hover popover. Storage key bumped to v2
 // so saved widths from the old layout don't wreck the new one.
-const TABLE_COLUMNS: (ColumnDef & { label: string; align?: 'left' | 'right' })[] = [
+//
+// `actions` is sticky-right + has no resize handle (it's last) so the buttons
+// stay visible regardless of horizontal scroll or other column widths (#316).
+const TABLE_COLUMNS: (ColumnDef & { label: string; align?: 'left' | 'right'; stickyRight?: boolean })[] = [
   { key: 'status', label: 'Status', minWidth: 60, defaultWidth: 90 },
   { key: 'name', label: 'Name', minWidth: 100, defaultWidth: 200 },
   { key: 'model', label: 'Model', minWidth: 50, defaultWidth: 80 },
   { key: 'services', label: 'Svcs', minWidth: 50, defaultWidth: 70 },
   { key: 'duration', label: 'Duration', minWidth: 50, defaultWidth: 90 },
-  { key: 'actions', label: '', minWidth: 80, defaultWidth: 120, align: 'right' as const },
+  { key: 'actions', label: '', minWidth: 160, defaultWidth: 160, align: 'right' as const, stickyRight: true },
 ];
 
 const STACK_TABLE_STORAGE_KEY = 'stack-table-v2';
@@ -794,6 +797,10 @@ export function Dashboard() {
                 ))}
               </div>
             ) : (
+              // Wrap in overflow-x-auto so the actions sticky-right cell
+              // has a horizontal scroll context to anchor against on
+              // narrow viewports (#316).
+              <div className="overflow-x-auto">
               <table className="w-full text-xs" style={{ tableLayout: 'fixed' }} data-testid="stack-table">
                 <ResizableTableHeader
                   columns={TABLE_COLUMNS}
@@ -806,6 +813,7 @@ export function Dashboard() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )
           ) : (
             history.length === 0 ? (

@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { StackTableRow } from '../../../src/renderer/components/StackTableRow';
 import { useAppStore, Stack } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
@@ -227,5 +227,89 @@ describe('StackTableRow primary-action chip (#315)', () => {
     const link = screen.getByTestId('row-pr-link-open');
     expect(link).toBeDefined();
     expect(link.textContent).toMatch(/#312/);
+  });
+});
+
+describe('StackTableRow action button visibility (#316)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('Teardown is visible without hovering the row (no opacity-0 wrapper)', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed' }));
+    const teardown = screen.getByTestId('row-teardown-foo');
+    // Walk the parent chain — none should carry opacity-0 / group-hover.
+    let el: HTMLElement | null = teardown;
+    while (el) {
+      expect(el.className).not.toMatch(/opacity-0/);
+      expect(el.className).not.toMatch(/group-hover:opacity-100/);
+      el = el.parentElement;
+    }
+  });
+
+  it('Teardown is hidden while a task is running (destructive guard, unchanged)', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'busy', status: 'running' }));
+    expect(screen.queryByTestId('row-teardown-busy')).toBeNull();
+  });
+
+  it('actions cell is sticky to the right edge so it stays visible during scroll', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed' }));
+    const cell = screen.getByTestId('row-actions-foo');
+    // Tailwind's `sticky right-0` on a <td> — verify the classes survived.
+    expect(cell.className).toMatch(/\bsticky\b/);
+    expect(cell.className).toMatch(/right-0/);
+  });
+});
+
+describe('StackTableRow popover suppression on actions hover (#316)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('cancels the pending popover when the cursor enters the actions cell', async () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed' }));
+
+    // Hover the row — popover would normally appear after the open delay.
+    const row = screen.getByTestId('row-actions-foo').closest('tr')!;
+    fireEvent.mouseEnter(row);
+
+    // Cursor moves to the actions cell BEFORE the delay elapses.
+    const actions = screen.getByTestId('row-actions-foo');
+    fireEvent.mouseEnter(actions);
+
+    // Run timers; popover should NOT have opened.
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(screen.queryByTestId(/stack-row-popover-/)).toBeNull();
+  });
+
+  it('hides an already-open popover when the cursor enters the actions cell', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed' }));
+
+    const row = screen.getByTestId('row-actions-foo').closest('tr')!;
+    fireEvent.mouseEnter(row);
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(screen.queryByTestId('stack-row-popover-foo')).not.toBeNull();
+
+    // Now move cursor to actions — popover should disappear.
+    const actions = screen.getByTestId('row-actions-foo');
+    fireEvent.mouseEnter(actions);
+    expect(screen.queryByTestId('stack-row-popover-foo')).toBeNull();
   });
 });

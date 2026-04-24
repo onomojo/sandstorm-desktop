@@ -86,6 +86,19 @@ export function StackTableRow({
     setPopoverRect(null);
   };
 
+  // #316 — the popover is anchored to the row's right edge and overlaps
+  // the action buttons in narrow viewports, blocking clicks. Suppress it
+  // entirely when the cursor enters the actions cell so buttons stay
+  // clickable. We don't auto-reopen on leave; the user can mouse off and
+  // back on if they want details again.
+  const handleActionsEnter = () => {
+    if (enterTimer.current) {
+      clearTimeout(enterTimer.current);
+      enterTimer.current = null;
+    }
+    setPopoverRect(null);
+  };
+
   const runningCount = stack.services.filter((s) => s.status === 'running').length;
   const totalCount = stack.services.length;
   const statusColor = STATUS_COLORS[stack.status] ?? 'bg-gray-500';
@@ -118,7 +131,7 @@ export function StackTableRow({
     <>
       <tr
         ref={rowRef}
-        className="border-b border-sandstorm-border hover:bg-sandstorm-surface-hover cursor-pointer transition-colors group"
+        className="border-b border-sandstorm-border bg-sandstorm-bg hover:bg-sandstorm-surface-hover cursor-pointer transition-colors group"
         onClick={() => selectStack(stack.id)}
         onMouseEnter={handleMouseEnter}
         onMouseLeave={handleMouseLeave}
@@ -182,8 +195,13 @@ export function StackTableRow({
           {duration}
         </td>
         <td
-          className="px-3 py-2 whitespace-nowrap text-right overflow-hidden"
+          className="px-3 py-2 whitespace-nowrap text-right overflow-hidden sticky right-0 z-[1] bg-sandstorm-bg group-hover:bg-sandstorm-surface-hover border-l border-sandstorm-border"
+          // Width is fixed by `actions.defaultWidth` in TABLE_COLUMNS — the
+          // column has no resize handle (it's last in the row), so the
+          // user can't drag it shrunk and lose the buttons (#316).
           style={columnWidths?.actions ? { width: `${columnWidths.actions}px` } : undefined}
+          data-testid={`row-actions-${stack.id}`}
+          onMouseEnter={handleActionsEnter}
         >
           <div className="flex items-center gap-1 justify-end">
             {/* Persistent primary action — always visible when applicable */}
@@ -197,30 +215,30 @@ export function StackTableRow({
                 🆕 Make PR
               </button>
             )}
-            {/* Secondary actions — hover-gated */}
-            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-              {stack.status !== 'running' && (
-                <button
-                  onClick={handleTeardown}
-                  className="text-[10px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-500/10 transition-colors"
-                >
-                  Teardown
-                </button>
-              )}
-              <svg
-                width="14"
-                height="14"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-                strokeLinejoin="round"
-                className="text-sandstorm-muted"
+            {/* Teardown — always visible (#316). Was opacity-0 group-hover
+                but the user couldn't reach it without the popover blocking. */}
+            {stack.status !== 'running' && (
+              <button
+                onClick={handleTeardown}
+                className="text-[10px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-500/10 transition-colors"
+                data-testid={`row-teardown-${stack.id}`}
               >
-                <path d="M9 18l6-6-6-6" />
-              </svg>
-            </div>
+                Teardown
+              </button>
+            )}
+            <svg
+              width="14"
+              height="14"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              className="text-sandstorm-muted"
+            >
+              <path d="M9 18l6-6-6-6" />
+            </svg>
           </div>
         </td>
       </tr>
