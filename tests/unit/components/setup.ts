@@ -139,6 +139,21 @@ export function mockSandstormApi() {
       status: vi.fn().mockResolvedValue({ loggedIn: false, expired: false }),
       login: vi.fn().mockResolvedValue({ success: true }),
     },
+    tickets: {
+      fetch: vi.fn().mockResolvedValue({ body: '# Issue: test\n\nbody', url: 'https://github.com/o/r/issues/1' }),
+      specCheck: vi.fn().mockResolvedValue({
+        passed: true, questions: [], gateSummary: 'Gate=PASS, questions=0',
+        ticketUrl: 'https://github.com/o/r/issues/1', cached: false,
+      }),
+      specRefine: vi.fn().mockResolvedValue({
+        passed: true, questions: [], gateSummary: 'Gate=PASS, questions=0',
+        ticketUrl: 'https://github.com/o/r/issues/1', cached: false,
+      }),
+    },
+    pr: {
+      draftBody: vi.fn().mockResolvedValue({ title: 'Test PR', body: '## Summary\n- thing\n\n## Test plan\n- [ ] check' }),
+      create: vi.fn().mockResolvedValue({ url: 'https://github.com/o/r/pull/1', number: 1 }),
+    },
     on: vi.fn().mockReturnValue(() => {}),
   };
 
