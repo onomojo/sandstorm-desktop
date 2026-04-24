@@ -5,11 +5,14 @@ import path from 'path';
 export type ScriptStatus = 'ok' | 'missing' | 'not_executable';
 
 /**
- * Check whether the project's update-ticket.sh script exists and is executable.
- * Mirrors getScriptStatus in ticket-fetcher.ts — same contract, different script.
+ * Check whether a named script under .sandstorm/scripts/ exists and is
+ * executable. Mirrors getScriptStatus in ticket-fetcher.ts.
  */
-export function getUpdateScriptStatus(projectDir: string): ScriptStatus {
-  const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', 'update-ticket.sh');
+export function getSandstormScriptStatus(
+  projectDir: string,
+  scriptName: string,
+): ScriptStatus {
+  const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', scriptName);
   if (!fs.existsSync(scriptPath)) return 'missing';
   try {
     fs.accessSync(scriptPath, fs.constants.X_OK);
@@ -17,6 +20,16 @@ export function getUpdateScriptStatus(projectDir: string): ScriptStatus {
   } catch {
     return 'not_executable';
   }
+}
+
+/** Back-compat alias for the update-ticket.sh status check from #319. */
+export function getUpdateScriptStatus(projectDir: string): ScriptStatus {
+  return getSandstormScriptStatus(projectDir, 'update-ticket.sh');
+}
+
+/** Status check for create-pr.sh (#320 — unified PR creation path). */
+export function getCreatePrScriptStatus(projectDir: string): ScriptStatus {
+  return getSandstormScriptStatus(projectDir, 'create-pr.sh');
 }
 
 /**

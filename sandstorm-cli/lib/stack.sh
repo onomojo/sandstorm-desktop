@@ -505,11 +505,27 @@ case "$COMMAND" in
 
   # -----------------------------------------------------------------
   push)
+    # Pre-parse flags so they don't collide with the optional positional
+    # commit message. Flags supported:
+    #   --force               (reserved — set but not currently acted on)
+    #   --pr-title <t>        custom PR title (defaults to the commit msg)
+    #   --pr-body-file <path> path (in the workspace, readable inside the
+    #                         container) to a file containing the PR body
     FORCE=false
-    for arg in "$@"; do
-      [ "$arg" = "--force" ] && FORCE=true
+    PR_TITLE=""
+    PR_BODY_FILE=""
+    POSITIONAL=()
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --force)        FORCE=true;             shift ;;
+        --pr-title)     PR_TITLE="$2";          shift 2 ;;
+        --pr-body-file) PR_BODY_FILE="$2";      shift 2 ;;
+        *)              POSITIONAL+=("$1");     shift ;;
+      esac
     done
-    COMMIT_MSG="${3:-"Changes from Sandstorm stack ${STACK_ID}"}"
+    # POSITIONAL is: <subcommand> <stackId> [<commit-message>]
+    COMMIT_MSG="${POSITIONAL[2]:-"Changes from Sandstorm stack ${STACK_ID}"}"
+    EFFECTIVE_PR_TITLE="${PR_TITLE:-$COMMIT_MSG}"
 
     resolve_github_token
 
@@ -534,14 +550,20 @@ case "$COMMAND" in
         git add -A
         git diff --cached --quiet || git commit -m "'"${COMMIT_MSG}"'"
         git push -u origin "'"${CURRENT_BRANCH}"'"
-        # Create PR back to main using the project create-pr script if available
+        # One PR-creation path: .sandstorm/scripts/create-pr.sh, invoked
+        # here with either the caller-provided title + body file or the
+        # default commit-message-as-title + short default body. No
+        # separate desktop-side path.
         if git log origin/main.."'"${CURRENT_BRANCH}"'" --oneline | head -1 | grep -q .; then
           if [ -x /app/.sandstorm/scripts/create-pr.sh ]; then
-            /app/.sandstorm/scripts/create-pr.sh \
-              --title "'"${COMMIT_MSG}"'" \
-              --body "Changes from Sandstorm stack '"${STACK_ID}"'" \
-              --base main \
-              --head "'"${CURRENT_BRANCH}"'" 2>/dev/null || echo "PR already exists or could not be created"
+            PR_ARGS=(--title "'"${EFFECTIVE_PR_TITLE}"'" --base main --head "'"${CURRENT_BRANCH}"'")
+            if [ -n "'"${PR_BODY_FILE}"'" ]; then
+              PR_ARGS+=(--body-file "'"${PR_BODY_FILE}"'")
+            else
+              PR_ARGS+=(--body "Changes from Sandstorm stack '"${STACK_ID}"'")
+            fi
+            /app/.sandstorm/scripts/create-pr.sh "${PR_ARGS[@]}" \
+              || echo "PR already exists or could not be created"
           else
             echo "No create-pr script found at .sandstorm/scripts/create-pr.sh — skipping PR creation."
             echo "Run sandstorm init to configure a ticket provider, or create the script manually."
@@ -551,7 +573,7 @@ case "$COMMAND" in
       '
 
     echo ""
-    echo "Done! Changes pushed to ${CURRENT_BRANCH} and PR created."
+    echo "Done! Changes pushed to ${CURRENT_BRANCH}."
     ;;
 
   # -----------------------------------------------------------------

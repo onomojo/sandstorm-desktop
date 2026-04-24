@@ -1079,6 +1079,57 @@ describe('StackManager', () => {
       const stack = registry.getStack('push-no-status');
       expect(stack!.status).toBe('up');
     });
+
+    // #320 — Make-PR flow passes a refined title + body file through to
+    // the unified create-pr.sh path inside the container.
+    it('appends --pr-title and --pr-body-file after the message', async () => {
+      registry.createStack(makeStack('push-pr-flags'));
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: '', exitCode: 0,
+      });
+
+      await manager.push('push-pr-flags', 'feat: thing', {
+        prTitle: 'feat: refined title',
+        prBodyFile: '/app/.sandstorm/pr-body.md',
+      });
+
+      expect(runCliSpy).toHaveBeenCalledWith(
+        '/proj',
+        [
+          'push', 'push-pr-flags', 'feat: thing',
+          '--pr-title', 'feat: refined title',
+          '--pr-body-file', '/app/.sandstorm/pr-body.md',
+        ],
+      );
+    });
+
+    it('synthesizes a default commit message so flags do not collide with positional args', async () => {
+      registry.createStack(makeStack('push-default-msg'));
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: '', exitCode: 0,
+      });
+
+      await manager.push('push-default-msg', undefined, { prTitle: 't' });
+
+      // Message is always present positionally so the bash arg parser sees
+      // the flags at position 4 (or later), not position 3.
+      expect(runCliSpy).toHaveBeenCalledWith(
+        '/proj',
+        ['push', 'push-default-msg', 'Changes from Sandstorm stack push-default-msg', '--pr-title', 't'],
+      );
+    });
+
+    it('returns stdout/stderr so callers can parse the PR URL emitted by create-pr.sh', async () => {
+      registry.createStack(makeStack('push-stdout'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'pushed\nhttps://github.com/o/r/pull/77\nDone!\n',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      const result = await manager.push('push-stdout', 't', { prTitle: 't' });
+      expect(result.stdout).toContain('pull/77');
+    });
   });
 
   describe('setPullRequest', () => {

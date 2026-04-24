@@ -16,6 +16,7 @@ export interface SandstormAPI {
       missingReviewPrompt?: boolean;
       networksMigrated?: boolean;
       missingUpdateScript?: boolean;
+      missingCreatePrScript?: boolean;
       detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
     }>;
     autoDetectVerify: (directory: string) => Promise<{
@@ -28,6 +29,10 @@ export interface SandstormAPI {
       serviceDescriptions: Record<string, string>,
     ) => Promise<{ success: boolean; error?: string }>;
     installUpdateScript: (
+      directory: string,
+      provider: 'github' | 'jira' | 'skeleton',
+    ) => Promise<{ success: boolean; path?: string; error?: string }>;
+    installCreatePrScript: (
       directory: string,
       provider: 'github' | 'jira' | 'skeleton',
     ) => Promise<{ success: boolean; path?: string; error?: string }>;
@@ -181,6 +186,8 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('projects:saveMigration', directory, verifyScript, serviceDescriptions),
     installUpdateScript: (directory: string, provider: 'github' | 'jira' | 'skeleton') =>
       ipcRenderer.invoke('projects:installUpdateScript', directory, provider),
+    installCreatePrScript: (directory: string, provider: 'github' | 'jira' | 'skeleton') =>
+      ipcRenderer.invoke('projects:installCreatePrScript', directory, provider),
     detectTicketProvider: (directory: string) =>
       ipcRenderer.invoke('projects:detectTicketProvider', directory),
     generateCompose: (directory: string) =>

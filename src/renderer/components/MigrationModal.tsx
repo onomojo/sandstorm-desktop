@@ -10,6 +10,7 @@ interface MigrationModalProps {
   missingReviewPrompt?: boolean;
   legacyPortMappings?: boolean;
   missingUpdateScript?: boolean;
+  missingCreatePrScript?: boolean;
   detectedTicketProvider?: TicketProvider;
   onComplete: () => void;
   onDismiss: () => void;
@@ -23,6 +24,7 @@ export function MigrationModal({
   missingReviewPrompt,
   legacyPortMappings,
   missingUpdateScript,
+  missingCreatePrScript,
   detectedTicketProvider,
   onComplete,
   onDismiss,
@@ -31,7 +33,10 @@ export function MigrationModal({
   const [serviceDescriptions, setServiceDescriptions] = useState<Record<string, string>>({});
   const [specQualityGate, setSpecQualityGate] = useState('');
   const [reviewPrompt, setReviewPrompt] = useState('');
-  const [updateProvider, setUpdateProvider] = useState<TicketProvider>(detectedTicketProvider ?? 'github');
+  // The two provider scripts (update-ticket.sh, create-pr.sh) are both per-
+  // provider (github/jira/skeleton). Keep one picker — they ship from the
+  // same template set.
+  const [scriptProvider, setScriptProvider] = useState<TicketProvider>(detectedTicketProvider ?? 'github');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -86,11 +91,20 @@ export function MigrationModal({
           return;
         }
       }
-      // Install update-ticket.sh template for the chosen provider (#318).
+      // Install the provider scripts (update-ticket.sh #318, create-pr.sh
+      // #320). Both pick from the same github / jira / skeleton template
+      // set — one provider choice, one save path.
       if (missingUpdateScript) {
-        const installRes = await window.sandstorm.projects.installUpdateScript(projectDir, updateProvider);
+        const installRes = await window.sandstorm.projects.installUpdateScript(projectDir, scriptProvider);
         if (!installRes.success) {
           setError(installRes.error || 'Failed to install update-ticket.sh');
+          return;
+        }
+      }
+      if (missingCreatePrScript) {
+        const installRes = await window.sandstorm.projects.installCreatePrScript(projectDir, scriptProvider);
+        if (!installRes.success) {
+          setError(installRes.error || 'Failed to install create-pr.sh');
           return;
         }
       }
@@ -121,6 +135,7 @@ export function MigrationModal({
               missingReviewPrompt && 'a review prompt',
               legacyPortMappings && 'legacy port mapping cleanup',
               missingUpdateScript && 'an update-ticket script',
+              missingCreatePrScript && 'a create-pr script',
             ].filter(Boolean).join(', ')
             .replace(/, ([^,]*)$/, ' and $1')}{' '}
             to work with the stack system.
@@ -214,14 +229,27 @@ export function MigrationModal({
                 </div>
               )}
 
-              {/* Update-ticket script provider picker (#318) */}
-              {missingUpdateScript && (
-                <div data-testid="update-ticket-section">
+              {/* Provider scripts picker — single control for both
+                  update-ticket.sh (#318) and create-pr.sh (#320) since
+                  both pick from the same github / jira / skeleton template
+                  set. */}
+              {(missingUpdateScript || missingCreatePrScript) && (
+                <div data-testid="provider-scripts-section">
                   <label className="block text-xs font-medium text-sandstorm-text-secondary mb-1.5">
-                    Update-Ticket Script (.sandstorm/scripts/update-ticket.sh)
+                    Provider Scripts{' '}
+                    <span className="text-sandstorm-muted font-normal">
+                      ({[
+                        missingUpdateScript && '.sandstorm/scripts/update-ticket.sh',
+                        missingCreatePrScript && '.sandstorm/scripts/create-pr.sh',
+                      ].filter(Boolean).join(', ')})
+                    </span>
                   </label>
                   <p className="text-[11px] text-sandstorm-muted mb-2">
-                    Lets the refine step commit the refined body back to your ticket system. Without this, refinements are lost between sessions.
+                    {missingUpdateScript && missingCreatePrScript
+                      ? 'Lets the refine step commit bodies back to your ticket system and lets Make PR open pull requests via your git host. Without these, both flows fail.'
+                      : missingUpdateScript
+                        ? 'Lets the refine step commit the refined body back to your ticket system. Without this, refinements are lost between sessions.'
+                        : 'Lets Make PR open pull requests via your git host. Without this, the PR button fails.'}
                     {detectedTicketProvider && (
                       <> Auto-detected: <span className="font-mono text-sandstorm-text-secondary">{detectedTicketProvider}</span>.</>
                     )}
@@ -231,15 +259,15 @@ export function MigrationModal({
                       <button
                         key={p}
                         type="button"
-                        onClick={() => setUpdateProvider(p)}
+                        onClick={() => setScriptProvider(p)}
                         className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-all ${
-                          updateProvider === p
+                          scriptProvider === p
                             ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
                             : 'border-sandstorm-border bg-sandstorm-bg text-sandstorm-muted hover:border-sandstorm-border-light'
                         }`}
-                        data-testid={`update-provider-${p}`}
+                        data-testid={`script-provider-${p}`}
                       >
-                        {p === 'github' && 'GitHub Issues'}
+                        {p === 'github' && 'GitHub'}
                         {p === 'jira' && 'Jira'}
                         {p === 'skeleton' && 'Custom (edit later)'}
                       </button>
