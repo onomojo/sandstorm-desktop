@@ -22,15 +22,15 @@ vi.mock('../../src/main/spec-quality-gate', () => ({
   getSpecQualityGate: vi.fn().mockReturnValue(''),
 }));
 
-vi.mock('../../src/main/control-plane/ticket-creator', () => ({
+vi.mock('../../src/main/control-plane/ticket-updater', () => ({
   updateTicketBody: vi.fn().mockResolvedValue(undefined),
-  createTicket: vi.fn().mockResolvedValue({ url: '', number: 0, ticketId: '' }),
+  getUpdateScriptStatus: vi.fn().mockReturnValue('ok'),
 }));
 
 import { stackManager, agentBackend } from '../../src/main/index';
 import { fetchTicketContext, getScriptStatus } from '../../src/main/control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../../src/main/spec-quality-gate';
-import { updateTicketBody } from '../../src/main/control-plane/ticket-creator';
+import { updateTicketBody } from '../../src/main/control-plane/ticket-updater';
 
 describe('MCP tools', () => {
   beforeEach(() => {
@@ -471,11 +471,11 @@ describe('MCP tools', () => {
         });
 
         expect(updateTicketBody).toHaveBeenCalledTimes(1);
-        expect(updateTicketBody).toHaveBeenCalledWith({
-          projectDir: '/proj',
-          ticketId: '42',
-          body: '# Issue: Refined\nWith answers.',
-        });
+        expect(updateTicketBody).toHaveBeenCalledWith(
+          '42',
+          '/proj',
+          '# Issue: Refined\nWith answers.',
+        );
       });
 
       it('writes back even when the refinement still FAILs (so iterative loops build on each other)', async () => {
@@ -490,9 +490,7 @@ describe('MCP tools', () => {
         }) as { passed: boolean; updatedBody: string | null };
 
         expect(updateTicketBody).toHaveBeenCalledOnce();
-        expect(updateTicketBody).toHaveBeenCalledWith(
-          expect.objectContaining({ body: '# Issue: Refined v1\nPartial.' }),
-        );
+        expect(updateTicketBody).toHaveBeenCalledWith('42', '/proj', '# Issue: Refined v1\nPartial.');
         expect(result.passed).toBe(false);
         expect(result.updatedBody).toContain('Refined v1');
       });

@@ -11,7 +11,7 @@ import path from 'path';
 import { stackManager, agentBackend } from '../index';
 import { fetchTicketContext, getScriptStatus } from '../control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../spec-quality-gate';
-import { updateTicketBody } from '../control-plane/ticket-creator';
+import { updateTicketBody } from '../control-plane/ticket-updater';
 
 /**
  * Validate that projectDir is a non-empty absolute path.
@@ -415,7 +415,7 @@ Respond in EXACTLY this format:
   // (not just on PASS) so iterative refinement loops build on each other.
   if (updatedBody) {
     try {
-      await updateTicketBody({ projectDir, ticketId, body: updatedBody });
+      await updateTicketBody(ticketId, projectDir, updatedBody);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {
@@ -423,14 +423,14 @@ Respond in EXACTLY this format:
         report: result,
         updatedBody,
         error:
-          `Refinement evaluated successfully but writing the updated body back to GitHub failed: ${msg}. ` +
+          `Refinement evaluated successfully but writing the updated body back to your ticket system failed: ${msg} ` +
           `The refined body is in the report — copy it manually if needed.`,
       };
     }
   } else if (userAnswers) {
     // Refinement was supposed to produce an updatedBody (the prompt
     // demands it) but didn't — surface as an error so the user knows the
-    // ticket on GitHub is still stale rather than silently shipping a
+    // ticket on the source system is still stale rather than silently shipping a
     // PASS verdict against the unchanged ticket.
     return {
       passed: false,
@@ -438,8 +438,8 @@ Respond in EXACTLY this format:
       updatedBody: null,
       error:
         'Refinement did not produce an "## Updated Ticket Body" section, so nothing was written ' +
-        'back to GitHub. Re-run refinement; if it persists, the ephemeral agent may be drifting ' +
-        'from the required output format.',
+        'back to your ticket system. Re-run refinement; if it persists, the ephemeral agent may be ' +
+        'drifting from the required output format.',
     };
   }
 

@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 
+type TicketProvider = 'github' | 'jira' | 'skeleton';
+
 interface MigrationModalProps {
   projectDir: string;
   missingVerifyScript: boolean;
@@ -7,6 +9,8 @@ interface MigrationModalProps {
   missingSpecQualityGate?: boolean;
   missingReviewPrompt?: boolean;
   legacyPortMappings?: boolean;
+  missingUpdateScript?: boolean;
+  detectedTicketProvider?: TicketProvider;
   onComplete: () => void;
   onDismiss: () => void;
 }
@@ -18,6 +22,8 @@ export function MigrationModal({
   missingSpecQualityGate,
   missingReviewPrompt,
   legacyPortMappings,
+  missingUpdateScript,
+  detectedTicketProvider,
   onComplete,
   onDismiss,
 }: MigrationModalProps) {
@@ -25,6 +31,7 @@ export function MigrationModal({
   const [serviceDescriptions, setServiceDescriptions] = useState<Record<string, string>>({});
   const [specQualityGate, setSpecQualityGate] = useState('');
   const [reviewPrompt, setReviewPrompt] = useState('');
+  const [updateProvider, setUpdateProvider] = useState<TicketProvider>(detectedTicketProvider ?? 'github');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,6 +86,14 @@ export function MigrationModal({
           return;
         }
       }
+      // Install update-ticket.sh template for the chosen provider (#318).
+      if (missingUpdateScript) {
+        const installRes = await window.sandstorm.projects.installUpdateScript(projectDir, updateProvider);
+        if (!installRes.success) {
+          setError(installRes.error || 'Failed to install update-ticket.sh');
+          return;
+        }
+      }
       onComplete();
     } catch (err) {
       setError(String(err));
@@ -105,6 +120,7 @@ export function MigrationModal({
               missingSpecQualityGate && 'a spec quality gate',
               missingReviewPrompt && 'a review prompt',
               legacyPortMappings && 'legacy port mapping cleanup',
+              missingUpdateScript && 'an update-ticket script',
             ].filter(Boolean).join(', ')
             .replace(/, ([^,]*)$/, ' and $1')}{' '}
             to work with the stack system.
@@ -195,6 +211,40 @@ export function MigrationModal({
                   <p className="text-[11px] text-sandstorm-muted mb-2">
                     This project has static port mappings in its sandstorm compose file. Ports are now exposed on demand via proxy containers. Saving will remove the static port mappings.
                   </p>
+                </div>
+              )}
+
+              {/* Update-ticket script provider picker (#318) */}
+              {missingUpdateScript && (
+                <div data-testid="update-ticket-section">
+                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-1.5">
+                    Update-Ticket Script (.sandstorm/scripts/update-ticket.sh)
+                  </label>
+                  <p className="text-[11px] text-sandstorm-muted mb-2">
+                    Lets the refine step commit the refined body back to your ticket system. Without this, refinements are lost between sessions.
+                    {detectedTicketProvider && (
+                      <> Auto-detected: <span className="font-mono text-sandstorm-text-secondary">{detectedTicketProvider}</span>.</>
+                    )}
+                  </p>
+                  <div className="flex gap-2">
+                    {(['github', 'jira', 'skeleton'] as const).map((p) => (
+                      <button
+                        key={p}
+                        type="button"
+                        onClick={() => setUpdateProvider(p)}
+                        className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-all ${
+                          updateProvider === p
+                            ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
+                            : 'border-sandstorm-border bg-sandstorm-bg text-sandstorm-muted hover:border-sandstorm-border-light'
+                        }`}
+                        data-testid={`update-provider-${p}`}
+                      >
+                        {p === 'github' && 'GitHub Issues'}
+                        {p === 'jira' && 'Jira'}
+                        {p === 'skeleton' && 'Custom (edit later)'}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               )}
 
