@@ -11,6 +11,7 @@ import path from 'path';
 import { stackManager, agentBackend } from '../index';
 import { fetchTicketContext, getScriptStatus } from '../control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../spec-quality-gate';
+import { updateTicketBody } from '../control-plane/ticket-creator';
 
 /**
  * Validate that projectDir is a non-empty absolute path.
@@ -406,6 +407,41 @@ Respond in EXACTLY this format:
   // Extract updated ticket body if present
   const bodyMatch = result.match(/## Updated Ticket Body\s*\n([\s\S]*?)(?=\n## Spec Quality Gate)/);
   const updatedBody = bodyMatch ? bodyMatch[1].trim() : null;
+
+  // Commit the refined body back to GitHub (#318). Without this, refinements
+  // only live in the renderer's transient state and are lost between
+  // sessions — the user does the work, sees PASS, and the ticket on GitHub
+  // is unchanged. We write on every refinement that produces an updatedBody
+  // (not just on PASS) so iterative refinement loops build on each other.
+  if (updatedBody) {
+    try {
+      await updateTicketBody({ projectDir, ticketId, body: updatedBody });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        passed: false,
+        report: result,
+        updatedBody,
+        error:
+          `Refinement evaluated successfully but writing the updated body back to GitHub failed: ${msg}. ` +
+          `The refined body is in the report — copy it manually if needed.`,
+      };
+    }
+  } else if (userAnswers) {
+    // Refinement was supposed to produce an updatedBody (the prompt
+    // demands it) but didn't — surface as an error so the user knows the
+    // ticket on GitHub is still stale rather than silently shipping a
+    // PASS verdict against the unchanged ticket.
+    return {
+      passed: false,
+      report: result,
+      updatedBody: null,
+      error:
+        'Refinement did not produce an "## Updated Ticket Body" section, so nothing was written ' +
+        'back to GitHub. Re-run refinement; if it persists, the ephemeral agent may be drifting ' +
+        'from the required output format.',
+    };
+  }
 
   return {
     passed,

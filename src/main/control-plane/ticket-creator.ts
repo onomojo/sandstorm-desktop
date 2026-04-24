@@ -59,3 +59,54 @@ export function createTicket(opts: {
     });
   });
 }
+
+/**
+ * Replace the body of an existing GitHub issue. Used by the refinement flow
+ * (#318) to commit the agent's updated ticket body back to the source of
+ * truth — without this, refinements only live in the renderer's transient
+ * state and are lost between sessions.
+ *
+ * Body is piped via `--body-file -` on stdin so we don't hit OS arg-length
+ * limits for large tickets.
+ */
+export function updateTicketBody(opts: {
+  projectDir: string;
+  ticketId: string;
+  body: string;
+}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(opts.projectDir)) {
+      reject(new Error(`Project directory not found at ${opts.projectDir}`));
+      return;
+    }
+    const ticketId = opts.ticketId.trim().replace(/^#/, '');
+    if (!ticketId) {
+      reject(new Error('Ticket ID is required'));
+      return;
+    }
+    if (!opts.body.trim()) {
+      reject(new Error('Ticket body cannot be empty'));
+      return;
+    }
+
+    const child = spawn('gh', ['issue', 'edit', ticketId, '--body-file', '-'], {
+      cwd: opts.projectDir,
+      stdio: ['pipe', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('error', (err) => reject(err));
+    child.on('close', (code) => {
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || stdout.trim() || `gh issue edit exited with code ${code}`));
+        return;
+      }
+      resolve();
+    });
+    child.stdin.write(opts.body);
+    child.stdin.end();
+  });
+}
