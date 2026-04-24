@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useCallback, useEffect } from 'react';
 import { useAppStore, SpecGateResult } from '../store';
 
 type Phase = 'input' | 'running' | 'pass' | 'fail' | 'starting';
@@ -9,7 +9,12 @@ function suggestStackName(ticketId: string): string {
 }
 
 export function RefineTicketDialog() {
-  const { setShowRefineTicketDialog, refreshStacks, activeProject } = useAppStore();
+  const {
+    setShowRefineTicketDialog,
+    refreshStacks,
+    activeProject,
+    consumeRefineTicketPrefill,
+  } = useAppStore();
   const project = activeProject();
 
   const [ticketId, setTicketId] = useState('');
@@ -26,22 +31,25 @@ export function RefineTicketDialog() {
   const cleanTicketId = useMemo(() => ticketId.trim().replace(/^#/, ''), [ticketId]);
   const projectDir = project?.directory ?? '';
 
-  const handleRunGate = async () => {
-    if (!cleanTicketId || !projectDir) {
+  // Take ticketId as an explicit arg so the prefill auto-run effect below
+  // can call it before React has flushed the setTicketId state update.
+  const runGateFor = useCallback(async (id: string) => {
+    const cleanId = id.trim().replace(/^#/, '');
+    if (!cleanId || !projectDir) {
       setError('Ticket ID and an active project are both required');
       return;
     }
     setError(null);
     setPhase('running');
     try {
-      const result = await window.sandstorm.tickets.specCheck(cleanTicketId, projectDir);
+      const result = await window.sandstorm.tickets.specCheck(cleanId, projectDir);
       setGate(result);
       if (result.error) {
         setPhase('fail');
         setError(result.error);
       } else if (result.passed) {
         setPhase('pass');
-        setStackName((s) => s || suggestStackName(cleanTicketId));
+        setStackName((s) => s || suggestStackName(cleanId));
       } else {
         setAnswers(result.questions.map(() => ''));
         setPhase('fail');
@@ -50,7 +58,22 @@ export function RefineTicketDialog() {
       setPhase('fail');
       setError(err instanceof Error ? err.message : String(err));
     }
-  };
+  }, [projectDir]);
+
+  const handleRunGate = () => runGateFor(cleanTicketId);
+
+  // Hand-off from CreateTicketDialog → "Refine #N" (#317). When the dialog
+  // opens with a prefilled id, hydrate the input and kick off the gate
+  // immediately so the user lands on the result instead of an asking-for-id
+  // input they just answered seconds ago in the previous modal.
+  useEffect(() => {
+    const prefill = consumeRefineTicketPrefill();
+    if (!prefill) return;
+    setTicketId(prefill);
+    void runGateFor(prefill);
+    // Run once on mount; consumeRefineTicketPrefill is stable.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleSubmitAnswers = async () => {
     if (!cleanTicketId || !projectDir) return;

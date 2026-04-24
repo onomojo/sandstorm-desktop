@@ -66,6 +66,9 @@ describe('CreateTicketDialog', () => {
     fireEvent.click(screen.getByTestId('create-ticket-refine-now'));
     expect(useAppStore.getState().showCreateTicketDialog).toBe(false);
     expect(useAppStore.getState().showRefineTicketDialog).toBe(true);
+    // #317 — the just-filed ticket id is handed off so the Refine dialog
+    // doesn't ask for it again.
+    expect(useAppStore.getState().refineTicketPrefill).toBe('77');
   });
 
   it('surfaces an error from tickets.create', async () => {
