@@ -338,6 +338,12 @@ interface AppState {
   showCreateTicketDialog: boolean;
   showStartTicketDialog: boolean;
   showCreatePRDialog: { stackId: string } | null;
+  /**
+   * Drafted PR title/body keyed by stackId — survives the dialog being
+   * closed/reopened so the user doesn't pay for another ephemeral Claude
+   * call to redraft (#320). Cleared after a successful PR creation.
+   */
+  prDraftCache: Record<string, { title: string; body: string }>;
   stackMetrics: Record<string, StackMetrics>;
   loading: boolean;
   error: string | null;
@@ -417,6 +423,8 @@ interface AppState {
   setShowCreateTicketDialog: (show: boolean) => void;
   setShowStartTicketDialog: (show: boolean) => void;
   setShowCreatePRDialog: (state: { stackId: string } | null) => void;
+  setPrDraft: (stackId: string, draft: { title: string; body: string }) => void;
+  clearPrDraft: (stackId: string) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   refreshStacks: () => Promise<void>;
@@ -653,6 +661,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   showCreateTicketDialog: false,
   showStartTicketDialog: false,
   showCreatePRDialog: null,
+  prDraftCache: {},
   loading: false,
   error: null,
 
@@ -840,6 +849,16 @@ export const useAppStore = create<AppState>((set, get) => ({
   setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
   setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
   setShowCreatePRDialog: (state) => set({ showCreatePRDialog: state }),
+  setPrDraft: (stackId, draft) =>
+    set((state) => ({
+      prDraftCache: { ...state.prDraftCache, [stackId]: draft },
+    })),
+  clearPrDraft: (stackId) =>
+    set((state) => {
+      const next = { ...state.prDraftCache };
+      delete next[stackId];
+      return { prDraftCache: next };
+    }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
 

@@ -18,6 +18,7 @@ describe('CreatePRDialog', () => {
     useAppStore.setState({
       showCreatePRDialog: { stackId: 'foo' },
       stacks: [],
+      prDraftCache: {},
     });
     originalOpen = window.open;
     window.open = vi.fn() as unknown as typeof window.open;
@@ -110,5 +111,89 @@ describe('CreatePRDialog', () => {
     await user.clear(title);
     await user.type(title, 'x'.repeat(75));
     expect(screen.getByText(/75\/70/)).toBeDefined();
+  });
+
+  // #320 — reopening the dialog must not re-run the draft LLM call.
+  describe('draft cache (#320)', () => {
+    it('hydrates title/body from prDraftCache and skips the LLM call', async () => {
+      useAppStore.setState({
+        prDraftCache: { foo: { title: 'cached title', body: 'cached body' } },
+      });
+      render(<CreatePRDialog stackId="foo" />);
+
+      // Editor is immediately visible (no drafting spinner) because we
+      // had a cached draft — no LLM call needed.
+      expect(screen.queryByTestId('pr-drafting')).toBeNull();
+      expect(api.pr.draftBody).not.toHaveBeenCalled();
+
+      const titleInput = screen.getByTestId('pr-title') as HTMLInputElement;
+      expect(titleInput.value).toBe('cached title');
+      const bodyInput = screen.getByTestId('pr-body') as HTMLTextAreaElement;
+      expect(bodyInput.value).toBe('cached body');
+    });
+
+    it('persists the drafted title/body to the cache after the first draft', async () => {
+      api.pr.draftBody.mockResolvedValue({ title: 'fresh title', body: 'fresh body' });
+      render(<CreatePRDialog stackId="foo" />);
+      await waitFor(() => screen.getByTestId('pr-title'));
+      // Wait for the persistence effect to flush.
+      await waitFor(() => {
+        expect(useAppStore.getState().prDraftCache.foo).toEqual({
+          title: 'fresh title',
+          body: 'fresh body',
+        });
+      });
+    });
+
+    it('writes edits to the cache so they survive a close + reopen', async () => {
+      const user = userEvent.setup();
+      api.pr.draftBody.mockResolvedValue({ title: 'orig', body: 'orig body' });
+      render(<CreatePRDialog stackId="foo" />);
+      await waitFor(() => screen.getByTestId('pr-title'));
+
+      const title = screen.getByTestId('pr-title') as HTMLInputElement;
+      await user.clear(title);
+      await user.type(title, 'user-edited title');
+
+      await waitFor(() => {
+        expect(useAppStore.getState().prDraftCache.foo?.title).toBe('user-edited title');
+      });
+    });
+
+    it('clears the cache after a successful pr.create', async () => {
+      useAppStore.setState({
+        prDraftCache: { foo: { title: 'cached', body: 'cached body' } },
+      });
+      api.pr.create.mockResolvedValue({ url: 'https://github.com/o/r/pull/1', number: 1 });
+      render(<CreatePRDialog stackId="foo" />);
+      fireEvent.click(screen.getByTestId('pr-create'));
+      await waitFor(() => {
+        expect(useAppStore.getState().prDraftCache.foo).toBeUndefined();
+      });
+    });
+
+    it('does NOT clear the cache when pr.create fails', async () => {
+      useAppStore.setState({
+        prDraftCache: { foo: { title: 'cached', body: 'cached body' } },
+      });
+      api.pr.create.mockRejectedValue(new Error('network down'));
+      render(<CreatePRDialog stackId="foo" />);
+      fireEvent.click(screen.getByTestId('pr-create'));
+      await waitFor(() => {
+        expect(screen.getByTestId('pr-error').textContent).toMatch(/network down/);
+      });
+      expect(useAppStore.getState().prDraftCache.foo).toEqual({
+        title: 'cached',
+        body: 'cached body',
+      });
+    });
+
+    it('shows the "draft restored" hint when hydrating from cache', () => {
+      useAppStore.setState({
+        prDraftCache: { foo: { title: 'cached', body: 'cached body' } },
+      });
+      render(<CreatePRDialog stackId="foo" />);
+      expect(screen.getByText(/draft restored/i)).toBeDefined();
+    });
   });
 });

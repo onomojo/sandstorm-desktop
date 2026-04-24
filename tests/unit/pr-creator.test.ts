@@ -8,6 +8,7 @@ import {
   parseDraftResponse,
   workspacePathFor,
   draftPullRequest,
+  commitAndPush,
   PR_BODY_MAX_BYTES,
   PR_TITLE_MAX_CHARS,
 } from '../../src/main/control-plane/pr-creator';
@@ -166,5 +167,109 @@ describe('draftPullRequest', () => {
     );
     expect(fetchTaskTail).toHaveBeenCalledWith('s');
     expect(runEphemeral.mock.calls[0][0]).toContain('important task log');
+  });
+});
+
+describe('commitAndPush (#320)', () => {
+  let originDir: string;
+  let workspace: string;
+
+  beforeEach(() => {
+    // Stand up a bare "origin" repo + a cloned workspace on a feature branch
+    // so we can exercise commit + push without hitting the network. We force
+    // HEAD to `main` via symbolic-ref because older gits don't honor the
+    // `-c init.defaultBranch=main` flag (or -b on init).
+    originDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-origin-'));
+    execFileSync('git', ['init', '--bare', '-q'], { cwd: originDir });
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: originDir });
+
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-ws-'));
+    execFileSync('git', ['init', '-q'], { cwd: workspace });
+    execFileSync('git', ['symbolic-ref', 'HEAD', 'refs/heads/main'], { cwd: workspace });
+    execFileSync('git', ['config', 'user.email', 't@t'], { cwd: workspace });
+    execFileSync('git', ['config', 'user.name', 't'], { cwd: workspace });
+    execFileSync('git', ['remote', 'add', 'origin', originDir], { cwd: workspace });
+    fs.writeFileSync(path.join(workspace, 'README'), 'hi');
+    execFileSync('git', ['add', 'README'], { cwd: workspace });
+    execFileSync('git', ['commit', '-q', '-m', 'initial'], { cwd: workspace });
+    execFileSync('git', ['push', '-q', '-u', 'origin', 'main'], { cwd: workspace });
+    execFileSync('git', ['checkout', '-q', '-b', 'feat/x'], { cwd: workspace });
+  });
+
+  afterEach(() => {
+    fs.rmSync(originDir, { recursive: true, force: true });
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it('rejects when the workspace is missing', async () => {
+    await expect(
+      commitAndPush({ workspace: '/nope', commitMessage: 'x' }),
+    ).rejects.toThrow(/workspace not found/);
+  });
+
+  it('commits dirty files and pushes the branch to origin', async () => {
+    fs.writeFileSync(path.join(workspace, 'new-file'), 'hello');
+    await commitAndPush({ workspace, commitMessage: 'feat: add new-file' });
+
+    // Commit landed locally.
+    const log = execFileSync('git', ['log', '-1', '--pretty=format:%s'], { cwd: workspace, encoding: 'utf-8' });
+    expect(log).toBe('feat: add new-file');
+
+    // Branch exists on origin.
+    const remoteBranches = execFileSync('git', ['branch', '-a'], { cwd: workspace, encoding: 'utf-8' });
+    expect(remoteBranches).toContain('remotes/origin/feat/x');
+  });
+
+  it('skips the commit when nothing is dirty but still pushes', async () => {
+    // Make one commit on the feature branch so there is something to push,
+    // but leave the working tree clean at call time.
+    fs.writeFileSync(path.join(workspace, 'already-committed'), 'a');
+    execFileSync('git', ['add', 'already-committed'], { cwd: workspace });
+    execFileSync('git', ['commit', '-q', '-m', 'pre-existing'], { cwd: workspace });
+
+    await commitAndPush({ workspace, commitMessage: 'ignored — no dirty files' });
+
+    // Commit count unchanged — nothing added on top of pre-existing.
+    const commits = execFileSync('git', ['rev-list', '--count', 'HEAD'], { cwd: workspace, encoding: 'utf-8' }).trim();
+    expect(commits).toBe('2');
+
+    // But the pre-existing commit did reach origin.
+    const originHead = execFileSync(
+      'git', ['ls-remote', 'origin', 'refs/heads/feat/x'],
+      { cwd: workspace, encoding: 'utf-8' },
+    ).trim();
+    expect(originHead).not.toBe('');
+  });
+
+  it('is idempotent when the branch is already pushed', async () => {
+    fs.writeFileSync(path.join(workspace, 'a'), 'a');
+    await commitAndPush({ workspace, commitMessage: 'first' });
+    // Run a second time with no new changes — should not throw.
+    await expect(
+      commitAndPush({ workspace, commitMessage: 'second' }),
+    ).resolves.toBeUndefined();
+  });
+
+  it('uses the provided commit message', async () => {
+    fs.writeFileSync(path.join(workspace, 'file'), 'x');
+    await commitAndPush({ workspace, commitMessage: 'Deterministic UI polish #320' });
+    const subject = execFileSync('git', ['log', '-1', '--pretty=format:%s'], { cwd: workspace, encoding: 'utf-8' });
+    expect(subject).toBe('Deterministic UI polish #320');
+  });
+
+  it('falls back to a default message when the provided one is empty', async () => {
+    fs.writeFileSync(path.join(workspace, 'file'), 'x');
+    await commitAndPush({ workspace, commitMessage: '   ' });
+    const subject = execFileSync('git', ['log', '-1', '--pretty=format:%s'], { cwd: workspace, encoding: 'utf-8' });
+    expect(subject).toMatch(/Changes from Sandstorm stack/);
+  });
+
+  it('surfaces git errors with which command failed', async () => {
+    // Point at a non-existent remote to force push to fail.
+    execFileSync('git', ['remote', 'set-url', 'origin', '/does-not-exist'], { cwd: workspace });
+    fs.writeFileSync(path.join(workspace, 'file'), 'x');
+    await expect(
+      commitAndPush({ workspace, commitMessage: 'x' }),
+    ).rejects.toThrow(/git push failed/);
   });
 });

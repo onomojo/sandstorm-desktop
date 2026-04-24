@@ -198,6 +198,71 @@ export async function draftPullRequest(args: DraftPRArgs, deps: DraftDeps): Prom
 }
 
 /**
+ * Commit any uncommitted changes in the workspace, then push the current
+ * branch to origin with upstream tracking. Fixes #320: `gh pr create` used
+ * to fail because inner-Claude's changes sat uncommitted in the workspace
+ * and the branch had never been pushed. "Make PR" is supposed to be one
+ * button — commit + push + create.
+ *
+ * No-op commit when there's nothing staged (idempotent if the user
+ * already pushed via the Push button). `git push -u origin HEAD` is
+ * idempotent too — safe if the branch is already on remote.
+ */
+export function commitAndPush(args: {
+  workspace: string;
+  commitMessage: string;
+}): Promise<void> {
+  return new Promise((resolve, reject) => {
+    if (!fs.existsSync(args.workspace)) {
+      reject(new Error(`Stack workspace not found at ${args.workspace}`));
+      return;
+    }
+    const message = args.commitMessage.trim() || 'Changes from Sandstorm stack';
+
+    runGit(args.workspace, ['add', '-A'])
+      .then(() => runGit(args.workspace, ['diff', '--cached', '--quiet']).then(
+        // Exit 0 from `diff --cached --quiet` means no staged changes → skip commit.
+        () => 'no-changes',
+        // Non-zero exit means there are staged changes → commit them.
+        () => 'has-changes',
+      ))
+      .then(async (state) => {
+        if (state === 'has-changes') {
+          await runGit(args.workspace, ['commit', '-m', message]);
+        }
+      })
+      .then(() => runGit(args.workspace, ['push', '-u', 'origin', 'HEAD']))
+      .then(() => resolve())
+      .catch((err) => reject(err));
+  });
+}
+
+function runGit(workspace: string, gitArgs: string[]): Promise<{ stdout: string; stderr: string }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('git', gitArgs, {
+      cwd: workspace,
+      stdio: ['ignore', 'pipe', 'pipe'],
+      env: { ...process.env },
+    });
+    let stdout = '';
+    let stderr = '';
+    child.stdout.on('data', (d: Buffer) => { stdout += d.toString(); });
+    child.stderr.on('data', (d: Buffer) => { stderr += d.toString(); });
+    child.on('error', (err) => reject(err));
+    child.on('close', (code) => {
+      if (code !== 0) {
+        const tag = `git ${gitArgs[0]}`;
+        reject(new Error(
+          `${tag} failed (exit ${code}): ${stderr.trim() || stdout.trim() || '(no output)'}`,
+        ));
+        return;
+      }
+      resolve({ stdout, stderr });
+    });
+  });
+}
+
+/**
  * Run `gh pr create` in the stack workspace. Returns the parsed URL + number.
  * `gh` writes the URL to stdout on success: e.g. https://github.com/owner/repo/pull/123
  */
