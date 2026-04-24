@@ -335,6 +335,13 @@ interface AppState {
   selectedStackId: string | null;
   showNewStackDialog: boolean;
   showRefineTicketDialog: boolean;
+  /**
+   * Optional ticket id passed when opening the Refine dialog from another
+   * surface (e.g. the Create-Ticket success screen's "Refine #N" hand-off).
+   * The Refine dialog reads + clears it on mount. Null when the user opened
+   * Refine cold from the Tickets strip and should type the id themselves.
+   */
+  refineTicketPrefill: string | null;
   showCreateTicketDialog: boolean;
   showStartTicketDialog: boolean;
   showCreatePRDialog: { stackId: string } | null;
@@ -420,6 +427,9 @@ interface AppState {
   selectStack: (id: string | null) => void;
   setShowNewStackDialog: (show: boolean) => void;
   setShowRefineTicketDialog: (show: boolean) => void;
+  /** Open the Refine dialog with a ticket id already filled in. */
+  openRefineTicketDialogWith: (ticketId: string) => void;
+  consumeRefineTicketPrefill: () => string | null;
   setShowCreateTicketDialog: (show: boolean) => void;
   setShowStartTicketDialog: (show: boolean) => void;
   setShowCreatePRDialog: (state: { stackId: string } | null) => void;
@@ -658,6 +668,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedStackId: null,
   showNewStackDialog: false,
   showRefineTicketDialog: false,
+  refineTicketPrefill: null,
   showCreateTicketDialog: false,
   showStartTicketDialog: false,
   showCreatePRDialog: null,
@@ -845,7 +856,21 @@ export const useAppStore = create<AppState>((set, get) => ({
   setStacks: (stacks) => set({ stacks }),
   selectStack: (id) => set({ selectedStackId: id }),
   setShowNewStackDialog: (show) => set({ showNewStackDialog: show }),
-  setShowRefineTicketDialog: (show) => set({ showRefineTicketDialog: show }),
+  setShowRefineTicketDialog: (show) => set({
+    showRefineTicketDialog: show,
+    // Closing the dialog drops any pending prefill so a later cold-open
+    // doesn't accidentally hydrate from a stale id.
+    refineTicketPrefill: show ? get().refineTicketPrefill : null,
+  }),
+  openRefineTicketDialogWith: (ticketId) => set({
+    showRefineTicketDialog: true,
+    refineTicketPrefill: ticketId,
+  }),
+  consumeRefineTicketPrefill: () => {
+    const value = get().refineTicketPrefill;
+    if (value !== null) set({ refineTicketPrefill: null });
+    return value;
+  },
   setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
   setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
   setShowCreatePRDialog: (state) => set({ showCreatePRDialog: state }),
