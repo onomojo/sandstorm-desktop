@@ -149,6 +149,9 @@ export function mockSandstormApi() {
         passed: true, questions: [], gateSummary: 'Gate=PASS, questions=0',
         ticketUrl: 'https://github.com/o/r/issues/1', cached: false,
       }),
+      create: vi.fn().mockResolvedValue({
+        url: 'https://github.com/o/r/issues/42', number: 42, ticketId: '42',
+      }),
     },
     pr: {
       draftBody: vi.fn().mockResolvedValue({ title: 'Test PR', body: '## Summary\n- thing\n\n## Test plan\n- [ ] check' }),

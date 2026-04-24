@@ -335,6 +335,8 @@ interface AppState {
   selectedStackId: string | null;
   showNewStackDialog: boolean;
   showRefineTicketDialog: boolean;
+  showCreateTicketDialog: boolean;
+  showStartTicketDialog: boolean;
   showCreatePRDialog: { stackId: string } | null;
   stackMetrics: Record<string, StackMetrics>;
   loading: boolean;
@@ -412,6 +414,8 @@ interface AppState {
   selectStack: (id: string | null) => void;
   setShowNewStackDialog: (show: boolean) => void;
   setShowRefineTicketDialog: (show: boolean) => void;
+  setShowCreateTicketDialog: (show: boolean) => void;
+  setShowStartTicketDialog: (show: boolean) => void;
   setShowCreatePRDialog: (state: { stackId: string } | null) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
@@ -574,6 +578,7 @@ declare global {
         fetch: (ticketId: string, projectDir: string) => Promise<{ body: string; url: string | null }>;
         specCheck: (ticketId: string, projectDir: string) => Promise<SpecGateResult>;
         specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<SpecGateResult>;
+        create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
       };
       pr: {
         draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
@@ -636,6 +641,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectedStackId: null,
   showNewStackDialog: false,
   showRefineTicketDialog: false,
+  showCreateTicketDialog: false,
+  showStartTicketDialog: false,
   showCreatePRDialog: null,
   loading: false,
   error: null,
@@ -821,6 +828,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   selectStack: (id) => set({ selectedStackId: id }),
   setShowNewStackDialog: (show) => set({ showNewStackDialog: show }),
   setShowRefineTicketDialog: (show) => set({ showRefineTicketDialog: show }),
+  setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
+  setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
   setShowCreatePRDialog: (state) => set({ showCreatePRDialog: state }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),

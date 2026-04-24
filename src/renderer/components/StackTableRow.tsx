@@ -1,7 +1,7 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 import { getStackDuration, isTerminalStatus, DURATION_UPDATE_INTERVAL } from '../utils/duration';
-import { formatTokenCount, formatBytes, buildTokenTooltip } from '../utils/format';
+import { StackRowPopover } from './StackRowPopover';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -31,17 +31,32 @@ const STATUS_LABELS: Record<string, string> = {
   rate_limited: 'Limited',
 };
 
-export function StackTableRow({ stack, showProject, columnWidths }: { stack: Stack; showProject?: boolean; columnWidths?: Record<string, number> }) {
-  const { selectStack, refreshStacks, stackMetrics } = useAppStore();
+const POPOVER_OPEN_DELAY_MS = 150;
+
+function makePrEligible(stack: Stack): boolean {
+  return (stack.status === 'completed' || stack.status === 'pushed') && !stack.pr_url;
+}
+
+export function StackTableRow({
+  stack,
+  showProject,
+  columnWidths,
+}: {
+  stack: Stack;
+  showProject?: boolean;
+  columnWidths?: Record<string, number>;
+}) {
+  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
   const [duration, setDuration] = useState(() =>
-    getStackDuration(stack.created_at, stack.updated_at, stack.status)
+    getStackDuration(stack.created_at, stack.updated_at, stack.status),
   );
+  const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
+  const rowRef = useRef<HTMLTableRowElement>(null);
+  const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     setDuration(getStackDuration(stack.created_at, stack.updated_at, stack.status));
-
-    // Only tick for active (non-terminal) stacks
     if (!isTerminalStatus(stack.status)) {
       const interval = setInterval(() => {
         setDuration(getStackDuration(stack.created_at, stack.updated_at, stack.status));
@@ -49,6 +64,27 @@ export function StackTableRow({ stack, showProject, columnWidths }: { stack: Sta
       return () => clearInterval(interval);
     }
   }, [stack.created_at, stack.updated_at, stack.status]);
+
+  useEffect(() => () => {
+    if (enterTimer.current) clearTimeout(enterTimer.current);
+  }, []);
+
+  const handleMouseEnter = () => {
+    if (enterTimer.current) clearTimeout(enterTimer.current);
+    enterTimer.current = setTimeout(() => {
+      if (rowRef.current) {
+        setPopoverRect(rowRef.current.getBoundingClientRect());
+      }
+    }, POPOVER_OPEN_DELAY_MS);
+  };
+
+  const handleMouseLeave = () => {
+    if (enterTimer.current) {
+      clearTimeout(enterTimer.current);
+      enterTimer.current = null;
+    }
+    setPopoverRect(null);
+  };
 
   const runningCount = stack.services.filter((s) => s.status === 'running').length;
   const totalCount = stack.services.length;
@@ -66,95 +102,135 @@ export function StackTableRow({ stack, showProject, columnWidths }: { stack: Sta
     }
   };
 
+  const handleMakePr = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowCreatePRDialog({ stackId: stack.id });
+  };
+
+  const handlePrLink = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (stack.pr_url) {
+      window.open(stack.pr_url, '_blank');
+    }
+  };
+
   return (
-    <tr
-      className="border-b border-sandstorm-border hover:bg-sandstorm-surface-hover cursor-pointer transition-colors group"
-      onClick={() => selectStack(stack.id)}
-    >
-      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.status ? { width: `${columnWidths.status}px` } : undefined}>
-        <div className="flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 rounded-full ${statusColor} shrink-0`} />
-          <span className="text-sandstorm-text-secondary">{statusLabel}</span>
-        </div>
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.name ? { width: `${columnWidths.name}px` } : undefined}>
-        <div className="flex items-center gap-1.5 min-w-0">
-          {showProject && (
-            <span className="text-sandstorm-muted truncate">{stack.project}/</span>
-          )}
-          <span className="font-medium text-sandstorm-text truncate">{stack.id}</span>
-        </div>
-      </td>
-      <td className="px-3 py-2 overflow-hidden" style={columnWidths?.description ? { width: `${columnWidths.description}px` } : undefined}>
-        <span className="text-sandstorm-text-secondary truncate block">
-          {stack.description || <span className="text-sandstorm-muted">—</span>}
-        </span>
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.model ? { width: `${columnWidths.model}px` } : undefined}>
-        <span className="text-sandstorm-text-secondary">
-          {stack.current_model ? stack.current_model.charAt(0).toUpperCase() + stack.current_model.slice(1) : <span className="text-sandstorm-muted">—</span>}
-        </span>
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.services ? { width: `${columnWidths.services}px` } : undefined}>
-        {totalCount > 0 ? (
+    <>
+      <tr
+        ref={rowRef}
+        className="border-b border-sandstorm-border hover:bg-sandstorm-surface-hover cursor-pointer transition-colors group"
+        onClick={() => selectStack(stack.id)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+      >
+        <td
+          className="px-3 py-2 whitespace-nowrap overflow-hidden"
+          style={columnWidths?.status ? { width: `${columnWidths.status}px` } : undefined}
+        >
           <div className="flex items-center gap-1.5">
-            <span className="flex gap-0.5">
-              {stack.services.map((svc, i) => (
-                <span
-                  key={i}
-                  className={`w-1.5 h-1.5 rounded-full ${
-                    svc.status === 'running'
-                      ? 'bg-emerald-400'
-                      : svc.status === 'exited'
-                        ? 'bg-red-400'
-                        : 'bg-amber-400'
-                  }`}
-                  title={`${svc.name}: ${svc.status}`}
-                />
-              ))}
-            </span>
-            <span className="text-sandstorm-muted tabular-nums">{runningCount}/{totalCount}</span>
+            <span className={`w-1.5 h-1.5 rounded-full ${statusColor} shrink-0`} />
+            <span className="text-sandstorm-text-secondary">{statusLabel}</span>
           </div>
-        ) : (
-          <span className="text-sandstorm-muted">—</span>
-        )}
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap overflow-hidden" style={columnWidths?.resources ? { width: `${columnWidths.resources}px` } : undefined}>
-        <div className="flex items-center gap-2 text-sandstorm-muted tabular-nums">
-          {metrics && metrics.totalMemory > 0 ? (
-            <>
-              <span title="Memory">{formatBytes(metrics.totalMemory)}</span>
-              <span title="CPU">{metrics.containers.reduce((s, c) => s + c.cpuPercent, 0).toFixed(1)}%</span>
-            </>
-          ) : null}
-          {(stack.total_input_tokens > 0 || stack.total_output_tokens > 0) ? (
-            <span title={buildTokenTooltip(stack)}>
-              {formatTokenCount(stack.total_input_tokens + stack.total_output_tokens)} tok
+        </td>
+        <td
+          className="px-3 py-2 whitespace-nowrap overflow-hidden"
+          style={columnWidths?.name ? { width: `${columnWidths.name}px` } : undefined}
+        >
+          <div className="flex items-center gap-1.5 min-w-0">
+            {showProject && (
+              <span className="text-sandstorm-muted truncate">{stack.project}/</span>
+            )}
+            <span className="font-medium text-sandstorm-text truncate">{stack.id}</span>
+            {stack.pr_url && stack.pr_number && (
+              <button
+                onClick={handlePrLink}
+                className="text-[10px] font-medium px-1.5 py-0.5 rounded text-violet-400 bg-violet-500/10 border border-violet-500/20 hover:bg-violet-500/20 transition-colors shrink-0"
+                title={stack.pr_url}
+                data-testid={`row-pr-link-${stack.id}`}
+              >
+                ↗ #{stack.pr_number}
+              </button>
+            )}
+          </div>
+        </td>
+        <td
+          className="px-3 py-2 whitespace-nowrap overflow-hidden"
+          style={columnWidths?.model ? { width: `${columnWidths.model}px` } : undefined}
+        >
+          <span className="text-sandstorm-text-secondary">
+            {stack.current_model
+              ? stack.current_model.charAt(0).toUpperCase() + stack.current_model.slice(1)
+              : <span className="text-sandstorm-muted">—</span>}
+          </span>
+        </td>
+        <td
+          className="px-3 py-2 whitespace-nowrap overflow-hidden"
+          style={columnWidths?.services ? { width: `${columnWidths.services}px` } : undefined}
+        >
+          {totalCount > 0 ? (
+            <span className="text-sandstorm-text-secondary tabular-nums">
+              {runningCount}/{totalCount}
             </span>
-          ) : null}
-          {!metrics?.totalMemory && !stack.total_input_tokens && !stack.total_output_tokens && (
-            <span>—</span>
+          ) : (
+            <span className="text-sandstorm-muted">—</span>
           )}
-        </div>
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap text-sandstorm-muted tabular-nums overflow-hidden" style={columnWidths?.duration ? { width: `${columnWidths.duration}px` } : undefined}>
-        {duration}
-      </td>
-      <td className="px-3 py-2 whitespace-nowrap text-right overflow-hidden" style={columnWidths?.actions ? { width: `${columnWidths.actions}px` } : undefined}>
-        <div className="flex items-center gap-1 justify-end opacity-0 group-hover:opacity-100 transition-opacity">
-          {stack.status !== 'running' && (
-            <button
-              onClick={handleTeardown}
-              className="text-[10px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-500/10 transition-colors"
-            >
-              Teardown
-            </button>
-          )}
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-sandstorm-muted">
-            <path d="M9 18l6-6-6-6"/>
-          </svg>
-        </div>
-      </td>
-    </tr>
+        </td>
+        <td
+          className="px-3 py-2 whitespace-nowrap text-sandstorm-muted tabular-nums overflow-hidden"
+          style={columnWidths?.duration ? { width: `${columnWidths.duration}px` } : undefined}
+        >
+          {duration}
+        </td>
+        <td
+          className="px-3 py-2 whitespace-nowrap text-right overflow-hidden"
+          style={columnWidths?.actions ? { width: `${columnWidths.actions}px` } : undefined}
+        >
+          <div className="flex items-center gap-1 justify-end">
+            {/* Persistent primary action — always visible when applicable */}
+            {makePrEligible(stack) && (
+              <button
+                onClick={handleMakePr}
+                className="text-[10px] font-medium px-2 py-0.5 rounded bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors"
+                data-testid={`row-make-pr-${stack.id}`}
+                title="Draft and open a pull request for this stack"
+              >
+                🆕 Make PR
+              </button>
+            )}
+            {/* Secondary actions — hover-gated */}
+            <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+              {stack.status !== 'running' && (
+                <button
+                  onClick={handleTeardown}
+                  className="text-[10px] px-1.5 py-0.5 rounded text-red-400 hover:bg-red-500/10 transition-colors"
+                >
+                  Teardown
+                </button>
+              )}
+              <svg
+                width="14"
+                height="14"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+                className="text-sandstorm-muted"
+              >
+                <path d="M9 18l6-6-6-6" />
+              </svg>
+            </div>
+          </div>
+        </td>
+      </tr>
+      {popoverRect && (
+        <tr aria-hidden>
+          <td colSpan={6} className="p-0">
+            <StackRowPopover stack={stack} metrics={metrics} anchorRect={popoverRect} />
+          </td>
+        </tr>
+      )}
+    </>
   );
 }

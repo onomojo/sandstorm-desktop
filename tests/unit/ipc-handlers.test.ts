@@ -1055,6 +1055,7 @@ describe('IPC Handlers', () => {
       'tickets:fetch',
       'tickets:specCheck',
       'tickets:specRefine',
+      'tickets:create',
       'pr:draftBody',
       'pr:create',
     ];

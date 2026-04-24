@@ -149,6 +149,7 @@ export interface SandstormAPI {
     fetch: (ticketId: string, projectDir: string) => Promise<{ body: string; url: string | null }>;
     specCheck: (ticketId: string, projectDir: string) => Promise<unknown>;
     specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<unknown>;
+    create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
   };
   pr: {
     draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
@@ -299,6 +300,8 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:specCheck', ticketId, projectDir),
     specRefine: (ticketId, projectDir, userAnswers) =>
       ipcRenderer.invoke('tickets:specRefine', ticketId, projectDir, userAnswers),
+    create: (projectDir, title, body) =>
+      ipcRenderer.invoke('tickets:create', projectDir, title, body),
   },
   pr: {
     draftBody: (stackId) => ipcRenderer.invoke('pr:draftBody', stackId),

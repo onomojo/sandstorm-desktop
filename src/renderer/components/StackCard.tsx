@@ -284,20 +284,29 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
         </div>
       )}
 
-      {/* Action buttons */}
+      {/* Persistent primary-action callout — always visible, no hover gate (#315) */}
+      {(stack.status === 'completed' || stack.status === 'pushed') && !stack.pr_url && (
+        <div className="mt-3 ml-5">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowCreatePRDialog({ stackId: stack.id }); }}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors active:scale-[0.98]"
+            data-testid={`card-make-pr-${stack.id}`}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="18" cy="18" r="3"/><circle cx="6" cy="6" r="3"/><path d="M13 6h3a2 2 0 012 2v7"/><path d="M6 9v12"/>
+            </svg>
+            Make PR
+          </button>
+        </div>
+      )}
+
+      {/* Secondary actions — hover-gated */}
       <div className="mt-3 ml-5 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
         {(stack.status === 'completed' || stack.status === 'pushed' || stack.status === 'pr_created') && (
           <>
             <ActionButton label="View Diff" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
             <ActionButton label="Push" onClick={(e) => { e.stopPropagation(); window.sandstorm.push.execute(stack.id); }} primary />
           </>
-        )}
-        {(stack.status === 'completed' || stack.status === 'pushed') && !stack.pr_url && (
-          <ActionButton
-            label="Make PR"
-            onClick={(e) => { e.stopPropagation(); setShowCreatePRDialog({ stackId: stack.id }); }}
-            primary
-          />
         )}
         {stack.status === 'running' && (
           <ActionButton label="View Output" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />

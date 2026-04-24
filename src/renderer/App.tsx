@@ -4,6 +4,8 @@ import { Dashboard } from './components/Dashboard';
 import { StackDetail } from './components/StackDetail';
 import { NewStackDialog } from './components/NewStackDialog';
 import { RefineTicketDialog } from './components/RefineTicketDialog';
+import { CreateTicketDialog } from './components/CreateTicketDialog';
+import { StartTicketDialog } from './components/StartTicketDialog';
 import { CreatePRDialog } from './components/CreatePRDialog';
 import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
@@ -26,6 +28,8 @@ export default function App() {
     selectedStackId,
     showNewStackDialog,
     showRefineTicketDialog,
+    showCreateTicketDialog,
+    showStartTicketDialog,
     showCreatePRDialog,
     showOpenProjectDialog,
     dockerConnected,
@@ -236,6 +240,8 @@ export default function App() {
       {/* Dialogs */}
       {showNewStackDialog && <NewStackDialog />}
       {showRefineTicketDialog && <RefineTicketDialog />}
+      {showCreateTicketDialog && <CreateTicketDialog />}
+      {showStartTicketDialog && <StartTicketDialog />}
       {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} />}
       {showOpenProjectDialog && <OpenProjectDialog />}
 

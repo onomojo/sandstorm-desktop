@@ -62,6 +62,7 @@ import {
   createPullRequest,
   workspacePathFor,
 } from './control-plane/pr-creator';
+import { createTicket } from './control-plane/ticket-creator';
 import { handleToolCall } from './claude/tools';
 
 /**
@@ -923,6 +924,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     'tickets:specRefine',
     async (_event, ticketId: string, projectDir: string, userAnswers: string) => {
       return runSpecRefine(ticketId, projectDir, userAnswers, specDeps);
+    },
+  );
+
+  ipcMain.handle(
+    'tickets:create',
+    async (_event, projectDir: string, title: string, body: string) => {
+      return createTicket({ projectDir, title, body });
     },
   );
 

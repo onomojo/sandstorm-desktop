@@ -23,16 +23,19 @@ import { StaleWorkspaces } from './StaleWorkspaces';
 import { useResizableColumns, ColumnDef } from '../hooks/useResizableColumns';
 import { formatTokenCount } from '../utils/format';
 
+// Trimmed table layout (#315). Dropped columns: description, services bubbles,
+// resources — all moved into the row hover popover. Storage key bumped to v2
+// so saved widths from the old layout don't wreck the new one.
 const TABLE_COLUMNS: (ColumnDef & { label: string; align?: 'left' | 'right' })[] = [
   { key: 'status', label: 'Status', minWidth: 60, defaultWidth: 90 },
-  { key: 'name', label: 'Name', minWidth: 80, defaultWidth: 140 },
-  { key: 'description', label: 'Description', minWidth: 80, defaultWidth: 200 },
-  { key: 'model', label: 'Model', minWidth: 50, defaultWidth: 70 },
-  { key: 'services', label: 'Services', minWidth: 60, defaultWidth: 100 },
-  { key: 'resources', label: 'Resources', minWidth: 60, defaultWidth: 120 },
-  { key: 'duration', label: 'Duration', minWidth: 50, defaultWidth: 80 },
-  { key: 'actions', label: '', minWidth: 40, defaultWidth: 60, align: 'right' as const },
+  { key: 'name', label: 'Name', minWidth: 100, defaultWidth: 200 },
+  { key: 'model', label: 'Model', minWidth: 50, defaultWidth: 80 },
+  { key: 'services', label: 'Svcs', minWidth: 50, defaultWidth: 70 },
+  { key: 'duration', label: 'Duration', minWidth: 50, defaultWidth: 90 },
+  { key: 'actions', label: '', minWidth: 80, defaultWidth: 120, align: 'right' as const },
 ];
+
+const STACK_TABLE_STORAGE_KEY = 'stack-table-v2';
 
 type DashboardTab = 'active' | 'history';
 
@@ -353,7 +356,18 @@ function TokenUsageSummary({ usage }: { usage: GlobalTokenUsage }) {
 }
 
 export function Dashboard() {
-  const { setShowNewStackDialog, setShowRefineTicketDialog, setShowModelSettings, showModelSettings, filteredStacks, filteredStackHistory, activeProject, globalTokenUsage } = useAppStore();
+  const {
+    setShowNewStackDialog,
+    setShowRefineTicketDialog,
+    setShowCreateTicketDialog,
+    setShowStartTicketDialog,
+    setShowModelSettings,
+    showModelSettings,
+    filteredStacks,
+    filteredStackHistory,
+    activeProject,
+    globalTokenUsage,
+  } = useAppStore();
   const stacks = filteredStacks();
   const history = filteredStackHistory();
   const project = activeProject();
@@ -405,7 +419,7 @@ export function Dashboard() {
   const [leftWidth, setLeftWidth] = useState(55); // percentage
   const dragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
-  const { columnWidths, startResize } = useResizableColumns('stack-table', TABLE_COLUMNS);
+  const { columnWidths, startResize } = useResizableColumns(STACK_TABLE_STORAGE_KEY, TABLE_COLUMNS);
 
   useEffect(() => {
     if (!project) {
@@ -543,20 +557,6 @@ export function Dashboard() {
               Context
             </button>
           )}
-          {project && (
-            <button
-              onClick={() => setShowRefineTicketDialog(true)}
-              className="flex items-center gap-1.5 px-3 py-2 bg-sandstorm-surface-hover hover:bg-sandstorm-border text-sandstorm-text-secondary rounded-lg transition-all text-sm font-medium active:scale-[0.98]"
-              data-testid="refine-ticket-btn"
-              title="Run the spec gate on a ticket and start a stack"
-            >
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="M9 11l3 3L22 4"/>
-                <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
-              </svg>
-              Refine Ticket
-            </button>
-          )}
           <button
             onClick={handleNewStackClick}
             className="flex items-center gap-1.5 px-4 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white rounded-lg transition-all text-sm font-medium shadow-glow hover:shadow-lg active:scale-[0.98]"
@@ -569,6 +569,52 @@ export function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* Tickets strip — project-scoped deterministic actions (#310 / #315) */}
+      {project && (
+        <div
+          className="flex items-center gap-2 px-6 py-2 border-b border-sandstorm-border shrink-0 bg-sandstorm-bg/50"
+          data-testid="tickets-strip"
+        >
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-sandstorm-muted mr-2">
+            Tickets
+          </span>
+          <button
+            onClick={() => setShowCreateTicketDialog(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-sandstorm-surface hover:bg-sandstorm-surface-hover text-sandstorm-text-secondary border border-sandstorm-border hover:border-sandstorm-border-light rounded-md transition-all text-xs font-medium active:scale-[0.98]"
+            data-testid="create-ticket-btn"
+            title="File a new GitHub issue"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            Create Ticket
+          </button>
+          <button
+            onClick={() => setShowRefineTicketDialog(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-sandstorm-surface hover:bg-sandstorm-surface-hover text-sandstorm-text-secondary border border-sandstorm-border hover:border-sandstorm-border-light rounded-md transition-all text-xs font-medium active:scale-[0.98]"
+            data-testid="refine-ticket-btn"
+            title="Run the spec quality gate on a ticket and answer any gaps"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 11l3 3L22 4"/>
+              <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+            </svg>
+            Refine Ticket
+          </button>
+          <button
+            onClick={() => setShowStartTicketDialog(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-sandstorm-surface hover:bg-sandstorm-surface-hover text-sandstorm-text-secondary border border-sandstorm-border hover:border-sandstorm-border-light rounded-md transition-all text-xs font-medium active:scale-[0.98]"
+            data-testid="start-ticket-btn"
+            title="Spin up a stack with the ticket body as its initial task"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="6 4 18 12 6 20 6 4"/>
+            </svg>
+            Start Ticket
+          </button>
+        </div>
+      )}
 
       {/* Two-column layout: Claude chat (left) + Stacks (right) */}
       <div className="flex-1 flex min-h-0" ref={containerRef}>

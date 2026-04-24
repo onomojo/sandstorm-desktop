@@ -165,3 +165,67 @@ describe('StackTableRow model column', () => {
     expect(dashes.length).toBeGreaterThan(0);
   });
 });
+
+describe('StackTableRow primary-action chip (#315)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({
+      stacks: [], selectedStackId: null, stackMetrics: {},
+      showCreatePRDialog: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows Make PR chip when status is completed and pr_url is null', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed', pr_url: null }));
+    expect(screen.getByTestId('row-make-pr-foo')).toBeDefined();
+  });
+
+  it('shows Make PR chip when status is pushed and pr_url is null', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'bar', status: 'pushed', pr_url: null }));
+    expect(screen.getByTestId('row-make-pr-bar')).toBeDefined();
+  });
+
+  it('hides Make PR chip when pr_url already exists', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({
+      id: 'baz',
+      status: 'pushed',
+      pr_url: 'https://github.com/o/r/pull/9',
+      pr_number: 9,
+    }));
+    expect(screen.queryByTestId('row-make-pr-baz')).toBeNull();
+  });
+
+  it('hides Make PR chip when status is running (not ready to ship)', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'qux', status: 'running' }));
+    expect(screen.queryByTestId('row-make-pr-qux')).toBeNull();
+  });
+
+  it('clicking Make PR opens the CreatePRDialog for that stack', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed', pr_url: null }));
+    screen.getByTestId('row-make-pr-foo').click();
+    expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 'foo' });
+  });
+
+  it('shows ↗#N PR link when pr_url + pr_number are set', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({
+      id: 'open',
+      status: 'pr_created',
+      pr_url: 'https://github.com/o/r/pull/312',
+      pr_number: 312,
+    }));
+    const link = screen.getByTestId('row-pr-link-open');
+    expect(link).toBeDefined();
+    expect(link.textContent).toMatch(/#312/);
+  });
+});
