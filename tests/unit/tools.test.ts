@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { tools, handleToolCall, validateProjectDir } from '../../src/main/claude/tools';
+import { handleToolCall, validateProjectDir } from '../../src/main/claude/tools';
 
 // Mock the stackManager, agentBackend, and registry imports
 vi.mock('../../src/main/index', () => ({
@@ -18,7 +18,7 @@ vi.mock('../../src/main/scheduler', () => ({
   createSchedule: vi.fn().mockReturnValue({
     id: 'sch_abc123456789',
     cronExpression: '0 * * * *',
-    prompt: 'Do stuff',
+    action: { kind: 'run-script', scriptName: 'do-stuff.sh' },
     enabled: true,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
@@ -27,7 +27,7 @@ vi.mock('../../src/main/scheduler', () => ({
   updateSchedule: vi.fn().mockReturnValue({
     id: 'sch_abc123456789',
     cronExpression: '*/5 * * * *',
-    prompt: 'Do stuff',
+    action: { kind: 'run-script', scriptName: 'do-stuff.sh' },
     enabled: true,
     createdAt: '2026-01-01T00:00:00Z',
     updatedAt: '2026-01-01T00:00:00Z',
@@ -48,39 +48,23 @@ vi.mock('../../src/main/spec-quality-gate', () => ({
   getSpecQualityGate: vi.fn().mockReturnValue(''),
 }));
 
+vi.mock('../../src/main/control-plane/ticket-updater', () => ({
+  updateTicketBody: vi.fn().mockResolvedValue(undefined),
+  getUpdateScriptStatus: vi.fn().mockReturnValue('ok'),
+}));
+
 import { stackManager, agentBackend } from '../../src/main/index';
 import { fetchTicketContext, getScriptStatus } from '../../src/main/control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../../src/main/spec-quality-gate';
 import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from '../../src/main/scheduler';
 import { syncAllProjectsCrontab } from '../../src/main/scheduler/scheduler-manager';
+import { updateTicketBody } from '../../src/main/control-plane/ticket-updater';
 
 describe('MCP tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // Default: script exists and is executable (individual tests override as needed)
     vi.mocked(getScriptStatus).mockReturnValue('ok');
-  });
-
-  describe('tool definitions', () => {
-    it('create_stack model enum includes auto, sonnet, opus', () => {
-      const createStack = tools.find((t) => t.name === 'create_stack')!;
-      const modelProp = (createStack.inputSchema.properties as Record<string, { enum?: string[] }>).model;
-      expect(modelProp.enum).toEqual(['auto', 'sonnet', 'opus']);
-    });
-
-    it('dispatch_task model enum includes auto, sonnet, opus', () => {
-      const dispatchTask = tools.find((t) => t.name === 'dispatch_task')!;
-      const modelProp = (dispatchTask.inputSchema.properties as Record<string, { enum?: string[] }>).model;
-      expect(modelProp.enum).toEqual(['auto', 'sonnet', 'opus']);
-    });
-
-    it('create_stack model description mentions triage and complexity signals', () => {
-      const createStack = tools.find((t) => t.name === 'create_stack')!;
-      const modelProp = (createStack.inputSchema.properties as Record<string, { description?: string }>).model;
-      expect(modelProp.description).toContain('triage');
-      expect(modelProp.description).toContain('architectural');
-      expect(modelProp.description).toContain('Security');
-    });
   });
 
   describe('handleToolCall — model passthrough', () => {
@@ -150,20 +134,6 @@ describe('MCP tools', () => {
         undefined,
         { gateApproved: undefined, forceBypass: undefined }
       );
-    });
-  });
-
-  describe('tool definitions — spec tools', () => {
-    it('spec_check tool is defined with required ticketId and projectDir', () => {
-      const specCheck = tools.find((t) => t.name === 'spec_check');
-      expect(specCheck).toBeDefined();
-      expect(specCheck!.inputSchema.required).toEqual(['ticketId', 'projectDir']);
-    });
-
-    it('spec_refine tool is defined with required ticketId and projectDir', () => {
-      const specRefine = tools.find((t) => t.name === 'spec_refine');
-      expect(specRefine).toBeDefined();
-      expect(specRefine!.inputSchema.required).toEqual(['ticketId', 'projectDir']);
     });
   });
 
@@ -465,7 +435,7 @@ describe('MCP tools', () => {
       const result = await handleToolCall('schedule_create', {
         projectDir: '',
         cronExpression: '0 * * * *',
-        prompt: 'Do stuff',
+        action: { kind: 'run-script', scriptName: 'do-stuff.sh' },
       }) as { error: string };
       expect(result.error).toContain('required');
     });
@@ -474,7 +444,7 @@ describe('MCP tools', () => {
       const result = await handleToolCall('schedule_create', {
         projectDir: './my-project',
         cronExpression: '0 * * * *',
-        prompt: 'Do stuff',
+        action: { kind: 'run-script', scriptName: 'do-stuff.sh' },
       }) as { error: string };
       expect(result.error).toContain('absolute path');
     });
@@ -483,7 +453,7 @@ describe('MCP tools', () => {
       const result = await handleToolCall('schedule_create', {
         projectDir: '/proj',
         cronExpression: '0 * * * *',
-        prompt: 'Do stuff',
+        action: { kind: 'run-script', scriptName: 'do-stuff.sh' },
         enabled: true,
       }) as { id: string };
 
@@ -491,7 +461,7 @@ describe('MCP tools', () => {
         expect.objectContaining({
           projectDir: '/proj',
           cronExpression: '0 * * * *',
-          prompt: 'Do stuff',
+          action: { kind: 'run-script', scriptName: 'do-stuff.sh' },
           enabled: true,
         })
       );
@@ -505,7 +475,7 @@ describe('MCP tools', () => {
       const result = await handleToolCall('schedule_create', {
         projectDir: '/proj',
         cronExpression: '0 * * * *',
-        prompt: 'Do stuff',
+        action: { kind: 'run-script', scriptName: 'do-stuff.sh' },
       }) as { id: string };
 
       expect(result.id).toBe('sch_abc123456789');
@@ -519,7 +489,7 @@ describe('MCP tools', () => {
     });
 
     it('schedule_list calls listSchedules and returns schedules array', async () => {
-      const mockSchedules = [{ id: 'sch_abc123456789', cronExpression: '0 * * * *', prompt: 'Do stuff', enabled: true, createdAt: '', updatedAt: '' }];
+      const mockSchedules = [{ id: 'sch_abc123456789', cronExpression: '0 * * * *', action: { kind: 'run-script', scriptName: 'do-stuff.sh' }, enabled: true, createdAt: '', updatedAt: '' }];
       vi.mocked(listSchedules).mockReturnValueOnce(mockSchedules);
 
       const result = await handleToolCall('schedule_list', {
@@ -639,6 +609,100 @@ describe('MCP tools', () => {
       );
       expect(result.passed).toBe(true);
       expect(result.updatedBody).toContain('Better spec');
+    });
+
+    // #318 — refine must write the updated body back to GitHub. Without
+    // this, refinements live only in the renderer's transient state and
+    // are lost between sessions.
+    describe('GitHub write-back (#318)', () => {
+      beforeEach(() => {
+        vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: stale');
+        vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement');
+      });
+
+      it('calls updateTicketBody with the refined body when refinement produces one', async () => {
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Updated Ticket Body\n\n# Issue: Refined\nWith answers.\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|',
+        );
+
+        await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+          userAnswers: 'My answer',
+        });
+
+        expect(updateTicketBody).toHaveBeenCalledTimes(1);
+        expect(updateTicketBody).toHaveBeenCalledWith(
+          '42',
+          '/proj',
+          '# Issue: Refined\nWith answers.',
+        );
+      });
+
+      it('writes back even when the refinement still FAILs (so iterative loops build on each other)', async () => {
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Updated Ticket Body\n\n# Issue: Refined v1\nPartial.\n\n## Spec Quality Gate: FAIL\n\n### Questions to Resolve Remaining Gaps\n1. Still need X?',
+        );
+
+        const result = await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+          userAnswers: 'Partial answer',
+        }) as { passed: boolean; updatedBody: string | null };
+
+        expect(updateTicketBody).toHaveBeenCalledOnce();
+        expect(updateTicketBody).toHaveBeenCalledWith('42', '/proj', '# Issue: Refined v1\nPartial.');
+        expect(result.passed).toBe(false);
+        expect(result.updatedBody).toContain('Refined v1');
+      });
+
+      it('does NOT call updateTicketBody on the initial call (no userAnswers, no updatedBody)', async () => {
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Spec Quality Gate: FAIL\n\n### Questions to Resolve Gaps\n1. What problem?',
+        );
+
+        await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+        });
+
+        expect(updateTicketBody).not.toHaveBeenCalled();
+      });
+
+      it('returns an error when gh write-back fails so the renderer can surface it', async () => {
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Updated Ticket Body\n\n# Issue: Refined\n\n## Spec Quality Gate: PASS',
+        );
+        vi.mocked(updateTicketBody).mockRejectedValueOnce(new Error('gh: not authenticated'));
+
+        const result = await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+          userAnswers: 'A',
+        }) as { passed: boolean; updatedBody: string | null; error?: string };
+
+        expect(result.passed).toBe(false);
+        expect(result.error).toMatch(/gh: not authenticated/);
+        expect(result.updatedBody).toContain('Refined');
+      });
+
+      it('returns an error when refinement should have produced an updatedBody but did not', async () => {
+        // Agent ignored the format and skipped the "## Updated Ticket Body" section.
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|',
+        );
+
+        const result = await handleToolCall('spec_refine', {
+          ticketId: '42',
+          projectDir: '/proj',
+          userAnswers: 'A',
+        }) as { passed: boolean; updatedBody: string | null; error?: string };
+
+        expect(updateTicketBody).not.toHaveBeenCalled();
+        expect(result.passed).toBe(false);
+        expect(result.error).toMatch(/did not produce/i);
+        expect(result.updatedBody).toBeNull();
+      });
     });
 
     it('spec_refine initial prompt includes assumption resolution and enhanced checks', async () => {

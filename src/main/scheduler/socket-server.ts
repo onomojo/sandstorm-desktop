@@ -195,11 +195,11 @@ export class SchedulerSocketServer extends EventEmitter {
       return;
     }
 
-    if (!request.projectDir || !request.scheduleId || !request.prompt || !request.firedAt) {
+    if (!request.projectDir || !request.scheduleId || !request.firedAt) {
       this.sendResponse(conn, {
         ok: false,
         reason: 'internal-error',
-        message: 'Missing required fields: projectDir, scheduleId, prompt, firedAt',
+        message: 'Missing required fields: projectDir, scheduleId, firedAt',
       });
       return;
     }

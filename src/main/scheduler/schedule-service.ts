@@ -5,9 +5,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
 import { randomUUID } from 'crypto';
-import { Schedule, ScheduleStore } from './types';
+import { Schedule, ScheduleStore, ScheduleAction } from './types';
 import { validateCronExpression } from './cron-validator';
 
 function generateScheduleId(): string {
@@ -21,6 +20,15 @@ function schedulesPath(projectDir: string): string {
 
 const SCHEDULE_ID_PATTERN = /^sch_[0-9a-f]{12}$/;
 
+function isValidAction(a: unknown): a is ScheduleAction {
+  if (!a || typeof a !== 'object') return false;
+  const obj = a as Record<string, unknown>;
+  if (obj.kind === 'run-script') {
+    return typeof obj.scriptName === 'string' && obj.scriptName.trim().length > 0;
+  }
+  return false;
+}
+
 function isValidSchedule(s: unknown): s is Schedule {
   if (!s || typeof s !== 'object') return false;
   const obj = s as Record<string, unknown>;
@@ -29,7 +37,7 @@ function isValidSchedule(s: unknown): s is Schedule {
     SCHEDULE_ID_PATTERN.test(obj.id) &&
     typeof obj.cronExpression === 'string' &&
     validateCronExpression(obj.cronExpression) === null &&
-    typeof obj.prompt === 'string' &&
+    isValidAction(obj.action) &&
     typeof obj.enabled === 'boolean' &&
     typeof obj.createdAt === 'string' &&
     typeof obj.updatedAt === 'string'
@@ -51,10 +59,23 @@ function readStore(projectDir: string): ScheduleStore {
   if (data.version !== 1) {
     throw new Error(`Unsupported schedules.json version: ${data.version}`);
   }
-  // Validate and filter out malformed entries
-  const schedules = Array.isArray(data.schedules)
-    ? data.schedules.filter((s: unknown) => isValidSchedule(s))
-    : [];
+  // Validate + drop malformed entries. Legacy entries with a flat `prompt`
+  // field (pre-#250 reshape) are invalid under the new schema and get dropped
+  // here with a warning — pre-release, no install base to preserve.
+  const rawList = Array.isArray(data.schedules) ? data.schedules : [];
+  const schedules: Schedule[] = [];
+  for (const s of rawList) {
+    if (isValidSchedule(s)) {
+      schedules.push(s);
+      continue;
+    }
+    if (s && typeof s === 'object' && 'prompt' in (s as Record<string, unknown>)) {
+      console.warn(
+        `[scheduler] Dropping legacy schedule with freeform prompt (id=${(s as { id?: string }).id ?? 'unknown'}). ` +
+        `Recreate it with an action kind — schedules no longer dispatch to the outer Claude chat.`,
+      );
+    }
+  }
   return { version: 1, schedules };
 }
 
@@ -73,27 +94,27 @@ export interface CreateScheduleInput {
   projectDir: string;
   label?: string;
   cronExpression: string;
-  prompt: string;
+  action: ScheduleAction;
   enabled?: boolean;
 }
 
 export interface UpdateSchedulePatch {
   label?: string;
   cronExpression?: string;
-  prompt?: string;
+  action?: ScheduleAction;
   enabled?: boolean;
 }
 
 export function createSchedule(input: CreateScheduleInput): Schedule {
-  const { projectDir, label, cronExpression, prompt, enabled } = input;
+  const { projectDir, label, cronExpression, action, enabled } = input;
 
   const cronError = validateCronExpression(cronExpression);
   if (cronError) {
     throw new Error(`Invalid cron expression: ${cronError}`);
   }
 
-  if (!prompt || !prompt.trim()) {
-    throw new Error('Prompt is required');
+  if (!isValidAction(action)) {
+    throw new Error('Invalid schedule action: expected { kind: "run-script", scriptName: string }');
   }
 
   const now = new Date().toISOString();
@@ -101,7 +122,7 @@ export function createSchedule(input: CreateScheduleInput): Schedule {
     id: generateScheduleId(),
     label: label?.trim() || undefined,
     cronExpression: cronExpression.trim(),
-    prompt: prompt.trim(),
+    action,
     enabled: enabled ?? true,
     createdAt: now,
     updatedAt: now,
@@ -146,11 +167,11 @@ export function updateSchedule(
     store.schedules[idx].label = patch.label.trim() || undefined;
   }
 
-  if (patch.prompt !== undefined) {
-    if (!patch.prompt.trim()) {
-      throw new Error('Prompt cannot be empty');
+  if (patch.action !== undefined) {
+    if (!isValidAction(patch.action)) {
+      throw new Error('Invalid schedule action: expected { kind: "run-script", scriptName: string }');
     }
-    store.schedules[idx].prompt = patch.prompt.trim();
+    store.schedules[idx].action = patch.action;
   }
 
   if (patch.enabled !== undefined) {

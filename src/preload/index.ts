@@ -1,10 +1,13 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+export type ScheduleAction =
+  | { kind: 'run-script'; scriptName: string };
+
 export interface ScheduleEntry {
   id: string;
   label?: string;
   cronExpression: string;
-  prompt: string;
+  action: ScheduleAction;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -25,6 +28,9 @@ export interface SandstormAPI {
       missingSpecQualityGate?: boolean;
       missingReviewPrompt?: boolean;
       networksMigrated?: boolean;
+      missingUpdateScript?: boolean;
+      missingCreatePrScript?: boolean;
+      detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
     }>;
     autoDetectVerify: (directory: string) => Promise<{
       verifyScript: string;
@@ -35,6 +41,17 @@ export interface SandstormAPI {
       verifyScript: string,
       serviceDescriptions: Record<string, string>,
     ) => Promise<{ success: boolean; error?: string }>;
+    installUpdateScript: (
+      directory: string,
+      provider: 'github' | 'jira' | 'skeleton',
+    ) => Promise<{ success: boolean; path?: string; error?: string }>;
+    installCreatePrScript: (
+      directory: string,
+      provider: 'github' | 'jira' | 'skeleton',
+    ) => Promise<{ success: boolean; path?: string; error?: string }>;
+    detectTicketProvider: (
+      directory: string,
+    ) => Promise<{ provider: 'github' | 'jira' | 'skeleton' }>;
     generateCompose: (directory: string) => Promise<{
       success: boolean;
       yaml?: string;
@@ -150,8 +167,8 @@ export interface SandstormAPI {
   };
   schedules: {
     list: (projectDir: string) => Promise<ScheduleEntry[]>;
-    create: (projectDir: string, data: { label?: string; cronExpression: string; prompt: string; enabled?: boolean }) => Promise<ScheduleEntry>;
-    update: (projectDir: string, id: string, patch: { label?: string; cronExpression?: string; prompt?: string; enabled?: boolean }) => Promise<ScheduleEntry>;
+    create: (projectDir: string, data: { label?: string; cronExpression: string; action: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
+    update: (projectDir: string, id: string, patch: { label?: string; cronExpression?: string; action?: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
     delete: (projectDir: string, id: string) => Promise<void>;
     cronHealth: () => Promise<{ running: boolean }>;
   };
@@ -161,6 +178,16 @@ export interface SandstormAPI {
   };
   docker: {
     status: () => Promise<{ connected: boolean }>;
+  };
+  tickets: {
+    fetch: (ticketId: string, projectDir: string) => Promise<{ body: string; url: string | null }>;
+    specCheck: (ticketId: string, projectDir: string) => Promise<unknown>;
+    specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<unknown>;
+    create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
+  };
+  pr: {
+    draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
+    create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
@@ -177,6 +204,12 @@ const api: SandstormAPI = {
     autoDetectVerify: (directory) => ipcRenderer.invoke('projects:autoDetectVerify', directory),
     saveMigration: (directory: string, verifyScript: string, serviceDescriptions: Record<string, string>) =>
       ipcRenderer.invoke('projects:saveMigration', directory, verifyScript, serviceDescriptions),
+    installUpdateScript: (directory: string, provider: 'github' | 'jira' | 'skeleton') =>
+      ipcRenderer.invoke('projects:installUpdateScript', directory, provider),
+    installCreatePrScript: (directory: string, provider: 'github' | 'jira' | 'skeleton') =>
+      ipcRenderer.invoke('projects:installCreatePrScript', directory, provider),
+    detectTicketProvider: (directory: string) =>
+      ipcRenderer.invoke('projects:detectTicketProvider', directory),
     generateCompose: (directory: string) =>
       ipcRenderer.invoke('projects:generateCompose', directory),
     saveComposeSetup: (directory: string, composeYaml: string, composeFile: string) =>
@@ -306,6 +339,21 @@ const api: SandstormAPI = {
   },
   docker: {
     status: () => ipcRenderer.invoke('docker:status'),
+  },
+  tickets: {
+    fetch: (ticketId, projectDir) =>
+      ipcRenderer.invoke('tickets:fetch', ticketId, projectDir),
+    specCheck: (ticketId, projectDir) =>
+      ipcRenderer.invoke('tickets:specCheck', ticketId, projectDir),
+    specRefine: (ticketId, projectDir, userAnswers) =>
+      ipcRenderer.invoke('tickets:specRefine', ticketId, projectDir, userAnswers),
+    create: (projectDir, title, body) =>
+      ipcRenderer.invoke('tickets:create', projectDir, title, body),
+  },
+  pr: {
+    draftBody: (stackId) => ipcRenderer.invoke('pr:draftBody', stackId),
+    create: (stackId, title, body) =>
+      ipcRenderer.invoke('pr:create', stackId, title, body),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

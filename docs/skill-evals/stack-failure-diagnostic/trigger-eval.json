@@ -1,0 +1,103 @@
+[
+  {
+    "query": "stack 250 doesn't seem to be working. Can you take a look and figure out what's going on?",
+    "should_trigger": true,
+    "notes": "User's real phrasing. 'doesn't seem to be working' is the failure signal that distinguishes this from check-and-resume."
+  },
+  {
+    "query": "stack 250 seemed to get stuck in an infinite loop. Can you figure out what's happening?",
+    "should_trigger": true,
+    "notes": "User's real phrasing. 'stuck in an infinite loop' is an explicit failure-mode signal."
+  },
+  {
+    "query": "stack 250 failed for some reason. I'm not sure what's going on. It seems like it did five loops. Can you take a look at what's going on and give me a summary?",
+    "should_trigger": true,
+    "notes": "User's real phrasing. Explicit 'failed' + reference to the inner-loop iteration count ('five loops')."
+  },
+  {
+    "query": "why did stack 317 fail",
+    "should_trigger": true,
+    "notes": "Terse, varied stack ID. Core failure-diagnostic question."
+  },
+  {
+    "query": "stack 42 shit the bed, what happened",
+    "should_trigger": true,
+    "notes": "Casual/frustrated tone, varied ID. Colorful failure signal."
+  },
+  {
+    "query": "stack 302 keeps hitting NEEDS HUMAN INTERVENTION, can you figure out what's up with it",
+    "should_trigger": true,
+    "notes": "References the harness's explicit failure exit state — unambiguous diagnostic intent."
+  },
+  {
+    "query": "stack 11 exited with an error, can you figure out why",
+    "should_trigger": true,
+    "notes": "Explicit exit-code / error failure signal, varied ID."
+  },
+  {
+    "query": "something clearly went wrong with stack 427 — it ran for a long time and ended with errors. Can you dig into it?",
+    "should_trigger": true,
+    "notes": "Compound: duration + error outcome + dig-in request. No resume intent."
+  },
+  {
+    "query": "what went wrong with stack 5",
+    "should_trigger": true,
+    "notes": "Terse, past-tense — failure already happened, need diagnosis. Varied short ID."
+  },
+
+  {
+    "query": "what's the status of stack 243",
+    "should_trigger": false,
+    "notes": "No failure context — routes to check-and-resume-stack."
+  },
+  {
+    "query": "Can you check the status of stack 43 and if it's finished or not, if it's not can you resume from where it left off?",
+    "should_trigger": false,
+    "notes": "Status + optional resume, no failure language — check-and-resume-stack."
+  },
+  {
+    "query": "Stack 23 was halted because of token limits. Can you pick up where it left off? Tokens have refreshed.",
+    "should_trigger": false,
+    "notes": "'Halted' is explained (token limits, not failure) and the intent is resume — check-and-resume-stack."
+  },
+  {
+    "query": "Stack 191 just halted because we paused it. Resume from where it left off.",
+    "should_trigger": false,
+    "notes": "Intentional halt, clear resume intent — check-and-resume-stack. Must not trigger failure-diagnostic on 'halted' keyword alone."
+  },
+  {
+    "query": "Let me know what the status is of all the stacks.",
+    "should_trigger": false,
+    "notes": "Plural, no failure — list-stacks."
+  },
+  {
+    "query": "Take a look at stack 275. Seems to be using a ton of tokens, I'm not sure what it's doing.",
+    "should_trigger": false,
+    "notes": "Concerning but no explicit failure — stack-inspect. Critical negative: 'not sure what it's doing' is general confusion, not a failure diagnosis."
+  },
+  {
+    "query": "Take a pull request out of stack 232.",
+    "should_trigger": false,
+    "notes": "PR intent — review-and-pr / stack-pr."
+  },
+  {
+    "query": "Let's go ahead and tear down stack 420.",
+    "should_trigger": false,
+    "notes": "Destructive intent — stack-teardown."
+  },
+  {
+    "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not.",
+    "should_trigger": false,
+    "notes": "Ticket-level readiness, no stack failure — sandstorm-spec."
+  },
+  {
+    "query": "Let's start ticket 151.",
+    "should_trigger": false,
+    "notes": "New work — spec-and-dispatch."
+  },
+  {
+    "query": "Stack 55 isn't making progress. Can you see what it's stuck on and get it moving?",
+    "should_trigger": true,
+    "notes": "Borderline: 'isn't making progress' + 'stuck on' IS a failure-diagnostic signal. 'Get it moving' is a resume follow-up but the leading intent is diagnosis — route here, then orchestrator can dispatch resume separately based on findings."
+  }
+]

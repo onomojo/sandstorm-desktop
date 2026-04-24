@@ -3,6 +3,10 @@ import { useAppStore, ThresholdLevel } from './store';
 import { Dashboard } from './components/Dashboard';
 import { StackDetail } from './components/StackDetail';
 import { NewStackDialog } from './components/NewStackDialog';
+import { RefineTicketDialog } from './components/RefineTicketDialog';
+import { CreateTicketDialog } from './components/CreateTicketDialog';
+import { StartTicketDialog } from './components/StartTicketDialog';
+import { CreatePRDialog } from './components/CreatePRDialog';
 import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { AccountUsageBar } from './components/AccountUsageBar';
@@ -23,6 +27,10 @@ export default function App() {
   const {
     selectedStackId,
     showNewStackDialog,
+    showRefineTicketDialog,
+    showCreateTicketDialog,
+    showStartTicketDialog,
+    showCreatePRDialog,
     showOpenProjectDialog,
     dockerConnected,
     refreshStacks,
@@ -238,6 +246,10 @@ export default function App() {
 
       {/* Dialogs */}
       {showNewStackDialog && <NewStackDialog />}
+      {showRefineTicketDialog && <RefineTicketDialog />}
+      {showCreateTicketDialog && <CreateTicketDialog />}
+      {showStartTicketDialog && <StartTicketDialog />}
+      {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} />}
       {showOpenProjectDialog && <OpenProjectDialog />}
 
       {/* Session warning modal (blocking, at 95% and 100% thresholds) */}

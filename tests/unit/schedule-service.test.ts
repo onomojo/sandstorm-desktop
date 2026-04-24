@@ -10,6 +10,9 @@ import {
   deleteSchedule,
   getAllSchedulesForProjects,
 } from '../../src/main/scheduler/schedule-service';
+import type { ScheduleAction } from '../../src/main/scheduler/types';
+
+const runScript = (scriptName: string): ScheduleAction => ({ kind: 'run-script', scriptName });
 
 let tmpDir: string;
 
@@ -30,13 +33,13 @@ describe('schedule-service', () => {
         projectDir: tmpDir,
         label: 'Test Schedule',
         cronExpression: '0 * * * *',
-        prompt: 'Do something',
+        action: runScript('do-something.sh'),
       });
 
       expect(schedule.id).toMatch(/^sch_/);
       expect(schedule.label).toBe('Test Schedule');
       expect(schedule.cronExpression).toBe('0 * * * *');
-      expect(schedule.prompt).toBe('Do something');
+      expect(schedule.action).toEqual({ kind: 'run-script', scriptName: 'do-something.sh' });
       expect(schedule.enabled).toBe(true);
       expect(schedule.createdAt).toBeTruthy();
       expect(schedule.updatedAt).toBeTruthy();
@@ -46,7 +49,7 @@ describe('schedule-service', () => {
       const schedule = createSchedule({
         projectDir: tmpDir,
         cronExpression: '0 * * * *',
-        prompt: 'Test',
+        action: runScript('test.sh'),
         enabled: false,
       });
       expect(schedule.enabled).toBe(false);
@@ -57,26 +60,37 @@ describe('schedule-service', () => {
         createSchedule({
           projectDir: tmpDir,
           cronExpression: 'invalid',
-          prompt: 'Test',
+          action: runScript('test.sh'),
         })
       ).toThrow('Invalid cron expression');
     });
 
-    it('rejects empty prompt', () => {
+    it('rejects run-script action with empty scriptName', () => {
       expect(() =>
         createSchedule({
           projectDir: tmpDir,
           cronExpression: '0 * * * *',
-          prompt: '  ',
+          action: { kind: 'run-script', scriptName: '   ' },
         })
-      ).toThrow('Prompt is required');
+      ).toThrow('Invalid schedule action');
+    });
+
+    it('rejects action with unknown kind', () => {
+      expect(() =>
+        createSchedule({
+          projectDir: tmpDir,
+          cronExpression: '0 * * * *',
+          // Cast through unknown to simulate a bad payload crossing the IPC boundary.
+          action: { kind: 'legacy-prompt' } as unknown as ScheduleAction,
+        })
+      ).toThrow('Invalid schedule action');
     });
 
     it('persists to schedules.json with atomic write', () => {
       createSchedule({
         projectDir: tmpDir,
         cronExpression: '0 * * * *',
-        prompt: 'Test',
+        action: runScript('test.sh'),
       });
 
       const filePath = path.join(tmpDir, '.sandstorm', 'schedules.json');
@@ -85,13 +99,14 @@ describe('schedule-service', () => {
       const store = JSON.parse(fs.readFileSync(filePath, 'utf-8'));
       expect(store.version).toBe(1);
       expect(store.schedules).toHaveLength(1);
+      expect(store.schedules[0].action).toEqual({ kind: 'run-script', scriptName: 'test.sh' });
     });
 
     it('no temp files remain after write', () => {
       createSchedule({
         projectDir: tmpDir,
         cronExpression: '0 * * * *',
-        prompt: 'Test',
+        action: runScript('test.sh'),
       });
 
       const files = fs.readdirSync(path.join(tmpDir, '.sandstorm'));
@@ -106,8 +121,8 @@ describe('schedule-service', () => {
     });
 
     it('returns all created schedules', () => {
-      createSchedule({ projectDir: tmpDir, cronExpression: '0 * * * *', prompt: 'First' });
-      createSchedule({ projectDir: tmpDir, cronExpression: '*/5 * * * *', prompt: 'Second' });
+      createSchedule({ projectDir: tmpDir, cronExpression: '0 * * * *', action: runScript('a.sh') });
+      createSchedule({ projectDir: tmpDir, cronExpression: '*/5 * * * *', action: runScript('b.sh') });
 
       const schedules = listSchedules(tmpDir);
       expect(schedules).toHaveLength(2);
@@ -121,7 +136,7 @@ describe('schedule-service', () => {
           {
             id: 'sch_aabbccddeeff',
             cronExpression: '0 * * * *\nmalicious-command /path',
-            prompt: 'injected',
+            action: { kind: 'run-script', scriptName: 'evil.sh' },
             enabled: true,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
@@ -129,7 +144,7 @@ describe('schedule-service', () => {
           {
             id: 'sch_112233445566',
             cronExpression: '0 * * * *',
-            prompt: 'valid entry',
+            action: { kind: 'run-script', scriptName: 'good.sh' },
             enabled: true,
             createdAt: new Date().toISOString(),
             updatedAt: new Date().toISOString(),
@@ -146,6 +161,35 @@ describe('schedule-service', () => {
       expect(schedules).toHaveLength(1);
       expect(schedules[0].id).toBe('sch_112233445566');
     });
+
+    it('silently drops legacy entries that carry a freeform prompt field', () => {
+      const warn = console.warn;
+      const seen: string[] = [];
+      console.warn = (msg: string) => { seen.push(msg); };
+      try {
+        const legacy = {
+          version: 1,
+          schedules: [
+            {
+              id: 'sch_aabbccddeeff',
+              cronExpression: '0 * * * *',
+              prompt: 'old freeform prompt',
+              enabled: true,
+              createdAt: new Date().toISOString(),
+              updatedAt: new Date().toISOString(),
+            },
+          ],
+        };
+        fs.writeFileSync(
+          path.join(tmpDir, '.sandstorm', 'schedules.json'),
+          JSON.stringify(legacy),
+        );
+        expect(listSchedules(tmpDir)).toHaveLength(0);
+        expect(seen.some((s) => /legacy schedule/i.test(s))).toBe(true);
+      } finally {
+        console.warn = warn;
+      }
+    });
   });
 
   describe('getSchedule', () => {
@@ -153,7 +197,7 @@ describe('schedule-service', () => {
       const created = createSchedule({
         projectDir: tmpDir,
         cronExpression: '0 * * * *',
-        prompt: 'Test',
+        action: runScript('test.sh'),
       });
 
       const found = getSchedule(tmpDir, created.id);
@@ -171,16 +215,16 @@ describe('schedule-service', () => {
       const created = createSchedule({
         projectDir: tmpDir,
         cronExpression: '0 * * * *',
-        prompt: 'Original',
+        action: runScript('original.sh'),
         label: 'Original Label',
       });
 
       const updated = updateSchedule(tmpDir, created.id, {
-        prompt: 'Updated',
+        action: runScript('updated.sh'),
         enabled: false,
       });
 
-      expect(updated.prompt).toBe('Updated');
+      expect(updated.action).toEqual({ kind: 'run-script', scriptName: 'updated.sh' });
       expect(updated.enabled).toBe(false);
       expect(updated.label).toBe('Original Label'); // unchanged
       expect(updated.cronExpression).toBe('0 * * * *'); // unchanged
@@ -193,7 +237,7 @@ describe('schedule-service', () => {
       const created = createSchedule({
         projectDir: tmpDir,
         cronExpression: '0 * * * *',
-        prompt: 'Test',
+        action: runScript('test.sh'),
       });
 
       expect(() =>
@@ -201,9 +245,23 @@ describe('schedule-service', () => {
       ).toThrow('Invalid cron expression');
     });
 
+    it('rejects invalid action in patch', () => {
+      const created = createSchedule({
+        projectDir: tmpDir,
+        cronExpression: '0 * * * *',
+        action: runScript('test.sh'),
+      });
+
+      expect(() =>
+        updateSchedule(tmpDir, created.id, {
+          action: { kind: 'run-script', scriptName: '' },
+        }),
+      ).toThrow('Invalid schedule action');
+    });
+
     it('throws for nonexistent schedule', () => {
       expect(() =>
-        updateSchedule(tmpDir, 'sch_nonexistent', { prompt: 'X' })
+        updateSchedule(tmpDir, 'sch_nonexistent', { action: runScript('x.sh') })
       ).toThrow('Schedule not found');
     });
   });
@@ -213,7 +271,7 @@ describe('schedule-service', () => {
       const created = createSchedule({
         projectDir: tmpDir,
         cronExpression: '0 * * * *',
-        prompt: 'Test',
+        action: runScript('test.sh'),
       });
 
       deleteSchedule(tmpDir, created.id);
@@ -230,8 +288,8 @@ describe('schedule-service', () => {
       const dir2 = fs.mkdtempSync(path.join(os.tmpdir(), 'sandstorm-sched-test2-'));
       fs.mkdirSync(path.join(dir2, '.sandstorm'), { recursive: true });
 
-      createSchedule({ projectDir: tmpDir, cronExpression: '0 * * * *', prompt: 'P1' });
-      createSchedule({ projectDir: dir2, cronExpression: '*/5 * * * *', prompt: 'P2' });
+      createSchedule({ projectDir: tmpDir, cronExpression: '0 * * * *', action: runScript('a.sh') });
+      createSchedule({ projectDir: dir2, cronExpression: '*/5 * * * *', action: runScript('b.sh') });
 
       const all = getAllSchedulesForProjects([tmpDir, dir2]);
       expect(all).toHaveLength(2);
@@ -259,7 +317,7 @@ describe('schedule-service', () => {
       expect(() => createSchedule({
         projectDir: tmpDir,
         cronExpression: '0 * * * *',
-        prompt: 'Test prompt',
+        action: runScript('test.sh'),
       })).toThrow('Failed to parse schedules.json');
     });
 

@@ -23,7 +23,7 @@ export function StackDetail({
   stackId: string;
   onBack: () => void;
 }) {
-  const { stacks, refreshStacks, stackMetrics } = useAppStore();
+  const { stacks, refreshStacks, stackMetrics, setShowCreatePRDialog } = useAppStore();
   const stack = stacks.find((s) => s.id === stackId);
   const metrics: StackMetrics | undefined = stackMetrics[stackId];
 
@@ -451,6 +451,11 @@ export function StackDetail({
           <FooterButton onClick={handlePush}>
             Push
           </FooterButton>
+          {(stack.status === 'completed' || stack.status === 'pushed') && !stack.pr_url && (
+            <FooterButton onClick={() => setShowCreatePRDialog({ stackId })}>
+              Make PR
+            </FooterButton>
+          )}
           <FooterButton onClick={handleTeardown} danger>
             Tear Down
           </FooterButton>

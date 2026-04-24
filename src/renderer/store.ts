@@ -3,7 +3,6 @@ import { create } from 'zustand';
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
-  scheduled?: boolean;
 }
 
 export interface AgentSessionState {
@@ -299,11 +298,18 @@ export interface StackHistoryRecord {
   duration_seconds: number;
 }
 
+/**
+ * Renderer-side mirror of `ScheduleAction` from src/main/scheduler/types.ts.
+ * This PR only ships `run-script`; follow-up tickets add more kinds.
+ */
+export type ScheduleAction =
+  | { kind: 'run-script'; scriptName: string };
+
 export interface ScheduleEntry {
   id: string;
   label?: string;
   cronExpression: string;
-  prompt: string;
+  action: ScheduleAction;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -345,6 +351,23 @@ interface AppState {
   stackHistory: StackHistoryRecord[];
   selectedStackId: string | null;
   showNewStackDialog: boolean;
+  showRefineTicketDialog: boolean;
+  /**
+   * Optional ticket id passed when opening the Refine dialog from another
+   * surface (e.g. the Create-Ticket success screen's "Refine #N" hand-off).
+   * The Refine dialog reads + clears it on mount. Null when the user opened
+   * Refine cold from the Tickets strip and should type the id themselves.
+   */
+  refineTicketPrefill: string | null;
+  showCreateTicketDialog: boolean;
+  showStartTicketDialog: boolean;
+  showCreatePRDialog: { stackId: string } | null;
+  /**
+   * Drafted PR title/body keyed by stackId — survives the dialog being
+   * closed/reopened so the user doesn't pay for another ephemeral Claude
+   * call to redraft (#320). Cleared after a successful PR creation.
+   */
+  prDraftCache: Record<string, { title: string; body: string }>;
   stackMetrics: Record<string, StackMetrics>;
   loading: boolean;
   error: string | null;
@@ -428,6 +451,15 @@ interface AppState {
   setStacks: (stacks: Stack[]) => void;
   selectStack: (id: string | null) => void;
   setShowNewStackDialog: (show: boolean) => void;
+  setShowRefineTicketDialog: (show: boolean) => void;
+  /** Open the Refine dialog with a ticket id already filled in. */
+  openRefineTicketDialogWith: (ticketId: string) => void;
+  consumeRefineTicketPrefill: () => string | null;
+  setShowCreateTicketDialog: (show: boolean) => void;
+  setShowStartTicketDialog: (show: boolean) => void;
+  setShowCreatePRDialog: (state: { stackId: string } | null) => void;
+  setPrDraft: (stackId: string, draft: { title: string; body: string }) => void;
+  clearPrDraft: (stackId: string) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   refreshStacks: () => Promise<void>;
@@ -460,6 +492,9 @@ declare global {
           missingSpecQualityGate?: boolean;
           missingReviewPrompt?: boolean;
           legacyPortMappings?: boolean;
+          missingUpdateScript?: boolean;
+          missingCreatePrScript?: boolean;
+          detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
         }>;
         autoDetectVerify: (directory: string) => Promise<{
           verifyScript: string;
@@ -470,6 +505,17 @@ declare global {
           verifyScript: string,
           serviceDescriptions: Record<string, string>,
         ) => Promise<{ success: boolean; error?: string }>;
+        installUpdateScript: (
+          directory: string,
+          provider: 'github' | 'jira' | 'skeleton',
+        ) => Promise<{ success: boolean; path?: string; error?: string }>;
+        installCreatePrScript: (
+          directory: string,
+          provider: 'github' | 'jira' | 'skeleton',
+        ) => Promise<{ success: boolean; path?: string; error?: string }>;
+        detectTicketProvider: (
+          directory: string,
+        ) => Promise<{ provider: 'github' | 'jira' | 'skeleton' }>;
         generateCompose: (directory: string) => Promise<{
           success: boolean;
           yaml?: string;
@@ -580,8 +626,8 @@ declare global {
       };
       schedules: {
         list: (projectDir: string) => Promise<ScheduleEntry[]>;
-        create: (projectDir: string, data: { label?: string; cronExpression: string; prompt: string; enabled?: boolean }) => Promise<ScheduleEntry>;
-        update: (projectDir: string, id: string, patch: { label?: string; cronExpression?: string; prompt?: string; enabled?: boolean }) => Promise<ScheduleEntry>;
+        create: (projectDir: string, data: { label?: string; cronExpression: string; action: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
+        update: (projectDir: string, id: string, patch: { label?: string; cronExpression?: string; action?: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
         delete: (projectDir: string, id: string) => Promise<void>;
         cronHealth: () => Promise<{ running: boolean }>;
       };
@@ -592,9 +638,29 @@ declare global {
       docker: {
         status: () => Promise<{ connected: boolean }>;
       };
+      tickets: {
+        fetch: (ticketId: string, projectDir: string) => Promise<{ body: string; url: string | null }>;
+        specCheck: (ticketId: string, projectDir: string) => Promise<SpecGateResult>;
+        specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<SpecGateResult>;
+        create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
+      };
+      pr: {
+        draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
+        create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
+      };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
   }
+}
+
+/** Renderer-side mirror of `SpecGateResult` from main/control-plane/ticket-spec.ts. */
+export interface SpecGateResult {
+  passed: boolean;
+  questions: string[];
+  gateSummary: string;
+  ticketUrl: string | null;
+  cached: boolean;
+  error?: string;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -638,6 +704,12 @@ export const useAppStore = create<AppState>((set, get) => ({
   stackMetrics: {},
   selectedStackId: null,
   showNewStackDialog: false,
+  showRefineTicketDialog: false,
+  refineTicketPrefill: null,
+  showCreateTicketDialog: false,
+  showStartTicketDialog: false,
+  showCreatePRDialog: null,
+  prDraftCache: {},
   loading: false,
   error: null,
 
@@ -850,6 +922,34 @@ export const useAppStore = create<AppState>((set, get) => ({
   setStacks: (stacks) => set({ stacks }),
   selectStack: (id) => set({ selectedStackId: id }),
   setShowNewStackDialog: (show) => set({ showNewStackDialog: show }),
+  setShowRefineTicketDialog: (show) => set({
+    showRefineTicketDialog: show,
+    // Closing the dialog drops any pending prefill so a later cold-open
+    // doesn't accidentally hydrate from a stale id.
+    refineTicketPrefill: show ? get().refineTicketPrefill : null,
+  }),
+  openRefineTicketDialogWith: (ticketId) => set({
+    showRefineTicketDialog: true,
+    refineTicketPrefill: ticketId,
+  }),
+  consumeRefineTicketPrefill: () => {
+    const value = get().refineTicketPrefill;
+    if (value !== null) set({ refineTicketPrefill: null });
+    return value;
+  },
+  setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
+  setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
+  setShowCreatePRDialog: (state) => set({ showCreatePRDialog: state }),
+  setPrDraft: (stackId, draft) =>
+    set((state) => ({
+      prDraftCache: { ...state.prDraftCache, [stackId]: draft },
+    })),
+  clearPrDraft: (stackId) =>
+    set((state) => {
+      const next = { ...state.prDraftCache };
+      delete next[stackId];
+      return { prDraftCache: next };
+    }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),
 

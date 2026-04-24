@@ -567,37 +567,36 @@ describe('review-prompt.md template', () => {
     expect(reviewPrompt).toContain('REVIEW_FAIL')
   })
 
-  it('covers all review categories', () => {
-    const categories = [
-      'Architecture',
-      'Best practices',
-      'Separation of concerns',
+  it('covers all review categories by code name (#291/#292 strict-contract rewrite)', () => {
+    // Post-rewrite, categories are referenced by their code-tag form
+    // throughout — the prose-heading form ('Best practices', 'Test
+    // coverage') was dropped when the output contract moved to
+    // issues-only.
+    const tags = [
+      'REQUIREMENTS',
+      'ARCHITECTURE',
+      'CORRECTNESS',
+      'BUG',
+      'SECURITY',
+      'BEST_PRACTICE',
+      'SEPARATION',
       'DRY',
-      'Security',
-      'Scalability',
-      'Test coverage',
+      'SCALABILITY',
+      'OPTIMIZATION',
+      'TEST_COVERAGE',
     ]
-    for (const cat of categories) {
-      expect(reviewPrompt.toLowerCase()).toContain(cat.toLowerCase())
-    }
-  })
-
-  it('includes issue category tags for structured output', () => {
-    const tags = ['REQUIREMENTS', 'ARCHITECTURE', 'BEST_PRACTICE', 'SECURITY', 'TEST_COVERAGE', 'BUG']
     for (const tag of tags) {
       expect(reviewPrompt).toContain(tag)
     }
   })
 
-  it('instructs the review agent to be pragmatic', () => {
-    expect(reviewPrompt.toLowerCase()).toContain('pragmatic')
-  })
-
-  it('lists requirements compliance as the first review criterion', () => {
-    const reqIndex = reviewPrompt.indexOf('Requirements compliance')
-    const archIndex = reviewPrompt.indexOf('Architecture')
+  it('lists REQUIREMENTS as the first (highest-priority) review category', () => {
+    const reqIndex = reviewPrompt.indexOf('REQUIREMENTS')
+    const archIndex = reviewPrompt.indexOf('ARCHITECTURE')
     expect(reqIndex).toBeGreaterThan(-1)
     expect(reqIndex).toBeLessThan(archIndex)
+    // The REQUIREMENTS bullet is still the one marked as the "highest-priority check"
+    expect(reviewPrompt).toMatch(/REQUIREMENTS[\s\S]*?Highest-priority/i)
   })
 
   it('instructs the review agent not to override explicit task approaches', () => {

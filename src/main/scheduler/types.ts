@@ -1,12 +1,35 @@
 /**
  * Types for the scheduled automation system.
+ *
+ * Design note (#250, reshaped per CLAUDE.md "Deterministic workflow
+ * philosophy"): schedules carry a structured `ScheduleAction`, never a
+ * freeform prompt. Scheduled fires MUST NOT route through the outer-Claude
+ * chat session — that's the whole point of the action-kind discriminator.
+ * Each kind maps to a deterministic primitive (a script, a bounded
+ * ephemeral LLM subprocess, or a pure IPC path).
  */
+
+/**
+ * A scheduled action. This PR ships the escape-hatch kind (`run-script`);
+ * follow-up PRs add kinds for the concrete workflows (refine-to-comments,
+ * dispatch-ready-tickets, close-loop-prs).
+ */
+export type ScheduleAction =
+  | {
+      kind: 'run-script';
+      /**
+       * Script name under `<projectDir>/.sandstorm/scripts/scheduled/`.
+       * Resolved with `.sh` appended if missing. Path traversal (any `..`
+       * segment or absolute path) is rejected.
+       */
+      scriptName: string;
+    };
 
 export interface Schedule {
   id: string;
   label?: string;
   cronExpression: string;
-  prompt: string;
+  action: ScheduleAction;
   enabled: boolean;
   createdAt: string;
   updatedAt: string;
@@ -22,7 +45,6 @@ export interface ScheduledDispatchRequest {
   version: 1;
   projectDir: string;
   scheduleId: string;
-  prompt: string;
   firedAt: string;
 }
 

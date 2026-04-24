@@ -24,16 +24,22 @@ import { SchedulerPanel } from './SchedulerPanel';
 import { useResizableColumns, ColumnDef } from '../hooks/useResizableColumns';
 import { formatTokenCount } from '../utils/format';
 
-const TABLE_COLUMNS: (ColumnDef & { label: string; align?: 'left' | 'right' })[] = [
+// Trimmed table layout (#315). Dropped columns: description, services bubbles,
+// resources — all moved into the row hover popover. Storage key bumped to v2
+// so saved widths from the old layout don't wreck the new one.
+//
+// `actions` is sticky-right + has no resize handle (it's last) so the buttons
+// stay visible regardless of horizontal scroll or other column widths (#316).
+const TABLE_COLUMNS: (ColumnDef & { label: string; align?: 'left' | 'right'; stickyRight?: boolean })[] = [
   { key: 'status', label: 'Status', minWidth: 60, defaultWidth: 90 },
-  { key: 'name', label: 'Name', minWidth: 80, defaultWidth: 140 },
-  { key: 'description', label: 'Description', minWidth: 80, defaultWidth: 200 },
-  { key: 'model', label: 'Model', minWidth: 50, defaultWidth: 70 },
-  { key: 'services', label: 'Services', minWidth: 60, defaultWidth: 100 },
-  { key: 'resources', label: 'Resources', minWidth: 60, defaultWidth: 120 },
-  { key: 'duration', label: 'Duration', minWidth: 50, defaultWidth: 80 },
-  { key: 'actions', label: '', minWidth: 40, defaultWidth: 60, align: 'right' as const },
+  { key: 'name', label: 'Name', minWidth: 100, defaultWidth: 200 },
+  { key: 'model', label: 'Model', minWidth: 50, defaultWidth: 80 },
+  { key: 'services', label: 'Svcs', minWidth: 50, defaultWidth: 70 },
+  { key: 'duration', label: 'Duration', minWidth: 50, defaultWidth: 90 },
+  { key: 'actions', label: '', minWidth: 160, defaultWidth: 160, align: 'right' as const, stickyRight: true },
 ];
+
+const STACK_TABLE_STORAGE_KEY = 'stack-table-v2';
 
 type DashboardTab = 'active' | 'history';
 
@@ -354,7 +360,18 @@ function TokenUsageSummary({ usage }: { usage: GlobalTokenUsage }) {
 }
 
 export function Dashboard() {
-  const { setShowNewStackDialog, setShowModelSettings, showModelSettings, filteredStacks, filteredStackHistory, activeProject, globalTokenUsage } = useAppStore();
+  const {
+    setShowNewStackDialog,
+    setShowRefineTicketDialog,
+    setShowCreateTicketDialog,
+    setShowStartTicketDialog,
+    setShowModelSettings,
+    showModelSettings,
+    filteredStacks,
+    filteredStackHistory,
+    activeProject,
+    globalTokenUsage,
+  } = useAppStore();
   const stacks = filteredStacks();
   const history = filteredStackHistory();
   const project = activeProject();
@@ -383,6 +400,9 @@ export function Dashboard() {
     missingSpecQualityGate: boolean;
     missingReviewPrompt: boolean;
     legacyPortMappings: boolean;
+    missingUpdateScript: boolean;
+    missingCreatePrScript: boolean;
+    detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
   } | null>(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
   const [showComposeSetup, setShowComposeSetup] = useState(false);
@@ -409,7 +429,7 @@ export function Dashboard() {
   const vertDragging = useRef(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const rightColRef = useRef<HTMLDivElement>(null);
-  const { columnWidths, startResize } = useResizableColumns('stack-table', TABLE_COLUMNS);
+  const { columnWidths, startResize } = useResizableColumns(STACK_TABLE_STORAGE_KEY, TABLE_COLUMNS);
 
   useEffect(() => {
     if (!project) {
@@ -439,6 +459,9 @@ export function Dashboard() {
               missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
               missingReviewPrompt: migration.missingReviewPrompt ?? false,
               legacyPortMappings: migration.legacyPortMappings ?? false,
+              missingUpdateScript: migration.missingUpdateScript ?? false,
+              missingCreatePrScript: migration.missingCreatePrScript ?? false,
+              detectedTicketProvider: migration.detectedTicketProvider,
             } : null);
             if (migration.needsMigration) {
               setShowMigrationModal(true);
@@ -573,6 +596,52 @@ export function Dashboard() {
           </button>
         </div>
       </div>
+
+      {/* Tickets strip — project-scoped deterministic actions (#310 / #315) */}
+      {project && (
+        <div
+          className="flex items-center gap-2 px-6 py-2 border-b border-sandstorm-border shrink-0 bg-sandstorm-bg/50"
+          data-testid="tickets-strip"
+        >
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-sandstorm-muted mr-2">
+            Tickets
+          </span>
+          <button
+            onClick={() => setShowCreateTicketDialog(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-sandstorm-surface hover:bg-sandstorm-surface-hover text-sandstorm-text-secondary border border-sandstorm-border hover:border-sandstorm-border-light rounded-md transition-all text-xs font-medium active:scale-[0.98]"
+            data-testid="create-ticket-btn"
+            title="File a new GitHub issue"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+              <path d="M12 5v14M5 12h14"/>
+            </svg>
+            Create Ticket
+          </button>
+          <button
+            onClick={() => setShowRefineTicketDialog(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-sandstorm-surface hover:bg-sandstorm-surface-hover text-sandstorm-text-secondary border border-sandstorm-border hover:border-sandstorm-border-light rounded-md transition-all text-xs font-medium active:scale-[0.98]"
+            data-testid="refine-ticket-btn"
+            title="Run the spec quality gate on a ticket and answer any gaps"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M9 11l3 3L22 4"/>
+              <path d="M21 12v7a2 2 0 01-2 2H5a2 2 0 01-2-2V5a2 2 0 012-2h11"/>
+            </svg>
+            Refine Ticket
+          </button>
+          <button
+            onClick={() => setShowStartTicketDialog(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-sandstorm-surface hover:bg-sandstorm-surface-hover text-sandstorm-text-secondary border border-sandstorm-border hover:border-sandstorm-border-light rounded-md transition-all text-xs font-medium active:scale-[0.98]"
+            data-testid="start-ticket-btn"
+            title="Spin up a stack with the ticket body as its initial task"
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="6 4 18 12 6 20 6 4"/>
+            </svg>
+            Start Ticket
+          </button>
+        </div>
+      )}
 
       {/* Two-column layout: Claude chat (left) + Stacks (right) */}
       <div className="flex-1 flex min-h-0" ref={containerRef}>
@@ -749,6 +818,10 @@ export function Dashboard() {
                 ))}
               </div>
             ) : (
+              // Wrap in overflow-x-auto so the actions sticky-right cell
+              // has a horizontal scroll context to anchor against on
+              // narrow viewports (#316).
+              <div className="overflow-x-auto">
               <table className="w-full text-xs" style={{ tableLayout: 'fixed' }} data-testid="stack-table">
                 <ResizableTableHeader
                   columns={TABLE_COLUMNS}
@@ -761,6 +834,7 @@ export function Dashboard() {
                   ))}
                 </tbody>
               </table>
+              </div>
             )
           ) : (
             history.length === 0 ? (
@@ -822,6 +896,9 @@ export function Dashboard() {
           missingSpecQualityGate={migrationState.missingSpecQualityGate}
           missingReviewPrompt={migrationState.missingReviewPrompt}
           legacyPortMappings={migrationState.legacyPortMappings}
+          missingUpdateScript={migrationState.missingUpdateScript}
+          missingCreatePrScript={migrationState.missingCreatePrScript}
+          detectedTicketProvider={migrationState.detectedTicketProvider}
           onComplete={() => {
             setShowMigrationModal(false);
             setMigrationState(null);
@@ -847,6 +924,9 @@ export function Dashboard() {
                   missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
                   missingReviewPrompt: migration.missingReviewPrompt ?? false,
                   legacyPortMappings: migration.legacyPortMappings ?? false,
+                  missingUpdateScript: migration.missingUpdateScript ?? false,
+                  missingCreatePrScript: migration.missingCreatePrScript ?? false,
+                  detectedTicketProvider: migration.detectedTicketProvider,
                 });
                 setShowMigrationModal(true);
               }

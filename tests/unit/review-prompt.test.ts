@@ -22,50 +22,85 @@ describe('getDefaultReviewPrompt', () => {
     expect(content).toMatch(/^# Code Review/);
   });
 
-  it('includes all review categories', () => {
+  it('includes all review categories (#291/#292 strict-contract rewrite)', () => {
     const content = getDefaultReviewPrompt();
-    expect(content).toContain('Requirements compliance');
-    expect(content).toContain('Architecture');
-    expect(content).toContain('Best practices');
-    expect(content).toContain('Separation of concerns');
+    // Post-rewrite, categories are referenced by their CODE name in the
+    // output contract rather than by prose heading. Assert the codes
+    // since those are the strings that guide the model's formatting.
+    expect(content).toContain('REQUIREMENTS');
+    expect(content).toContain('ARCHITECTURE');
+    expect(content).toContain('CORRECTNESS');
+    expect(content).toContain('BUG');
+    expect(content).toContain('SECURITY');
+    expect(content).toContain('BEST_PRACTICE');
+    expect(content).toContain('SEPARATION');
     expect(content).toContain('DRY');
-    expect(content).toContain('Security');
-    expect(content).toContain('Scalability');
-    expect(content).toContain('Test coverage');
+    expect(content).toContain('SCALABILITY');
+    expect(content).toContain('OPTIMIZATION');
+    expect(content).toContain('TEST_COVERAGE');
   });
 
-  it('includes REVIEW_PASS and REVIEW_FAIL verdict markers', () => {
+  it('includes REVIEW_PASS and REVIEW_FAIL sentinels', () => {
     const content = getDefaultReviewPrompt();
     expect(content).toContain('REVIEW_PASS');
     expect(content).toContain('REVIEW_FAIL');
   });
 
-  it('does NOT contain the old "lean toward REVIEW_PASS" escape hatch', () => {
+  it('forbids praise and positive summaries in the review output (#291)', () => {
+    // The original 1.4M-token cascade was rooted in reviews that wrote
+    // glowing summaries ("all tests pass, build is clean") without a
+    // sentinel. The parser treated those as UNCLEAR → FAIL. The fix is
+    // at the prompt level: the contract must explicitly ban commentary.
     const content = getDefaultReviewPrompt();
-    expect(content).not.toContain("If you're unsure whether something is an issue, lean toward REVIEW_PASS and mention it as a note");
+    expect(content).toMatch(/Never praise/i);
+    expect(content).toMatch(/Never summarize what the code got right/i);
+    expect(content).toMatch(/Never narrate your process/i);
   });
 
-  it('contains the new strict guidance for obvious fixes', () => {
+  it('enforces sentinel-as-last-line contract (#291)', () => {
     const content = getDefaultReviewPrompt();
-    expect(content).toContain('If you identified a problem and the fix is obvious');
-    expect(content).toContain('it is a REVIEW_FAIL, not a note');
+    expect(content).toMatch(/sentinel.*MUST be the last non-empty line/i);
+    expect(content).toMatch(/treated as FAIL/i);
   });
 
-  it('includes code quality guidance as BEST_PRACTICE failures', () => {
+  it('removes the "acceptable observation" category — it must be FAIL or omit (#292)', () => {
+    // Old prompt allowed "Explicitly stated as acceptable with a brief
+    // reason". That's exactly how positive summaries leaked into
+    // /tmp/claude-review-output.txt, then got fed back to the
+    // execution agent as the "issues to fix" body (#292). Bad category
+    // must be gone.
     const content = getDefaultReviewPrompt();
-    expect(content).toContain('Code quality is a review criterion');
-    expect(content).toContain('Redundant database calls');
+    expect(content).not.toContain('Explicitly stated as acceptable');
+    expect(content).toMatch(/If you mentioned it, it's a fail/i);
+  });
+
+  it('frames the output as machine-read for the execution agent, not a human', () => {
+    const content = getDefaultReviewPrompt();
+    expect(content).toMatch(/machine-read/i);
+    expect(content).toMatch(/execution agent/i);
+  });
+
+  it('covers the core quality signals that were BEST_PRACTICE failures pre-rewrite', () => {
+    // Same quality checks — just rehoused inside the BEST_PRACTICE
+    // category bullet instead of a separate section.
+    const content = getDefaultReviewPrompt();
+    expect(content).toContain('Redundant database');
     expect(content).toContain('Unnecessary object reloads');
-    expect(content).toContain('trivially simplified');
-    expect(content).toContain('"Functionally correct" is necessary but not sufficient');
+    expect(content).toContain('Multiple round-trips');
+    expect(content).toContain('Dead or unreachable code');
   });
 
-  it('requires categorization of all findings', () => {
-    const content = getDefaultReviewPrompt();
-    expect(content).toContain('Categorize all findings');
-    expect(content).toContain('REVIEW_FAIL issue');
-    expect(content).toContain('Explicitly stated as acceptable');
-    expect(content).toContain('Do not leave unclassified observations');
+  it('matches the container-side template byte-for-byte (#291)', () => {
+    // Both files seed the review prompt. The .md gets baked into
+    // /usr/bin/review-prompt.md in the container image; this .ts
+    // seeds .sandstorm/review-prompt.md in new projects via the
+    // migration modal. A drift between them means some projects get
+    // the old contract and others get the new one.
+    const containerTemplate = fs.readFileSync(
+      path.join(__dirname, '..', '..', 'sandstorm-cli', 'docker', 'review-prompt.md'),
+      'utf-8',
+    );
+    expect(getDefaultReviewPrompt()).toBe(containerTemplate);
   });
 });
 
@@ -227,28 +262,38 @@ describe('ensureReviewPrompt', () => {
   });
 });
 
-describe('review-prompt.md source file', () => {
+describe('review-prompt.md source file (#291/#292 strict-contract)', () => {
   const reviewPromptPath = path.resolve(__dirname, '../../sandstorm-cli/docker/review-prompt.md');
 
-  it('does NOT contain the old "lean toward REVIEW_PASS" escape hatch', () => {
+  it('contains the REVIEW_PASS and REVIEW_FAIL sentinels', () => {
     const content = fs.readFileSync(reviewPromptPath, 'utf-8');
-    expect(content).not.toContain("If you're unsure whether something is an issue, lean toward REVIEW_PASS and mention it as a note");
+    expect(content).toContain('REVIEW_PASS');
+    expect(content).toContain('REVIEW_FAIL');
   });
 
-  it('contains the new strict guidance for obvious fixes', () => {
+  it('forbids praise, summaries of what works, and process narration', () => {
     const content = fs.readFileSync(reviewPromptPath, 'utf-8');
-    expect(content).toContain('If you identified a problem and the fix is obvious');
+    expect(content).toMatch(/Never praise/i);
+    expect(content).toMatch(/Never summarize what the code got right/i);
+    expect(content).toMatch(/Never narrate your process/i);
   });
 
-  it('contains code quality guidance', () => {
+  it('does NOT contain the old "Explicitly stated as acceptable" escape hatch (#292)', () => {
+    // That hatch was how positive review bodies leaked into
+    // /tmp/claude-review-output.txt and got fed back as "issues to fix".
     const content = fs.readFileSync(reviewPromptPath, 'utf-8');
-    expect(content).toContain('Code quality is a review criterion');
-    expect(content).toContain('Redundant database calls');
+    expect(content).not.toContain('Explicitly stated as acceptable');
   });
 
-  it('requires categorization of all findings', () => {
+  it('enforces sentinel-as-last-non-empty-line (#291)', () => {
     const content = fs.readFileSync(reviewPromptPath, 'utf-8');
-    expect(content).toContain('Categorize all findings');
+    expect(content).toMatch(/sentinel.*MUST be the last non-empty line/i);
+  });
+
+  it('retains the best-practice quality signals under the BEST_PRACTICE category', () => {
+    const content = fs.readFileSync(reviewPromptPath, 'utf-8');
+    expect(content).toContain('Redundant database');
+    expect(content).toContain('Unnecessary object reloads');
   });
 });
 
@@ -261,10 +306,12 @@ describe('init.sh generates review-prompt.md', () => {
     expect(init).toContain('Created .sandstorm/review-prompt.md');
   });
 
-  it('includes the updated review prompt content in init.sh', () => {
+  it('embeds the strict-contract review prompt content (#291/#292)', () => {
     const init = fs.readFileSync(initPath, 'utf-8');
-    expect(init).toContain('Code quality is a review criterion');
-    expect(init).toContain('Categorize all findings');
+    expect(init).toMatch(/machine-read, not for humans/i);
+    expect(init).toMatch(/Never praise/i);
+    // Negative: no legacy content
+    expect(init).not.toContain('Explicitly stated as acceptable');
     expect(init).not.toContain("If you're unsure whether something is an issue, lean toward REVIEW_PASS and mention it as a note");
   });
 });

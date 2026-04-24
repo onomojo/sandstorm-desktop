@@ -54,7 +54,6 @@ describe('SchedulerSocketServer', () => {
       version: 1,
       projectDir: '/home/user/project',
       scheduleId: 'sch_abc',
-      prompt: 'Do work',
       firedAt: '2026-01-01T00:00:00Z',
     };
 
@@ -93,7 +92,6 @@ describe('SchedulerSocketServer', () => {
       version: 99,
       projectDir: '/p',
       scheduleId: 's',
-      prompt: 'p',
       firedAt: 'now',
     }));
     const parsed = JSON.parse(response);
@@ -134,7 +132,6 @@ describe('SchedulerSocketServer', () => {
       version: 1,
       projectDir: '/p',
       scheduleId: 's',
-      prompt: 'p',
       firedAt: 'now',
     };
     const response = await sendRequest(sockPath, JSON.stringify(request));
@@ -171,7 +168,6 @@ describe('SchedulerSocketServer', () => {
       version: 1,
       projectDir: '/p',
       scheduleId: 's',
-      prompt: 'p',
       firedAt: 'now',
     };
 

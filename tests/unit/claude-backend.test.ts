@@ -65,6 +65,7 @@ vi.mock('fs', async (importOriginal) => {
     existsSync: vi.fn().mockReturnValue(false),
     mkdirSync: vi.fn(),
     writeFileSync: vi.fn(),
+    appendFileSync: vi.fn(),
     readFileSync: vi.fn().mockImplementation(() => {
       throw new Error('File not found');
     }),
@@ -549,6 +550,75 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
     });
   });
 
+  describe('--tools allowlist (#256)', () => {
+    it('passes --tools with the default allowlist (comma-separated)', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-tools-default', 'hello', '/tmp');
+
+      const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+      const toolsIdx = spawnedArgs.indexOf('--tools');
+      expect(toolsIdx).toBeGreaterThan(-1);
+      expect(spawnedArgs[toolsIdx + 1]).toBe('Bash,Read,Grep,Glob,Skill');
+    });
+
+    it('does not pass --mcp-config (MCP layer removed in Ticket D-final)', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-no-mcp', 'hello', '/tmp');
+
+      const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+      expect(spawnedArgs).not.toContain('--mcp-config');
+      // --tools is still present as the built-in allowlist.
+      expect(spawnedArgs).toContain('--tools');
+    });
+
+    it('does not include denied tools in the --tools arg', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-tools-deny', 'hello', '/tmp');
+
+      const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+      const toolsArg = spawnedArgs[spawnedArgs.indexOf('--tools') + 1];
+      for (const denied of [
+        'Edit',
+        'Write',
+        'MultiEdit',
+        'NotebookEdit',
+        'Agent',
+        'TaskCreate',
+        'TaskUpdate',
+        'TaskList',
+        'TaskGet',
+        'TaskStop',
+        'TaskOutput',
+        'WebFetch',
+        'WebSearch',
+        'LSP',
+      ]) {
+        expect(toolsArg).not.toContain(denied);
+      }
+    });
+
+    it('falls back to defaults when no projectDir is given', async () => {
+      const { spawn } = await import('child_process');
+      const spawnMock = spawn as ReturnType<typeof vi.fn>;
+      spawnMock.mockClear();
+
+      backend.sendMessage('tab-tools-noproj', 'hello');
+
+      const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+      const toolsIdx = spawnedArgs.indexOf('--tools');
+      expect(spawnedArgs[toolsIdx + 1]).toBe('Bash,Read,Grep,Glob,Skill');
+    });
+  });
+
   describe('initLogger error handling', () => {
     it('does not throw when createWriteStream fails', () => {
       expect(() => new ClaudeBackend(1000)).not.toThrow();
@@ -612,6 +682,376 @@ describe('Watchdog timeout is longer than MCP tool chain', () => {
     const timeoutMs = (backend as unknown as { timeoutMs: number }).timeoutMs;
     expect(timeoutMs).toBe(600_000);
     expect(timeoutMs).toBeGreaterThan(310_000); // Must exceed bridge timeout
+    backend.destroy();
+  });
+});
+
+describe('Token telemetry wiring (#262 tactic A)', () => {
+  let origFlag: string | undefined;
+
+  beforeEach(() => {
+    origFlag = process.env.SANDSTORM_TOKEN_TELEMETRY;
+  });
+
+  afterEach(() => {
+    if (origFlag === undefined) delete process.env.SANDSTORM_TOKEN_TELEMETRY;
+    else process.env.SANDSTORM_TOKEN_TELEMETRY = origFlag;
+  });
+
+  it('does not emit telemetry appends when the flag is off', async () => {
+    delete process.env.SANDSTORM_TOKEN_TELEMETRY;
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    // A full turn lifecycle — any telemetry append would happen inside the
+    // result handler. With the flag off, zero appends to the telemetry path.
+    backend.sendMessage('tel-off', 'hi', '/tmp');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    proc.stdout.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({
+          type: 'result',
+          result: 'ok',
+          usage: {
+            input_tokens: 10,
+            output_tokens: 2,
+            cache_creation_input_tokens: 100,
+            cache_read_input_tokens: 0,
+          },
+        }) + '\n'
+      )
+    );
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    expect(telemetryAppends.length).toBe(0);
+
+    backend.destroy();
+  });
+
+  it('writes a per-turn telemetry line when the flag is on', async () => {
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-on', 'hi', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    proc.stdout.emit(
+      'data',
+      Buffer.from(
+        JSON.stringify({
+          type: 'result',
+          result: 'ok',
+          usage: {
+            input_tokens: 1234,
+            output_tokens: 56,
+            cache_creation_input_tokens: 28_000,
+            cache_read_input_tokens: 0,
+          },
+        }) + '\n'
+      )
+    );
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    expect(telemetryAppends.length).toBe(1);
+    const jsonLine = telemetryAppends[0][1] as string;
+    const event = JSON.parse(jsonLine.trim());
+    expect(event.tabId).toBe('tel-on');
+    expect(event.projectDir).toBe('/proj');
+    expect(event.turn_index).toBe(0);
+    expect(event.seconds_since_prev_turn).toBeNull();
+    expect(event.input_tokens).toBe(1234);
+    expect(event.output_tokens).toBe(56);
+    expect(event.cache_creation_input_tokens).toBe(28_000);
+    expect(event.cache_read_input_tokens).toBe(0);
+    // Direct reply (no tool chain): sub_turn_count defaults to 0 because no
+    // assistant events were streamed before the result in this test, and
+    // tool_calls is the empty list.
+    expect(event.sub_turn_count).toBe(0);
+    expect(event.tool_calls).toEqual([]);
+
+    backend.destroy();
+  });
+
+  it('captures sub_turn_count and tool_calls for a tool-use chain (#262 sub-turn instrumentation)', async () => {
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-chain', 'check stack 1', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+
+    const emit = (obj: unknown): void => {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    };
+
+    // Simulate the exact stream-json event sequence a multi-tool chain would
+    // produce: assistant (1st API call — emits tool_use), user (tool_result
+    // for that tool), assistant (2nd API call — emits 2nd tool_use), user
+    // (2nd tool_result), assistant (3rd API call — final text), result.
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'content_block_start',
+      content_block: { type: 'tool_use', name: 'list_stacks', id: 'tu_1' },
+    });
+    const listStacksResult = 'x'.repeat(512);
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_1', content: listStacksResult }],
+      },
+    });
+
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'content_block_start',
+      content_block: { type: 'tool_use', name: 'get_diff', id: 'tu_2' },
+    });
+    const getDiffResult = 'y'.repeat(42_000);
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [
+          {
+            type: 'tool_result',
+            tool_use_id: 'tu_2',
+            // tool_result content may also arrive as an array of text blocks
+            content: [{ type: 'text', text: getDiffResult }],
+          },
+        ],
+      },
+    });
+
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 17,
+        output_tokens: 280,
+        cache_creation_input_tokens: 3_200,
+        cache_read_input_tokens: 156_000,
+      },
+    });
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    expect(telemetryAppends.length).toBe(1);
+    const event = JSON.parse((telemetryAppends[0][1] as string).trim());
+
+    expect(event.tabId).toBe('tel-chain');
+    expect(event.cache_read_input_tokens).toBe(156_000);
+    // Three assistant events = three sub-API-calls
+    expect(event.sub_turn_count).toBe(3);
+    // Two tools called, in order, with their tool_result byte sizes
+    expect(event.tool_calls).toEqual([
+      { name: 'list_stacks', tool_result_bytes: 512 },
+      { name: 'get_diff', tool_result_bytes: 42_000 },
+    ]);
+
+    backend.destroy();
+  });
+
+  it('captures tool_use blocks embedded in type:"assistant" message content (#262 instrumentation fix)', async () => {
+    // Some Claude CLI builds emit tool_use inline on type:"assistant" events
+    // instead of via separate content_block_start events. We must capture
+    // them on both paths — this test exercises the assistant-only path.
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-assistant-tool-use', 'check it', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    const emit = (obj: unknown): void => {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    };
+
+    emit({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'text', text: 'Checking...' },
+          { type: 'tool_use', name: 'Bash', id: 'tu_a', input: { command: 'docker ps' } },
+        ],
+      },
+    });
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_a', content: 'CONTAINER ID   ...' }],
+      },
+    });
+
+    emit({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', name: 'Bash', id: 'tu_b', input: { command: 'git diff' } },
+        ],
+      },
+    });
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'tu_b', content: 'diff --git ...' }],
+      },
+    });
+
+    emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'Done.' }] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 5,
+        output_tokens: 50,
+        cache_creation_input_tokens: 100,
+        cache_read_input_tokens: 45_000,
+      },
+    });
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    const event = JSON.parse((telemetryAppends[0][1] as string).trim());
+
+    expect(event.sub_turn_count).toBe(3);
+    expect(event.tool_calls).toEqual([
+      { name: 'Bash', tool_result_bytes: Buffer.byteLength('CONTAINER ID   ...', 'utf8') },
+      { name: 'Bash', tool_result_bytes: Buffer.byteLength('diff --git ...', 'utf8') },
+    ]);
+
+    backend.destroy();
+  });
+
+  it('does not double-count when tool_use appears in both content_block_start and assistant content (#262 dedupe)', async () => {
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-dedupe', 'x', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    const emit = (obj: unknown): void => {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    };
+
+    // Same tool_use id arrives via both content_block_start AND assistant.content
+    emit({ type: 'content_block_start', content_block: { type: 'tool_use', name: 'Bash', id: 'dup' } });
+    emit({
+      type: 'assistant',
+      message: {
+        content: [{ type: 'tool_use', name: 'Bash', id: 'dup', input: {} }],
+      },
+    });
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'dup', content: 'result' }],
+      },
+    });
+    emit({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 1,
+        output_tokens: 1,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 10,
+      },
+    });
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    const event = JSON.parse((telemetryAppends[0][1] as string).trim());
+
+    expect(event.tool_calls).toHaveLength(1);
+    expect(event.tool_calls[0]).toEqual({ name: 'Bash', tool_result_bytes: 6 });
+
+    backend.destroy();
+  });
+
+  it('resets sub_turn_count and tool_calls between successive user messages', async () => {
+    process.env.SANDSTORM_TOKEN_TELEMETRY = '1';
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backend = new ClaudeBackend();
+    backend.sendMessage('tel-reset', 'first', '/proj');
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+    const emit = (obj: unknown): void => {
+      proc.stdout.emit('data', Buffer.from(JSON.stringify(obj) + '\n'));
+    };
+
+    // First message: 1 tool call, 2 assistant events
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'content_block_start',
+      content_block: { type: 'tool_use', name: 'list_stacks', id: 'a1' },
+    });
+    emit({
+      type: 'user',
+      message: {
+        role: 'user',
+        content: [{ type: 'tool_result', tool_use_id: 'a1', content: 'stacks' }],
+      },
+    });
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 50,
+        cache_creation_input_tokens: 100,
+        cache_read_input_tokens: 50_000,
+      },
+    });
+
+    // Second message: 1 assistant event, no tool calls
+    backend.sendMessage('tel-reset', 'second', '/proj');
+    emit({ type: 'assistant', message: { content: [] } });
+    emit({
+      type: 'result',
+      result: 'ok',
+      usage: {
+        input_tokens: 10,
+        output_tokens: 100,
+        cache_creation_input_tokens: 200,
+        cache_read_input_tokens: 50_000,
+      },
+    });
+
+    const telemetryAppends = vi
+      .mocked(fs.appendFileSync)
+      .mock.calls.filter((c) => String(c[0]).endsWith('sandstorm-desktop-token-telemetry.jsonl'));
+    expect(telemetryAppends.length).toBe(2);
+
+    const first = JSON.parse((telemetryAppends[0][1] as string).trim());
+    const second = JSON.parse((telemetryAppends[1][1] as string).trim());
+
+    expect(first.sub_turn_count).toBe(2);
+    expect(first.tool_calls).toEqual([{ name: 'list_stacks', tool_result_bytes: 6 }]);
+
+    // Second turn must be independent — cycle counters reset on result.
+    expect(second.sub_turn_count).toBe(1);
+    expect(second.tool_calls).toEqual([]);
+
     backend.destroy();
   });
 });
@@ -996,5 +1436,125 @@ describe('Outer-Claude session token accumulation (agent:token-usage IPC)', () =
     expect(bMessages.length).toBe(1);
     expect((aMessages[0].args[0] as { input_tokens: number }).input_tokens).toBe(100);
     expect((bMessages[0].args[0] as { input_tokens: number }).input_tokens).toBe(999);
+  });
+});
+
+describe('Raw API-request capture wiring (#299)', () => {
+  let origFlag: string | undefined;
+
+  beforeEach(() => {
+    origFlag = process.env.SANDSTORM_RAW_REQUEST_CAPTURE;
+    spawnedProcesses.length = 0;
+  });
+
+  afterEach(() => {
+    if (origFlag === undefined) delete process.env.SANDSTORM_RAW_REQUEST_CAPTURE;
+    else process.env.SANDSTORM_RAW_REQUEST_CAPTURE = origFlag;
+  });
+
+  it('does NOT set ANTHROPIC_BASE_URL in spawn env when the flag is off', async () => {
+    delete process.env.SANDSTORM_RAW_REQUEST_CAPTURE;
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const mockWindow = { webContents: { send: vi.fn() } };
+    const backend = new ClaudeBackend(1000);
+    backend.setMainWindow(mockWindow as never);
+    await backend.initialize();
+
+    backend.sendMessage('tab-no-cap', 'hi', '/tmp');
+
+    const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const spawnOptions = callArgs[2] as { env: Record<string, string | undefined> };
+    expect(spawnOptions.env.ANTHROPIC_BASE_URL).toBeUndefined();
+
+    backend.destroy();
+  });
+
+  it('rawCapture supervisor reports disabled when flag is off', () => {
+    delete process.env.SANDSTORM_RAW_REQUEST_CAPTURE;
+    const backend = new ClaudeBackend(1000);
+    const supervisor = (backend as unknown as {
+      rawCapture: { enabled: boolean };
+    }).rawCapture;
+    expect(supervisor.enabled).toBe(false);
+    backend.destroy();
+  });
+
+  it('rawCapture supervisor reports enabled when flag is set to "1"', () => {
+    process.env.SANDSTORM_RAW_REQUEST_CAPTURE = '1';
+    const backend = new ClaudeBackend(1000);
+    const supervisor = (backend as unknown as {
+      rawCapture: { enabled: boolean };
+    }).rawCapture;
+    expect(supervisor.enabled).toBe(true);
+    backend.destroy();
+  });
+});
+
+describe('Outer Claude context-bloat suppression (#302, #303)', () => {
+  beforeEach(() => {
+    spawnedProcesses.length = 0;
+  });
+
+  it('spawns with CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 (#302 — suppress project CLAUDE.md auto-injection)', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backend = new ClaudeBackend(1000);
+    backend.setMainWindow({ webContents: { send: vi.fn() } } as never);
+    await backend.initialize();
+
+    backend.sendMessage('tab-claudemd', 'hi', '/tmp');
+
+    const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const env = (callArgs[2] as { env: Record<string, string | undefined> }).env;
+    expect(env.CLAUDE_CODE_DISABLE_CLAUDE_MDS).toBe('1');
+
+    backend.destroy();
+  });
+
+  it('spawns with CLAUDE_CODE_PLUGIN_CACHE_DIR pointing at a sandbox empty dir (#303 — suppress global MCP/LSP)', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backend = new ClaudeBackend(1000);
+    backend.setMainWindow({ webContents: { send: vi.fn() } } as never);
+    await backend.initialize();
+
+    backend.sendMessage('tab-plugincache', 'hi', '/tmp');
+
+    const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const env = (callArgs[2] as { env: Record<string, string | undefined> }).env;
+    expect(env.CLAUDE_CODE_PLUGIN_CACHE_DIR).toBeDefined();
+    expect(env.CLAUDE_CODE_PLUGIN_CACHE_DIR).toContain('sandstorm-empty-plugins');
+    // Must not be the user's real Claude plugin dir
+    expect(env.CLAUDE_CODE_PLUGIN_CACHE_DIR).not.toContain('.claude/plugins');
+
+    backend.destroy();
+  });
+
+  it('plugin cache dir is stable across multiple sendMessage calls in the same backend', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backend = new ClaudeBackend(1000);
+    backend.setMainWindow({ webContents: { send: vi.fn() } } as never);
+    await backend.initialize();
+
+    backend.sendMessage('tab-a', 'hi', '/tmp');
+    backend.sendMessage('tab-b', 'hi', '/tmp');
+
+    const callA = spawnMock.mock.calls[spawnMock.mock.calls.length - 2];
+    const callB = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const envA = (callA[2] as { env: Record<string, string | undefined> }).env;
+    const envB = (callB[2] as { env: Record<string, string | undefined> }).env;
+    expect(envA.CLAUDE_CODE_PLUGIN_CACHE_DIR).toBe(envB.CLAUDE_CODE_PLUGIN_CACHE_DIR);
+
+    backend.destroy();
   });
 });

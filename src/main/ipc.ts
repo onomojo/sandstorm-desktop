@@ -20,6 +20,7 @@ import {
   isCronRunning,
   removeProjectFromCrontab,
 } from './scheduler';
+import type { ScheduleAction } from './scheduler/types';
 import { validateProjectDir } from './validation';
 import { syncAllProjectsCrontab, projectIdFromDir } from './scheduler/scheduler-manager';
 import { StackManager } from './control-plane/stack-manager';
@@ -60,6 +61,29 @@ import {
   ensureReviewPrompt,
   isReviewPromptMissing,
 } from './review-prompt';
+import {
+  defaultSpecGateDeps,
+  fetchTicketForRenderer,
+  runSpecCheck,
+  runSpecRefine,
+  type SpecGateReport,
+} from './control-plane/ticket-spec';
+import {
+  draftPullRequest,
+  workspacePathFor,
+} from './control-plane/pr-creator';
+import { createTicket } from './control-plane/ticket-creator';
+import {
+  getUpdateScriptStatus,
+  getCreatePrScriptStatus,
+} from './control-plane/ticket-updater';
+import {
+  detectTicketProvider,
+  installUpdateScript,
+  installScript,
+  type TicketProvider,
+} from './control-plane/ticket-provider';
+import { handleToolCall } from './claude/tools';
 
 /**
  * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
@@ -410,19 +434,74 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       const missingSpecQualityGate = isSpecQualityGateMissing(directory);
       const missingReviewPrompt = isReviewPromptMissing(directory);
       const legacyPortMappings = hasLegacyPortMappings(directory);
+      const missingUpdateScript = getUpdateScriptStatus(directory) !== 'ok';
+      const missingCreatePrScript = getCreatePrScriptStatus(directory) !== 'ok';
+      const needsProvider = missingUpdateScript || missingCreatePrScript;
+      const detectedProvider = needsProvider ? detectTicketProvider(directory) : undefined;
 
       return {
-        needsMigration: !hasVerifyScript || !hasServiceLabels || missingSpecQualityGate || missingReviewPrompt || legacyPortMappings,
+        needsMigration:
+          !hasVerifyScript ||
+          !hasServiceLabels ||
+          missingSpecQualityGate ||
+          missingReviewPrompt ||
+          legacyPortMappings ||
+          missingUpdateScript ||
+          missingCreatePrScript,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
         missingSpecQualityGate,
         missingReviewPrompt,
         networksMigrated,
         legacyPortMappings,
+        missingUpdateScript,
+        missingCreatePrScript,
+        detectedTicketProvider: detectedProvider,
       };
     } catch {
       return { needsMigration: false };
     }
+  });
+
+  // Install the update-ticket.sh template for the chosen provider into
+  // .sandstorm/scripts/. Used by the migration modal when an existing
+  // project lacks the script (initialized before #318 landed).
+  ipcMain.handle(
+    'projects:installUpdateScript',
+    async (_event, directory: string, provider: TicketProvider) => {
+      try {
+        const dest = installUpdateScript({ projectDir: directory, cliDir, provider });
+        return { success: true, path: dest };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    },
+  );
+
+  // Install create-pr.sh from the chosen provider template. Same pattern as
+  // installUpdateScript — used by the migration modal when a project lacks
+  // the unified PR-creation script (#320).
+  ipcMain.handle(
+    'projects:installCreatePrScript',
+    async (_event, directory: string, provider: TicketProvider) => {
+      try {
+        const dest = installScript({
+          projectDir: directory,
+          cliDir,
+          provider,
+          scriptName: 'create-pr.sh',
+        });
+        return { success: true, path: dest };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    },
+  );
+
+  ipcMain.handle('projects:detectTicketProvider', (_event, directory: string) => {
+    return { provider: detectTicketProvider(directory) };
   });
 
   ipcMain.handle('projects:autoDetectVerify', async (_event, directory: string) => {
@@ -915,14 +994,14 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle(
     'schedules:create',
-    async (_event, projectDir: string, data: { label?: string; cronExpression: string; prompt: string; enabled?: boolean }) => {
+    async (_event, projectDir: string, data: { label?: string; cronExpression: string; action: ScheduleAction; enabled?: boolean }) => {
       const dirError = validateProjectDir(projectDir);
       if (dirError) throw new Error(dirError.error);
       const schedule = createSchedule({
         projectDir,
         label: data.label,
         cronExpression: data.cronExpression,
-        prompt: data.prompt,
+        action: data.action,
         enabled: data.enabled,
       });
       try {
@@ -936,7 +1015,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle(
     'schedules:update',
-    async (_event, projectDir: string, id: string, patch: { label?: string; cronExpression?: string; prompt?: string; enabled?: boolean }) => {
+    async (_event, projectDir: string, id: string, patch: { label?: string; cronExpression?: string; action?: ScheduleAction; enabled?: boolean }) => {
       const dirError = validateProjectDir(projectDir);
       if (dirError) throw new Error(dirError.error);
       const schedule = updateSchedule(projectDir, id, patch);
@@ -966,5 +1045,109 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   ipcMain.handle('schedules:cronHealth', async () => {
     return { running: isCronRunning() };
   });
+
+
+  // --- Tickets (deterministic UI for refine workflow, #310) ---
+  // These IPC handlers route the renderer straight to the same ticket-fetcher
+  // and spec-gate primitives that the `sandstorm-spec` skill uses, but in
+  // process — no orchestrator round-trip, no skill catalog.
+
+  const specDeps = defaultSpecGateDeps(
+    (ticketId, projectDir) =>
+      handleToolCall('spec_check', { ticketId, projectDir }) as Promise<SpecGateReport>,
+    (ticketId, projectDir, userAnswers) =>
+      handleToolCall('spec_refine', { ticketId, projectDir, userAnswers }) as Promise<SpecGateReport>,
+  );
+
+  ipcMain.handle('tickets:fetch', async (_event, ticketId: string, projectDir: string) => {
+    return fetchTicketForRenderer(ticketId, projectDir);
+  });
+
+  ipcMain.handle('tickets:specCheck', async (_event, ticketId: string, projectDir: string) => {
+    return runSpecCheck(ticketId, projectDir, specDeps);
+  });
+
+  ipcMain.handle(
+    'tickets:specRefine',
+    async (_event, ticketId: string, projectDir: string, userAnswers: string) => {
+      return runSpecRefine(ticketId, projectDir, userAnswers, specDeps);
+    },
+  );
+
+  ipcMain.handle(
+    'tickets:create',
+    async (_event, projectDir: string, title: string, body: string) => {
+      return createTicket({ projectDir, title, body });
+    },
+  );
+
+  // --- PR creation (deterministic UI for make-PR workflow, #310) ---
+
+  ipcMain.handle('pr:draftBody', async (_event, stackId: string) => {
+    const stack = await stackManager.getStackWithServices(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    return draftPullRequest(
+      {
+        stackId,
+        workspace: workspacePathFor(stack.project_dir, stackId),
+        ticket: stack.ticket,
+      },
+      {
+        runEphemeral: (prompt, projectDir, timeoutMs) =>
+          agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs),
+        fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
+      },
+    );
+  });
+
+  ipcMain.handle(
+    'pr:create',
+    async (_event, stackId: string, title: string, body: string) => {
+      const stack = await stackManager.getStackWithServices(stackId);
+      if (!stack) throw new Error(`Stack "${stackId}" not found`);
+
+      // One PR-creation path: the project's `.sandstorm/scripts/create-pr.sh`,
+      // invoked by `sandstorm push`. Same script that the chat-driven push
+      // flow uses. Mirrors the fetch-ticket.sh / update-ticket.sh pattern —
+      // provider-neutral (GitHub, Jira, Bitbucket, custom API), all the
+      // GITHUB_TOKEN / committer / remote-URL plumbing already handled.
+      //
+      // Body is written to a temp file in the workspace so it can be multi-
+      // line + contain shell metacharacters without any quoting peril. The
+      // bind mount makes the file visible inside the container at the same
+      // path under /app.
+      const workspace = workspacePathFor(stack.project_dir, stackId);
+      if (!fs.existsSync(workspace)) {
+        throw new Error(`Stack workspace not found at ${workspace}`);
+      }
+      const tmpDir = path.join(workspace, '.sandstorm');
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const tmpName = `pr-body-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.md`;
+      const hostBodyPath = path.join(tmpDir, tmpName);
+      const containerBodyPath = `/app/.sandstorm/${tmpName}`;
+      fs.writeFileSync(hostBodyPath, body, 'utf-8');
+
+      try {
+        const { stdout, stderr } = await stackManager.push(stackId, title, {
+          prTitle: title,
+          prBodyFile: containerBodyPath,
+        });
+        const urlMatch = (stdout + '\n' + stderr).match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/);
+        if (!urlMatch) {
+          throw new Error(
+            `sandstorm push completed but no PR URL was emitted by create-pr.sh. ` +
+            `Check that .sandstorm/scripts/create-pr.sh is installed and prints the URL on success. ` +
+            `Last output:\n${stdout.trim() || stderr.trim() || '(empty)'}`,
+          );
+        }
+        const url = urlMatch[0];
+        const number = Number(urlMatch[1]);
+        stackManager.setPullRequest(stackId, url, number);
+        return { url, number };
+      } finally {
+        try { fs.unlinkSync(hostBodyPath); } catch { /* best effort */ }
+      }
+    },
+  );
 
 }

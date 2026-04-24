@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, act } from '@testing-library/react';
+import { render, screen, act, fireEvent } from '@testing-library/react';
 import { StackTableRow } from '../../../src/renderer/components/StackTableRow';
 import { useAppStore, Stack } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
@@ -163,5 +163,153 @@ describe('StackTableRow model column', () => {
     // The dash is rendered as a span with text content "—"
     const dashes = screen.getAllByText('—');
     expect(dashes.length).toBeGreaterThan(0);
+  });
+});
+
+describe('StackTableRow primary-action chip (#315)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({
+      stacks: [], selectedStackId: null, stackMetrics: {},
+      showCreatePRDialog: null,
+    });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows Make PR chip when status is completed and pr_url is null', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed', pr_url: null }));
+    expect(screen.getByTestId('row-make-pr-foo')).toBeDefined();
+  });
+
+  it('shows Make PR chip when status is pushed and pr_url is null', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'bar', status: 'pushed', pr_url: null }));
+    expect(screen.getByTestId('row-make-pr-bar')).toBeDefined();
+  });
+
+  it('hides Make PR chip when pr_url already exists', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({
+      id: 'baz',
+      status: 'pushed',
+      pr_url: 'https://github.com/o/r/pull/9',
+      pr_number: 9,
+    }));
+    expect(screen.queryByTestId('row-make-pr-baz')).toBeNull();
+  });
+
+  it('hides Make PR chip when status is running (not ready to ship)', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'qux', status: 'running' }));
+    expect(screen.queryByTestId('row-make-pr-qux')).toBeNull();
+  });
+
+  it('clicking Make PR opens the CreatePRDialog for that stack', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed', pr_url: null }));
+    screen.getByTestId('row-make-pr-foo').click();
+    expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 'foo' });
+  });
+
+  it('shows ↗#N PR link when pr_url + pr_number are set', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({
+      id: 'open',
+      status: 'pr_created',
+      pr_url: 'https://github.com/o/r/pull/312',
+      pr_number: 312,
+    }));
+    const link = screen.getByTestId('row-pr-link-open');
+    expect(link).toBeDefined();
+    expect(link.textContent).toMatch(/#312/);
+  });
+});
+
+describe('StackTableRow action button visibility (#316)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('Teardown is visible without hovering the row (no opacity-0 wrapper)', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed' }));
+    const teardown = screen.getByTestId('row-teardown-foo');
+    // Walk the parent chain — none should carry opacity-0 / group-hover.
+    let el: HTMLElement | null = teardown;
+    while (el) {
+      expect(el.className).not.toMatch(/opacity-0/);
+      expect(el.className).not.toMatch(/group-hover:opacity-100/);
+      el = el.parentElement;
+    }
+  });
+
+  it('Teardown is hidden while a task is running (destructive guard, unchanged)', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'busy', status: 'running' }));
+    expect(screen.queryByTestId('row-teardown-busy')).toBeNull();
+  });
+
+  it('actions cell is sticky to the right edge so it stays visible during scroll', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed' }));
+    const cell = screen.getByTestId('row-actions-foo');
+    // Tailwind's `sticky right-0` on a <td> — verify the classes survived.
+    expect(cell.className).toMatch(/\bsticky\b/);
+    expect(cell.className).toMatch(/right-0/);
+  });
+});
+
+describe('StackTableRow popover suppression on actions hover (#316)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('cancels the pending popover when the cursor enters the actions cell', async () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed' }));
+
+    // Hover the row — popover would normally appear after the open delay.
+    const row = screen.getByTestId('row-actions-foo').closest('tr')!;
+    fireEvent.mouseEnter(row);
+
+    // Cursor moves to the actions cell BEFORE the delay elapses.
+    const actions = screen.getByTestId('row-actions-foo');
+    fireEvent.mouseEnter(actions);
+
+    // Run timers; popover should NOT have opened.
+    act(() => { vi.advanceTimersByTime(500); });
+    expect(screen.queryByTestId(/stack-row-popover-/)).toBeNull();
+  });
+
+  it('hides an already-open popover when the cursor enters the actions cell', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'foo', status: 'completed' }));
+
+    const row = screen.getByTestId('row-actions-foo').closest('tr')!;
+    fireEvent.mouseEnter(row);
+    act(() => { vi.advanceTimersByTime(200); });
+    expect(screen.queryByTestId('stack-row-popover-foo')).not.toBeNull();
+
+    // Now move cursor to actions — popover should disappear.
+    const actions = screen.getByTestId('row-actions-foo');
+    fireEvent.mouseEnter(actions);
+    expect(screen.queryByTestId('stack-row-popover-foo')).toBeNull();
   });
 });

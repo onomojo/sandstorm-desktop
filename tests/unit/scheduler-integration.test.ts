@@ -41,12 +41,12 @@ describe('Scheduler integration', () => {
       projectDir: tmpDir,
       label: 'Hourly triage',
       cronExpression: '0 * * * *',
-      prompt: 'Scan issues',
+      action: { kind: 'run-script', scriptName: 'scan-issues.sh' },
     });
     const s2 = createSchedule({
       projectDir: tmpDir,
       cronExpression: '*/30 * * * *',
-      prompt: 'Check builds',
+      action: { kind: 'run-script', scriptName: 'check-builds.sh' },
       enabled: false, // disabled
     });
 
@@ -113,7 +113,7 @@ describe('Scheduler integration', () => {
       projectDir: tmpDir,
       label: 'Test dispatch',
       cronExpression: '* * * * *',
-      prompt: 'Count to 10',
+      action: { kind: 'run-script', scriptName: 'count.sh' },
     });
 
     // Start a socket server with a test handler
@@ -135,7 +135,6 @@ describe('Scheduler integration', () => {
         version: 1,
         projectDir: tmpDir,
         scheduleId: schedule.id,
-        prompt: '__from_schedule__',
         firedAt: new Date().toISOString(),
       };
 
@@ -168,7 +167,7 @@ describe('Scheduler integration', () => {
         projectDir: tmpDir,
         label: 'Rate test',
         cronExpression: '* * * * *',
-        prompt: 'test prompt',
+        action: { kind: 'run-script', scriptName: 'test.sh' },
       });
 
       // Simulate a dispatch handler that checks rate-limit state
@@ -191,7 +190,6 @@ describe('Scheduler integration', () => {
           version: 1,
           projectDir: tmpDir,
           scheduleId: schedule.id,
-          prompt: '__from_schedule__',
           firedAt: new Date().toISOString(),
         };
 
@@ -218,7 +216,7 @@ describe('Scheduler integration', () => {
         projectDir: tmpDir,
         label: 'Limit test',
         cronExpression: '* * * * *',
-        prompt: 'test prompt',
+        action: { kind: 'run-script', scriptName: 'test.sh' },
       });
 
       const handler = async (_req: ScheduledDispatchRequest): Promise<ScheduledDispatchResponse> => {
@@ -239,7 +237,6 @@ describe('Scheduler integration', () => {
           version: 1,
           projectDir: tmpDir,
           scheduleId: schedule.id,
-          prompt: '__from_schedule__',
           firedAt: new Date().toISOString(),
         };
 
@@ -266,7 +263,7 @@ describe('Scheduler integration', () => {
         projectDir: tmpDir,
         label: 'Auth test',
         cronExpression: '* * * * *',
-        prompt: 'test prompt',
+        action: { kind: 'run-script', scriptName: 'test.sh' },
       });
 
       const handler = async (req: ScheduledDispatchRequest): Promise<ScheduledDispatchResponse> => {
@@ -291,7 +288,6 @@ describe('Scheduler integration', () => {
           version: 1,
           projectDir: tmpDir,
           scheduleId: schedule.id,
-          prompt: '__from_schedule__',
           firedAt: new Date().toISOString(),
         };
 
@@ -318,7 +314,7 @@ describe('Scheduler integration', () => {
         projectDir: tmpDir,
         label: 'Busy test',
         cronExpression: '* * * * *',
-        prompt: 'test prompt',
+        action: { kind: 'run-script', scriptName: 'test.sh' },
       });
 
       // Track in-flight dispatches (mirrors the production logic)
@@ -343,7 +339,6 @@ describe('Scheduler integration', () => {
           version: 1,
           projectDir: tmpDir,
           scheduleId: schedule.id,
-          prompt: '__from_schedule__',
           firedAt: new Date().toISOString(),
         };
 
@@ -383,7 +378,7 @@ describe('Scheduler integration', () => {
     createSchedule({
       projectDir: tmpDir,
       cronExpression: '0 * * * *',
-      prompt: 'Test',
+      action: { kind: 'run-script', scriptName: 'test.sh' },
     });
 
     const schedulesPath = path.join(tmpDir, '.sandstorm', 'schedules.json');

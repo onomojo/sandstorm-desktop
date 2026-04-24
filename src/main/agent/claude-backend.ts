@@ -12,7 +12,7 @@ import fs from 'fs';
 import os from 'os';
 import { BrowserWindow, shell } from 'electron';
 import { app } from 'electron';
-import { handleToolCall, tools } from '../claude/tools';
+import { handleToolCall } from '../claude/tools';
 import { cliDir } from '../index';
 import {
   AgentBackend,
@@ -23,6 +23,20 @@ import {
   StackInfo,
   zeroSessionTokens,
 } from './types';
+import { resolveOuterClaudeTools } from './tools-allowlist';
+import { composeSystemPromptWithSkills } from './skill-enumeration';
+import { TokenTelemetry, ToolCallRecord, isTelemetryEnabled } from './token-telemetry';
+import {
+  RawCaptureSession,
+  RawCaptureSupervisor,
+  createRawCaptureSupervisor,
+  isRawCaptureEnabled,
+} from './raw-request-capture';
+
+/** In-flight per-cycle tracking; tool_use_id is only retained in memory. */
+interface InFlightToolCall extends ToolCallRecord {
+  tool_use_id: string;
+}
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — must be longer than MCP tool chain (300s ephemeral + 310s bridge)
 
@@ -40,6 +54,10 @@ interface ClaudeSession {
   stderrBuffer: string;
   cancelledTurn: boolean;   // true when the user cancelled the current turn (process kept alive)
   cancelFallback: ReturnType<typeof setTimeout> | null; // fallback kill timer after cancel
+  turnIndex: number;            // 0-based index of completed turns in this session
+  lastResultAt: number | null;  // Date.now() of the previous `type:"result"` event, for telemetry deltas
+  subTurnCount: number;         // count of type:"assistant" events since the last type:"result" (= API calls in the current tool-use chain)
+  toolCallsInCycle: InFlightToolCall[]; // MCP tool calls made since the last type:"result"; reset on record
 }
 
 function getClaudeBin(): string {
@@ -75,11 +93,13 @@ export class ClaudeBackend implements AgentBackend {
   private bridgeServer: Server | null = null;
   private bridgePort = 0;
   private bridgeToken: string;
-  private mcpConfigPath: string | null = null;
   private mainWindow: BrowserWindow | null = null;
   private logStream: fs.WriteStream | null = null;
   private timeoutMs: number;
   private modelResolver?: (projectDir: string) => string;
+  private telemetry: TokenTelemetry;
+  private rawCapture: RawCaptureSupervisor;
+  private rawCaptureByTab = new Map<string, RawCaptureSession>();
 
   constructor(
     timeoutMs?: number,
@@ -89,6 +109,66 @@ export class ClaudeBackend implements AgentBackend {
     this.timeoutMs = timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.modelResolver = modelResolver;
     this.initLogger();
+    this.telemetry = this.initTelemetry();
+    this.rawCapture = this.initRawCapture();
+  }
+
+  /**
+   * Per-process empty directory used as `CLAUDE_CODE_PLUGIN_CACHE_DIR` for
+   * outer Claude subprocess spawns (#303). Pointing the CLI's plugin cache
+   * at a pristine empty dir prevents globally-installed Claude Code plugins
+   * (Gmail/Gcal/Gdrive MCPs, LSP, skill-creator, etc.) from registering
+   * themselves in the subprocess while our Sandstorm skills continue to
+   * load via `--plugin-dir`. Created lazily on first `ensureProcess` call.
+   */
+  private emptyPluginCacheDir: string | null = null;
+
+  private ensureEmptyPluginCacheDir(): string {
+    if (this.emptyPluginCacheDir) return this.emptyPluginCacheDir;
+    const dir = path.join(os.tmpdir(), `sandstorm-empty-plugins-${process.pid}`);
+    try {
+      fs.mkdirSync(dir, { recursive: true });
+    } catch {
+      // If the mkdir fails we still return the path — the CLI will just
+      // see a missing dir and treat it as empty, which is fine.
+    }
+    this.emptyPluginCacheDir = dir;
+    return dir;
+  }
+
+  /**
+   * Opt-in raw API-request capture (#299). Off unless
+   * `SANDSTORM_RAW_REQUEST_CAPTURE=1` is set. Stands up one HTTP proxy per
+   * tab, dumps outbound request bodies to disk next to the telemetry log.
+   */
+  private initRawCapture(): RawCaptureSupervisor {
+    const enabled = isRawCaptureEnabled();
+    let baseDir: string;
+    try {
+      baseDir = typeof app !== 'undefined' && app.getPath ? app.getPath('userData') : os.tmpdir();
+    } catch {
+      baseDir = os.tmpdir();
+    }
+    const sessionId = new Date().toISOString().replace(/[:.]/g, '-');
+    const rootDir = path.join(baseDir, 'raw-api-capture', sessionId);
+    return createRawCaptureSupervisor({ rootDir, enabled });
+  }
+
+  /**
+   * Opt-in per-turn token telemetry (#262 tactic A). Off unless
+   * `SANDSTORM_TOKEN_TELEMETRY=1` is set. Writes JSONL to the app's userData
+   * dir so it sits next to the existing claude log.
+   */
+  private initTelemetry(): TokenTelemetry {
+    const enabled = isTelemetryEnabled();
+    let filePath = '';
+    try {
+      const dir = typeof app !== 'undefined' && app.getPath ? app.getPath('userData') : os.tmpdir();
+      filePath = path.join(dir, 'sandstorm-desktop-token-telemetry.jsonl');
+    } catch {
+      filePath = path.join(os.tmpdir(), 'sandstorm-desktop-token-telemetry.jsonl');
+    }
+    return new TokenTelemetry({ filePath, enabled });
   }
 
   getSessionTokens(tabId: string): OuterClaudeSessionTokens {
@@ -130,7 +210,6 @@ export class ClaudeBackend implements AgentBackend {
 
   async initialize(): Promise<void> {
     await this.startBridgeServer();
-    this.writeMcpConfig();
   }
 
   private startBridgeServer(): Promise<void> {
@@ -174,111 +253,6 @@ export class ClaudeBackend implements AgentBackend {
     });
   }
 
-  private writeMcpConfig(): void {
-    const tmpDir = path.join(os.tmpdir(), `sandstorm-mcp-${process.pid}`);
-    fs.mkdirSync(tmpDir, { recursive: true });
-
-    const serverScriptPath = path.join(tmpDir, 'mcp-server.mjs');
-    const serverScript = `import http from 'http';
-import { createInterface } from 'readline';
-
-const BRIDGE_PORT = ${this.bridgePort};
-const BRIDGE_TOKEN = '${this.bridgeToken}';
-const TOOLS = ${JSON.stringify(tools)};
-
-const rl = createInterface({ input: process.stdin });
-
-function send(msg) {
-  process.stdout.write(JSON.stringify(msg) + '\\n');
-}
-
-async function callBridge(name, input) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({ name, input });
-    const req = http.request({
-      hostname: '127.0.0.1',
-      port: BRIDGE_PORT,
-      path: '/tool-call',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-Auth-Token': BRIDGE_TOKEN,
-        'Content-Length': Buffer.byteLength(data),
-      },
-      timeout: 310_000,
-    }, (res) => {
-      let body = '';
-      res.on('data', (chunk) => { body += chunk; });
-      res.on('end', () => {
-        try {
-          const parsed = JSON.parse(body);
-          if (parsed.error) reject(new Error(parsed.error));
-          else resolve(parsed.result);
-        } catch (e) { reject(e); }
-      });
-    });
-    req.on('timeout', () => {
-      req.destroy();
-      reject(new Error('Bridge request timed out after 310s'));
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
-  });
-}
-
-rl.on('line', async (line) => {
-  try {
-    const msg = JSON.parse(line);
-    if (msg.method === 'initialize') {
-      send({ jsonrpc: '2.0', id: msg.id, result: {
-        protocolVersion: '2024-11-05',
-        capabilities: { tools: {} },
-        serverInfo: { name: 'sandstorm-tools', version: '1.0.0' },
-      }});
-    } else if (msg.method === 'notifications/initialized') {
-      // No response needed
-    } else if (msg.method === 'tools/list') {
-      send({ jsonrpc: '2.0', id: msg.id, result: {
-        tools: TOOLS.map(t => ({
-          name: t.name,
-          description: t.description,
-          inputSchema: t.inputSchema,
-        })),
-      }});
-    } else if (msg.method === 'tools/call') {
-      const { name, arguments: args } = msg.params;
-      try {
-        const result = await callBridge(name, args || {});
-        send({ jsonrpc: '2.0', id: msg.id, result: {
-          content: [{ type: 'text', text: JSON.stringify(result, null, 2) }],
-        }});
-      } catch (err) {
-        send({ jsonrpc: '2.0', id: msg.id, result: {
-          content: [{ type: 'text', text: 'Error: ' + err.message }],
-          isError: true,
-        }});
-      }
-    }
-  } catch {
-    // Ignore malformed input
-  }
-});
-`;
-    fs.writeFileSync(serverScriptPath, serverScript);
-
-    this.mcpConfigPath = path.join(tmpDir, 'mcp-config.json');
-    const mcpConfig = {
-      mcpServers: {
-        'sandstorm-tools': {
-          command: 'node',
-          args: [serverScriptPath],
-        },
-      },
-    };
-    fs.writeFileSync(this.mcpConfigPath, JSON.stringify(mcpConfig));
-  }
-
   // --- Session management (AgentBackend interface) ---
 
   sendMessage(
@@ -303,6 +277,10 @@ rl.on('line', async (line) => {
         stderrBuffer: '',
         cancelledTurn: false,
         cancelFallback: null,
+        turnIndex: 0,
+        lastResultAt: null,
+        subTurnCount: 0,
+        toolCallsInCycle: [],
       };
       this.sessions.set(tabId, session);
     }
@@ -328,6 +306,30 @@ rl.on('line', async (line) => {
     // Note: Claude CLI with --input-format stream-json does NOT emit the
     // system init event until it receives input on stdin, so we must write
     // the message first — not wait for init.
+    //
+    // Default (capture off) path stays fully synchronous so no spawn
+    // latency is introduced. Capture on (#299) defers spawn+write until
+    // the loopback proxy has bound an ephemeral port.
+    if (this.rawCapture.enabled) {
+      void this.rawCapture
+        .registerTab(tabId)
+        .then((captureSession) => {
+          const extraEnv: Record<string, string> = {};
+          if (captureSession.baseUrl) {
+            extraEnv.ANTHROPIC_BASE_URL = captureSession.baseUrl;
+            this.rawCaptureByTab.set(tabId, captureSession);
+            this.log(`Raw request capture active for tab=${tabId} at ${captureSession.baseUrl}`);
+          }
+          this.ensureProcess(tabId, extraEnv);
+          this.writeMessage(tabId, message);
+        })
+        .catch((err) => {
+          this.log(`Raw request capture failed to start for tab=${tabId}: ${String(err)}`);
+          this.ensureProcess(tabId);
+          this.writeMessage(tabId, message);
+        });
+      return;
+    }
     this.ensureProcess(tabId);
     this.writeMessage(tabId, message);
   }
@@ -387,6 +389,14 @@ rl.on('line', async (line) => {
       }
     }
     this.sessions.delete(tabId);
+
+    // Tear down the per-tab raw-capture proxy (#299). A fresh one will be
+    // created on the next sendMessage via ensureProcess.
+    const capture = this.rawCaptureByTab.get(tabId);
+    if (capture) {
+      this.rawCaptureByTab.delete(tabId);
+      capture.close().catch(() => { /* best effort */ });
+    }
 
     // Reset token counter to zero for the new session — and push the zero
     // value to the renderer immediately so the UI updates without a poll.
@@ -659,29 +669,89 @@ rl.on('line', async (line) => {
   }
 
   /**
+   * Compose the orchestrator system prompt with a per-project skills
+   * enumeration (#266). `--system-prompt-file` replaces Claude Code's
+   * default system prompt and thereby suppresses the built-in
+   * "Available Skills" reminder; this helper re-injects it by reading
+   * `.claude/skills/<name>/SKILL.md` frontmatter at spawn time and
+   * appending a skills section to SANDSTORM_OUTER.md. Writes the
+   * composed prompt to a tmp file and returns its path, or returns the
+   * original path if composition fails. Returns null when the base
+   * prompt file doesn't exist, so the caller can fall through to the
+   * CLI's default system prompt.
+   */
+  private resolveSystemPromptFile(
+    basePath: string,
+    projectDir: string,
+    tabId: string
+  ): string | null {
+    if (!fs.existsSync(basePath)) return null;
+    try {
+      const base = fs.readFileSync(basePath, 'utf-8');
+      // Skills bundled under `sandstorm-cli/skills/` are exposed to the
+      // subprocess as a Claude Code plugin via `--plugin-dir` (added to
+      // spawn args below). The CLI registers them under the
+      // plugin-name:skill-name pattern, so the injected system-prompt
+      // description has to use the same prefix or the model will call a
+      // name the CLI doesn't recognize (70-byte "skill not found"
+      // error, debugged post-D-final).
+      const composed = composeSystemPromptWithSkills(
+        base,
+        projectDir,
+        path.join(cliDir, 'skills'),
+        path.basename(cliDir)
+      );
+      if (composed === base) return basePath;
+      const tmpDir = path.join(os.tmpdir(), `sandstorm-orchestrator-${process.pid}`);
+      fs.mkdirSync(tmpDir, { recursive: true });
+      const safeTab = tabId.replace(/[^A-Za-z0-9._-]/g, '_');
+      const outPath = path.join(tmpDir, `system-prompt-${safeTab}.md`);
+      fs.writeFileSync(outPath, composed, 'utf-8');
+      return outPath;
+    } catch {
+      return basePath;
+    }
+  }
+
+  /**
    * Ensure a persistent Claude process is running for the given tab.
    * Spawns one if none exists. The process stays alive across messages.
+   *
+   * `extraEnv` is merged into the spawn env. Used by the raw-capture
+   * path (#299) to inject `ANTHROPIC_BASE_URL` pointing at the loopback
+   * proxy. When capture is off this is an empty object.
    */
-  private ensureProcess(tabId: string): void {
+  private ensureProcess(tabId: string, extraEnv: Record<string, string> = {}): void {
     const session = this.sessions.get(tabId);
     if (!session || session.process) return;
 
     const systemPromptFile = path.join(cliDir, 'SANDSTORM_OUTER.md');
     const claudeBin = getClaudeBin();
+    const cwd = session.projectDir || process.cwd();
 
     const args: string[] = [
       '--print',
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
+      // Restrict the orchestrator to an allowlist of built-in tools. Every
+      // denied tool's schema drops out of the context the CLI re-sends on
+      // every turn — the single largest static-bloat lever per #254. #256.
+      '--tools', resolveOuterClaudeTools(session.projectDir).join(','),
     ];
 
-    if (fs.existsSync(systemPromptFile)) {
-      args.push('--system-prompt-file', systemPromptFile);
+    const resolvedPromptFile = this.resolveSystemPromptFile(systemPromptFile, cwd, tabId);
+    if (resolvedPromptFile) {
+      args.push('--system-prompt-file', resolvedPromptFile);
     }
 
-    if (this.mcpConfigPath) {
-      args.push('--mcp-config', this.mcpConfigPath);
+    // Register the Sandstorm-bundled skills with the CLI as a plugin.
+    // Without this, `Skill(name=…)` invocations fail with "skill not
+    // found" even though the description is advertised in the prompt.
+    // `cliDir` contains a top-level `skills/` dir, which is exactly the
+    // plugin-root layout Claude Code expects.
+    if (fs.existsSync(path.join(cliDir, 'skills'))) {
+      args.push('--plugin-dir', cliDir);
     }
 
     if (this.modelResolver && session.projectDir) {
@@ -689,11 +759,41 @@ rl.on('line', async (line) => {
       args.push('--model', outerModel);
     }
 
-    const cwd = session.projectDir || process.cwd();
+    // Expose the in-process MCP bridge to script-backed skills (#268). The
+    // bridge already exists for the MCP server; scripts call the same
+    // endpoint via curl and go through the control plane, not raw CLI.
+    // SANDSTORM_SKILLS_DIR points at the bundled skills dir so SKILL.md
+    // bodies can reference their own `scripts/*.sh` no matter which
+    // project is open.
+    //
+    // `CLAUDE_CODE_DISABLE_CLAUDE_MDS=1` (#302) — stops Claude Code from
+    // auto-injecting the project's CLAUDE.md into every user message as
+    // a `<system-reminder>`. The outer orchestrator already gets its
+    // instructions from SANDSTORM_OUTER.md; the per-project CLAUDE.md is
+    // for the inner stack Claude, not the outer. Without this flag every
+    // outbound API request carries ~10 KB of redundant context per turn.
+    //
+    // `CLAUDE_CODE_PLUGIN_CACHE_DIR` (#303) — points the CLI's plugin
+    // discovery at an empty sandbox dir so globally-installed Claude
+    // Code plugins (frontend-design, skill-creator, Gmail/Gcal/Gdrive
+    // MCPs, LSP, etc.) don't register themselves. Our Sandstorm skills
+    // still load via `--plugin-dir`. Saves several KB of tool schemas
+    // on every API request and prevents unrelated MCP tools from
+    // advertising auth flows to the orchestrator model.
+    const emptyPluginDir = this.ensureEmptyPluginCacheDir();
+    const env: Record<string, string | undefined> = {
+      ...getClaudeEnv(),
+      SANDSTORM_BRIDGE_URL: `http://127.0.0.1:${this.bridgePort}`,
+      SANDSTORM_BRIDGE_TOKEN: this.bridgeToken,
+      SANDSTORM_SKILLS_DIR: path.join(cliDir, 'skills'),
+      CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+      CLAUDE_CODE_PLUGIN_CACHE_DIR: emptyPluginDir,
+      ...extraEnv,
+    };
 
     const child = spawn(claudeBin, args, {
       cwd,
-      env: getClaudeEnv(),
+      env,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
 
@@ -776,6 +876,42 @@ rl.on('line', async (line) => {
                   prev.cache_read_input_tokens + (usage.cache_read_input_tokens ?? 0),
               });
               this.emitSessionTokens(tabId);
+
+              // Per-turn telemetry (#262 tactic A). No-op when the opt-in
+              // env flag is off. Measurement lands first so later tactics
+              // have a baseline.
+              if (this.telemetry.active) {
+                const now = Date.now();
+                const secondsSincePrev =
+                  session.lastResultAt === null
+                    ? null
+                    : (now - session.lastResultAt) / 1000;
+                this.telemetry.record({
+                  ts: new Date(now).toISOString(),
+                  tabId,
+                  projectDir: session.projectDir,
+                  turn_index: session.turnIndex,
+                  seconds_since_prev_turn: secondsSincePrev,
+                  input_tokens: usage.input_tokens ?? 0,
+                  output_tokens: usage.output_tokens ?? 0,
+                  cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
+                  cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
+                  sub_turn_count: session.subTurnCount,
+                  tool_calls: session.toolCallsInCycle.map((c) => ({
+                    name: c.name,
+                    tool_result_bytes: c.tool_result_bytes,
+                  })),
+                });
+              }
+              session.turnIndex += 1;
+              session.lastResultAt = Date.now();
+              // Reset per-cycle counters for the next user-message turn.
+              session.subTurnCount = 0;
+              session.toolCallsInCycle = [];
+              // Advance the raw-capture turn boundary in lock-step with
+              // our internal turn counter. Dumps for the next turn land
+              // in files tagged with the incremented turn index (#299).
+              this.rawCaptureByTab.get(tabId)?.markTurnComplete();
             }
 
             if (session.fullResponse) {
@@ -803,16 +939,83 @@ rl.on('line', async (line) => {
             continue;
           }
 
-          // Log tool_use events for observability
+          // Log tool_use events for observability + telemetry (#262 sub-turn instrumentation)
           if (parsed.type === 'content_block_start') {
             const contentBlock = (parsed as { content_block?: { type?: string; name?: string; id?: string } }).content_block;
             if (contentBlock?.type === 'tool_use') {
               this.log(`Tool call: tab=${tabId} tool=${contentBlock.name} id=${contentBlock.id}`);
+              if (contentBlock.name && contentBlock.id) {
+                session.toolCallsInCycle.push({
+                  name: contentBlock.name,
+                  tool_use_id: contentBlock.id,
+                  tool_result_bytes: 0,
+                });
+              }
             }
           }
           if (parsed.type === 'content_block_stop') {
             const idx = (parsed as { index?: number }).index;
             this.log(`Tool call ended: tab=${tabId} block_index=${idx}`);
+          }
+
+          // Count sub-API-calls: each type:"assistant" event is one API response.
+          // A direct reply has sub_turn_count=1; a tool-use chain produces >= 2.
+          // Also walk the assistant message content for tool_use blocks —
+          // some CLI builds (observed on the orchestrator path) emit tool_use
+          // here instead of via separate content_block_start events, so we
+          // capture from both paths and dedupe by tool_use_id.
+          if (parsed.type === 'assistant') {
+            session.subTurnCount += 1;
+            const assistantMsg = (parsed as { message?: { content?: unknown } }).message;
+            const assistantContent = assistantMsg?.content;
+            if (Array.isArray(assistantContent)) {
+              for (const block of assistantContent as Array<Record<string, unknown>>) {
+                if (block?.type !== 'tool_use') continue;
+                const id = typeof block.id === 'string' ? block.id : undefined;
+                const name = typeof block.name === 'string' ? block.name : undefined;
+                if (!id || !name) continue;
+                if (session.toolCallsInCycle.some((c) => c.tool_use_id === id)) continue;
+                session.toolCallsInCycle.push({
+                  name,
+                  tool_use_id: id,
+                  tool_result_bytes: 0,
+                });
+                this.log(`Tool call: tab=${tabId} tool=${name} id=${id}`);
+              }
+            }
+          }
+
+          // type:"user" carries tool_result blocks that the bridge returned to
+          // the model. Associate each tool_result's text size with its
+          // originating tool_use_id so we can see which tools fed the biggest
+          // payloads into the transcript.
+          if (parsed.type === 'user') {
+            const msg = (parsed as { message?: { content?: unknown } }).message;
+            const content = msg?.content;
+            if (Array.isArray(content)) {
+              for (const block of content as Array<Record<string, unknown>>) {
+                if (block?.type !== 'tool_result') continue;
+                const toolUseId = block.tool_use_id as string | undefined;
+                if (!toolUseId) continue;
+                const record = session.toolCallsInCycle.find(
+                  (c) => c.tool_use_id === toolUseId
+                );
+                if (!record) continue;
+                const blockContent = block.content;
+                let bytes = 0;
+                if (typeof blockContent === 'string') {
+                  bytes = Buffer.byteLength(blockContent, 'utf8');
+                } else if (Array.isArray(blockContent)) {
+                  for (const inner of blockContent as Array<Record<string, unknown>>) {
+                    if (typeof inner?.text === 'string') {
+                      bytes += Buffer.byteLength(inner.text, 'utf8');
+                    }
+                  }
+                }
+                // Accumulate in case a tool_result arrives in chunks
+                record.tool_result_bytes += bytes;
+              }
+            }
           }
 
           // Extract text for streaming output
@@ -909,13 +1112,10 @@ rl.on('line', async (line) => {
     this.bridgeServer?.close();
     this.logStream?.end();
     this.logStream = null;
-    if (this.mcpConfigPath) {
-      const tmpDir = path.dirname(this.mcpConfigPath);
-      try {
-        fs.rmSync(tmpDir, { recursive: true });
-      } catch {
-        // Ignore cleanup errors
-      }
-    }
+    this.telemetry.close();
+    // Close all raw-capture listeners (#299). Fire-and-forget — we don't
+    // block shutdown on proxy drain.
+    this.rawCapture.closeAll().catch(() => { /* ignore */ });
+    this.rawCaptureByTab.clear();
   }
 }

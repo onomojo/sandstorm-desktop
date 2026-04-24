@@ -24,6 +24,7 @@ import {
   isCronRunning,
 } from './scheduler';
 import { syncAllProjectsCrontab } from './scheduler/scheduler-manager';
+import { runScheduledScript } from './scheduler/script-runner';
 
 // Enable remote debugging via env var (used by integration tests and ad-hoc CDP connections)
 if (process.env.REMOTE_DEBUGGING_PORT) {
@@ -45,11 +46,11 @@ export let dockerConnectionManager: DockerConnectionManager | null = null;
 export let sessionMonitor: SessionMonitor;
 export let schedulerSocketServer: SchedulerSocketServer;
 
-// Track in-flight dispatches to prevent duplicate concurrent runs.
-// Maps flightKey → { safetyTimer, completionPoll } so we can clear both on quit.
+// Track in-flight scheduler dispatches to prevent overlapping concurrent
+// runs of the same schedule. Each action Promise clears its own entry in
+// `finally`; the `safetyTimer` is a belt-and-suspenders leak guard.
 interface InFlightEntry {
   safetyTimer: ReturnType<typeof setTimeout>;
-  completionPoll: ReturnType<typeof setInterval>;
 }
 const inFlightDispatches = new Map<string, InFlightEntry>();
 
@@ -200,7 +201,10 @@ async function initializeApp(): Promise<void> {
     console.warn('[scheduler] Wrapper install failed (non-fatal):', err);
   }
 
-  // Start the scheduler socket server for cron → app dispatch
+  // Scheduler dispatch handler. Routes each scheduled fire by
+  // `schedule.action.kind` to a deterministic primitive (this PR: only
+  // `run-script`). MUST NOT call `agentBackend.sendMessage` or any
+  // chat-session API — see CLAUDE.md "Deterministic workflow philosophy".
   const handleScheduledDispatch = async (
     request: ScheduledDispatchRequest
   ): Promise<ScheduledDispatchResponse> => {
@@ -227,59 +231,56 @@ async function initializeApp(): Promise<void> {
       if (smState.level === 'over_limit' || smState.level === 'limit') {
         return { ok: false, reason: 'rate-limited', message: 'Rate limit reached' };
       }
-
-      // Check auth-halt (session monitor halted state)
       if (smState.halted) {
         return { ok: false, reason: 'auth-halt', message: 'Session is halted' };
       }
 
-      // Check if a dispatch for this (projectDir, scheduleId) is already in-flight
+      // In-flight dedup so a slow schedule doesn't stack up overlapping
+      // fires. Safety timer clears the flight if the action Promise
+      // somehow never settles.
       const flightKey = `${request.projectDir}:${request.scheduleId}`;
       if (inFlightDispatches.has(flightKey)) {
         return { ok: false, reason: 'orchestrator-busy', message: `Dispatch already in-flight for schedule ${request.scheduleId}` };
       }
 
-      // Use the schedule's prompt (not the placeholder from the wrapper)
-      const prompt = schedule.prompt;
-
-      // Dispatch via the agent backend as a scheduled turn
-      const tabId = `project-${project.id}`;
-      agentBackend.sendMessage(tabId, prompt, project.directory);
-
-      // Mark as in-flight and poll the agent backend for completion.
-      // The agent backend sets session.processing = false when done; we check
-      // every 10s and clear the in-flight entry when the session is no longer
-      // processing, allowing the next scheduled fire to dispatch.
-      const clearFlight = (key: string): void => {
-        const entry = inFlightDispatches.get(key);
-        if (entry) {
-          clearInterval(entry.completionPoll);
-          clearTimeout(entry.safetyTimer);
-          inFlightDispatches.delete(key);
-        }
-      };
-      const completionPoll = setInterval(() => {
-        const history = agentBackend.getHistory(tabId);
-        if (!history.processing) {
-          clearFlight(flightKey);
-        }
-      }, 10_000);
-      // Safety timeout: 4 hours max to prevent leaks if polling somehow fails
       const safetyTimer = setTimeout(() => {
-        clearFlight(flightKey);
+        inFlightDispatches.delete(flightKey);
       }, 4 * 60 * 60 * 1000);
-      inFlightDispatches.set(flightKey, { safetyTimer, completionPoll });
+      inFlightDispatches.set(flightKey, { safetyTimer });
 
-      // Notify the renderer to mark this user-turn with a "scheduled" badge
+      // Notify the renderer so the UI can show an "action running" badge
+      // on the schedule in the panel. No chat turn — this is just a UI
+      // hint, keyed by scheduleId, not a message in the agent session.
       mainWindow?.webContents.send('schedule:dispatched', {
         projectDir: request.projectDir,
         scheduleId: request.scheduleId,
         scheduleLabel: schedule.label || schedule.id,
         firedAt: request.firedAt,
-        tabId,
       });
 
-      return { ok: true, dispatchId: `dispatch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}` };
+      try {
+        switch (schedule.action.kind) {
+          case 'run-script': {
+            const response = await runScheduledScript(
+              project.directory,
+              schedule.action.scriptName,
+              request,
+            );
+            return response;
+          }
+          default: {
+            const unknownKind = (schedule.action as { kind?: string }).kind;
+            return {
+              ok: false,
+              reason: 'internal-error',
+              message: `Unknown schedule action kind: ${String(unknownKind)}`,
+            };
+          }
+        }
+      } finally {
+        clearTimeout(safetyTimer);
+        inFlightDispatches.delete(flightKey);
+      }
     } catch (err) {
       return {
         ok: false,
@@ -365,9 +366,8 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
-  // Clear in-flight dispatch timers to allow graceful shutdown
+  // Clear in-flight dispatch safety timers to allow graceful shutdown
   for (const entry of inFlightDispatches.values()) {
-    clearInterval(entry.completionPoll);
     clearTimeout(entry.safetyTimer);
   }
   inFlightDispatches.clear();

@@ -79,10 +79,11 @@ json_escape() {
 PROJECT_DIR_ESC=$(json_escape "$PROJECT_DIR")
 SCHEDULE_ID_ESC=$(json_escape "$SCHEDULE_ID")
 
-# Read prompt from schedule — the prompt is passed in the request; the app
-# looks it up from the schedule store. We send a placeholder that the app
-# will replace with the actual prompt from the schedule.
-REQUEST="{\"type\":\"scheduled-dispatch\",\"version\":${PROTOCOL_VERSION},\"projectDir\":\"${PROJECT_DIR_ESC}\",\"scheduleId\":\"${SCHEDULE_ID_ESC}\",\"prompt\":\"__from_schedule__\",\"firedAt\":\"${FIRED_AT}\"}"
+# Request carries only the identifiers — the app looks up the schedule's
+# structured action (`{kind: ..., ...}`) from schedules.json. No freeform
+# prompt crosses the socket; there's nothing to dispatch to an outer-Claude
+# chat turn by design.
+REQUEST="{\"type\":\"scheduled-dispatch\",\"version\":${PROTOCOL_VERSION},\"projectDir\":\"${PROJECT_DIR_ESC}\",\"scheduleId\":\"${SCHEDULE_ID_ESC}\",\"firedAt\":\"${FIRED_AT}\"}"
 
 # --- Send request via socket ---
 

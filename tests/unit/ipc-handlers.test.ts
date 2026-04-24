@@ -149,12 +149,20 @@ vi.mock('../../src/main/control-plane/account-usage', () => ({
 
 vi.mock('child_process', () => ({
   spawn: mockSpawn,
+  // ticket-spec / pr-creator / ticket-updater use execFile via promisify;
+  // promisify only needs the function to exist + be callable, so a no-op
+  // stub is enough — the IPC handler tests don't exercise these paths.
+  execFile: vi.fn(),
+  // ticket-provider uses spawnSync for `gh --version` and `git remote -v`
+  // detection. Return a non-zero exit so detection returns 'skeleton' for
+  // the IPC handler tests (no assertions depend on the detected value).
+  spawnSync: vi.fn(() => ({ status: 1, stdout: '', stderr: '' })),
 }));
 
 vi.mock('../../src/main/scheduler', () => ({
-  createSchedule: vi.fn().mockReturnValue({ id: 'sch_test', cronExpression: '0 * * * *', prompt: 'Test', enabled: true }),
+  createSchedule: vi.fn().mockReturnValue({ id: 'sch_test', cronExpression: '0 * * * *', action: { kind: 'run-script', scriptName: 'test.sh' }, enabled: true }),
   listSchedules: vi.fn().mockReturnValue([]),
-  updateSchedule: vi.fn().mockReturnValue({ id: 'sch_test', cronExpression: '0 * * * *', prompt: 'Test', enabled: true }),
+  updateSchedule: vi.fn().mockReturnValue({ id: 'sch_test', cronExpression: '0 * * * *', action: { kind: 'run-script', scriptName: 'test.sh' }, enabled: true }),
   deleteSchedule: vi.fn(),
   isCronRunning: vi.fn().mockReturnValue(true),
   removeProjectFromCrontab: (...args: unknown[]) => mockRemoveProjectFromCrontab(...args),
@@ -1022,7 +1030,7 @@ describe('IPC Handlers', () => {
       const result = await invokeHandler('schedules:create', '/home/user/proj', {
         label: 'Test',
         cronExpression: '0 * * * *',
-        prompt: 'Run tests',
+        action: { kind: 'run-script', scriptName: 'run-tests.sh' },
         enabled: true,
       });
 
@@ -1030,7 +1038,7 @@ describe('IPC Handlers', () => {
         projectDir: '/home/user/proj',
         label: 'Test',
         cronExpression: '0 * * * *',
-        prompt: 'Run tests',
+        action: { kind: 'run-script', scriptName: 'run-tests.sh' },
         enabled: true,
       });
       expect(syncAllProjectsCrontab).toHaveBeenCalled();
@@ -1066,7 +1074,7 @@ describe('IPC Handlers', () => {
 
     it('schedules:create rejects empty projectDir', async () => {
       await expect(
-        invokeHandler('schedules:create', '', { cronExpression: '0 * * * *', prompt: 'test' })
+        invokeHandler('schedules:create', '', { cronExpression: '0 * * * *', action: { kind: 'run-script', scriptName: 'test.sh' } })
       ).rejects.toThrow(/projectDir is required/);
     });
 
@@ -1179,6 +1187,15 @@ describe('IPC Handlers', () => {
       'schedules:cronHealth',
       'auth:status',
       'auth:login',
+      'tickets:fetch',
+      'tickets:specCheck',
+      'tickets:specRefine',
+      'tickets:create',
+      'pr:draftBody',
+      'pr:create',
+      'projects:installUpdateScript',
+      'projects:installCreatePrScript',
+      'projects:detectTicketProvider',
     ];
 
     it('registers all expected IPC channels', () => {

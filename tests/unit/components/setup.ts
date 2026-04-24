@@ -137,14 +137,32 @@ export function mockSandstormApi() {
     },
     schedules: {
       list: vi.fn().mockResolvedValue([]),
-      create: vi.fn().mockResolvedValue({ id: 'sch_test', cronExpression: '0 * * * *', prompt: 'Test', enabled: true, createdAt: '', updatedAt: '' }),
-      update: vi.fn().mockResolvedValue({ id: 'sch_test', cronExpression: '0 * * * *', prompt: 'Test', enabled: true, createdAt: '', updatedAt: '' }),
+      create: vi.fn().mockResolvedValue({ id: 'sch_test', cronExpression: '0 * * * *', action: { kind: 'run-script', scriptName: 'test.sh' }, enabled: true, createdAt: '', updatedAt: '' }),
+      update: vi.fn().mockResolvedValue({ id: 'sch_test', cronExpression: '0 * * * *', action: { kind: 'run-script', scriptName: 'test.sh' }, enabled: true, createdAt: '', updatedAt: '' }),
       delete: vi.fn().mockResolvedValue(undefined),
       cronHealth: vi.fn().mockResolvedValue({ running: true }),
     },
     auth: {
       status: vi.fn().mockResolvedValue({ loggedIn: false, expired: false }),
       login: vi.fn().mockResolvedValue({ success: true }),
+    },
+    tickets: {
+      fetch: vi.fn().mockResolvedValue({ body: '# Issue: test\n\nbody', url: 'https://github.com/o/r/issues/1' }),
+      specCheck: vi.fn().mockResolvedValue({
+        passed: true, questions: [], gateSummary: 'Gate=PASS, questions=0',
+        ticketUrl: 'https://github.com/o/r/issues/1', cached: false,
+      }),
+      specRefine: vi.fn().mockResolvedValue({
+        passed: true, questions: [], gateSummary: 'Gate=PASS, questions=0',
+        ticketUrl: 'https://github.com/o/r/issues/1', cached: false,
+      }),
+      create: vi.fn().mockResolvedValue({
+        url: 'https://github.com/o/r/issues/42', number: 42, ticketId: '42',
+      }),
+    },
+    pr: {
+      draftBody: vi.fn().mockResolvedValue({ title: 'Test PR', body: '## Summary\n- thing\n\n## Test plan\n- [ ] check' }),
+      create: vi.fn().mockResolvedValue({ url: 'https://github.com/o/r/pull/1', number: 1 }),
     },
     on: vi.fn().mockReturnValue(() => {}),
   };

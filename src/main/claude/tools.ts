@@ -1,7 +1,10 @@
 /**
- * MCP tool definitions that Claude can use to interact with the control plane.
- * These are exposed to the Claude chat window so the AI can create stacks,
- * dispatch tasks, and manage the lifecycle programmatically.
+ * Control-plane tool handlers. Historically these were registered as MCP
+ * tools so the outer Claude could invoke them as model-facing tools; as
+ * of the Ticket D migration the orchestrator reaches them exclusively
+ * through script-backed skills that hit the in-process HTTP bridge. The
+ * handler dispatch (`handleToolCall`) is unchanged — only the MCP
+ * advertisement layer went away.
  */
 
 import path from 'path';
@@ -15,253 +18,16 @@ import {
   deleteSchedule,
 } from '../scheduler';
 import { syncAllProjectsCrontab } from '../scheduler/scheduler-manager';
-import type { UpdateSchedulePatch } from '../scheduler/schedule-service';
+import type {
+  CreateScheduleInput,
+  UpdateSchedulePatch,
+} from '../scheduler/schedule-service';
 import { validateProjectDir } from '../validation';
+import { updateTicketBody } from '../control-plane/ticket-updater';
 
 export { validateProjectDir };
 
-export interface ToolDefinition {
-  name: string;
-  description: string;
-  inputSchema: Record<string, unknown>;
-}
 
-export const tools: ToolDefinition[] = [
-  {
-    name: 'create_stack',
-    description:
-      'Create a new Sandstorm stack with a name, project directory, and optional task. When a ticket is specified or the task references a GitHub issue, gateApproved must be true (run /spec-check first) or forceBypass must be true.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        name: { type: 'string', description: 'Stack name (e.g., "auth-refactor")' },
-        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
-        ticket: { type: 'string', description: 'Ticket ID (e.g., "EXP-342")' },
-        branch: { type: 'string', description: 'Git branch name' },
-        description: { type: 'string', description: 'Short description of the work' },
-        runtime: { type: 'string', enum: ['docker', 'podman'], description: 'Container runtime' },
-        task: { type: 'string', description: 'Task to dispatch immediately after creation' },
-        gateApproved: { type: 'boolean', description: 'Set to true after running /spec-check and getting user approval. Required when a ticket is specified or the task references a GitHub issue.' },
-        forceBypass: { type: 'boolean', description: 'Set to true to bypass the spec quality gate. Only use when the user explicitly requests skipping the gate.' },
-        model: {
-          type: 'string',
-          enum: ['auto', 'sonnet', 'opus'],
-          description: 'Claude model for inner agent. If omitted, uses the project\'s configured default model (set in Model Settings). When explicitly set to "auto", YOU must analyze the task complexity and choose the best model via lightweight triage:\n\n**Choose "sonnet" (fast & efficient) when:**\n- Typo fixes, config changes, simple bug fixes\n- Well-defined tasks with clear scope (1-3 files)\n- Routine refactors following existing patterns\n- Straightforward feature additions with no design decisions\n\n**Choose "opus" (most capable) when:**\n- Architectural changes or multi-file features requiring design decisions\n- Tricky bugs that need deep reasoning or cross-cutting analysis\n- Security-sensitive or performance-critical work\n- Tasks involving new patterns not yet established in the codebase\n- Open-ended features where the approach is ambiguous\n\nWhen you choose a model via triage, communicate your reasoning briefly (e.g., "Using Sonnet — straightforward config change" or "Using Opus — multi-file architectural refactor").',
-        },
-      },
-      required: ['name', 'projectDir'],
-    },
-  },
-  {
-    name: 'list_stacks',
-    description: 'List all current stacks with their status and services',
-    inputSchema: {
-      type: 'object',
-      properties: {},
-    },
-  },
-  {
-    name: 'dispatch_task',
-    description: 'Dispatch a task to an existing stack. When the stack has a ticket or the prompt references a GitHub issue, gateApproved must be true (run /spec-check first) or forceBypass must be true.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        stackId: { type: 'string', description: 'Stack ID to dispatch to' },
-        prompt: { type: 'string', description: 'Task description for inner Claude' },
-        gateApproved: { type: 'boolean', description: 'Set to true after running /spec-check and getting user approval. Required when a ticket is specified or the prompt references a GitHub issue.' },
-        forceBypass: { type: 'boolean', description: 'Set to true to bypass the spec quality gate. Only use when the user explicitly requests skipping the gate.' },
-        model: {
-          type: 'string',
-          enum: ['auto', 'sonnet', 'opus'],
-          description: 'Claude model for this task. If omitted, uses the project\'s configured default model (set in Model Settings). When explicitly set to "auto", YOU must analyze the task complexity and choose the best model via lightweight triage:\n\n**Choose "sonnet"** for: typo fixes, config changes, simple bugs, well-defined tasks (1-3 files), routine refactors, straightforward additions.\n**Choose "opus"** for: architectural changes, multi-file features with design decisions, tricky bugs, security/performance-critical work, new patterns, ambiguous scope.\n\nCommunicate your reasoning briefly when auto-selecting.',
-        },
-      },
-      required: ['stackId', 'prompt'],
-    },
-  },
-  {
-    name: 'get_diff',
-    description: 'Get the git diff from a stack',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        stackId: { type: 'string', description: 'Stack ID' },
-      },
-      required: ['stackId'],
-    },
-  },
-  {
-    name: 'push_stack',
-    description: 'Commit and push changes from a stack',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        stackId: { type: 'string', description: 'Stack ID' },
-        message: { type: 'string', description: 'Commit message' },
-      },
-      required: ['stackId'],
-    },
-  },
-  {
-    name: 'get_task_status',
-    description:
-      'Get the current task status for a stack (running, completed, failed, idle)',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        stackId: { type: 'string', description: 'Stack ID' },
-      },
-      required: ['stackId'],
-    },
-  },
-  {
-    name: 'get_task_output',
-    description:
-      'Get the latest output from the running or most recent task in a stack',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        stackId: { type: 'string', description: 'Stack ID' },
-        lines: {
-          type: 'number',
-          description: 'Number of lines to return (default: 50)',
-        },
-      },
-      required: ['stackId'],
-    },
-  },
-  {
-    name: 'teardown_stack',
-    description:
-      'Tear down a stack — stops containers, removes workspace, archives to history',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        stackId: { type: 'string', description: 'Stack ID to tear down' },
-      },
-      required: ['stackId'],
-    },
-  },
-  {
-    name: 'get_logs',
-    description:
-      'Get container logs from a stack, optionally filtered to a specific service',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        stackId: { type: 'string', description: 'Stack ID' },
-        service: {
-          type: 'string',
-          description:
-            'Service name to get logs for (e.g., "claude", "app"). Omit for all services.',
-        },
-      },
-      required: ['stackId'],
-    },
-  },
-  {
-    name: 'set_pr',
-    description:
-      'Record that a pull request was created for a stack. Updates the stack status to pr_created and stores the PR URL and number.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        stackId: { type: 'string', description: 'Stack ID' },
-        prUrl: { type: 'string', description: 'Full URL of the pull request' },
-        prNumber: { type: 'number', description: 'Pull request number' },
-      },
-      required: ['stackId', 'prUrl', 'prNumber'],
-    },
-  },
-  {
-    name: 'spec_check',
-    description:
-      'Run the spec quality gate against a ticket. Spawns an ephemeral agent to evaluate the ticket against the project\'s quality gate criteria. Returns a structured pass/fail report with gaps and assumptions. Use this instead of running /spec-check in-session to avoid inflating the outer session with evaluation tokens.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ticketId: { type: 'string', description: 'Ticket ID (e.g., "178", "#178", "PROJ-123")' },
-        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
-      },
-      required: ['ticketId', 'projectDir'],
-    },
-  },
-  {
-    name: 'spec_refine',
-    description:
-      'Refine a ticket that failed the spec quality gate. Spawns an ephemeral agent to incorporate user answers into the ticket and re-evaluate. Call without userAnswers to get the initial gaps and questions. Call with userAnswers to update the ticket and re-check. The outer Claude shuttles questions/answers between the user and this tool — each call is a fresh ephemeral process.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        ticketId: { type: 'string', description: 'Ticket ID (e.g., "178", "#178")' },
-        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
-        userAnswers: { type: 'string', description: 'User answers to the gap questions from the previous spec_check or spec_refine call. Omit on the first call to get the initial gaps.' },
-      },
-      required: ['ticketId', 'projectDir'],
-    },
-  },
-  {
-    name: 'schedule_create',
-    description:
-      'Create a scheduled automation for a project. The schedule fires on a cron expression and dispatches the prompt to the orchestrator.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
-        label: { type: 'string', description: 'Human-readable label for the schedule. If omitted, the schedule ID is used as the display label.' },
-        cronExpression: { type: 'string', description: 'Standard 5-field cron expression (minute hour day-of-month month day-of-week)' },
-        prompt: { type: 'string', description: 'The prompt to dispatch when the schedule fires' },
-        enabled: { type: 'boolean', description: 'Whether the schedule is enabled (default: true)' },
-      },
-      required: ['projectDir', 'cronExpression', 'prompt'],
-    },
-  },
-  {
-    name: 'schedule_list',
-    description: 'List all schedules for a project.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
-      },
-      required: ['projectDir'],
-    },
-  },
-  {
-    name: 'schedule_update',
-    description: 'Update an existing schedule. Only the fields in `patch` are modified.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
-        id: { type: 'string', description: 'Schedule ID' },
-        patch: {
-          type: 'object',
-          description: 'Fields to update',
-          properties: {
-            label: { type: 'string' },
-            cronExpression: { type: 'string' },
-            prompt: { type: 'string' },
-            enabled: { type: 'boolean' },
-          },
-        },
-      },
-      required: ['projectDir', 'id', 'patch'],
-    },
-  },
-  {
-    name: 'schedule_delete',
-    description: 'Delete a schedule from a project.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        projectDir: { type: 'string', description: 'Absolute path to the project directory' },
-        id: { type: 'string', description: 'Schedule ID' },
-      },
-      required: ['projectDir', 'id'],
-    },
-  },
-];
 
 export async function handleToolCall(
   name: string,
@@ -362,7 +128,7 @@ export async function handleToolCall(
         projectDir: input.projectDir as string,
         label: input.label as string | undefined,
         cronExpression: input.cronExpression as string,
-        prompt: input.prompt as string,
+        action: input.action as CreateScheduleInput['action'],
         enabled: input.enabled as boolean | undefined,
       });
       try {
@@ -680,6 +446,41 @@ Respond in EXACTLY this format:
   // Extract updated ticket body if present
   const bodyMatch = result.match(/## Updated Ticket Body\s*\n([\s\S]*?)(?=\n## Spec Quality Gate)/);
   const updatedBody = bodyMatch ? bodyMatch[1].trim() : null;
+
+  // Commit the refined body back to GitHub (#318). Without this, refinements
+  // only live in the renderer's transient state and are lost between
+  // sessions — the user does the work, sees PASS, and the ticket on GitHub
+  // is unchanged. We write on every refinement that produces an updatedBody
+  // (not just on PASS) so iterative refinement loops build on each other.
+  if (updatedBody) {
+    try {
+      await updateTicketBody(ticketId, projectDir, updatedBody);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        passed: false,
+        report: result,
+        updatedBody,
+        error:
+          `Refinement evaluated successfully but writing the updated body back to your ticket system failed: ${msg} ` +
+          `The refined body is in the report — copy it manually if needed.`,
+      };
+    }
+  } else if (userAnswers) {
+    // Refinement was supposed to produce an updatedBody (the prompt
+    // demands it) but didn't — surface as an error so the user knows the
+    // ticket on the source system is still stale rather than silently shipping a
+    // PASS verdict against the unchanged ticket.
+    return {
+      passed: false,
+      report: result,
+      updatedBody: null,
+      error:
+        'Refinement did not produce an "## Updated Ticket Body" section, so nothing was written ' +
+        'back to your ticket system. Re-run refinement; if it persists, the ephemeral agent may be ' +
+        'drifting from the required output format.',
+    };
+  }
 
   return {
     passed,
