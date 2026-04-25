@@ -350,6 +350,11 @@ describe('AgentSession', () => {
     expect(screen.getByText('Thinking...')).toBeDefined();
   });
 
+  // The "Scheduled" chat badge was removed in #297 reshape — scheduled fires
+  // no longer route through the outer-Claude chat. See CLAUDE.md
+  // "Deterministic workflow philosophy". The schedule:dispatched IPC event
+  // still fires to light up the scheduler panel, but never touches chat state.
+
   it('shows "Message queued..." when isQueued:true is preserved in store after remount', async () => {
     // Pre-populate store as if message was queued while component was unmounted.
     // Mock history to match — backend is still processing.

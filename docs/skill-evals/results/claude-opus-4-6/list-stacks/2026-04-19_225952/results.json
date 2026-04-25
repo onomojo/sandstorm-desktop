@@ -1,0 +1,225 @@
+{
+  "exit_reason": "max_iterations (1)",
+  "original_description": "Use this skill whenever the user asks for a listing / overview / enumeration of their Sandstorm stacks. Trigger phrases include: 'list my stacks', 'what stacks do I have', 'show me all my stacks', 'list stacks', 'what's running', 'give me a rundown of the stacks', 'which stacks are active'. This is a pure listing \u2014 it returns every stack with its status and services. Do NOT trigger for: asking about ONE specific stack (that's check-and-resume-stack or stack-inspect), creating a new stack (that's spec-and-dispatch), or any action on a stack.",
+  "best_description": "Use this skill whenever the user asks for a listing / overview / enumeration of their Sandstorm stacks. Trigger phrases include: 'list my stacks', 'what stacks do I have', 'show me all my stacks', 'list stacks', 'what's running', 'give me a rundown of the stacks', 'which stacks are active'. This is a pure listing \u2014 it returns every stack with its status and services. Do NOT trigger for: asking about ONE specific stack (that's check-and-resume-stack or stack-inspect), creating a new stack (that's spec-and-dispatch), or any action on a stack.",
+  "best_score": "8/12",
+  "best_train_score": "8/12",
+  "best_test_score": null,
+  "final_description": "Use this skill whenever the user asks for a listing / overview / enumeration of their Sandstorm stacks. Trigger phrases include: 'list my stacks', 'what stacks do I have', 'show me all my stacks', 'list stacks', 'what's running', 'give me a rundown of the stacks', 'which stacks are active'. This is a pure listing \u2014 it returns every stack with its status and services. Do NOT trigger for: asking about ONE specific stack (that's check-and-resume-stack or stack-inspect), creating a new stack (that's spec-and-dispatch), or any action on a stack.",
+  "iterations_run": 1,
+  "holdout": 0.0,
+  "train_size": 12,
+  "test_size": 0,
+  "history": [
+    {
+      "iteration": 1,
+      "description": "Use this skill whenever the user asks for a listing / overview / enumeration of their Sandstorm stacks. Trigger phrases include: 'list my stacks', 'what stacks do I have', 'show me all my stacks', 'list stacks', 'what's running', 'give me a rundown of the stacks', 'which stacks are active'. This is a pure listing \u2014 it returns every stack with its status and services. Do NOT trigger for: asking about ONE specific stack (that's check-and-resume-stack or stack-inspect), creating a new stack (that's spec-and-dispatch), or any action on a stack.",
+      "train_passed": 8,
+      "train_failed": 4,
+      "train_total": 12,
+      "train_results": [
+        {
+          "query": "Something happened, our tokens hit the limit and all the stacks got halted. Can you take a look at all the stacks we have and see where the state is and whether or not they finished?",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "I'm just curious what the status of everything is. Something weird happened.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "The app crashed, I'm not sure if the state listed is correct. Can you verify the state is correct on all of the stacks?",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Let me know what the status is of all the stacks.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "what's the status of stack 243",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you tell me the current state of stack abc?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Take a look at stack 42, seems to be running for a while. Stuck in a loop or something?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 23 was halted. Can you pick up where it left off?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let's go ahead and tear down stack 420.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let's start ticket 151.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        }
+      ],
+      "test_passed": null,
+      "test_failed": null,
+      "test_total": null,
+      "test_results": null,
+      "passed": 8,
+      "failed": 4,
+      "total": 12,
+      "results": [
+        {
+          "query": "Something happened, our tokens hit the limit and all the stacks got halted. Can you take a look at all the stacks we have and see where the state is and whether or not they finished?",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "I'm just curious what the status of everything is. Something weird happened.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "The app crashed, I'm not sure if the state listed is correct. Can you verify the state is correct on all of the stacks?",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Let me know what the status is of all the stacks.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "what's the status of stack 243",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you tell me the current state of stack abc?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Take a look at stack 42, seems to be running for a while. Stuck in a loop or something?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 23 was halted. Can you pick up where it left off?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let's go ahead and tear down stack 420.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let's start ticket 151.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        }
+      ]
+    }
+  ]
+}

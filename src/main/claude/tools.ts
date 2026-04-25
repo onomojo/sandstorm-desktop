@@ -8,39 +8,26 @@
  */
 
 import path from 'path';
-import { stackManager, agentBackend } from '../index';
+import { stackManager, agentBackend, registry } from '../index';
 import { fetchTicketContext, getScriptStatus } from '../control-plane/ticket-fetcher';
 import { getSpecQualityGate } from '../spec-quality-gate';
+import {
+  createSchedule,
+  listSchedules,
+  updateSchedule,
+  deleteSchedule,
+} from '../scheduler';
+import { syncAllProjectsCrontab } from '../scheduler/scheduler-manager';
+import type {
+  CreateScheduleInput,
+  UpdateSchedulePatch,
+} from '../scheduler/schedule-service';
+import { validateProjectDir } from '../validation';
 import { updateTicketBody } from '../control-plane/ticket-updater';
 
-/**
- * Validate that projectDir is a non-empty absolute path.
- * Returns an error object if invalid, or null if valid.
- */
-export function validateProjectDir(projectDir: unknown): { error: string } | null {
-  if (!projectDir || typeof projectDir !== 'string' || !projectDir.trim()) {
-    return {
-      error:
-        'projectDir is required and must be a non-empty string. ' +
-        'Pass the absolute path to the project directory (e.g., "/home/user/my-project").',
-    };
-  }
-  if (!path.isAbsolute(projectDir)) {
-    return {
-      error:
-        `projectDir must be an absolute path, got relative path: "${projectDir}". ` +
-        'Use the full path (e.g., "/home/user/my-project") instead of a relative path like "." or "./project".',
-    };
-  }
-  return null;
-}
+export { validateProjectDir };
 
 
-/**
- * MCP tool schemas were removed in Ticket D-final (#__). `handleToolCall`
- * remains because script-backed skills invoke it through the local HTTP
- * bridge by name; no external MCP server advertises these schemas anymore.
- */
 
 export async function handleToolCall(
   name: string,
@@ -132,6 +119,58 @@ export async function handleToolCall(
         input.projectDir as string,
         input.userAnswers as string | undefined
       );
+    }
+
+    case 'schedule_create': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
+      const schedule = createSchedule({
+        projectDir: input.projectDir as string,
+        label: input.label as string | undefined,
+        cronExpression: input.cronExpression as string,
+        action: input.action as CreateScheduleInput['action'],
+        enabled: input.enabled as boolean | undefined,
+      });
+      try {
+        await syncAllProjectsCrontab(registry);
+      } catch (err) {
+        console.warn('[scheduler] Crontab sync failed (non-fatal):', err);
+      }
+      return { id: schedule.id };
+    }
+
+    case 'schedule_list': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
+      return { schedules: listSchedules(input.projectDir as string) };
+    }
+
+    case 'schedule_update': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
+      const schedule = updateSchedule(
+        input.projectDir as string,
+        input.id as string,
+        input.patch as UpdateSchedulePatch
+      );
+      try {
+        await syncAllProjectsCrontab(registry);
+      } catch (err) {
+        console.warn('[scheduler] Crontab sync failed (non-fatal):', err);
+      }
+      return { schedule };
+    }
+
+    case 'schedule_delete': {
+      const dirError = validateProjectDir(input.projectDir);
+      if (dirError) return dirError;
+      deleteSchedule(input.projectDir as string, input.id as string);
+      try {
+        await syncAllProjectsCrontab(registry);
+      } catch (err) {
+        console.warn('[scheduler] Crontab sync failed (non-fatal):', err);
+      }
+      return { ok: true };
     }
 
     default:

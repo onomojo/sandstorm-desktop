@@ -298,6 +298,23 @@ export interface StackHistoryRecord {
   duration_seconds: number;
 }
 
+/**
+ * Renderer-side mirror of `ScheduleAction` from src/main/scheduler/types.ts.
+ * This PR only ships `run-script`; follow-up tickets add more kinds.
+ */
+export type ScheduleAction =
+  | { kind: 'run-script'; scriptName: string };
+
+export interface ScheduleEntry {
+  id: string;
+  label?: string;
+  cronExpression: string;
+  action: ScheduleAction;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface ModelSettings {
   inner_model: string;
   outer_model: string;
@@ -406,6 +423,14 @@ interface AppState {
   sessionAcknowledgeCritical: () => Promise<void>;
   sessionHaltAll: () => Promise<string[]>;
   sessionResumeAll: () => Promise<string[]>;
+
+  // Schedules (per-project)
+  schedules: ScheduleEntry[];
+  schedulesLoading: boolean;
+  cronHealthy: boolean | null;
+  _schedulesProjectDir: string | null;
+  refreshSchedules: (projectDir: string) => Promise<void>;
+  refreshCronHealth: () => Promise<void>;
 
   // Account usage budget (persisted in localStorage)
   tokenBudget: number; // 0 means no budget set
@@ -598,6 +623,13 @@ declare global {
         resumeStack: (stackId: string) => Promise<void>;
         forcePoll: () => Promise<SessionMonitorState>;
         reportActivity: () => void;
+      };
+      schedules: {
+        list: (projectDir: string) => Promise<ScheduleEntry[]>;
+        create: (projectDir: string, data: { label?: string; cronExpression: string; action: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
+        update: (projectDir: string, id: string, patch: { label?: string; cronExpression?: string; action?: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
+        delete: (projectDir: string, id: string) => Promise<void>;
+        cronHealth: () => Promise<{ running: boolean }>;
       };
       auth: {
         status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
@@ -814,6 +846,35 @@ export const useAppStore = create<AppState>((set, get) => ({
     const resumed = await window.sandstorm.session.resumeAll();
     await get().refreshStacks();
     return resumed;
+  },
+
+  // Schedules
+  schedules: [],
+  schedulesLoading: false,
+  cronHealthy: null,
+  _schedulesProjectDir: null as string | null,
+
+  refreshSchedules: async (projectDir: string) => {
+    try {
+      set({ schedulesLoading: true, _schedulesProjectDir: projectDir });
+      const schedules = await window.sandstorm.schedules.list(projectDir);
+      // Guard against stale responses from a previous project
+      if (get()._schedulesProjectDir !== projectDir) return;
+      set({ schedules, schedulesLoading: false });
+    } catch {
+      if (get()._schedulesProjectDir === projectDir) {
+        set({ schedulesLoading: false });
+      }
+    }
+  },
+
+  refreshCronHealth: async () => {
+    try {
+      const result = await window.sandstorm.schedules.cronHealth();
+      set({ cronHealthy: result.running });
+    } catch {
+      set({ cronHealthy: null });
+    }
   },
 
   // Account usage budget

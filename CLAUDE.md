@@ -144,6 +144,69 @@ Sandstorm Desktop is a cross-platform control plane for managing isolated agent 
 
 If a change touches application code, it goes through a stack. No exceptions.
 
+## Deterministic workflow philosophy
+
+Routine workflows — refine, start, make-PR, push, schedule fires — MUST
+NOT route through the outer-Claude chat session. The outer chat is
+reserved for novel / exploratory work where the user is actively engaged.
+Every recurring or automatable workflow goes through one of:
+
+1. **A shell script** at `.sandstorm/scripts/<name>.sh`, installed from the
+   provider template set (`github` / `jira` / `skeleton`). Provider-neutral.
+   Mirrors the existing `fetch-ticket.sh` / `update-ticket.sh` / `create-pr.sh`
+   pattern — one contract, one script per provider, one TS wrapper.
+2. **An IPC handler** in `src/main/ipc.ts` that calls deterministic modules
+   under `src/main/control-plane/`. May include a **bounded ephemeral
+   LLM call** via `agentBackend.runEphemeralAgent` — single subprocess,
+   explicit timeout, NEVER adds messages to the chat session, NEVER
+   accumulates state across calls. Used e.g. for the Make-PR title/body
+   draft and the spec quality gate evaluator.
+3. **A scheduler action kind** (`src/main/scheduler/types.ts`) whose
+   dispatch routes to (1) or (2). `run-script` is the escape hatch;
+   built-in kinds wrap specific deterministic flows.
+
+### Why
+
+- Outer Claude chat sessions accumulate context across turns. Every fire
+  of a recurring workflow costs tokens that keep growing — the session
+  doesn't reset.
+- Chat turns appear in the UI and the token counter. Automation that
+  silently wakes up the chat is visually misleading and
+  rate-limit-dangerous (scheduled work while the user is asleep can
+  exhaust the limit).
+- Interactive refinement doesn't compose with cron. If a workflow
+  requires a conversation to finish, it's not a schedule-ready workflow;
+  it belongs as a button.
+
+### Hard rules
+
+- Scheduled / automated work **MUST NOT** call `agentBackend.sendMessage`,
+  `agentBackend.getHistory`, or any chat-session API. Automation paths
+  are grepped for these as a gate.
+- Freeform user prompts **MUST NOT** be stored on long-running schedules.
+  If a schedule carries user text, it's already the wrong shape — route
+  it through an action kind that maps to a deterministic primitive.
+- Don't add a feature's "also works on a schedule" affordance by wiring
+  the button's handler to `agentBackend.sendMessage`. Write the
+  deterministic path first; the button and the scheduler both call that.
+
+### When adding a new workflow
+
+Start from `fetch-ticket.sh` as the template:
+
+1. Write one provider-neutral shell script under
+   `sandstorm-cli/templates/{github,jira,skeleton}/scripts/<name>.sh` with
+   an explicit input/output contract documented at the top of the file.
+2. Add a thin TS wrapper in `src/main/control-plane/` that shells the
+   script and returns a structured result (mirrors
+   `updateTicketBody` / `fetchTicketContext`).
+3. Expose an IPC handler in `src/main/ipc.ts` that calls the wrapper and
+   returns a renderer-friendly shape.
+4. Wire a button in the renderer that calls the IPC handler.
+
+Schedulability comes for free once those four exist — add a new
+`ScheduleAction` kind that calls the same IPC handler/module.
+
 ## Stack teardown rule
 
 NEVER tear down stacks unless the user explicitly says to tear down a stack. No exceptions.
@@ -164,6 +227,17 @@ Violating this rule has caused loss of unpushed work. This is a hard rule.
 - `electron-builder.yml` — files section includes `out/**/*`
 - `electron-vite.config.ts` — build config
 - `src/main/` — Electron main process
+- `src/main/scheduler/` — cron-driven scheduled-action subsystem. Dispatch
+  handler is in `src/main/index.ts`; NEVER routes to outer-Claude chat.
+- `src/main/control-plane/` — deterministic workflow modules
+  (ticket-spec, ticket-updater, ticket-creator, ticket-provider, pr-creator,
+  stack-manager). These are the primitives that buttons and schedules
+  both compose.
 - `src/renderer/` — React UI
 - `src/preload/` — IPC bridge
+- `.sandstorm/scripts/` — per-project provider scripts (`fetch-ticket.sh`,
+  `update-ticket.sh`, `create-pr.sh`, `start-ticket.sh`) plus
+  `.sandstorm/scripts/scheduled/` for the `run-script` scheduler action.
 - `tailwind.config.js` — theme colors under `sandstorm.*`
+- `sandstorm-cli/templates/<provider>/scripts/` — the github / jira /
+  skeleton script templates copied into a project by `sandstorm init`.

@@ -1,0 +1,241 @@
+{
+  "exit_reason": "max_iterations (1)",
+  "original_description": "Use this skill whenever the user wants to see DETAILED output, logs, or uncommitted changes from a specific Sandstorm stack. Trigger phrases include: 'show me the output of stack X', 'what did stack X log', 'show the task output for X', 'show container logs for stack X', 'what changed in stack X', 'show me the diff in stack X', 'what's happening inside stack X', 'dump stack X's output', 'get logs for stack X's claude container'. The skill covers three read-only probes \u2014 task output, container logs, and uncommitted diff \u2014 as subcommands. Do NOT trigger for: a quick status check (that's check-and-resume-stack), listing all stacks (that's list-stacks), or anything that modifies state. Prefer the narrower subcommand (output / logs / diff) over 'all' when the user is specific about what they want.",
+  "best_description": "Use this skill whenever the user wants to see DETAILED output, logs, or uncommitted changes from a specific Sandstorm stack. Trigger phrases include: 'show me the output of stack X', 'what did stack X log', 'show the task output for X', 'show container logs for stack X', 'what changed in stack X', 'show me the diff in stack X', 'what's happening inside stack X', 'dump stack X's output', 'get logs for stack X's claude container'. The skill covers three read-only probes \u2014 task output, container logs, and uncommitted diff \u2014 as subcommands. Do NOT trigger for: a quick status check (that's check-and-resume-stack), listing all stacks (that's list-stacks), or anything that modifies state. Prefer the narrower subcommand (output / logs / diff) over 'all' when the user is specific about what they want.",
+  "best_score": "8/13",
+  "best_train_score": "8/13",
+  "best_test_score": null,
+  "final_description": "Use this skill whenever the user wants to see DETAILED output, logs, or uncommitted changes from a specific Sandstorm stack. Trigger phrases include: 'show me the output of stack X', 'what did stack X log', 'show the task output for X', 'show container logs for stack X', 'what changed in stack X', 'show me the diff in stack X', 'what's happening inside stack X', 'dump stack X's output', 'get logs for stack X's claude container'. The skill covers three read-only probes \u2014 task output, container logs, and uncommitted diff \u2014 as subcommands. Do NOT trigger for: a quick status check (that's check-and-resume-stack), listing all stacks (that's list-stacks), or anything that modifies state. Prefer the narrower subcommand (output / logs / diff) over 'all' when the user is specific about what they want.",
+  "iterations_run": 1,
+  "holdout": 0.0,
+  "train_size": 13,
+  "test_size": 0,
+  "history": [
+    {
+      "iteration": 1,
+      "description": "Use this skill whenever the user wants to see DETAILED output, logs, or uncommitted changes from a specific Sandstorm stack. Trigger phrases include: 'show me the output of stack X', 'what did stack X log', 'show the task output for X', 'show container logs for stack X', 'what changed in stack X', 'show me the diff in stack X', 'what's happening inside stack X', 'dump stack X's output', 'get logs for stack X's claude container'. The skill covers three read-only probes \u2014 task output, container logs, and uncommitted diff \u2014 as subcommands. Do NOT trigger for: a quick status check (that's check-and-resume-stack), listing all stacks (that's list-stacks), or anything that modifies state. Prefer the narrower subcommand (output / logs / diff) over 'all' when the user is specific about what they want.",
+      "train_passed": 8,
+      "train_failed": 5,
+      "train_total": 13,
+      "train_results": [
+        {
+          "query": "Take a look at stack 42, seems to be running for a while. I'm not sure what's going on. Stuck in a loop or something? It's been thinking for too long.",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Take a look at stack 212. Let me know what's going on. Is it something weird going on? Just let me know what the status is.",
+          "should_trigger": true,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Let me know what the status of 200 is, it seems to be taking longer than I thought.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at stack 275. Seems to be using a ton of tokens, I'm not sure what it's doing.",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Take a look at stack off-a-branch. We ran out of tokens and I'm not sure where we left off. Can you take a look? I don't know if it's finished or what's going on.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at stack my-feature. Something crashed, sandstorm I just restarted it, lost context, I want to know where we're at.",
+          "should_trigger": true,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Stack 23 was halted because of token limits. Can you pick up where it left off?",
+          "should_trigger": false,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you check the status of stack 43 and if it's finished or not, if it's not can you resume from where it left off?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let me know what the status is of all the stacks.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.",
+          "should_trigger": false,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Let's go ahead and tear down stack 420.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let's start ticket 151.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        }
+      ],
+      "test_passed": null,
+      "test_failed": null,
+      "test_total": null,
+      "test_results": null,
+      "passed": 8,
+      "failed": 5,
+      "total": 13,
+      "results": [
+        {
+          "query": "Take a look at stack 42, seems to be running for a while. I'm not sure what's going on. Stuck in a loop or something? It's been thinking for too long.",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Take a look at stack 212. Let me know what's going on. Is it something weird going on? Just let me know what the status is.",
+          "should_trigger": true,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Let me know what the status of 200 is, it seems to be taking longer than I thought.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at stack 275. Seems to be using a ton of tokens, I'm not sure what it's doing.",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Take a look at stack off-a-branch. We ran out of tokens and I'm not sure where we left off. Can you take a look? I don't know if it's finished or what's going on.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at stack my-feature. Something crashed, sandstorm I just restarted it, lost context, I want to know where we're at.",
+          "should_trigger": true,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Stack 23 was halted because of token limits. Can you pick up where it left off?",
+          "should_trigger": false,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you check the status of stack 43 and if it's finished or not, if it's not can you resume from where it left off?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let me know what the status is of all the stacks.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.",
+          "should_trigger": false,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Let's go ahead and tear down stack 420.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let's start ticket 151.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        }
+      ]
+    }
+  ]
+}

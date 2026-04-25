@@ -152,14 +152,16 @@ export function AgentSession({ tabId, projectDir }: AgentSessionProps) {
             key={i}
             className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}
           >
-            <div
-              className={`max-w-[85%] rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
-                msg.role === 'user'
-                  ? 'bg-sandstorm-accent/90 text-white'
-                  : 'bg-sandstorm-surface text-sandstorm-text border border-sandstorm-border'
-              }`}
-            >
-              {msg.content}
+            <div className={`max-w-[85%] ${msg.role === 'user' ? 'flex flex-col items-end' : ''}`}>
+              <div
+                className={`rounded-lg px-3 py-2 text-sm whitespace-pre-wrap ${
+                  msg.role === 'user'
+                    ? 'bg-sandstorm-accent/90 text-white'
+                    : 'bg-sandstorm-surface text-sandstorm-text border border-sandstorm-border'
+                }`}
+              >
+                {msg.content}
+              </div>
             </div>
           </div>
         ))}

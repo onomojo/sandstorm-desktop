@@ -13,6 +13,18 @@ import { AgentBackend, ClaudeBackend } from './agent';
 import { registerIpcHandlers } from './ipc';
 import { createTray } from './tray';
 import { SessionMonitor } from './control-plane/session-monitor';
+import {
+  SchedulerSocketServer,
+  ScheduledDispatchRequest,
+  ScheduledDispatchResponse,
+  getSchedule,
+  installWrapper,
+  getBundledWrapperPath,
+  getStableWrapperPath,
+  isCronRunning,
+} from './scheduler';
+import { syncAllProjectsCrontab } from './scheduler/scheduler-manager';
+import { runScheduledScript } from './scheduler/script-runner';
 
 // Enable remote debugging via env var (used by integration tests and ad-hoc CDP connections)
 if (process.env.REMOTE_DEBUGGING_PORT) {
@@ -32,6 +44,15 @@ export let cliDir: string;
 export let agentBackend: AgentBackend;
 export let dockerConnectionManager: DockerConnectionManager | null = null;
 export let sessionMonitor: SessionMonitor;
+export let schedulerSocketServer: SchedulerSocketServer;
+
+// Track in-flight scheduler dispatches to prevent overlapping concurrent
+// runs of the same schedule. Each action Promise clears its own entry in
+// `finally`; the `safetyTimer` is a belt-and-suspenders leak guard.
+interface InFlightEntry {
+  safetyTimer: ReturnType<typeof setTimeout>;
+}
+const inFlightDispatches = new Map<string, InFlightEntry>();
 
 function createWindow(): BrowserWindow {
   nativeTheme.themeSource = 'dark';
@@ -168,6 +189,121 @@ async function initializeApp(): Promise<void> {
 
   sessionMonitor.start();
 
+  // --- Scheduler setup ---
+
+  // Install the wrapper script to a stable user-writable path
+  try {
+    const bundledPath = app.isPackaged
+      ? getBundledWrapperPath(process.resourcesPath)
+      : getBundledWrapperPath(path.join(app.getAppPath(), 'resources'));
+    installWrapper(bundledPath);
+  } catch (err) {
+    console.warn('[scheduler] Wrapper install failed (non-fatal):', err);
+  }
+
+  // Scheduler dispatch handler. Routes each scheduled fire by
+  // `schedule.action.kind` to a deterministic primitive (this PR: only
+  // `run-script`). MUST NOT call `agentBackend.sendMessage` or any
+  // chat-session API — see CLAUDE.md "Deterministic workflow philosophy".
+  const handleScheduledDispatch = async (
+    request: ScheduledDispatchRequest
+  ): Promise<ScheduledDispatchResponse> => {
+    try {
+      // Find the project
+      const projects = registry.listProjects();
+      const resolvedDir = path.resolve(request.projectDir);
+      const project = projects.find((p) => path.resolve(p.directory) === resolvedDir);
+      if (!project) {
+        return { ok: false, reason: 'project-not-open', message: `Project not open: ${request.projectDir}` };
+      }
+
+      // Find the schedule
+      const schedule = getSchedule(request.projectDir, request.scheduleId);
+      if (!schedule) {
+        return { ok: false, reason: 'schedule-not-found', message: `Schedule not found: ${request.scheduleId}` };
+      }
+      if (!schedule.enabled) {
+        return { ok: false, reason: 'schedule-disabled', message: `Schedule is disabled: ${request.scheduleId}` };
+      }
+
+      // Check rate-limit state
+      const smState = sessionMonitor.getState();
+      if (smState.level === 'over_limit' || smState.level === 'limit') {
+        return { ok: false, reason: 'rate-limited', message: 'Rate limit reached' };
+      }
+      if (smState.halted) {
+        return { ok: false, reason: 'auth-halt', message: 'Session is halted' };
+      }
+
+      // In-flight dedup so a slow schedule doesn't stack up overlapping
+      // fires. Safety timer clears the flight if the action Promise
+      // somehow never settles.
+      const flightKey = `${request.projectDir}:${request.scheduleId}`;
+      if (inFlightDispatches.has(flightKey)) {
+        return { ok: false, reason: 'orchestrator-busy', message: `Dispatch already in-flight for schedule ${request.scheduleId}` };
+      }
+
+      const safetyTimer = setTimeout(() => {
+        inFlightDispatches.delete(flightKey);
+      }, 4 * 60 * 60 * 1000);
+      inFlightDispatches.set(flightKey, { safetyTimer });
+
+      // Notify the renderer so the UI can show an "action running" badge
+      // on the schedule in the panel. No chat turn — this is just a UI
+      // hint, keyed by scheduleId, not a message in the agent session.
+      mainWindow?.webContents.send('schedule:dispatched', {
+        projectDir: request.projectDir,
+        scheduleId: request.scheduleId,
+        scheduleLabel: schedule.label || schedule.id,
+        firedAt: request.firedAt,
+      });
+
+      try {
+        switch (schedule.action.kind) {
+          case 'run-script': {
+            const response = await runScheduledScript(
+              project.directory,
+              schedule.action.scriptName,
+              request,
+            );
+            return response;
+          }
+          default: {
+            const unknownKind = (schedule.action as { kind?: string }).kind;
+            return {
+              ok: false,
+              reason: 'internal-error',
+              message: `Unknown schedule action kind: ${String(unknownKind)}`,
+            };
+          }
+        }
+      } finally {
+        clearTimeout(safetyTimer);
+        inFlightDispatches.delete(flightKey);
+      }
+    } catch (err) {
+      return {
+        ok: false,
+        reason: 'internal-error',
+        message: err instanceof Error ? err.message : String(err),
+      };
+    }
+  };
+
+  schedulerSocketServer = new SchedulerSocketServer(handleScheduledDispatch);
+  try {
+    await schedulerSocketServer.start();
+  } catch (err) {
+    console.error('[scheduler] Socket server failed to start:', err);
+  }
+
+  // Sync crontab entries on startup
+  try {
+    await syncAllProjectsCrontab(registry);
+  } catch (err) {
+    console.warn('[scheduler] Initial crontab sync failed (non-fatal):', err);
+  }
+
   // Listen for task events to send to renderer
   taskWatcher.on('task:completed', ({ stackId, task }) => {
     mainWindow?.webContents.send('task:completed', { stackId, task });
@@ -206,6 +342,16 @@ app.whenReady().then(async () => {
   registerIpcHandlers(mainWindow);
   createTray(mainWindow);
 
+  // Proactive cron health check on app launch — push result to renderer
+  try {
+    const cronRunning = isCronRunning();
+    mainWindow.webContents.once('did-finish-load', () => {
+      mainWindow?.webContents.send('scheduler:cronHealth', { running: cronRunning });
+    });
+  } catch {
+    // Non-fatal — renderer will check lazily when panel mounts
+  }
+
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       mainWindow = createWindow();
@@ -220,6 +366,12 @@ app.on('window-all-closed', () => {
 });
 
 app.on('before-quit', () => {
+  // Clear in-flight dispatch safety timers to allow graceful shutdown
+  for (const entry of inFlightDispatches.values()) {
+    clearTimeout(entry.safetyTimer);
+  }
+  inFlightDispatches.clear();
+  schedulerSocketServer?.stop().catch(() => {});
   sessionMonitor?.destroy();
   agentBackend?.destroy();
   stackManager?.destroy();

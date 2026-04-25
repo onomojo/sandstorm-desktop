@@ -1,0 +1,225 @@
+{
+  "exit_reason": "max_iterations (1)",
+  "original_description": "Use this skill whenever the user wants to take an existing ticket / issue, run the Sandstorm spec quality gate on it, and then (once it passes) create a stack with the ticket's verbatim body as the initial task. Trigger phrases include: 'take ticket N and build it', 'spec and dispatch N', 'fire up a stack for ticket N', 'let's work on #N', 'start issue N in a stack', 'create a stack for issue N, run the gate first'. This skill is the full start-to-dispatch flow for a ticket: fetch ticket \u2192 spec_check \u2192 (refine loop if needed) \u2192 create_stack with gateApproved=true and the ticket body as the initial task. Do NOT trigger for: dispatching follow-up work to an EXISTING stack (that's the sandstorm / check-and-resume flow), running the spec gate in isolation (that's the sandstorm-spec skill), or creating a stack without a ticket.",
+  "best_description": "Use this skill whenever the user wants to take an existing ticket / issue, run the Sandstorm spec quality gate on it, and then (once it passes) create a stack with the ticket's verbatim body as the initial task. Trigger phrases include: 'take ticket N and build it', 'spec and dispatch N', 'fire up a stack for ticket N', 'let's work on #N', 'start issue N in a stack', 'create a stack for issue N, run the gate first'. This skill is the full start-to-dispatch flow for a ticket: fetch ticket \u2192 spec_check \u2192 (refine loop if needed) \u2192 create_stack with gateApproved=true and the ticket body as the initial task. Do NOT trigger for: dispatching follow-up work to an EXISTING stack (that's the sandstorm / check-and-resume flow), running the spec gate in isolation (that's the sandstorm-spec skill), or creating a stack without a ticket.",
+  "best_score": "8/12",
+  "best_train_score": "8/12",
+  "best_test_score": null,
+  "final_description": "Use this skill whenever the user wants to take an existing ticket / issue, run the Sandstorm spec quality gate on it, and then (once it passes) create a stack with the ticket's verbatim body as the initial task. Trigger phrases include: 'take ticket N and build it', 'spec and dispatch N', 'fire up a stack for ticket N', 'let's work on #N', 'start issue N in a stack', 'create a stack for issue N, run the gate first'. This skill is the full start-to-dispatch flow for a ticket: fetch ticket \u2192 spec_check \u2192 (refine loop if needed) \u2192 create_stack with gateApproved=true and the ticket body as the initial task. Do NOT trigger for: dispatching follow-up work to an EXISTING stack (that's the sandstorm / check-and-resume flow), running the spec gate in isolation (that's the sandstorm-spec skill), or creating a stack without a ticket.",
+  "iterations_run": 1,
+  "holdout": 0.0,
+  "train_size": 12,
+  "test_size": 0,
+  "history": [
+    {
+      "iteration": 1,
+      "description": "Use this skill whenever the user wants to take an existing ticket / issue, run the Sandstorm spec quality gate on it, and then (once it passes) create a stack with the ticket's verbatim body as the initial task. Trigger phrases include: 'take ticket N and build it', 'spec and dispatch N', 'fire up a stack for ticket N', 'let's work on #N', 'start issue N in a stack', 'create a stack for issue N, run the gate first'. This skill is the full start-to-dispatch flow for a ticket: fetch ticket \u2192 spec_check \u2192 (refine loop if needed) \u2192 create_stack with gateApproved=true and the ticket body as the initial task. Do NOT trigger for: dispatching follow-up work to an EXISTING stack (that's the sandstorm / check-and-resume flow), running the spec gate in isolation (that's the sandstorm-spec skill), or creating a stack without a ticket.",
+      "train_passed": 8,
+      "train_failed": 4,
+      "train_total": 12,
+      "train_results": [
+        {
+          "query": "Start with an idea: I want to let users pin notes to the top. Make a ticket, make it pass our quality gates, then if everything's good, fire up a stack and get it done.",
+          "should_trigger": true,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at ticket 149. Basically I want this. Let's flesh out the details. Once it passes our quality checks, let's fire up a stack. Start a stack and make it happen.",
+          "should_trigger": true,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Let's start ticket 151.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at ticket 144. Looks ready to go. Take a look and see how it looks to you. If it passes all our checks, let's go ahead and work on that.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at ticket 250. It looks like this is all spec'd out. If that looks good to you, let's go ahead and kick off a stack with it. If not, let's figure out what else we need.",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not. If not, let's flesh out the details.",
+          "should_trigger": false,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Take a look at ticket 275. I want you to help me spec this ticket out a little bit further. We want to make sure it passes our quality checks.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "what's the status of stack 243",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 23 was halted because of token limits. Can you pick up where it left off?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let me know what the status is of all the stacks.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let's go ahead and tear down stack 420.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        }
+      ],
+      "test_passed": null,
+      "test_failed": null,
+      "test_total": null,
+      "test_results": null,
+      "passed": 8,
+      "failed": 4,
+      "total": 12,
+      "results": [
+        {
+          "query": "Start with an idea: I want to let users pin notes to the top. Make a ticket, make it pass our quality gates, then if everything's good, fire up a stack and get it done.",
+          "should_trigger": true,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at ticket 149. Basically I want this. Let's flesh out the details. Once it passes our quality checks, let's fire up a stack. Start a stack and make it happen.",
+          "should_trigger": true,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Let's start ticket 151.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at ticket 144. Looks ready to go. Take a look and see how it looks to you. If it passes all our checks, let's go ahead and work on that.",
+          "should_trigger": true,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": false
+        },
+        {
+          "query": "Take a look at ticket 250. It looks like this is all spec'd out. If that looks good to you, let's go ahead and kick off a stack with it. If not, let's figure out what else we need.",
+          "should_trigger": true,
+          "trigger_rate": 0.6666666666666666,
+          "triggers": 2,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Can you take a look at ticket 43? Let me know if it passes our quality gates or not. If not, let's flesh out the details.",
+          "should_trigger": false,
+          "trigger_rate": 0.3333333333333333,
+          "triggers": 1,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Take a look at ticket 275. I want you to help me spec this ticket out a little bit further. We want to make sure it passes our quality checks.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "what's the status of stack 243",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 23 was halted because of token limits. Can you pick up where it left off?",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let me know what the status is of all the stacks.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Stack 123 looks like it's ready for a pull request. Go ahead and make a pull request.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        },
+        {
+          "query": "Let's go ahead and tear down stack 420.",
+          "should_trigger": false,
+          "trigger_rate": 0.0,
+          "triggers": 0,
+          "runs": 3,
+          "pass": true
+        }
+      ]
+    }
+  ]
+}

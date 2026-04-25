@@ -12,6 +12,17 @@ import {
   dockerConnectionManager,
   sessionMonitor,
 } from './index';
+import {
+  createSchedule,
+  listSchedules,
+  updateSchedule,
+  deleteSchedule,
+  isCronRunning,
+  removeProjectFromCrontab,
+} from './scheduler';
+import type { ScheduleAction } from './scheduler/types';
+import { validateProjectDir } from './validation';
+import { syncAllProjectsCrontab, projectIdFromDir } from './scheduler/scheduler-manager';
 import { StackManager } from './control-plane/stack-manager';
 import { CreateStackOpts } from './control-plane/stack-manager';
 import { fetchAccountUsage } from './control-plane/account-usage';
@@ -207,7 +218,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   ipcMain.handle('projects:remove', async (_event, id: number) => {
+    // Look up project directory before removal so we can clean up crontab entries
+    const project = registry.getProject(id);
     registry.removeProject(id);
+    if (project) {
+      try {
+        removeProjectFromCrontab(projectIdFromDir(project.directory));
+      } catch (err) {
+        console.warn('[scheduler] Failed to remove crontab entries for project:', err);
+      }
+    }
   });
 
   ipcMain.handle('projects:browse', async (event) => {
@@ -963,6 +983,69 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
     return result;
   });
+
+  // --- Schedules ---
+
+  ipcMain.handle('schedules:list', async (_event, projectDir: string) => {
+    const dirError = validateProjectDir(projectDir);
+    if (dirError) throw new Error(dirError.error);
+    return listSchedules(projectDir);
+  });
+
+  ipcMain.handle(
+    'schedules:create',
+    async (_event, projectDir: string, data: { label?: string; cronExpression: string; action: ScheduleAction; enabled?: boolean }) => {
+      const dirError = validateProjectDir(projectDir);
+      if (dirError) throw new Error(dirError.error);
+      const schedule = createSchedule({
+        projectDir,
+        label: data.label,
+        cronExpression: data.cronExpression,
+        action: data.action,
+        enabled: data.enabled,
+      });
+      try {
+        await syncAllProjectsCrontab(registry);
+      } catch (err) {
+        console.warn('[scheduler] Crontab sync failed (non-fatal):', err);
+      }
+      return schedule;
+    }
+  );
+
+  ipcMain.handle(
+    'schedules:update',
+    async (_event, projectDir: string, id: string, patch: { label?: string; cronExpression?: string; action?: ScheduleAction; enabled?: boolean }) => {
+      const dirError = validateProjectDir(projectDir);
+      if (dirError) throw new Error(dirError.error);
+      const schedule = updateSchedule(projectDir, id, patch);
+      try {
+        await syncAllProjectsCrontab(registry);
+      } catch (err) {
+        console.warn('[scheduler] Crontab sync failed (non-fatal):', err);
+      }
+      return schedule;
+    }
+  );
+
+  ipcMain.handle(
+    'schedules:delete',
+    async (_event, projectDir: string, id: string) => {
+      const dirError = validateProjectDir(projectDir);
+      if (dirError) throw new Error(dirError.error);
+      deleteSchedule(projectDir, id);
+      try {
+        await syncAllProjectsCrontab(registry);
+      } catch (err) {
+        console.warn('[scheduler] Crontab sync failed (non-fatal):', err);
+      }
+    }
+  );
+
+  ipcMain.handle('schedules:cronHealth', async () => {
+    return { running: isCronRunning() };
+  });
+
 
   // --- Tickets (deterministic UI for refine workflow, #310) ---
   // These IPC handlers route the renderer straight to the same ticket-fetcher

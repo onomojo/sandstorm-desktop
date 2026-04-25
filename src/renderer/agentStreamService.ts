@@ -37,7 +37,7 @@ export function registerAgentStreamListeners(tabId: string): void {
       isLoading: false,
       streamingContent: '',
     });
-    // Re-fetch authoritative history from backend (handles queued messages too)
+    // Re-fetch authoritative history from backend (handles queued messages too).
     window.sandstorm.agent.history(tabId).then((result) => {
       const messages = result.messages.map((m) => ({
         role: m.role as 'user' | 'assistant',

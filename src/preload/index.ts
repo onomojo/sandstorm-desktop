@@ -1,5 +1,18 @@
 import { contextBridge, ipcRenderer } from 'electron';
 
+export type ScheduleAction =
+  | { kind: 'run-script'; scriptName: string };
+
+export interface ScheduleEntry {
+  id: string;
+  label?: string;
+  cronExpression: string;
+  action: ScheduleAction;
+  enabled: boolean;
+  createdAt: string;
+  updatedAt: string;
+}
+
 export interface SandstormAPI {
   projects: {
     list: () => Promise<unknown[]>;
@@ -151,6 +164,13 @@ export interface SandstormAPI {
     resumeStack: (stackId: string) => Promise<void>;
     forcePoll: () => Promise<unknown>;
     reportActivity: () => void;
+  };
+  schedules: {
+    list: (projectDir: string) => Promise<ScheduleEntry[]>;
+    create: (projectDir: string, data: { label?: string; cronExpression: string; action: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
+    update: (projectDir: string, id: string, patch: { label?: string; cronExpression?: string; action?: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
+    delete: (projectDir: string, id: string) => Promise<void>;
+    cronHealth: () => Promise<{ running: boolean }>;
   };
   auth: {
     status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
@@ -305,6 +325,13 @@ const api: SandstormAPI = {
     resumeStack: (stackId) => ipcRenderer.invoke('session:resumeStack', stackId),
     forcePoll: () => ipcRenderer.invoke('session:forcePoll'),
     reportActivity: () => { ipcRenderer.send('session:activity'); },
+  },
+  schedules: {
+    list: (projectDir) => ipcRenderer.invoke('schedules:list', projectDir),
+    create: (projectDir, data) => ipcRenderer.invoke('schedules:create', projectDir, data),
+    update: (projectDir, id, patch) => ipcRenderer.invoke('schedules:update', projectDir, id, patch),
+    delete: (projectDir, id) => ipcRenderer.invoke('schedules:delete', projectDir, id),
+    cronHealth: () => ipcRenderer.invoke('schedules:cronHealth'),
   },
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),
