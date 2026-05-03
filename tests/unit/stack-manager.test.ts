@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
+import { spawnSync } from 'child_process';
 import {
   StackManager,
   sanitizeComposeName,
@@ -143,6 +144,15 @@ describe('StackManager', () => {
 
   describe('createStack', () => {
     let tmpDir: string;
+
+    beforeAll(() => {
+      const result = spawnSync('git', ['--version'], { encoding: 'utf-8' });
+      if (result.status !== 0) {
+        throw new Error(
+          'git binary not found on PATH. createStack tests require git to set up bare repos and clones.'
+        );
+      }
+    });
 
     beforeEach(() => {
       const { execSync } = require('child_process');
@@ -637,6 +647,15 @@ describe('StackManager', () => {
 
   describe('buildStackInBackground task retry', () => {
     let tmpDir: string;
+
+    beforeAll(() => {
+      const result = spawnSync('git', ['--version'], { encoding: 'utf-8' });
+      if (result.status !== 0) {
+        throw new Error(
+          'git binary not found on PATH. buildStackInBackground task retry tests require git to set up bare repos and clones.'
+        );
+      }
+    });
 
     beforeEach(() => {
       const { execSync } = require('child_process');
@@ -1986,6 +2005,15 @@ describe('spec quality gate enforcement', () => {
   let manager: StackManager;
   let dbPath: string;
   let tmpDir: string;
+
+  beforeAll(() => {
+    const result = spawnSync('git', ['--version'], { encoding: 'utf-8' });
+    if (result.status !== 0) {
+      throw new Error(
+        'git binary not found on PATH. spec quality gate enforcement tests require git to set up bare repos and clones.'
+      );
+    }
+  });
 
   beforeEach(async () => {
     dbPath = makeTempDb();

@@ -1,4 +1,5 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -11,6 +12,15 @@ import {
 describe('detectTicketProvider', () => {
   let tmpDir: string;
   let originalPath: string | undefined;
+
+  beforeAll(() => {
+    const result = spawnSync('git', ['--version'], { encoding: 'utf-8' });
+    if (result.status !== 0) {
+      throw new Error(
+        'git binary not found on PATH. detectTicketProvider tests require git to initialise test repos.'
+      );
+    }
+  });
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-detect-'));

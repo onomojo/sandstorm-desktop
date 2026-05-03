@@ -114,9 +114,12 @@ export const test = base.extend<object, IntegrationFixtures>({
         env: {
           ...process.env,
           REMOTE_DEBUGGING_PORT: '9222',
-          // Ensure the packaged app can find claude CLI and its credentials
-          HOME: '/root',
-          PATH: '/usr/local/bin:/usr/bin:/bin',
+          // Use the actual HOME/PATH from the current process so the packaged
+          // app can find claude CLI and its credentials in any environment.
+          // Hardcoding '/root' caused failures in sandstorm containers where
+          // HOME is not /root. Fall back only when the env var is absent.
+          HOME: process.env.HOME ?? '/root',
+          PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
         },
         timeout: 60000,
       });
