@@ -27,6 +27,7 @@ describe('getDefaultReviewPrompt', () => {
     // Post-rewrite, categories are referenced by their CODE name in the
     // output contract rather than by prose heading. Assert the codes
     // since those are the strings that guide the model's formatting.
+    expect(content).toContain('SCOPE');
     expect(content).toContain('REQUIREMENTS');
     expect(content).toContain('ARCHITECTURE');
     expect(content).toContain('CORRECTNESS');
@@ -38,6 +39,15 @@ describe('getDefaultReviewPrompt', () => {
     expect(content).toContain('SCALABILITY');
     expect(content).toContain('OPTIMIZATION');
     expect(content).toContain('TEST_COVERAGE');
+  });
+
+  it('includes SCOPE category for out-of-scope file enforcement (#335)', () => {
+    const content = getDefaultReviewPrompt();
+    expect(content).toContain('SCOPE');
+    expect(content).toContain('out_of_scope:<path>');
+    expect(content).toContain('Out of scope');
+    expect(content).toContain('Non-goals');
+    expect(content).toContain('Out-of-scope file changes are ALWAYS a fail');
   });
 
   it('includes REVIEW_PASS and REVIEW_FAIL sentinels', () => {
@@ -294,6 +304,13 @@ describe('review-prompt.md source file (#291/#292 strict-contract)', () => {
     const content = fs.readFileSync(reviewPromptPath, 'utf-8');
     expect(content).toContain('Redundant database');
     expect(content).toContain('Unnecessary object reloads');
+  });
+
+  it('includes SCOPE category for out-of-scope file enforcement (#335)', () => {
+    const content = fs.readFileSync(reviewPromptPath, 'utf-8');
+    expect(content).toContain('SCOPE');
+    expect(content).toContain('out_of_scope:<path>');
+    expect(content).toContain('Out-of-scope file changes are ALWAYS a fail');
   });
 });
 

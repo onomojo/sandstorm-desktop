@@ -348,6 +348,29 @@ describe('Registry', () => {
       expect(stack!.status).toBe('failed');
     });
 
+    it('completeTaskNeedsHuman sets needs_human status and captures reason (#335)', () => {
+      const task = registry.createTask('task-stack', 'Fix something');
+      const reason = 'tests/integration/fixtures.ts is out of scope for this ticket';
+      registry.completeTaskNeedsHuman(task.id, reason);
+
+      const tasks = registry.getTasksForStack('task-stack');
+      expect(tasks[0].status).toBe('needs_human');
+      expect(tasks[0].exit_code).toBe(1);
+      expect(tasks[0].warnings).toBe(reason);
+      expect(tasks[0].finished_at).toBeTruthy();
+
+      const stack = registry.getStack('task-stack');
+      expect(stack!.status).toBe('needs_human');
+    });
+
+    it('completeTaskNeedsHuman works with empty reason string', () => {
+      const task = registry.createTask('task-stack', 'Fix something');
+      registry.completeTaskNeedsHuman(task.id, '');
+
+      const tasks = registry.getTasksForStack('task-stack');
+      expect(tasks[0].status).toBe('needs_human');
+    });
+
     it('preserves various exit codes', () => {
       for (const code of [0, 1, 2, 127, 137, 255]) {
         const task = registry.createTask('task-stack', `exit ${code}`);

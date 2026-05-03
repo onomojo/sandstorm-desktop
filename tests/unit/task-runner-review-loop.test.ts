@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'fs'
+import { readFileSync, existsSync } from 'fs'
 import { resolve } from 'path'
+import { spawnSync } from 'child_process'
 
 /**
  * Tests for the dual-loop review workflow in task-runner.sh.
@@ -433,8 +434,8 @@ describe('task-runner.sh dual-loop workflow', () => {
   describe('no local keyword outside function scope', () => {
     it('does not use `local` in the outer/inner while loops', () => {
       // Find all `local ` usages and verify they are inside function bodies.
-      // Functions in the script: log_loop, run_claude, check_for_diff, run_review, run_verify
-      const functionNames = ['log_loop', 'run_claude', 'check_for_diff', 'run_review', 'run_verify', 'is_infra_error_only']
+      // Functions in the script: log_loop, run_claude, check_for_diff, run_review, run_verify, check_for_stop_and_ask
+      const functionNames = ['log_loop', 'run_claude', 'check_for_diff', 'run_review', 'run_verify', 'is_infra_error_only', 'check_for_stop_and_ask']
 
       // Collect the line ranges of all function bodies
       const functionRanges: Array<{ start: number; end: number }> = []
@@ -549,6 +550,131 @@ describe('task-runner.sh dual-loop workflow', () => {
       expect(taskRunner).toContain('NEEDS HUMAN INTERVENTION')
     })
   })
+
+  // ── STOP_AND_ASK deadlock break ──────────────────────────────────────
+
+  describe('STOP_AND_ASK deadlock break', () => {
+    it('has a check_for_stop_and_ask function', () => {
+      expect(taskRunner).toContain('check_for_stop_and_ask()')
+    })
+
+    it('greps execution log for STOP_AND_ASK signal', () => {
+      expect(taskRunner).toContain("grep -m1 'STOP_AND_ASK:'")
+    })
+
+    it('writes reason to /tmp/claude-stop-reason.txt', () => {
+      expect(taskRunner).toContain('/tmp/claude-stop-reason.txt')
+    })
+
+    it('checks for STOP_AND_ASK after the initial execution pass', () => {
+      const checkAfterInit = taskRunner.indexOf('STOP_AND_ASK detected during initial execution')
+      expect(checkAfterInit).toBeGreaterThan(-1)
+      // Must appear before the review loop entry
+      const reviewLoopEntry = taskRunner.indexOf('Code changes detected, entering review loop')
+      expect(checkAfterInit).toBeLessThan(reviewLoopEntry)
+    })
+
+    it('writes needs_human status when STOP_AND_ASK detected initially', () => {
+      const stopSection = taskRunner.indexOf('STOP_AND_ASK detected during initial execution')
+      const needsHumanWrite = taskRunner.indexOf('"needs_human" > /tmp/claude-task.status', stopSection)
+      expect(needsHumanWrite).toBeGreaterThan(stopSection)
+    })
+
+    it('checks for STOP_AND_ASK after review-fail execution fix', () => {
+      expect(taskRunner).toContain('STOP_AND_ASK detected after review feedback')
+    })
+
+    it('checks for STOP_AND_ASK after verify-fail execution fix', () => {
+      expect(taskRunner).toContain('STOP_AND_ASK detected after verify failure')
+    })
+
+    it('sets TASK_NEEDS_HUMAN=1 when STOP_AND_ASK is detected in the loop', () => {
+      expect(taskRunner).toContain('TASK_NEEDS_HUMAN=1')
+    })
+
+    it('writes needs_human status file in the final status block', () => {
+      const finalStatus = taskRunner.indexOf('# ── Final status')
+      const needsHumanBlock = taskRunner.indexOf('TASK_NEEDS_HUMAN -eq 1', finalStatus)
+      expect(needsHumanBlock).toBeGreaterThan(finalStatus)
+      const needsHumanStatusWrite = taskRunner.indexOf('"needs_human" > /tmp/claude-task.status', needsHumanBlock)
+      expect(needsHumanStatusWrite).toBeGreaterThan(needsHumanBlock)
+    })
+
+    it('logs the STOP_AND_ASK reason in the final summary', () => {
+      expect(taskRunner).toContain('STATUS: NEEDS HUMAN INTERVENTION (STOP_AND_ASK)')
+    })
+  })
+
+  // ── Scope re-injection on iteration N+1 ─────────────────────────────
+
+  describe('scope re-injection on subsequent iterations', () => {
+    it('includes original task verbatim header in review-fail fix prompt', () => {
+      expect(taskRunner).toContain('## Original Task (verbatim — defines your scope)')
+    })
+
+    it('includes scope constraint header in review-fail fix prompt', () => {
+      expect(taskRunner).toContain('## Scope Constraints — MANDATORY')
+    })
+
+    it('forbids out-of-scope file modifications in review-fail prompt', () => {
+      expect(taskRunner).toContain('Do NOT modify any file that is not in scope for the original task')
+    })
+
+    it('forbids modifying tests to make them pass in review-fail prompt', () => {
+      expect(taskRunner).toContain('Do NOT modify tests to make them pass')
+    })
+
+    it('instructs STOP_AND_ASK usage in review-fail prompt', () => {
+      expect(taskRunner).toContain('STOP_AND_ASK: <one-sentence reason naming the out-of-scope file>')
+    })
+
+    it('includes original task verbatim and scope constraints in verify-fail fix prompt', () => {
+      // Both prompts share these strings — count occurrences to confirm both have them
+      const verbatimCount = (taskRunner.match(/## Original Task \(verbatim — defines your scope\)/g) ?? []).length
+      expect(verbatimCount).toBeGreaterThanOrEqual(2)
+      const scopeCount = (taskRunner.match(/## Scope Constraints — MANDATORY/g) ?? []).length
+      expect(scopeCount).toBeGreaterThanOrEqual(2)
+    })
+
+    it('forbids loosening test assertions in both prompts', () => {
+      const matches = taskRunner.match(/Do NOT loosen test assertions/g) ?? []
+      expect(matches.length).toBeGreaterThanOrEqual(2)
+    })
+
+    it('includes already-modified files listing in review-fail fix prompt', () => {
+      expect(taskRunner).toContain('## Files Already Modified')
+      expect(taskRunner).toContain('git diff --name-only HEAD')
+    })
+
+    it('includes already-modified files listing in verify-fail fix prompt', () => {
+      // Both prompts must contain the files-already-modified section — count occurrences
+      const modifiedCount = (taskRunner.match(/## Files Already Modified/g) ?? []).length
+      expect(modifiedCount).toBeGreaterThanOrEqual(2)
+      const diffCount = (taskRunner.match(/git diff --name-only HEAD/g) ?? []).length
+      expect(diffCount).toBeGreaterThanOrEqual(2)
+    })
+
+    it('lists untracked new files alongside modified files in both prompts', () => {
+      // git ls-files --others --exclude-standard picks up newly created files
+      const untrackedCount = (taskRunner.match(/git ls-files --others --exclude-standard/g) ?? []).length
+      // At least 2 occurrences (one per fix prompt) — the check_for_diff call also has one
+      expect(untrackedCount).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  // ── needs_human status file ──────────────────────────────────────────
+
+  describe('needs_human status file', () => {
+    it('writes needs_human to /tmp/claude-task.status', () => {
+      expect(taskRunner).toContain('"needs_human" > /tmp/claude-task.status')
+    })
+
+    it('initializes TASK_NEEDS_HUMAN to 0 before the dual loop', () => {
+      const loopStart = taskRunner.indexOf('ORIGINAL_PROMPT="$PROMPT"')
+      const needsHumanInit = taskRunner.indexOf('TASK_NEEDS_HUMAN=0', loopStart)
+      expect(needsHumanInit).toBeGreaterThan(loopStart)
+    })
+  })
 })
 
 describe('review-prompt.md template', () => {
@@ -573,6 +699,7 @@ describe('review-prompt.md template', () => {
     // coverage') was dropped when the output contract moved to
     // issues-only.
     const tags = [
+      'SCOPE',
       'REQUIREMENTS',
       'ARCHITECTURE',
       'CORRECTNESS',
@@ -588,6 +715,26 @@ describe('review-prompt.md template', () => {
     for (const tag of tags) {
       expect(reviewPrompt).toContain(tag)
     }
+  })
+
+  it('includes SCOPE as the first review category (checked before code quality)', () => {
+    const scopeIndex = reviewPrompt.indexOf('**SCOPE**')
+    const requirementsIndex = reviewPrompt.indexOf('**REQUIREMENTS**')
+    expect(scopeIndex).toBeGreaterThan(-1)
+    expect(scopeIndex).toBeLessThan(requirementsIndex)
+  })
+
+  it('instructs the reviewer to scan for out-of-scope sections in the task', () => {
+    expect(reviewPrompt).toContain('Out of scope')
+    expect(reviewPrompt).toContain('Non-goals')
+  })
+
+  it('requires out_of_scope:<path> as the issue description format', () => {
+    expect(reviewPrompt).toContain('out_of_scope:<path>')
+  })
+
+  it('enforces that out-of-scope changes are ALWAYS a fail in the rules section', () => {
+    expect(reviewPrompt).toContain('Out-of-scope file changes are ALWAYS a fail')
   })
 
   it('lists REQUIREMENTS as the first (highest-priority) review category', () => {
@@ -648,6 +795,18 @@ describe('SANDSTORM_INNER.md workflow section', () => {
   it('notes the review agent has no prior context', () => {
     expect(innerMd).toContain('NO context from your session')
   })
+
+  it('documents the STOP_AND_ASK deadlock-break protocol', () => {
+    expect(innerMd).toContain('STOP_AND_ASK')
+  })
+
+  it('documents scope constraints for iteration 2+ prompts', () => {
+    expect(innerMd).toContain('Scope constraints on iteration 2+')
+  })
+
+  it('explains the needs_human stack status', () => {
+    expect(innerMd).toContain('needs_human')
+  })
 })
 
 describe('Dockerfile includes review-prompt.md', () => {
@@ -658,3 +817,35 @@ describe('Dockerfile includes review-prompt.md', () => {
     expect(dockerfile).toContain('COPY docker/review-prompt.md /usr/bin/review-prompt.md')
   })
 })
+
+// ── Regression smoke test: out-of-scope ticket → STOP_AND_ASK → needs_human ──
+//
+// Exercises the bash plumbing in task-runner.sh with a synthetic ticket body
+// that contains an explicit "Out of scope: tests/integration/**" declaration
+// and a planted failing integration test in the simulated execution log.
+// Asserts that check_for_stop_and_ask correctly detects the signal, status
+// resolves to needs_human, and no tests/integration/** diff exists.
+
+const smokeSh = resolve(__dirname, 'task-runner-scope-smoke.sh')
+const hasBash = spawnSync('which', ['bash'], { encoding: 'utf-8' }).status === 0
+
+describe.skipIf(!hasBash || !existsSync(smokeSh))(
+  'scope regression smoke test (bash-level)',
+  () => {
+    it(
+      'halts with needs_human when agent emits STOP_AND_ASK for out-of-scope file',
+      () => {
+        const result = spawnSync('bash', [smokeSh], {
+          encoding: 'utf-8',
+          timeout: 15_000,
+        })
+        if (result.status !== 0) {
+          console.error('smoke test stdout:', result.stdout)
+          console.error('smoke test stderr:', result.stderr)
+        }
+        expect(result.status).toBe(0)
+      },
+      15_000,
+    )
+  },
+)
