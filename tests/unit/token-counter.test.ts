@@ -14,6 +14,10 @@ import { join, resolve } from 'path';
 
 const SCRIPT = resolve(__dirname, '../../sandstorm-cli/docker/token-counter.sh');
 
+// token-counter.sh uses jq to parse JSON events. Skip the entire suite if jq
+// is absent rather than failing with cryptic "expected [] to have length N".
+const hasJq = spawnSync('which', ['jq'], { encoding: 'utf-8' }).status === 0;
+
 function runScript(input: string, args: string[] = []): string {
   const tmpDir = mkdtempSync(join(tmpdir(), 'token-counter-test-'));
   const outputFile = join(tmpDir, 'tokens.jsonl');
@@ -44,7 +48,7 @@ function parseLines(output: string): Record<string, unknown>[] {
     .map((l) => JSON.parse(l));
 }
 
-describe('token-counter.sh', () => {
+describe.skipIf(!hasJq)('token-counter.sh', () => {
   it('writes nothing for empty input', () => {
     const output = runScript('');
     expect(output.trim()).toBe('');

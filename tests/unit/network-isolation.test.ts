@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { readFileSync, writeFileSync, unlinkSync } from 'fs'
 import { resolve, join } from 'path'
-import { execSync } from 'child_process'
+import { execSync, spawnSync } from 'child_process'
 import os from 'os'
 
 describe('network isolation in init.sh', () => {
@@ -32,6 +32,13 @@ describe('network name extraction logic', () => {
   let scriptPath: string
 
   beforeAll(() => {
+    const py3 = spawnSync('which', ['python3'], { encoding: 'utf-8' });
+    if (py3.status !== 0) {
+      throw new Error(
+        'python3 binary not found on PATH. network isolation tests require python3 to run the extraction script.'
+      );
+    }
+
     // Write the Python script to a temp file to avoid shell escaping issues
     scriptPath = join(os.tmpdir(), `sandstorm-net-test-${Date.now()}.py`)
     writeFileSync(
