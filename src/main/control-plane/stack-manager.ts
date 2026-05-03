@@ -825,6 +825,19 @@ export class StackManager {
     this.notifyUpdate();
   }
 
+  async execInContainer(stackId: string, cmd: string[]): Promise<void> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+    const runtime = this.getRuntimeForStack(stack);
+    const claudeContainer = await this.findClaudeContainer(stack, runtime);
+    const result = await runtime.exec(claudeContainer.id, cmd, { workdir: '/app' });
+    if (result.exitCode !== 0) {
+      throw new Error(
+        `exec in container failed (exit ${result.exitCode}): ${result.stderr || result.stdout}`,
+      );
+    }
+  }
+
   getTaskStatus(stackId: string): TaskStatusResult {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);

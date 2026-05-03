@@ -83,6 +83,12 @@ FUNC_SOURCE="${FUNC_SOURCE//\/tmp\/claude-stop-reason.txt/$STOP_REASON_FILE}"
 
 eval "$FUNC_SOURCE"
 
+# Capture the tests/integration/ diff state before running the function —
+# this branch may legitimately have changes there (e.g. new e2e tests added
+# as part of the same ticket). We only want to fail if the function itself
+# introduces NEW changes to that directory.
+BEFORE_INT_DIFF=$(git -C "$(realpath "$SCRIPT_DIR/../..")" diff --name-only HEAD 2>/dev/null | grep "^tests/integration/" | sort || true)
+
 # ---------------------------------------------------------------------------
 # Run the check — this is exactly what task-runner.sh does in both the
 # initial-execution path and the loop paths after review/verify failures.
@@ -115,9 +121,13 @@ if ! echo "$REASON" | grep -q "tests/integration/"; then
   FAIL=1
 fi
 
-# Verify no diff in tests/integration/** was created (no side-effects)
-if git -C "$(realpath "$SCRIPT_DIR/../..")" diff --name-only HEAD 2>/dev/null | grep -q "^tests/integration/"; then
-  echo "FAIL: git diff contains changes in tests/integration/ — scope was violated" >&2
+# Verify no NEW diff in tests/integration/** was created by this smoke test.
+# check_for_stop_and_ask only writes to $STOP_REASON_FILE; it must not touch
+# real repo files. We compare against the pre-run state so pre-existing branch
+# changes in tests/integration/ (e.g. new e2e tests) don't cause a false fail.
+AFTER_INT_DIFF=$(git -C "$(realpath "$SCRIPT_DIR/../..")" diff --name-only HEAD 2>/dev/null | grep "^tests/integration/" | sort || true)
+if [ "$BEFORE_INT_DIFF" != "$AFTER_INT_DIFF" ]; then
+  echo "FAIL: smoke test execution created new changes in tests/integration/ — scope was violated" >&2
   FAIL=1
 fi
 

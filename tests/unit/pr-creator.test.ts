@@ -8,6 +8,9 @@ import {
   parseDraftResponse,
   workspacePathFor,
   draftPullRequest,
+  nextBranchName,
+  createPullRequest,
+  MAX_PR_ATTEMPTS,
   PR_BODY_MAX_BYTES,
   PR_TITLE_MAX_CHARS,
 } from '../../src/main/control-plane/pr-creator';
@@ -166,6 +169,146 @@ describe('draftPullRequest', () => {
     );
     expect(fetchTaskTail).toHaveBeenCalledWith('s');
     expect(runEphemeral.mock.calls[0][0]).toContain('important task log');
+  });
+});
+
+describe('nextBranchName — suffix policy', () => {
+  it.each([
+    ['feat/foo',      'feat/foo-v2'],
+    ['feat/foo-v2',   'feat/foo-v3'],
+    ['feat/foo-v9',   'feat/foo-v10'],
+    ['feat/foo-v99',  'feat/foo-v100'],
+    ['main',          'main-v2'],
+    // non-digit after -v is treated as part of the name, not a version
+    ['feat/foo-vfoo', 'feat/foo-vfoo-v2'],
+    ['feat/foo-v',    'feat/foo-v-v2'],
+  ])('%s → %s', (input, expected) => {
+    expect(nextBranchName(input)).toBe(expected);
+  });
+});
+
+describe('createPullRequest — retry budget', () => {
+  let workspace: string;
+
+  beforeEach(() => {
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-create-'));
+    fs.mkdirSync(path.join(workspace, '.sandstorm'), { recursive: true });
+  });
+
+  afterEach(() => {
+    fs.rmSync(workspace, { recursive: true, force: true });
+  });
+
+  it('returns url and number immediately on first success', async () => {
+    const setPR = vi.fn();
+    const result = await createPullRequest(
+      { stackId: 's', title: 'feat', body: 'body', initialBranch: 'feat/foo' },
+      {
+        workspace,
+        runPush: vi.fn().mockResolvedValue({ stdout: 'https://github.com/test/repo/pull/42\n', stderr: '' }),
+        checkoutBranch: vi.fn(),
+        setPullRequest: setPR,
+      },
+    );
+    expect(result).toEqual({ url: 'https://github.com/test/repo/pull/42', number: 42 });
+    expect(setPR).toHaveBeenCalledWith('https://github.com/test/repo/pull/42', 42);
+  });
+
+  it('picks up URL from stderr when stdout has none', async () => {
+    const result = await createPullRequest(
+      { stackId: 's', title: 't', body: 'b', initialBranch: 'feat/foo' },
+      {
+        workspace,
+        runPush: vi.fn().mockResolvedValue({ stdout: 'some output', stderr: 'https://github.com/test/repo/pull/7\n' }),
+        checkoutBranch: vi.fn(),
+        setPullRequest: vi.fn(),
+      },
+    );
+    expect(result.number).toBe(7);
+  });
+
+  it('retries on SANDSTORM_PR_FAILED marker and succeeds on second attempt', async () => {
+    const runPush = vi.fn()
+      .mockResolvedValueOnce({ stdout: '', stderr: 'SANDSTORM_PR_FAILED:already exists\n' })
+      .mockResolvedValueOnce({ stdout: 'https://github.com/test/repo/pull/43\n', stderr: '' });
+    const checkoutBranch = vi.fn().mockResolvedValue(undefined);
+
+    const result = await createPullRequest(
+      { stackId: 's', title: 't', body: 'b', initialBranch: 'feat/foo' },
+      { workspace, runPush, checkoutBranch, setPullRequest: vi.fn() },
+    );
+
+    expect(result.number).toBe(43);
+    expect(runPush).toHaveBeenCalledTimes(2);
+    expect(checkoutBranch).toHaveBeenCalledTimes(1);
+    expect(checkoutBranch).toHaveBeenCalledWith('feat/foo-v2');
+  });
+
+  it(`exhausts exactly ${MAX_PR_ATTEMPTS} attempts then throws`, async () => {
+    const runPush = vi.fn().mockResolvedValue({ stdout: '', stderr: 'SANDSTORM_PR_FAILED:duplicate PR\n' });
+    const checkoutBranch = vi.fn().mockResolvedValue(undefined);
+
+    await expect(
+      createPullRequest(
+        { stackId: 's', title: 't', body: 'b', initialBranch: 'feat/foo' },
+        { workspace, runPush, checkoutBranch, setPullRequest: vi.fn() },
+      ),
+    ).rejects.toThrow(`PR creation failed after ${MAX_PR_ATTEMPTS} attempts`);
+
+    expect(runPush).toHaveBeenCalledTimes(MAX_PR_ATTEMPTS);
+    expect(checkoutBranch).toHaveBeenCalledTimes(MAX_PR_ATTEMPTS - 1);
+  });
+
+  it('error message includes all 5 attempted branches and their reasons', async () => {
+    const runPush = vi.fn().mockResolvedValue({ stdout: '', stderr: 'SANDSTORM_PR_FAILED:reason-X\n' });
+
+    let err: Error | undefined;
+    try {
+      await createPullRequest(
+        { stackId: 's', title: 't', body: 'b', initialBranch: 'feat/foo' },
+        { workspace, runPush, checkoutBranch: vi.fn().mockResolvedValue(undefined), setPullRequest: vi.fn() },
+      );
+    } catch (e) {
+      err = e as Error;
+    }
+
+    expect(err).toBeDefined();
+    expect(err!.message).toMatch(/attempt 1.*feat\/foo.*reason-X/);
+    expect(err!.message).toMatch(/attempt 5.*feat\/foo-v5.*reason-X/);
+  });
+
+  it('bumps through v2→v5 for recovery branches', async () => {
+    const checkoutBranch = vi.fn().mockResolvedValue(undefined);
+    await expect(
+      createPullRequest(
+        { stackId: 's', title: 't', body: 'b', initialBranch: 'feat/foo' },
+        { workspace, runPush: vi.fn().mockResolvedValue({ stdout: '', stderr: 'SANDSTORM_PR_FAILED:x' }), checkoutBranch, setPullRequest: vi.fn() },
+      ),
+    ).rejects.toThrow();
+    expect(checkoutBranch).toHaveBeenNthCalledWith(1, 'feat/foo-v2');
+    expect(checkoutBranch).toHaveBeenNthCalledWith(2, 'feat/foo-v3');
+    expect(checkoutBranch).toHaveBeenNthCalledWith(3, 'feat/foo-v4');
+    expect(checkoutBranch).toHaveBeenNthCalledWith(4, 'feat/foo-v5');
+  });
+
+  it('cleans up the temp body file on success', async () => {
+    await createPullRequest(
+      { stackId: 's', title: 't', body: 'b', initialBranch: 'feat/foo' },
+      { workspace, runPush: vi.fn().mockResolvedValue({ stdout: 'https://github.com/test/repo/pull/1\n', stderr: '' }), checkoutBranch: vi.fn(), setPullRequest: vi.fn() },
+    );
+    const files = fs.readdirSync(path.join(workspace, '.sandstorm'));
+    expect(files.filter((f) => f.startsWith('pr-body-'))).toHaveLength(0);
+  });
+
+  it('cleans up the temp body file on failure', async () => {
+    await expect(
+      createPullRequest(
+        { stackId: 's', title: 't', body: 'b', initialBranch: 'feat/foo' },
+        { workspace, runPush: vi.fn().mockResolvedValue({ stdout: '', stderr: 'SANDSTORM_PR_FAILED:x' }), checkoutBranch: vi.fn().mockResolvedValue(undefined), setPullRequest: vi.fn() },
+      ),
+    ).rejects.toThrow();
+    const files = fs.readdirSync(path.join(workspace, '.sandstorm'));
+    expect(files.filter((f) => f.startsWith('pr-body-'))).toHaveLength(0);
   });
 });
 

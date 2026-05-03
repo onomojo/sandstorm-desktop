@@ -71,6 +71,7 @@ import {
 import {
   draftPullRequest,
   workspacePathFor,
+  createPullRequest,
 } from './control-plane/pr-creator';
 import { createTicket } from './control-plane/ticket-creator';
 import {
@@ -1106,47 +1107,22 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       const stack = await stackManager.getStackWithServices(stackId);
       if (!stack) throw new Error(`Stack "${stackId}" not found`);
 
-      // One PR-creation path: the project's `.sandstorm/scripts/create-pr.sh`,
-      // invoked by `sandstorm push`. Same script that the chat-driven push
-      // flow uses. Mirrors the fetch-ticket.sh / update-ticket.sh pattern —
-      // provider-neutral (GitHub, Jira, Bitbucket, custom API), all the
-      // GITHUB_TOKEN / committer / remote-URL plumbing already handled.
-      //
-      // Body is written to a temp file in the workspace so it can be multi-
-      // line + contain shell metacharacters without any quoting peril. The
-      // bind mount makes the file visible inside the container at the same
-      // path under /app.
       const workspace = workspacePathFor(stack.project_dir, stackId);
       if (!fs.existsSync(workspace)) {
         throw new Error(`Stack workspace not found at ${workspace}`);
       }
-      const tmpDir = path.join(workspace, '.sandstorm');
-      fs.mkdirSync(tmpDir, { recursive: true });
-      const tmpName = `pr-body-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.md`;
-      const hostBodyPath = path.join(tmpDir, tmpName);
-      const containerBodyPath = `/app/.sandstorm/${tmpName}`;
-      fs.writeFileSync(hostBodyPath, body, 'utf-8');
 
-      try {
-        const { stdout, stderr } = await stackManager.push(stackId, title, {
-          prTitle: title,
-          prBodyFile: containerBodyPath,
-        });
-        const urlMatch = (stdout + '\n' + stderr).match(/https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/);
-        if (!urlMatch) {
-          throw new Error(
-            `sandstorm push completed but no PR URL was emitted by create-pr.sh. ` +
-            `Check that .sandstorm/scripts/create-pr.sh is installed and prints the URL on success. ` +
-            `Last output:\n${stdout.trim() || stderr.trim() || '(empty)'}`,
-          );
-        }
-        const url = urlMatch[0];
-        const number = Number(urlMatch[1]);
-        stackManager.setPullRequest(stackId, url, number);
-        return { url, number };
-      } finally {
-        try { fs.unlinkSync(hostBodyPath); } catch { /* best effort */ }
-      }
+      return createPullRequest(
+        { stackId, title, body },
+        {
+          workspace,
+          runPush: (t, bodyFile) =>
+            stackManager.push(stackId, t, { prTitle: t, prBodyFile: bodyFile }),
+          checkoutBranch: (branch) =>
+            stackManager.execInContainer(stackId, ['git', 'checkout', '-b', branch]),
+          setPullRequest: (url, num) => stackManager.setPullRequest(stackId, url, num),
+        },
+      );
     },
   );
 
