@@ -1,35 +1,16 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { useAppStore, ScheduleEntry, ScheduleAction } from '../store';
 import { cronToHuman, validateCronExpression as validateCron } from '../../shared/cron-utils';
-
-// Ship only `run-script` in this PR (#297 reshape per CLAUDE.md
-// "Deterministic workflow philosophy"). Follow-up tickets add more kinds
-// — each maps to a deterministic primitive, never a chat turn.
-type ActionKind = ScheduleAction['kind'];
-const ACTION_KINDS: { value: ActionKind; label: string; description: string }[] = [
-  {
-    value: 'run-script',
-    label: 'Custom script',
-    description: 'Runs .sandstorm/scripts/scheduled/<name>.sh when the cron fires.',
-  },
-];
+import { NewScheduleModal } from './NewScheduleModal';
 
 interface ScheduleFormData {
   label: string;
   cronExpression: string;
-  actionKind: ActionKind;
+  actionKind: ScheduleAction['kind'];
   // run-script fields
   scriptName: string;
   enabled: boolean;
 }
-
-const EMPTY_FORM: ScheduleFormData = {
-  label: '',
-  cronExpression: '',
-  actionKind: 'run-script',
-  scriptName: '',
-  enabled: true,
-};
 
 function buildAction(form: ScheduleFormData): ScheduleAction | { error: string } {
   switch (form.actionKind) {
@@ -66,7 +47,6 @@ function ScheduleForm({
 
   const cronError = form.cronExpression ? validateCron(form.cronExpression) : null;
   const cronPreview = !cronError && form.cronExpression ? cronToHuman(form.cronExpression) : null;
-  const activeKind = ACTION_KINDS.find((k) => k.value === form.actionKind);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -113,38 +93,19 @@ function ScheduleForm({
       </div>
 
       <div>
-        <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">Action</label>
-        <select
-          value={form.actionKind}
-          onChange={(e) => setForm({ ...form, actionKind: e.target.value as ActionKind })}
-          className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-md px-2.5 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:border-sandstorm-accent"
-          data-testid="schedule-action-kind"
-        >
-          {ACTION_KINDS.map((k) => (
-            <option key={k.value} value={k.value}>{k.label}</option>
-          ))}
-        </select>
-        {activeKind && (
-          <p className="mt-1 text-[10px] text-sandstorm-muted">{activeKind.description}</p>
-        )}
+        <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">Script name</label>
+        <input
+          type="text"
+          value={form.scriptName}
+          onChange={(e) => setForm({ ...form, scriptName: e.target.value })}
+          className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-md px-2.5 py-1.5 text-xs font-mono text-sandstorm-text placeholder:text-sandstorm-muted focus:outline-none focus:border-sandstorm-accent"
+          placeholder="triage-open-issues.sh"
+          data-testid="schedule-script-name"
+        />
+        <p className="mt-1 text-[10px] text-sandstorm-muted">
+          Path is resolved under <span className="font-mono">.sandstorm/scripts/scheduled/</span>. Must be executable.
+        </p>
       </div>
-
-      {form.actionKind === 'run-script' && (
-        <div>
-          <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">Script name</label>
-          <input
-            type="text"
-            value={form.scriptName}
-            onChange={(e) => setForm({ ...form, scriptName: e.target.value })}
-            className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-md px-2.5 py-1.5 text-xs font-mono text-sandstorm-text placeholder:text-sandstorm-muted focus:outline-none focus:border-sandstorm-accent"
-            placeholder="triage-open-issues.sh"
-            data-testid="schedule-script-name"
-          />
-          <p className="mt-1 text-[10px] text-sandstorm-muted">
-            Path is resolved under <span className="font-mono">.sandstorm/scripts/scheduled/</span>. Must be executable.
-          </p>
-        </div>
-      )}
 
       <div className="flex items-center gap-2">
         <input
@@ -217,7 +178,6 @@ function ScheduleRow({
       handleDeleteConfirm();
     } else {
       setConfirmDelete(true);
-      // Auto-reset after 3 seconds if user doesn't confirm
       setTimeout(() => setConfirmDelete(false), 3000);
     }
   };
@@ -329,7 +289,7 @@ function scheduleToFormData(schedule: ScheduleEntry): ScheduleFormData {
 
 export function SchedulerPanel({ projectDir }: { projectDir: string }) {
   const { schedules, schedulesLoading, cronHealthy, refreshSchedules, refreshCronHealth } = useAppStore();
-  const [showForm, setShowForm] = useState(false);
+  const [showModal, setShowModal] = useState(false);
   const [editingSchedule, setEditingSchedule] = useState<ScheduleEntry | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -339,29 +299,11 @@ export function SchedulerPanel({ projectDir }: { projectDir: string }) {
 
   useEffect(() => {
     setError(null);
-    setShowForm(false);
+    setShowModal(false);
     setEditingSchedule(null);
     refresh();
     refreshCronHealth();
   }, [projectDir, refresh, refreshCronHealth]);
-
-  const handleCreate = async (data: ScheduleFormData) => {
-    const action = buildAction(data);
-    if ('error' in action) { setError(action.error); return; }
-    try {
-      setError(null);
-      await window.sandstorm.schedules.create(projectDir, {
-        label: data.label || undefined,
-        cronExpression: data.cronExpression,
-        action,
-        enabled: data.enabled,
-      });
-      setShowForm(false);
-      refresh();
-    } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
-    }
-  };
 
   const handleUpdate = async (data: ScheduleFormData) => {
     if (!editingSchedule) return;
@@ -384,7 +326,7 @@ export function SchedulerPanel({ projectDir }: { projectDir: string }) {
 
   const handleEdit = (schedule: ScheduleEntry) => {
     setEditingSchedule(schedule);
-    setShowForm(false);
+    setShowModal(false);
   };
 
   return (
@@ -403,9 +345,9 @@ export function SchedulerPanel({ projectDir }: { projectDir: string }) {
             </span>
           )}
         </div>
-        {!showForm && !editingSchedule && (
+        {!editingSchedule && (
           <button
-            onClick={() => setShowForm(true)}
+            onClick={() => setShowModal(true)}
             className="flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-sandstorm-accent hover:text-sandstorm-accent-hover transition-colors"
             data-testid="new-schedule-btn"
           >
@@ -439,19 +381,7 @@ export function SchedulerPanel({ projectDir }: { projectDir: string }) {
           </div>
         )}
 
-        {/* New schedule form */}
-        {showForm && (
-          <div className="border border-sandstorm-accent/30 rounded-lg p-3 bg-sandstorm-bg">
-            <ScheduleForm
-              initial={EMPTY_FORM}
-              onSubmit={handleCreate}
-              onCancel={() => { setShowForm(false); setError(null); }}
-              submitLabel="Create Schedule"
-            />
-          </div>
-        )}
-
-        {/* Edit schedule form */}
+        {/* Edit schedule form (inline, for editing existing schedules) */}
         {editingSchedule && (
           <div className="border border-sandstorm-accent/30 rounded-lg p-3 bg-sandstorm-bg">
             <ScheduleForm
@@ -469,7 +399,7 @@ export function SchedulerPanel({ projectDir }: { projectDir: string }) {
           <p className="text-[11px] text-sandstorm-muted text-center py-4">Loading...</p>
         )}
 
-        {!schedulesLoading && schedules.length === 0 && !showForm && (
+        {!schedulesLoading && schedules.length === 0 && !editingSchedule && (
           <div className="flex flex-col items-center justify-center py-6 text-sandstorm-muted">
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" className="mb-2 opacity-50">
               <circle cx="12" cy="12" r="10" />
@@ -491,6 +421,15 @@ export function SchedulerPanel({ projectDir }: { projectDir: string }) {
           />
         ))}
       </div>
+
+      {/* New schedule modal */}
+      {showModal && (
+        <NewScheduleModal
+          projectDir={projectDir}
+          onClose={() => setShowModal(false)}
+          onCreated={refresh}
+        />
+      )}
     </div>
   );
 }

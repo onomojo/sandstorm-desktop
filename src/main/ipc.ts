@@ -21,6 +21,7 @@ import {
   removeProjectFromCrontab,
 } from './scheduler';
 import type { ScheduleAction } from './scheduler/types';
+import { BUILT_IN_ACTIONS } from './scheduler/built-in-actions';
 import { validateProjectDir } from './validation';
 import { syncAllProjectsCrontab, projectIdFromDir } from './scheduler/scheduler-manager';
 import { StackManager } from './control-plane/stack-manager';
@@ -1045,6 +1046,22 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('schedules:cronHealth', async () => {
     return { running: isCronRunning() };
+  });
+
+  ipcMain.handle('scheduler:listBuiltInActions', async () => {
+    return BUILT_IN_ACTIONS;
+  });
+
+  ipcMain.handle('schedules:listScripts', async (_event, projectDir: string) => {
+    const dirError = validateProjectDir(projectDir);
+    if (dirError) throw new Error(dirError.error);
+    const scriptsDir = path.join(projectDir, '.sandstorm', 'scripts', 'scheduled');
+    try {
+      const entries = await fs.promises.readdir(scriptsDir);
+      return entries.filter((f) => f.endsWith('.sh')).sort();
+    } catch {
+      return [];
+    }
   });
 
 

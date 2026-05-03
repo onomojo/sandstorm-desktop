@@ -141,6 +141,8 @@ export function mockSandstormApi() {
       update: vi.fn().mockResolvedValue({ id: 'sch_test', cronExpression: '0 * * * *', action: { kind: 'run-script', scriptName: 'test.sh' }, enabled: true, createdAt: '', updatedAt: '' }),
       delete: vi.fn().mockResolvedValue(undefined),
       cronHealth: vi.fn().mockResolvedValue({ running: true }),
+      listBuiltInActions: vi.fn().mockResolvedValue([]),
+      listScripts: vi.fn().mockResolvedValue([]),
     },
     auth: {
       status: vi.fn().mockResolvedValue({ loggedIn: false, expired: false }),

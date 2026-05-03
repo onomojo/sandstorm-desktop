@@ -71,70 +71,36 @@ describe('SchedulerPanel', () => {
     expect(screen.queryByTestId('cron-warning')).toBeNull();
   });
 
-  it('opens create form with an action-kind picker + script-name input', async () => {
+  it('opens NewScheduleModal when + New button is clicked', async () => {
     api.schedules.list.mockResolvedValue([]);
     api.schedules.cronHealth.mockResolvedValue({ running: true });
+    api.schedules.listBuiltInActions.mockResolvedValue([]);
+    api.schedules.listScripts.mockResolvedValue([]);
 
     render(<SchedulerPanel projectDir="/test/project" />);
 
     fireEvent.click(screen.getByTestId('new-schedule-btn'));
 
     await waitFor(() => {
-      expect(screen.getByTestId('schedule-form')).toBeTruthy();
-      expect(screen.getByTestId('schedule-cron-input')).toBeTruthy();
-      expect(screen.getByTestId('schedule-action-kind')).toBeTruthy();
-      expect(screen.getByTestId('schedule-script-name')).toBeTruthy();
+      expect(screen.getByTestId('new-schedule-modal')).toBeTruthy();
     });
   });
 
-  it('creates a schedule via the form with a run-script action', async () => {
+  it('closes the modal when the close button is clicked', async () => {
     api.schedules.list.mockResolvedValue([]);
     api.schedules.cronHealth.mockResolvedValue({ running: true });
-    api.schedules.create.mockResolvedValue(SAMPLE_SCHEDULE);
+    api.schedules.listBuiltInActions.mockResolvedValue([]);
+    api.schedules.listScripts.mockResolvedValue([]);
 
     render(<SchedulerPanel projectDir="/test/project" />);
 
     fireEvent.click(screen.getByTestId('new-schedule-btn'));
-    await waitFor(() => screen.getByTestId('schedule-form'));
+    await waitFor(() => screen.getByTestId('new-schedule-modal'));
 
-    fireEvent.change(screen.getByTestId('schedule-label-input'), {
-      target: { value: 'Test Label' },
-    });
-    fireEvent.change(screen.getByTestId('schedule-cron-input'), {
-      target: { value: '0 * * * *' },
-    });
-    fireEvent.change(screen.getByTestId('schedule-script-name'), {
-      target: { value: 'triage.sh' },
-    });
-
-    fireEvent.click(screen.getByTestId('schedule-submit-btn'));
+    fireEvent.click(screen.getByTestId('new-schedule-modal-close'));
 
     await waitFor(() => {
-      expect(api.schedules.create).toHaveBeenCalledWith('/test/project', {
-        label: 'Test Label',
-        cronExpression: '0 * * * *',
-        action: { kind: 'run-script', scriptName: 'triage.sh' },
-        enabled: true,
-      });
-    });
-  });
-
-  it('shows cron preview for valid expression', async () => {
-    api.schedules.list.mockResolvedValue([]);
-    api.schedules.cronHealth.mockResolvedValue({ running: true });
-
-    render(<SchedulerPanel projectDir="/test/project" />);
-
-    fireEvent.click(screen.getByTestId('new-schedule-btn'));
-    await waitFor(() => screen.getByTestId('schedule-cron-input'));
-
-    fireEvent.change(screen.getByTestId('schedule-cron-input'), {
-      target: { value: '*/5 * * * *' },
-    });
-
-    await waitFor(() => {
-      expect(screen.getByTestId('cron-preview')).toBeTruthy();
-      expect(screen.getByTestId('cron-preview').textContent).toContain('Every 5 minutes');
+      expect(screen.queryByTestId('new-schedule-modal')).toBeNull();
     });
   });
 
@@ -231,78 +197,6 @@ describe('SchedulerPanel', () => {
         }),
       );
     });
-  });
-
-  it('shows error when submitting with empty cron expression', async () => {
-    api.schedules.list.mockResolvedValue([]);
-    api.schedules.cronHealth.mockResolvedValue({ running: true });
-
-    render(<SchedulerPanel projectDir="/test/project" />);
-
-    fireEvent.click(screen.getByTestId('new-schedule-btn'));
-    await waitFor(() => screen.getByTestId('schedule-form'));
-
-    fireEvent.change(screen.getByTestId('schedule-script-name'), {
-      target: { value: 'something.sh' },
-    });
-
-    fireEvent.click(screen.getByTestId('schedule-submit-btn'));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('schedule-form-error')).toBeTruthy();
-      expect(screen.getByText('Cron expression is required')).toBeTruthy();
-    });
-
-    expect(api.schedules.create).not.toHaveBeenCalled();
-  });
-
-  it('shows error when submitting with invalid cron expression', async () => {
-    api.schedules.list.mockResolvedValue([]);
-    api.schedules.cronHealth.mockResolvedValue({ running: true });
-
-    render(<SchedulerPanel projectDir="/test/project" />);
-
-    fireEvent.click(screen.getByTestId('new-schedule-btn'));
-    await waitFor(() => screen.getByTestId('schedule-form'));
-
-    fireEvent.change(screen.getByTestId('schedule-cron-input'), {
-      target: { value: 'not a valid cron' },
-    });
-    fireEvent.change(screen.getByTestId('schedule-script-name'), {
-      target: { value: 'something.sh' },
-    });
-
-    fireEvent.click(screen.getByTestId('schedule-submit-btn'));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('schedule-form-error')).toBeTruthy();
-    });
-
-    expect(api.schedules.create).not.toHaveBeenCalled();
-  });
-
-  it('shows error when run-script is selected but scriptName is empty', async () => {
-    api.schedules.list.mockResolvedValue([]);
-    api.schedules.cronHealth.mockResolvedValue({ running: true });
-
-    render(<SchedulerPanel projectDir="/test/project" />);
-
-    fireEvent.click(screen.getByTestId('new-schedule-btn'));
-    await waitFor(() => screen.getByTestId('schedule-form'));
-
-    fireEvent.change(screen.getByTestId('schedule-cron-input'), {
-      target: { value: '0 * * * *' },
-    });
-    // Leave script-name empty.
-
-    fireEvent.click(screen.getByTestId('schedule-submit-btn'));
-
-    await waitFor(() => {
-      expect(screen.getByTestId('schedule-form-error')).toBeTruthy();
-      expect(screen.getByText('Script name is required')).toBeTruthy();
-    });
-
-    expect(api.schedules.create).not.toHaveBeenCalled();
   });
 
   it('shows schedules count badge', () => {

@@ -305,6 +305,14 @@ export interface StackHistoryRecord {
 export type ScheduleAction =
   | { kind: 'run-script'; scriptName: string };
 
+/** Renderer-side mirror of `BuiltInAction` from src/main/scheduler/built-in-actions.ts. */
+export interface BuiltInAction {
+  kind: ScheduleAction['kind'];
+  label: string;
+  description: string;
+  defaultAction: ScheduleAction;
+}
+
 export interface ScheduleEntry {
   id: string;
   label?: string;
@@ -630,6 +638,8 @@ declare global {
         update: (projectDir: string, id: string, patch: { label?: string; cronExpression?: string; action?: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
         delete: (projectDir: string, id: string) => Promise<void>;
         cronHealth: () => Promise<{ running: boolean }>;
+        listBuiltInActions: () => Promise<BuiltInAction[]>;
+        listScripts: (projectDir: string) => Promise<string[]>;
       };
       auth: {
         status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;

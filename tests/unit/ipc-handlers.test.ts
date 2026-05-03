@@ -1097,6 +1097,46 @@ describe('IPC Handlers', () => {
       const result = await invokeHandler('schedules:cronHealth');
       expect(result).toEqual({ running: false });
     });
+
+    describe('schedules:listScripts', () => {
+      let tmpDir: string;
+
+      beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-listscripts-'));
+      });
+
+      afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      });
+
+      it('returns .sh filenames sorted from the scheduled dir', async () => {
+        const scheduledDir = path.join(tmpDir, '.sandstorm', 'scripts', 'scheduled');
+        fs.mkdirSync(scheduledDir, { recursive: true });
+        fs.writeFileSync(path.join(scheduledDir, 'zebra.sh'), '#!/bin/bash');
+        fs.writeFileSync(path.join(scheduledDir, 'alpha.sh'), '#!/bin/bash');
+        fs.writeFileSync(path.join(scheduledDir, 'not-a-script.txt'), 'ignored');
+
+        const result = await invokeHandler('schedules:listScripts', tmpDir);
+        expect(result).toEqual(['alpha.sh', 'zebra.sh']);
+      });
+
+      it('returns [] when the scheduled dir does not exist', async () => {
+        const result = await invokeHandler('schedules:listScripts', tmpDir);
+        expect(result).toEqual([]);
+      });
+
+      it('rejects a relative projectDir', async () => {
+        await expect(invokeHandler('schedules:listScripts', 'relative/path')).rejects.toThrow(
+          /absolute path/,
+        );
+      });
+
+      it('rejects an empty projectDir', async () => {
+        await expect(invokeHandler('schedules:listScripts', '')).rejects.toThrow(
+          /projectDir is required/,
+        );
+      });
+    });
   });
 
   // =========================================================================
@@ -1185,6 +1225,8 @@ describe('IPC Handlers', () => {
       'schedules:update',
       'schedules:delete',
       'schedules:cronHealth',
+      'scheduler:listBuiltInActions',
+      'schedules:listScripts',
       'auth:status',
       'auth:login',
       'tickets:fetch',
