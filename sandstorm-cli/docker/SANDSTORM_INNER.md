@@ -64,6 +64,24 @@ This loop repeats until review + verification both pass (or max iterations are r
 - **When you receive verify failures**, focus on the specific errors (test failures, type errors, build errors)
 - The review agent has NO context from your session — it only sees the task description and your diff. Write clean, self-explanatory code.
 
+### Scope constraints on iteration 2+
+
+Every iteration prompt after the first re-injects the original task verbatim. On review-fix and verify-fix iterations you will receive explicit scope constraints:
+
+- **Do not modify files outside the scope of the original task.** The reviewer will reject out-of-scope changes regardless of code quality.
+- **Do not modify tests to make them pass.** Fix production code instead.
+- **Do not loosen assertions, skip test cases, or weaken error checks.**
+
+### STOP_AND_ASK — deadlock break
+
+If you determine that verify cannot pass **without** making out-of-scope changes (e.g., a pre-existing broken test unrelated to your ticket keeps failing), do NOT silently drift. Instead, output exactly:
+
+```
+STOP_AND_ASK: <one-sentence reason naming the out-of-scope file or problem>
+```
+
+on its own line, then stop immediately without making further changes. The harness will halt the loop, set the stack status to `needs_human`, and surface your reason to the human operator. The human will then fix the pre-existing issue separately and re-dispatch your ticket.
+
 ## What you should NOT do
 
 - Do not push to GitHub (you only have read-only access)

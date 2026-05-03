@@ -1290,4 +1290,55 @@ describe('TaskWatcher', () => {
     await progressPromise;
     watcher.unwatchAll();
   });
+
+  it('emits task:failed and records needs_human status when STOP_AND_ASK detected', async () => {
+    const stopReason = 'tests/integration/fixtures.ts is out of scope for this ticket';
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        const cmdStr = cmd.join(' ');
+        if (cmdStr.includes('/tmp/claude-task.status')) {
+          // Transition: running → needs_human
+          const callCount = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls.length;
+          return { exitCode: 0, stdout: callCount <= 2 ? 'running' : 'needs_human', stderr: '' };
+        }
+        if (cmdStr.includes('/tmp/claude-stop-reason.txt')) {
+          return { exitCode: 0, stdout: stopReason, stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'test task');
+
+    const failedPromise = new Promise<void>((resolve) => {
+      watcher.on('task:failed', ({ stackId, task }) => {
+        expect(stackId).toBe('watch-stack');
+        expect(task.status).toBe('needs_human');
+        expect(task.warnings).toBe(stopReason);
+        resolve();
+      });
+    });
+
+    watcher.watch('watch-stack', 'container-123');
+    await failedPromise;
+    watcher.unwatchAll();
+
+    // Verify registry recorded needs_human status and captured the reason
+    await new Promise((r) => setTimeout(r, 50));
+    const updatedTask = registry.getMostRecentTask('watch-stack');
+    expect(updatedTask?.status).toBe('needs_human');
+    expect(updatedTask?.warnings).toBe(stopReason);
+
+    const stack = registry.getStack('watch-stack');
+    expect(stack?.status).toBe('needs_human');
+  });
 });

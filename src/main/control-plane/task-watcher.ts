@@ -128,11 +128,16 @@ export class TaskWatcher extends EventEmitter {
   private completeTaskAndNotify(
     task: Task,
     stackId: string,
-    status: 'completed' | 'failed',
+    status: 'completed' | 'failed' | 'needs_human',
     exitCode: number,
-    containerId?: string
+    containerId?: string,
+    stopReason?: string
   ): void {
-    this.registry.completeTask(task.id, exitCode);
+    if (status === 'needs_human') {
+      this.registry.completeTaskNeedsHuman(task.id, stopReason ?? 'Agent signaled STOP_AND_ASK — needs human intervention');
+    } else {
+      this.registry.completeTask(task.id, exitCode);
+    }
 
     // Check for suspicious completion: fast exit with no changes
     let warning: string | null = null;
@@ -155,11 +160,12 @@ export class TaskWatcher extends EventEmitter {
       ...task,
       status,
       exit_code: exitCode,
-      warnings: warning,
+      warnings: status === 'needs_human' ? (stopReason ?? null) : warning,
       finished_at: new Date().toISOString(),
     };
 
     const event = status === 'completed' ? 'task:completed' : 'task:failed';
+    // needs_human emits task:failed so existing listeners see a terminal failure state
     this.emit(event, { stackId, task: updatedTask });
     this.onStatusChange?.();
     this.unwatch(stackId);
@@ -559,7 +565,7 @@ export class TaskWatcher extends EventEmitter {
         return;
       }
 
-      if (status === 'completed' || status === 'failed') {
+      if (status === 'completed' || status === 'failed' || status === 'needs_human') {
         // Ignore stale completion from a prior task — we must see "running"
         // at least once before treating completion as valid.
         // Safety net: if we never see "running" (e.g. task runner crashed),
@@ -572,6 +578,19 @@ export class TaskWatcher extends EventEmitter {
             return;
           }
         }
+
+        if (status === 'needs_human') {
+          let stopReason = 'Agent signaled STOP_AND_ASK — needs human intervention';
+          try {
+            const reasonResult = await runtime.exec(containerId, ['cat', '/tmp/claude-stop-reason.txt']);
+            if (reasonResult.stdout.trim()) {
+              stopReason = reasonResult.stdout.trim();
+            }
+          } catch { /* best effort */ }
+          this.completeTaskAndNotify(task, stackId, 'needs_human', 1, containerId, stopReason);
+          return;
+        }
+
         let exitCode: number;
         try {
           const exitResult = await runtime.exec(containerId, [

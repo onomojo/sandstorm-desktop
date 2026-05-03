@@ -34,6 +34,7 @@ export type StackStatus =
   | 'running'
   | 'completed'
   | 'failed'
+  | 'needs_human'
   | 'idle'
   | 'stopped'
   | 'pushed'
@@ -47,7 +48,7 @@ export interface Task {
   prompt: string;
   model: string | null;
   resolved_model: string | null;
-  status: 'running' | 'completed' | 'failed' | 'interrupted';
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'needs_human';
   exit_code: number | null;
   warnings: string | null;
   session_id: string | null;
@@ -578,6 +579,19 @@ export class Registry {
         task.stack_id,
         exitCode === 0 ? 'completed' : 'failed'
       );
+    }
+  }
+
+  completeTaskNeedsHuman(taskId: number, reason: string): void {
+    this.db.prepare(
+      "UPDATE tasks SET status = 'needs_human', exit_code = 1, warnings = ?, finished_at = datetime('now') WHERE id = ?"
+    ).run(reason, taskId);
+
+    const task = this.db.prepare(
+      'SELECT stack_id FROM tasks WHERE id = ?'
+    ).get(taskId) as { stack_id: string } | undefined;
+    if (task) {
+      this.updateStackStatus(task.stack_id, 'needs_human');
     }
   }
 
