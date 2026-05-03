@@ -3,6 +3,13 @@ import { contextBridge, ipcRenderer } from 'electron';
 export type ScheduleAction =
   | { kind: 'run-script'; scriptName: string };
 
+export interface BuiltInAction {
+  kind: ScheduleAction['kind'];
+  label: string;
+  description: string;
+  defaultAction: ScheduleAction;
+}
+
 export interface ScheduleEntry {
   id: string;
   label?: string;
@@ -171,6 +178,8 @@ export interface SandstormAPI {
     update: (projectDir: string, id: string, patch: { label?: string; cronExpression?: string; action?: ScheduleAction; enabled?: boolean }) => Promise<ScheduleEntry>;
     delete: (projectDir: string, id: string) => Promise<void>;
     cronHealth: () => Promise<{ running: boolean }>;
+    listBuiltInActions: () => Promise<BuiltInAction[]>;
+    listScripts: (projectDir: string) => Promise<string[]>;
   };
   auth: {
     status: () => Promise<{ loggedIn: boolean; email?: string; expired: boolean; expiresAt?: number }>;
@@ -332,6 +341,8 @@ const api: SandstormAPI = {
     update: (projectDir, id, patch) => ipcRenderer.invoke('schedules:update', projectDir, id, patch),
     delete: (projectDir, id) => ipcRenderer.invoke('schedules:delete', projectDir, id),
     cronHealth: () => ipcRenderer.invoke('schedules:cronHealth'),
+    listBuiltInActions: () => ipcRenderer.invoke('scheduler:listBuiltInActions'),
+    listScripts: (projectDir) => ipcRenderer.invoke('schedules:listScripts', projectDir),
   },
   auth: {
     status: () => ipcRenderer.invoke('auth:status'),
