@@ -276,6 +276,14 @@ case "$COMMAND" in
         mkdir -p "$WORKSPACE/.sandstorm"
         cp "$PROJECT_ROOT/.sandstorm/verify.sh" "$WORKSPACE/.sandstorm/verify.sh" 2>/dev/null || true
       fi
+      # Copy host .sandstorm/scripts/ into the workspace so container-side tools
+      # (create-pr.sh, fetch-ticket.sh, etc.) are reachable at /app/.sandstorm/scripts/.
+      # Use -rp to preserve executable bits and recurse into subdirs (e.g. scheduled/).
+      # No-op silently when the host has no scripts dir (uninitialized project).
+      if [ -d "$PROJECT_ROOT/.sandstorm/scripts" ]; then
+        mkdir -p "$WORKSPACE/.sandstorm/scripts"
+        cp -rp "$PROJECT_ROOT/.sandstorm/scripts/." "$WORKSPACE/.sandstorm/scripts/" 2>/dev/null || true
+      fi
       # Remap ports in env files to match sandstorm stack offsets
       if [ -n "${PORT_MAP:-}" ]; then
         IFS=',' read -ra ENTRIES <<< "$PORT_MAP"
@@ -562,9 +570,11 @@ case "$COMMAND" in
             else
               PR_ARGS+=(--body "Changes from Sandstorm stack '"${STACK_ID}"'")
             fi
-            /app/.sandstorm/scripts/create-pr.sh "${PR_ARGS[@]}" \
-              || echo "PR already exists or could not be created"
+            if ! /app/.sandstorm/scripts/create-pr.sh "${PR_ARGS[@]}"; then
+              echo "SANDSTORM_PR_FAILED:create-pr.sh exited non-zero" >&2
+            fi
           else
+            echo "SANDSTORM_PR_FAILED:no create-pr script at .sandstorm/scripts/create-pr.sh" >&2
             echo "No create-pr script found at .sandstorm/scripts/create-pr.sh — skipping PR creation."
             echo "Run sandstorm init to configure a ticket provider, or create the script manually."
           fi

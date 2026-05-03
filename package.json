@@ -10,6 +10,7 @@
   "main": "dist/main/index.cjs",
   "scripts": {
     "dev": "electron-vite dev",
+    "prebuild": "git config --global --add safe.directory /app 2>/dev/null; git rev-parse --short HEAD > src/renderer/build-version.txt 2>/dev/null || echo unknown > src/renderer/build-version.txt",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
     "package": "electron-builder",

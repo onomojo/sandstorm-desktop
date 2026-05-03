@@ -12,12 +12,21 @@ describe('stack.sh .sandstorm/ config injection', () => {
     expect(stackSh).toContain('$WORKSPACE/.sandstorm/verify.sh');
   });
 
-  it('does NOT inject other files (review-prompt.md, scripts/, context/, etc.)', () => {
+  it('does NOT inject unrelated files (review-prompt.md, context/, spec-quality-gate, etc.)', () => {
     expect(stackSh).not.toContain('review-prompt.md');
     expect(stackSh).not.toContain('SANDSTORM_INJECT_ITEMS');
-    expect(stackSh).not.toMatch(/cp.*\.sandstorm\/scripts/);
     expect(stackSh).not.toMatch(/cp.*\.sandstorm\/context/);
     expect(stackSh).not.toMatch(/cp.*spec-quality-gate/);
+  });
+
+  it('injects .sandstorm/scripts/ into workspace (create-pr.sh and friends)', () => {
+    expect(stackSh).toContain('$PROJECT_ROOT/.sandstorm/scripts');
+    expect(stackSh).toContain('$WORKSPACE/.sandstorm/scripts');
+    expect(stackSh).toMatch(/cp -rp.*\.sandstorm\/scripts/);
+  });
+
+  it('skips scripts injection silently if host has no scripts dir', () => {
+    expect(stackSh).toContain('[ -d "$PROJECT_ROOT/.sandstorm/scripts" ]');
   });
 
   it('skips injection silently if verify.sh does not exist', () => {
