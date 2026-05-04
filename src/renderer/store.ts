@@ -425,12 +425,16 @@ interface AppState {
   /** Whether to show the session warning modal */
   showSessionWarningModal: boolean;
   setShowSessionWarningModal: (show: boolean) => void;
+  /** Non-dismissive modal shown when user tries to resume but token limit hasn't refreshed */
+  sessionTokenLimitModal: { resetAt: string | null } | null;
+  setSessionTokenLimitModal: (state: { resetAt: string | null } | null) => void;
   refreshSessionState: () => Promise<void>;
   refreshSessionSettings: () => Promise<void>;
   updateSessionSettings: (settings: Partial<SessionMonitorSettings>) => Promise<void>;
   sessionAcknowledgeCritical: () => Promise<void>;
   sessionHaltAll: () => Promise<string[]>;
   sessionResumeAll: () => Promise<string[]>;
+  resumeStackWithContinuation: (stackId: string) => Promise<void>;
 
   // Schedules (per-project)
   schedules: ScheduleEntry[];
@@ -629,6 +633,11 @@ declare global {
         haltAll: () => Promise<string[]>;
         resumeAll: () => Promise<string[]>;
         resumeStack: (stackId: string) => Promise<void>;
+        resumeStackWithContinuation: (stackId: string) => Promise<{
+          halted: boolean;
+          resetAt?: string | null;
+          outcome?: 'resuming_with_session' | 'resumed_fresh' | 'idle';
+        }>;
         forcePoll: () => Promise<SessionMonitorState>;
         reportActivity: () => void;
       };
@@ -818,6 +827,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   sessionWarningLevel: null,
   showSessionWarningModal: false,
   setShowSessionWarningModal: (show) => set({ showSessionWarningModal: show }),
+  sessionTokenLimitModal: null,
+  setSessionTokenLimitModal: (state) => set({ sessionTokenLimitModal: state }),
 
   refreshSessionState: async () => {
     try {
@@ -856,6 +867,15 @@ export const useAppStore = create<AppState>((set, get) => ({
     const resumed = await window.sandstorm.session.resumeAll();
     await get().refreshStacks();
     return resumed;
+  },
+
+  resumeStackWithContinuation: async (stackId: string) => {
+    const result = await window.sandstorm.session.resumeStackWithContinuation(stackId);
+    if (result.halted) {
+      get().setSessionTokenLimitModal({ resetAt: result.resetAt ?? null });
+      return;
+    }
+    await get().refreshStacks();
   },
 
   // Schedules

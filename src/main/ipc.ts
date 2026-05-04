@@ -23,6 +23,7 @@ import {
 import type { ScheduleAction } from './scheduler/types';
 import { BUILT_IN_ACTIONS } from './scheduler/built-in-actions';
 import { validateProjectDir } from './validation';
+import { SandstormError, ErrorCode } from './errors';
 import { syncAllProjectsCrontab, projectIdFromDir } from './scheduler/scheduler-manager';
 import { StackManager } from './control-plane/stack-manager';
 import { CreateStackOpts } from './control-plane/stack-manager';
@@ -954,6 +955,22 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('session:resumeStack', (_event, stackId: string) => {
     stackManager.sessionResumeStack(stackId);
+  });
+
+  ipcMain.handle('session:resumeStackWithContinuation', async (_event, stackId: string) => {
+    try {
+      const result = await stackManager.resumeStackWithContinuation(
+        stackId,
+        () => sessionMonitor.getState().halted
+      );
+      return { halted: false, ...result };
+    } catch (err) {
+      if (err instanceof SandstormError && err.code === ErrorCode.SESSION_HALTED) {
+        const resetAt = sessionMonitor.getState().usage?.session?.resetsAt ?? null;
+        return { halted: true, resetAt };
+      }
+      throw err;
+    }
   });
 
   ipcMain.handle('session:forcePoll', async () => {

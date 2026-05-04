@@ -11,6 +11,7 @@ import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { AccountUsageBar } from './components/AccountUsageBar';
 import { SessionWarningModal } from './components/SessionWarningModal';
+import { SessionTokenLimitModal } from './components/SessionTokenLimitModal';
 import trayIcon from './tray-icon.png';
 import buildVersion from './build-version.txt?raw';
 
@@ -260,6 +261,9 @@ export default function App() {
           onClose={() => setShowSessionWarningModal(false)}
         />
       )}
+
+      {/* Token-limit-not-refreshed modal — shown when user clicks Resume too early */}
+      <SessionTokenLimitModal />
     </div>
   );
 }

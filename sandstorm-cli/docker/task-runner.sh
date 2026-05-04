@@ -301,6 +301,16 @@ while true; do
       rm -f /tmp/claude-task-model.txt
     fi
 
+    # Read resume session id if provided (set by --resume flag in dispatchContinuation)
+    RESUME_ARGS=()
+    if [ -f /tmp/claude-task-resume.txt ]; then
+      RESUME_SESSION_ID=$(cat /tmp/claude-task-resume.txt 2>/dev/null | tr -d '[:space:]')
+      if [ -n "$RESUME_SESSION_ID" ]; then
+        RESUME_ARGS=(--resume "$RESUME_SESSION_ID")
+      fi
+      rm -f /tmp/claude-task-resume.txt
+    fi
+
     echo ""
     echo "=========================================="
     echo "  Task: $LABEL"
@@ -333,8 +343,20 @@ while true; do
 
     log_loop "Starting initial execution pass..."
     echo "execution_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
-    run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${MODEL_ARGS[@]}"
+    run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${MODEL_ARGS[@]}" "${RESUME_ARGS[@]}"
     EXIT_CODE=${PIPESTATUS[0]}
+
+    # Edge Case 6: if --resume failed, fall back to a fresh dispatch with the original prompt
+    if [ $EXIT_CODE -ne 0 ] && [ ${#RESUME_ARGS[@]} -gt 0 ]; then
+      log_loop "Resume dispatch failed (exit $EXIT_CODE) — session data may be unavailable, falling back to fresh dispatch..."
+      echo "" >> /tmp/claude-task.log
+      echo "⚠️ WARNING: Session resume failed (session data unavailable). Starting fresh dispatch." >> /tmp/claude-task.log
+      > /tmp/claude-raw.log
+      RESUME_ARGS=()
+      run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${MODEL_ARGS[@]}"
+      EXIT_CODE=${PIPESTATUS[0]}
+    fi
+
     echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
 
     # Capture execution summary (last 50 lines of task log)

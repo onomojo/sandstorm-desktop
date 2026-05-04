@@ -270,6 +270,47 @@ describe('StackTableRow action button visibility (#316)', () => {
   });
 });
 
+describe('StackTableRow session_paused Resume button', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows Resume button only for session_paused stacks', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'paused', status: 'session_paused' }));
+    expect(screen.getByTestId('row-resume-paused')).toBeDefined();
+  });
+
+  it('does not show Resume button for running stacks', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'busy', status: 'running' }));
+    expect(screen.queryByTestId('row-resume-busy')).toBeNull();
+  });
+
+  it('shows Halted label for session_paused status', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'halted', status: 'session_paused' }));
+    expect(screen.getByText('Halted')).toBeDefined();
+  });
+
+  it('calls resumeStackWithContinuation when Resume is clicked', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    const resumeFn = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ resumeStackWithContinuation: resumeFn } as any);
+
+    renderRow(makeStack({ id: 'paused2', status: 'session_paused' }));
+    fireEvent.click(screen.getByTestId('row-resume-paused2'));
+
+    expect(resumeFn).toHaveBeenCalledWith('paused2');
+  });
+});
+
 describe('StackTableRow popover suppression on actions hover (#316)', () => {
   beforeEach(() => {
     vi.useFakeTimers();

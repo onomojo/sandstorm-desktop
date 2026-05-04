@@ -1832,6 +1832,124 @@ describe('StackManager', () => {
     });
   });
 
+  describe('resumeStackWithContinuation', () => {
+    it('Case A: dispatches with --resume flag when running task has session_id', async () => {
+      registry.createStack(makeStack('resume-a'));
+      const task = registry.createTask('resume-a', 'do work', 'sonnet');
+      registry.setTaskSessionId(task.id, 'sess-abc123');
+      // Must set session_paused AFTER createTask — createTask calls updateStackStatus('running')
+      registry.updateStackStatus('resume-a', 'session_paused');
+
+      vi.spyOn(manager, 'waitForClaudeReady').mockResolvedValue(undefined);
+      vi.spyOn(taskWatcher, 'watch').mockImplementation(() => {});
+      vi.spyOn(taskWatcher, 'streamOutput').mockResolvedValue(undefined);
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: '', exitCode: 0,
+      });
+
+      const result = await manager.resumeStackWithContinuation('resume-a');
+      expect(result.outcome).toBe('resuming_with_session');
+
+      // CLI should include --resume and the session ID
+      const resumeCall = runCliSpy.mock.calls.find(
+        ([, args]) => Array.isArray(args) && args.includes('--resume')
+      );
+      expect(resumeCall).toBeDefined();
+      expect(resumeCall![1]).toContain('sess-abc123');
+
+      // resumed_at should be stamped on the task
+      const tasks = registry.getTasksForStack('resume-a');
+      expect(tasks[0].resumed_at).toBeTruthy();
+
+      expect(registry.getStack('resume-a')!.status).toBe('running');
+    });
+
+    it('Case B: interrupts old task and redispatches fresh when session_id is null', async () => {
+      registry.createStack(makeStack('resume-b'));
+      const task = registry.createTask('resume-b', 'original prompt', 'sonnet');
+      // session_id is null by default; set session_paused after createTask
+      registry.updateStackStatus('resume-b', 'session_paused');
+
+      vi.spyOn(manager, 'waitForClaudeReady').mockResolvedValue(undefined);
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: '', exitCode: 0,
+      });
+
+      const result = await manager.resumeStackWithContinuation('resume-b');
+      expect(result.outcome).toBe('resumed_fresh');
+
+      // Old task must be interrupted
+      const allTasks = registry.getTasksForStack('resume-b');
+      const oldTask = allTasks.find(t => t.id === task.id);
+      expect(oldTask!.status).toBe('interrupted');
+
+      // A new task was created for the fresh dispatch
+      expect(allTasks.length).toBeGreaterThan(1);
+
+      // CLI task call must NOT carry --resume
+      const taskCall = runCliSpy.mock.calls.find(
+        ([, args]) => Array.isArray(args) && args[0] === 'task'
+      );
+      expect(taskCall).toBeDefined();
+      expect(taskCall![1]).not.toContain('--resume');
+    });
+
+    it('Case C: marks stack idle when no running task exists', async () => {
+      registry.createStack(makeStack('resume-c'));
+      // Stack has no tasks; set session_paused directly
+      registry.updateStackStatus('resume-c', 'session_paused');
+
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      const result = await manager.resumeStackWithContinuation('resume-c');
+      expect(result.outcome).toBe('idle');
+      expect(registry.getStack('resume-c')!.status).toBe('idle');
+    });
+
+    it('returns idle immediately and skips CLI when stack is not session_paused', async () => {
+      registry.createStack(makeStack('resume-up'));
+      // default status is 'up'
+
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: '', exitCode: 0,
+      });
+
+      const result = await manager.resumeStackWithContinuation('resume-up');
+      expect(result.outcome).toBe('idle');
+      expect(runCliSpy).not.toHaveBeenCalled();
+      expect(registry.getStack('resume-up')!.status).toBe('up');
+    });
+
+    it('Pre-flight: throws without touching containers when isHalted returns true', async () => {
+      registry.createStack(makeStack('resume-halted'));
+      registry.updateStackStatus('resume-halted', 'session_paused');
+
+      const runCliSpy = vi.spyOn(manager, 'runCli');
+
+      await expect(
+        manager.resumeStackWithContinuation('resume-halted', () => true)
+      ).rejects.toThrow('Session token limit has not refreshed yet');
+
+      expect(runCliSpy).not.toHaveBeenCalled();
+      expect(registry.getStack('resume-halted')!.status).toBe('session_paused');
+    });
+
+    it('reverts to session_paused when container start fails', async () => {
+      registry.createStack(makeStack('resume-fail'));
+      registry.updateStackStatus('resume-fail', 'session_paused');
+
+      vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: '', stderr: 'docker daemon unavailable', exitCode: 1,
+      });
+
+      await expect(
+        manager.resumeStackWithContinuation('resume-fail')
+      ).rejects.toThrow();
+
+      expect(registry.getStack('resume-fail')!.status).toBe('session_paused');
+    });
+  });
+
   describe('getRuntimeForStack (per-stack runtime resolution)', () => {
     it('returns docker runtime for stacks with runtime=docker', () => {
       const dockerRt = createMockRuntime();
