@@ -371,6 +371,21 @@ describe('Registry', () => {
       expect(tasks[0].status).toBe('needs_human');
     });
 
+    it('completeTaskVerifyBlockedEnvironmental sets needs_human status and verify_blocked_environmental stack status', () => {
+      const task = registry.createTask('task-stack', 'Fix something');
+      const reason = 'Verify blocked (environmental): jq: command not found';
+      registry.completeTaskVerifyBlockedEnvironmental(task.id, reason);
+
+      const tasks = registry.getTasksForStack('task-stack');
+      expect(tasks[0].status).toBe('needs_human');
+      expect(tasks[0].exit_code).toBe(1);
+      expect(tasks[0].warnings).toBe(reason);
+      expect(tasks[0].finished_at).toBeTruthy();
+
+      const stack = registry.getStack('task-stack');
+      expect(stack!.status).toBe('verify_blocked_environmental');
+    });
+
     it('preserves various exit codes', () => {
       for (const code of [0, 1, 2, 127, 137, 255]) {
         const task = registry.createTask('task-stack', `exit ${code}`);

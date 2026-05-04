@@ -565,7 +565,7 @@ export class TaskWatcher extends EventEmitter {
         return;
       }
 
-      if (status === 'completed' || status === 'failed' || status === 'needs_human') {
+      if (status === 'completed' || status === 'failed' || status === 'needs_human' || status === 'verify_blocked_environmental') {
         // Ignore stale completion from a prior task — we must see "running"
         // at least once before treating completion as valid.
         // Safety net: if we never see "running" (e.g. task runner crashed),
@@ -588,6 +588,33 @@ export class TaskWatcher extends EventEmitter {
             }
           } catch { /* best effort */ }
           this.completeTaskAndNotify(task, stackId, 'needs_human', 1, containerId, stopReason);
+          return;
+        }
+
+        if (status === 'verify_blocked_environmental') {
+          let envReason = 'Verify failed repeatedly — likely an environmental issue (missing binary, missing service, etc.)';
+          try {
+            const envResult = await runtime.exec(containerId, ['cat', '/tmp/claude-verify-environmental.txt']);
+            if (envResult.stdout.trim()) {
+              envReason = `Verify blocked (environmental): ${envResult.stdout.trim()}`;
+            }
+          } catch { /* best effort */ }
+          this.registry.completeTaskVerifyBlockedEnvironmental(task.id, envReason);
+          const updatedTask = {
+            ...task,
+            status: 'needs_human' as const,
+            exit_code: 1,
+            warnings: envReason,
+            finished_at: new Date().toISOString(),
+          };
+          if (containerId) {
+            this.readTaskTokens(task.id, stackId, containerId).catch(() => {});
+            this.readTaskIterations(task.id, stackId, containerId).catch(() => {});
+            this.readTaskMetadata(task.id, stackId, containerId).catch(() => {});
+          }
+          this.emit('task:failed', { stackId, task: updatedTask });
+          this.onStatusChange?.();
+          this.unwatch(stackId);
           return;
         }
 

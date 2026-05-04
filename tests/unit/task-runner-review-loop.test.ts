@@ -662,6 +662,128 @@ describe('task-runner.sh dual-loop workflow', () => {
     })
   })
 
+  // ── Global review iteration cap ──────────────────────────────────────
+
+  describe('global review iteration cap', () => {
+    it('defines MAX_TOTAL_REVIEW_ITERATIONS=5', () => {
+      expect(taskRunner).toContain('MAX_TOTAL_REVIEW_ITERATIONS=5')
+    })
+
+    it('enforces global cap in inner loop while condition', () => {
+      expect(taskRunner).toContain('TOTAL_REVIEW_ITERATIONS -lt $MAX_TOTAL_REVIEW_ITERATIONS')
+    })
+
+    it('enforces global cap in review-fail break condition', () => {
+      // The fail branch must have elif for global cap after the inner cap check
+      const failBranch = taskRunner.indexOf('INNER_ITERATION -ge $MAX_INNER_ITERATIONS')
+      const totalCapCheck = taskRunner.indexOf('TOTAL_REVIEW_ITERATIONS -ge $MAX_TOTAL_REVIEW_ITERATIONS', failBranch)
+      expect(failBranch).toBeGreaterThan(-1)
+      expect(totalCapCheck).toBeGreaterThan(failBranch)
+    })
+
+    it('adds fallback after inner loop for global-cap exit path', () => {
+      // When the while condition exits because TOTAL hits cap (not REVIEW_PASSED),
+      // there must be a check that sets TASK_FAILED before proceeding to verify
+      expect(taskRunner).toContain('Global review cap ($MAX_TOTAL_REVIEW_ITERATIONS total) reached without a passing review')
+    })
+
+    it('global cap check is in review-fail branch as an elif after the inner cap check', () => {
+      // Inner cap check fires first; global cap fires as elif to avoid running fix pass
+      expect(taskRunner).toContain('elif [ $TOTAL_REVIEW_ITERATIONS -ge $MAX_TOTAL_REVIEW_ITERATIONS ]')
+    })
+  })
+
+  // ── Verify retry cap and environmental detection ──────────────────────
+
+  describe('verify retry cap', () => {
+    it('defines MAX_VERIFY_RETRIES=2', () => {
+      expect(taskRunner).toContain('MAX_VERIFY_RETRIES=2')
+    })
+
+    it('halts when TOTAL_VERIFY_RETRIES reaches MAX_VERIFY_RETRIES', () => {
+      expect(taskRunner).toContain('TOTAL_VERIFY_RETRIES -ge $MAX_VERIFY_RETRIES')
+    })
+
+    it('logs a distinctive message when verify retry cap fires', () => {
+      expect(taskRunner).toContain('Likely environmental or unresolvable. Halting')
+    })
+
+    it('captures a failure fingerprint from the verify log', () => {
+      expect(taskRunner).toContain('VERIFY_FAIL_FINGERPRINT')
+    })
+
+    it('writes fingerprint to /tmp/claude-verify-environmental.txt', () => {
+      expect(taskRunner).toContain('/tmp/claude-verify-environmental.txt')
+    })
+
+    it('sets VERIFY_BLOCKED_ENVIRONMENTAL=1 when cap fires', () => {
+      expect(taskRunner).toContain('VERIFY_BLOCKED_ENVIRONMENTAL=1')
+    })
+
+    it('initializes VERIFY_BLOCKED_ENVIRONMENTAL to 0 before the dual loop', () => {
+      const loopStart = taskRunner.indexOf('ORIGINAL_PROMPT="$PROMPT"')
+      const envInit = taskRunner.indexOf('VERIFY_BLOCKED_ENVIRONMENTAL=0', loopStart)
+      expect(envInit).toBeGreaterThan(loopStart)
+    })
+
+    it('verify retry cap fires before outer loop exhaustion check', () => {
+      // Environmental check should fire at retry 2, well before outer loop hits max (5)
+      const verifyRetryCheck = taskRunner.indexOf('TOTAL_VERIFY_RETRIES -ge $MAX_VERIFY_RETRIES')
+      const outerLoopCheck = taskRunner.indexOf('OUTER_ITERATION -ge $MAX_OUTER_ITERATIONS', verifyRetryCheck)
+      expect(verifyRetryCheck).toBeGreaterThan(-1)
+      expect(outerLoopCheck).toBeGreaterThan(verifyRetryCheck)
+    })
+  })
+
+  // ── Missing-binary environmental detection ────────────────────────────
+
+  describe('missing-binary environmental detection', () => {
+    it('detects "command not found" in is_infra_error_only', () => {
+      expect(taskRunner).toContain('command not found')
+    })
+
+    it('detects ": not found" (POSIX shell missing-command format)', () => {
+      expect(taskRunner).toContain(': not found')
+    })
+
+    it('detects "executable file not found in $PATH"', () => {
+      expect(taskRunner).toContain('executable file not found in')
+    })
+
+    it('missing-binary check is inside is_infra_error_only', () => {
+      const fnStart = taskRunner.indexOf('is_infra_error_only()')
+      const fnEnd = taskRunner.indexOf('\n}', fnStart)
+      const fnBody = taskRunner.substring(fnStart, fnEnd)
+      expect(fnBody).toContain('command not found')
+    })
+  })
+
+  // ── verify_blocked_environmental status ──────────────────────────────
+
+  describe('verify_blocked_environmental status', () => {
+    it('writes verify_blocked_environmental to status file', () => {
+      expect(taskRunner).toContain('"verify_blocked_environmental" > /tmp/claude-task.status')
+    })
+
+    it('writes verify_blocked_environmental status in the VERIFY_BLOCKED_ENVIRONMENTAL branch', () => {
+      const finalStatus = taskRunner.indexOf('# ── Final status')
+      const envBranch = taskRunner.indexOf('VERIFY_BLOCKED_ENVIRONMENTAL -eq 1', finalStatus)
+      expect(envBranch).toBeGreaterThan(finalStatus)
+      const statusWrite = taskRunner.indexOf('"verify_blocked_environmental" > /tmp/claude-task.status', envBranch)
+      expect(statusWrite).toBeGreaterThan(envBranch)
+    })
+
+    it('prints a distinct banner for environmental failures', () => {
+      expect(taskRunner).toContain('STATUS: VERIFY BLOCKED — ENVIRONMENTAL FAILURE')
+    })
+
+    it('prints the fingerprint in the failure banner', () => {
+      const bannerSection = taskRunner.indexOf('STATUS: VERIFY BLOCKED')
+      const fingerprintRef = taskRunner.indexOf('claude-verify-environmental.txt', bannerSection)
+      expect(fingerprintRef).toBeGreaterThan(bannerSection)
+    })
+  })
+
   // ── needs_human status file ──────────────────────────────────────────
 
   describe('needs_human status file', () => {
