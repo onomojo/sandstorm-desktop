@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { useAppStore } from '../store';
+import { useAppStore, RefinementSession } from '../store';
 
 export function ProjectTabs() {
   const {
@@ -8,6 +8,7 @@ export function ProjectTabs() {
     setActiveProjectId,
     setShowOpenProjectDialog,
     removeProject,
+    refinementSessions,
   } = useAppStore();
 
   const [confirmingCloseId, setConfirmingCloseId] = useState<number | null>(null);
@@ -46,18 +47,33 @@ export function ProjectTabs() {
       </button>
 
       {/* Project tabs */}
-      {projects.map((project) => (
+      {projects.map((project) => {
+        const isActive = activeProjectId === project.id;
+        const badgeCount = isActive
+          ? 0
+          : refinementSessions.filter((s: RefinementSession) => s.projectDir === project.directory).length;
+        return (
         <div key={project.id} className="group relative shrink-0">
           <button
             onClick={() => setActiveProjectId(project.id)}
             className={`shrink-0 pl-4 pr-7 py-2 text-xs font-medium transition-colors border-b-2 ${
-              activeProjectId === project.id
+              isActive
                 ? 'border-sandstorm-accent text-sandstorm-accent'
                 : 'border-transparent text-sandstorm-muted hover:text-sandstorm-text-secondary'
             }`}
             title={project.directory}
           >
-            {project.name}
+            <span className="flex items-center gap-1.5">
+              {project.name}
+              {badgeCount > 0 && (
+                <span
+                  data-testid={`refinement-badge-${project.id}`}
+                  className="flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-sandstorm-accent text-white text-[10px] font-semibold leading-none"
+                >
+                  {badgeCount}
+                </span>
+              )}
+            </span>
           </button>
           <button
             onClick={(e) => handleClose(e, project.id)}
@@ -70,7 +86,8 @@ export function ProjectTabs() {
             </svg>
           </button>
         </div>
-      ))}
+        );
+      })}
 
       {/* Add project button */}
       <button

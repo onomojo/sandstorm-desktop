@@ -192,6 +192,10 @@ export interface SandstormAPI {
     fetch: (ticketId: string, projectDir: string) => Promise<{ body: string; url: string | null }>;
     specCheck: (ticketId: string, projectDir: string) => Promise<unknown>;
     specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<unknown>;
+    specCheckAsync: (ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
+    specRefineAsync: (sessionId: string, ticketId: string, projectDir: string, userAnswers: string) => Promise<void>;
+    cancelRefinement: (sessionId: string) => Promise<void>;
+    listRefinements: () => Promise<unknown[]>;
     create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
   };
   pr: {
@@ -358,6 +362,14 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:specCheck', ticketId, projectDir),
     specRefine: (ticketId, projectDir, userAnswers) =>
       ipcRenderer.invoke('tickets:specRefine', ticketId, projectDir, userAnswers),
+    specCheckAsync: (ticketId, projectDir) =>
+      ipcRenderer.invoke('tickets:specCheckAsync', ticketId, projectDir),
+    specRefineAsync: (sessionId, ticketId, projectDir, userAnswers) =>
+      ipcRenderer.invoke('tickets:specRefineAsync', sessionId, ticketId, projectDir, userAnswers),
+    cancelRefinement: (sessionId) =>
+      ipcRenderer.invoke('tickets:cancelRefinement', sessionId),
+    listRefinements: () =>
+      ipcRenderer.invoke('tickets:listRefinements'),
     create: (projectDir, title, body) =>
       ipcRenderer.invoke('tickets:create', projectDir, title, body),
   },

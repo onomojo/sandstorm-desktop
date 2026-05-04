@@ -167,4 +167,43 @@ describe('ProjectTabs', () => {
     fireEvent.click(backdrop);
     expect(screen.queryByText(/Close project "my-project"\?/)).toBeNull();
   });
+
+  it('shows badge on non-active project tab when it has in-flight refinements', () => {
+    useAppStore.setState({
+      projects: [
+        { id: 1, name: 'project-a', directory: '/a', added_at: '' },
+        { id: 2, name: 'project-b', directory: '/b', added_at: '' },
+      ],
+      activeProjectId: 1,
+      refinementSessions: [
+        { id: 's1', ticketId: '1', projectDir: '/b', status: 'running', phase: 'check', startedAt: Date.now() },
+        { id: 's2', ticketId: '2', projectDir: '/b', status: 'ready', phase: 'check', startedAt: Date.now() },
+      ],
+    });
+
+    render(<ProjectTabs />);
+    // project-b is not active and has 2 sessions → should show badge with count 2
+    expect(screen.getByTestId('refinement-badge-2').textContent).toBe('2');
+    // project-a is active → no badge
+    expect(screen.queryByTestId('refinement-badge-1')).toBeNull();
+  });
+
+  it('hides badge on project tab when that project becomes active', () => {
+    useAppStore.setState({
+      projects: [
+        { id: 1, name: 'project-a', directory: '/a', added_at: '' },
+        { id: 2, name: 'project-b', directory: '/b', added_at: '' },
+      ],
+      activeProjectId: 2,
+      refinementSessions: [
+        { id: 's1', ticketId: '1', projectDir: '/b', status: 'running', phase: 'check', startedAt: Date.now() },
+      ],
+    });
+
+    render(<ProjectTabs />);
+    // project-b is active → no badge even though it has sessions
+    expect(screen.queryByTestId('refinement-badge-2')).toBeNull();
+    // project-a is not active but has no sessions → no badge
+    expect(screen.queryByTestId('refinement-badge-1')).toBeNull();
+  });
 });

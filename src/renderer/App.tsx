@@ -4,6 +4,7 @@ import { Dashboard } from './components/Dashboard';
 import { StackDetail } from './components/StackDetail';
 import { NewStackDialog } from './components/NewStackDialog';
 import { RefineTicketDialog } from './components/RefineTicketDialog';
+import { RefinementIndicator } from './components/RefinementIndicator';
 import { CreateTicketDialog } from './components/CreateTicketDialog';
 import { StartTicketDialog } from './components/StartTicketDialog';
 import { CreatePRDialog } from './components/CreatePRDialog';
@@ -44,6 +45,7 @@ export default function App() {
     sessionWarningLevel,
     showSessionWarningModal,
     setShowSessionWarningModal,
+    upsertRefinementSession,
     error,
   } = useAppStore();
 
@@ -90,6 +92,21 @@ export default function App() {
       window.removeEventListener('scroll', report, true);
       window.removeEventListener('focus', report);
     };
+  }, []);
+
+  // Refinement sessions: restore persisted sessions and listen for updates
+  useEffect(() => {
+    // Load any sessions that survived a previous app session.
+    window.sandstorm.tickets.listRefinements().then((sessions) => {
+      sessions.forEach(upsertRefinementSession);
+    }).catch(() => {});
+
+    const unsubRefinement = window.sandstorm.on('refinement:update', (data: unknown) => {
+      upsertRefinementSession(data as Parameters<typeof upsertRefinementSession>[0]);
+    });
+
+    return () => { unsubRefinement(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Session monitor: listen for threshold/halt/reset IPC events from main process
@@ -191,7 +208,8 @@ export default function App() {
             {buildVersion.trim()}
           </span>
         </div>
-        <div className="titlebar-no-drag absolute right-4">
+        <div className="titlebar-no-drag absolute right-4 flex items-center gap-2">
+          <RefinementIndicator />
           <AccountUsageBar />
         </div>
       </div>

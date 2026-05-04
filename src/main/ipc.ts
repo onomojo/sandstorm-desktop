@@ -67,8 +67,19 @@ import {
   fetchTicketForRenderer,
   runSpecCheck,
   runSpecRefine,
+  extractQuestions,
+  extractGateSummary,
+  shortBodyHash,
   type SpecGateReport,
+  type SpecGateResult,
 } from './control-plane/ticket-spec';
+import {
+  loadRefinements,
+  persistRefinement,
+  deleteRefinement,
+  type RefinementSession,
+} from './control-plane/refinement-store';
+import { randomUUID } from 'crypto';
 import {
   draftPullRequest,
   workspacePathFor,
@@ -85,7 +96,7 @@ import {
   installScript,
   type TicketProvider,
 } from './control-plane/ticket-provider';
-import { handleToolCall } from './claude/tools';
+import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
 
 /**
  * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
@@ -1077,6 +1088,99 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       handleToolCall('spec_refine', { ticketId, projectDir, userAnswers }) as Promise<SpecGateReport>,
   );
 
+  // In-memory map of active refinement sessions (id → session + cancel handle).
+  // Persisted sessions (interrupted/ready/errored) survive restarts via disk.
+  const activeRefinements = new Map<string, { session: RefinementSession; cancel: (() => void) | null }>();
+
+  /** Emit a refinement session update to the renderer. */
+  function emitRefinementUpdate(session: RefinementSession): void {
+    mainWindow?.webContents.send('refinement:update', session);
+  }
+
+  // On startup, load any persisted sessions (running → interrupted) and
+  // broadcast them to the renderer once the window is ready.
+  const persistedSessions = loadRefinements();
+  for (const s of persistedSessions) {
+    activeRefinements.set(s.id, { session: s, cancel: null });
+    persistRefinement(s);
+  }
+  // Delay the broadcast slightly so the renderer has time to mount.
+  setTimeout(() => {
+    for (const { session } of activeRefinements.values()) {
+      emitRefinementUpdate(session);
+    }
+  }, 500);
+
+  function startRefinementAsync(
+    ticketId: string,
+    projectDir: string,
+    existingSessionId: string | null,
+    phase: 'check' | 'refine',
+    userAnswers?: string,
+  ): string {
+    const id = existingSessionId ?? randomUUID();
+    const session: RefinementSession = {
+      id,
+      ticketId,
+      projectDir,
+      status: 'running',
+      phase,
+      startedAt: Date.now(),
+    };
+    persistRefinement(session);
+    emitRefinementUpdate(session);
+
+    const { promise, cancel } = phase === 'check'
+      ? spawnSpecCheck(ticketId, projectDir)
+      : spawnSpecRefine(ticketId, projectDir, userAnswers);
+
+    activeRefinements.set(id, { session, cancel });
+
+    promise
+      .then(async (rawReport) => {
+        const entry = activeRefinements.get(id);
+        if (!entry) return; // was cancelled
+
+        // Convert the raw SpecGateReport to the renderer-facing SpecGateResult.
+        const url = await specDeps.readTicketUrl(ticketId);
+        const passed = !!rawReport.passed;
+        const reportText = (rawReport as unknown as SpecGateReport).report || '';
+        const rawError = (rawReport as unknown as SpecGateReport & { error?: string }).error;
+
+        if (passed && phase === 'check') {
+          // Mark spec-ready on GitHub (best-effort, same as the sync path).
+          const body = await specDeps.fetchTicket(ticketId, projectDir);
+          if (body) await specDeps.markSpecReady(ticketId, shortBodyHash(body));
+        }
+
+        const result: SpecGateResult = rawError
+          ? { passed: false, questions: [], gateSummary: '', ticketUrl: url || null, cached: false, error: rawError }
+          : {
+              passed,
+              questions: passed ? [] : extractQuestions(reportText),
+              gateSummary: extractGateSummary(reportText),
+              ticketUrl: url || null,
+              cached: false,
+            };
+
+        const done: RefinementSession = { ...session, status: 'ready', result };
+        activeRefinements.set(id, { session: done, cancel: null });
+        persistRefinement(done);
+        emitRefinementUpdate(done);
+      })
+      .catch((err: unknown) => {
+        const entry = activeRefinements.get(id);
+        if (!entry) return; // was cancelled
+        const msg = err instanceof Error ? err.message : String(err);
+        const failed: RefinementSession = { ...session, status: 'errored', error: msg };
+        activeRefinements.set(id, { session: failed, cancel: null });
+        persistRefinement(failed);
+        emitRefinementUpdate(failed);
+      });
+
+    return id;
+  }
+
   ipcMain.handle('tickets:fetch', async (_event, ticketId: string, projectDir: string) => {
     return fetchTicketForRenderer(ticketId, projectDir);
   });
@@ -1091,6 +1195,37 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       return runSpecRefine(ticketId, projectDir, userAnswers, specDeps);
     },
   );
+
+  // Async (non-blocking) variants — return a session ID immediately and
+  // emit 'refinement:update' events as the operation progresses.
+  ipcMain.handle(
+    'tickets:specCheckAsync',
+    (_event, ticketId: string, projectDir: string) => {
+      const sessionId = startRefinementAsync(ticketId, projectDir, null, 'check');
+      return { sessionId };
+    },
+  );
+
+  ipcMain.handle(
+    'tickets:specRefineAsync',
+    (_event, sessionId: string, ticketId: string, projectDir: string, userAnswers: string) => {
+      startRefinementAsync(ticketId, projectDir, sessionId, 'refine', userAnswers);
+    },
+  );
+
+  ipcMain.handle('tickets:cancelRefinement', (_event, id: string) => {
+    const entry = activeRefinements.get(id);
+    if (entry) {
+      entry.cancel?.();
+      activeRefinements.delete(id);
+      deleteRefinement(id);
+      mainWindow?.webContents.send('refinement:update', { id, status: 'cancelled' });
+    }
+  });
+
+  ipcMain.handle('tickets:listRefinements', () => {
+    return Array.from(activeRefinements.values()).map((e) => e.session);
+  });
 
   ipcMain.handle(
     'tickets:create',
