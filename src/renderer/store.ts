@@ -367,6 +367,10 @@ interface AppState {
    * Refine cold from the Tickets strip and should type the id themselves.
    */
   refineTicketPrefill: string | null;
+  /** All known refinement sessions (running, ready, errored, interrupted). */
+  refinementSessions: RefinementSession[];
+  /** ID of the session currently shown in the refine dialog (null = new refinement). */
+  currentRefinementSessionId: string | null;
   showCreateTicketDialog: boolean;
   showStartTicketDialog: boolean;
   showCreatePRDialog: { stackId: string } | null;
@@ -467,6 +471,14 @@ interface AppState {
   /** Open the Refine dialog with a ticket id already filled in. */
   openRefineTicketDialogWith: (ticketId: string) => void;
   consumeRefineTicketPrefill: () => string | null;
+  /** Open the refine dialog showing a specific existing session. */
+  openRefinementSession: (sessionId: string) => void;
+  /** Add or update a refinement session (called on refinement:update events). */
+  upsertRefinementSession: (session: RefinementSession) => void;
+  /** Remove a refinement session (after cancel or dismiss). */
+  removeRefinementSession: (sessionId: string) => void;
+  /** Set which session id is shown in the refine dialog. */
+  setCurrentRefinementSessionId: (id: string | null) => void;
   setShowCreateTicketDialog: (show: boolean) => void;
   setShowStartTicketDialog: (show: boolean) => void;
   setShowCreatePRDialog: (state: { stackId: string } | null) => void;
@@ -661,6 +673,10 @@ declare global {
         fetch: (ticketId: string, projectDir: string) => Promise<{ body: string; url: string | null }>;
         specCheck: (ticketId: string, projectDir: string) => Promise<SpecGateResult>;
         specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<SpecGateResult>;
+        specCheckAsync: (ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
+        specRefineAsync: (sessionId: string, ticketId: string, projectDir: string, userAnswers: string) => Promise<void>;
+        cancelRefinement: (sessionId: string) => Promise<void>;
+        listRefinements: () => Promise<RefinementSession[]>;
         create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
       };
       pr: {
@@ -680,6 +696,20 @@ export interface SpecGateResult {
   ticketUrl: string | null;
   cached: boolean;
   error?: string;
+}
+
+export type RefinementStatus = 'running' | 'ready' | 'errored' | 'interrupted';
+
+/** Mirrors RefinementSession from main/control-plane/refinement-store.ts. */
+export interface RefinementSession {
+  id: string;
+  ticketId: string;
+  projectDir: string;
+  status: RefinementStatus;
+  phase: 'check' | 'refine';
+  result?: SpecGateResult;
+  error?: string;
+  startedAt: number;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -725,6 +755,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   showNewStackDialog: false,
   showRefineTicketDialog: false,
   refineTicketPrefill: null,
+  refinementSessions: [],
+  currentRefinementSessionId: null,
   showCreateTicketDialog: false,
   showStartTicketDialog: false,
   showCreatePRDialog: null,
@@ -961,12 +993,36 @@ export const useAppStore = create<AppState>((set, get) => ({
   openRefineTicketDialogWith: (ticketId) => set({
     showRefineTicketDialog: true,
     refineTicketPrefill: ticketId,
+    currentRefinementSessionId: null,
   }),
   consumeRefineTicketPrefill: () => {
     const value = get().refineTicketPrefill;
     if (value !== null) set({ refineTicketPrefill: null });
     return value;
   },
+  openRefinementSession: (sessionId) => set({
+    showRefineTicketDialog: true,
+    currentRefinementSessionId: sessionId,
+  }),
+  upsertRefinementSession: (session) => set((state) => {
+    if ((session as { status?: string }).status === 'cancelled') {
+      return { refinementSessions: state.refinementSessions.filter((s) => s.id !== session.id) };
+    }
+    const idx = state.refinementSessions.findIndex((s) => s.id === session.id);
+    if (idx >= 0) {
+      const next = [...state.refinementSessions];
+      next[idx] = session;
+      return { refinementSessions: next };
+    }
+    return { refinementSessions: [...state.refinementSessions, session] };
+  }),
+  removeRefinementSession: (sessionId) => set((state) => ({
+    refinementSessions: state.refinementSessions.filter((s) => s.id !== sessionId),
+    currentRefinementSessionId: state.currentRefinementSessionId === sessionId
+      ? null
+      : state.currentRefinementSessionId,
+  })),
+  setCurrentRefinementSessionId: (id) => set({ currentRefinementSessionId: id }),
   setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
   setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
   setShowCreatePRDialog: (state) => set({ showCreatePRDialog: state }),

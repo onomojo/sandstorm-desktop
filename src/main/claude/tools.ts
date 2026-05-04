@@ -178,37 +178,52 @@ export async function handleToolCall(
   }
 }
 
-async function handleSpecCheck(
+/** Resolved inputs shared by spec_check and spec_refine. */
+interface SpecContext {
+  ticketBody: string;
+  gate: string;
+}
+
+/** Shared pre-checks before calling the LLM. Returns an error result or the resolved context. */
+async function resolveSpecContext(
   ticketId: string,
-  projectDir: string
-): Promise<unknown> {
+  projectDir: string,
+  toolName: string,
+): Promise<{ ok: false; result: Record<string, unknown> } | { ok: true; ctx: SpecContext }> {
   const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
-  console.log(`[sandstorm] spec_check: projectDir="${projectDir}", scriptPath="${scriptPath}"`);
+  console.log(`[sandstorm] ${toolName}: projectDir="${projectDir}", scriptPath="${scriptPath}"`);
 
   const scriptStatus = getScriptStatus(projectDir);
   if (scriptStatus === 'missing') {
     return {
-      passed: false,
-      reason:
-        `fetch-ticket.sh not found at ${scriptPath}. ` +
-        "Run 'sandstorm init' to auto-generate it for your ticket system (Jira or GitHub Issues), " +
-        "or create it manually: the script receives a ticket ID as $1 and must output the ticket body to stdout.",
+      ok: false,
+      result: {
+        passed: false,
+        reason:
+          `fetch-ticket.sh not found at ${scriptPath}. ` +
+          "Run 'sandstorm init' to auto-generate it for your ticket system (Jira or GitHub Issues), " +
+          "or create it manually: the script receives a ticket ID as $1 and must output the ticket body to stdout.",
+      },
     };
   }
   if (scriptStatus === 'not_executable') {
     return {
-      passed: false,
-      reason:
-        `fetch-ticket.sh exists but is not executable. ` +
-        `Fix with: chmod +x ${scriptPath}`,
+      ok: false,
+      result: {
+        passed: false,
+        reason: `fetch-ticket.sh exists but is not executable. Fix with: chmod +x ${scriptPath}`,
+      },
     };
   }
 
   const ticketBody = await fetchTicketContext(ticketId, projectDir);
   if (!ticketBody) {
     return {
-      passed: false,
-      reason: `fetch-ticket.sh ran but returned no output for ticket "${ticketId}". Check the script's implementation and that the ticket ID is correct.`,
+      ok: false,
+      result: {
+        passed: false,
+        reason: `fetch-ticket.sh ran but returned no output for ticket "${ticketId}". Check the script's implementation and that the ticket ID is correct.`,
+      },
     };
   }
 
@@ -216,11 +231,16 @@ async function handleSpecCheck(
   const gate = getSpecQualityGate(projectDir);
   if (!gate) {
     return {
-      error: `No quality gate configured at ${gatePath}. Run sandstorm init or create .sandstorm/spec-quality-gate.md.`,
+      ok: false,
+      result: { error: `No quality gate configured at ${gatePath}. Run sandstorm init or create .sandstorm/spec-quality-gate.md.` },
     };
   }
 
-  const prompt = `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict — if you'd have to guess, it's a FAIL.
+  return { ok: true, ctx: { ticketBody, gate } };
+}
+
+function buildSpecCheckPrompt(gate: string, ticketBody: string): string {
+  return `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict — if you'd have to guess, it's a FAIL.
 
 ## Quality Gate Criteria
 
@@ -277,7 +297,17 @@ Respond in EXACTLY this format (no other text before or after):
 ### Questions Requiring User Answers (if any)
 1. <specific question from unresolvable assumptions or ambiguities>
 ...`;
+}
 
+async function handleSpecCheck(
+  ticketId: string,
+  projectDir: string
+): Promise<unknown> {
+  const res = await resolveSpecContext(ticketId, projectDir, 'spec_check');
+  if (!res.ok) return res.result;
+  const { ctx } = res;
+
+  const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody);
   const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
@@ -287,52 +317,8 @@ Respond in EXACTLY this format (no other text before or after):
   };
 }
 
-async function handleSpecRefine(
-  ticketId: string,
-  projectDir: string,
-  userAnswers?: string
-): Promise<unknown> {
-  const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
-  console.log(`[sandstorm] spec_refine: projectDir="${projectDir}", scriptPath="${scriptPath}"`);
-
-  const scriptStatus = getScriptStatus(projectDir);
-  if (scriptStatus === 'missing') {
-    return {
-      passed: false,
-      reason:
-        `fetch-ticket.sh not found at ${scriptPath}. ` +
-        "Run 'sandstorm init' to auto-generate it for your ticket system (Jira or GitHub Issues), " +
-        "or create it manually: the script receives a ticket ID as $1 and must output the ticket body to stdout.",
-    };
-  }
-  if (scriptStatus === 'not_executable') {
-    return {
-      passed: false,
-      reason:
-        `fetch-ticket.sh exists but is not executable. ` +
-        `Fix with: chmod +x ${scriptPath}`,
-    };
-  }
-
-  const ticketBody = await fetchTicketContext(ticketId, projectDir);
-  if (!ticketBody) {
-    return {
-      passed: false,
-      reason: `fetch-ticket.sh ran but returned no output for ticket "${ticketId}". Check the script's implementation and that the ticket ID is correct.`,
-    };
-  }
-
-  const gatePath = path.join(projectDir, '.sandstorm', 'spec-quality-gate.md');
-  const gate = getSpecQualityGate(projectDir);
-  if (!gate) {
-    return {
-      error: `No quality gate configured at ${gatePath}. Run sandstorm init or create .sandstorm/spec-quality-gate.md.`,
-    };
-  }
-
-  if (!userAnswers) {
-    // First call — evaluate and return gaps/questions
-    const prompt = `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict.
+function buildSpecRefineInitialPrompt(gate: string, ticketBody: string): string {
+  return `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict.
 
 ## Quality Gate Criteria
 
@@ -380,18 +366,10 @@ Respond in EXACTLY this format:
 1. <specific question>
 2. <specific question>
 ...`;
+}
 
-    const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
-    const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
-
-    return {
-      passed,
-      report: result,
-    };
-  }
-
-  // Subsequent call — incorporate answers and re-evaluate
-  const prompt = `You are a spec quality gate evaluator performing a refinement step.
+function buildSpecRefineAnswerPrompt(gate: string, ticketBody: string, userAnswers: string): string {
+  return `You are a spec quality gate evaluator performing a refinement step.
 
 ## Quality Gate Criteria
 
@@ -439,19 +417,19 @@ Respond in EXACTLY this format:
 ### Questions to Resolve Remaining Gaps (if any)
 1. <specific question>
 ...`;
+}
 
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
-  const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
-
-  // Extract updated ticket body if present
-  const bodyMatch = result.match(/## Updated Ticket Body\s*\n([\s\S]*?)(?=\n## Spec Quality Gate)/);
+async function applySpecRefineResult(
+  ticketId: string,
+  projectDir: string,
+  rawResult: string,
+  hadUserAnswers: boolean,
+): Promise<Record<string, unknown>> {
+  const passed = /## Spec Quality Gate:\s*PASS/i.test(rawResult);
+  const bodyMatch = rawResult.match(/## Updated Ticket Body\s*\n([\s\S]*?)(?=\n## Spec Quality Gate)/);
   const updatedBody = bodyMatch ? bodyMatch[1].trim() : null;
 
-  // Commit the refined body back to GitHub (#318). Without this, refinements
-  // only live in the renderer's transient state and are lost between
-  // sessions — the user does the work, sees PASS, and the ticket on GitHub
-  // is unchanged. We write on every refinement that produces an updatedBody
-  // (not just on PASS) so iterative refinement loops build on each other.
+  // Commit the refined body back to GitHub (#318).
   if (updatedBody) {
     try {
       await updateTicketBody(ticketId, projectDir, updatedBody);
@@ -459,21 +437,17 @@ Respond in EXACTLY this format:
       const msg = err instanceof Error ? err.message : String(err);
       return {
         passed: false,
-        report: result,
+        report: rawResult,
         updatedBody,
         error:
           `Refinement evaluated successfully but writing the updated body back to your ticket system failed: ${msg} ` +
           `The refined body is in the report — copy it manually if needed.`,
       };
     }
-  } else if (userAnswers) {
-    // Refinement was supposed to produce an updatedBody (the prompt
-    // demands it) but didn't — surface as an error so the user knows the
-    // ticket on the source system is still stale rather than silently shipping a
-    // PASS verdict against the unchanged ticket.
+  } else if (hadUserAnswers) {
     return {
       passed: false,
-      report: result,
+      report: rawResult,
       updatedBody: null,
       error:
         'Refinement did not produce an "## Updated Ticket Body" section, so nothing was written ' +
@@ -482,9 +456,98 @@ Respond in EXACTLY this format:
     };
   }
 
-  return {
-    passed,
-    report: result,
-    updatedBody,
+  return { passed, report: rawResult, updatedBody };
+}
+
+async function handleSpecRefine(
+  ticketId: string,
+  projectDir: string,
+  userAnswers?: string
+): Promise<unknown> {
+  const res = await resolveSpecContext(ticketId, projectDir, 'spec_refine');
+  if (!res.ok) return res.result;
+  const { ctx } = res;
+
+  if (!userAnswers) {
+    const prompt = buildSpecRefineInitialPrompt(ctx.gate, ctx.ticketBody);
+    const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
+    const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
+    return { passed, report: result };
+  }
+
+  const prompt = buildSpecRefineAnswerPrompt(ctx.gate, ctx.ticketBody, userAnswers);
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
+  return applySpecRefineResult(ticketId, projectDir, result, true);
+}
+
+/**
+ * Cancellable version of spec_check for the async refinement path.
+ * Returns a promise and a cancel function that sends SIGTERM to the Claude process.
+ */
+export function spawnSpecCheck(
+  ticketId: string,
+  projectDir: string,
+): { promise: Promise<Record<string, unknown>>; cancel: () => void } {
+  let innerCancel: (() => void) | null = null;
+  let cancelled = false;
+  const cancel = (): void => {
+    cancelled = true;
+    innerCancel?.();
   };
+
+  const promise: Promise<Record<string, unknown>> = (async (): Promise<Record<string, unknown>> => {
+    const res = await resolveSpecContext(ticketId, projectDir, 'spec_check');
+    if (!res.ok) return res.result;
+    if (cancelled) throw new Error('Cancelled');
+
+    const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody);
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir);
+    innerCancel = epCancel;
+    if (cancelled) { epCancel(); throw new Error('Cancelled'); }
+
+    const result = await ep;
+    const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
+    return { passed, report: result };
+  })();
+
+  return { promise, cancel };
+}
+
+/**
+ * Cancellable version of spec_refine for the async refinement path.
+ */
+export function spawnSpecRefine(
+  ticketId: string,
+  projectDir: string,
+  userAnswers?: string,
+): { promise: Promise<Record<string, unknown>>; cancel: () => void } {
+  let innerCancel: (() => void) | null = null;
+  let cancelled = false;
+  const cancel = (): void => {
+    cancelled = true;
+    innerCancel?.();
+  };
+
+  const promise: Promise<Record<string, unknown>> = (async (): Promise<Record<string, unknown>> => {
+    const res = await resolveSpecContext(ticketId, projectDir, 'spec_refine');
+    if (!res.ok) return res.result;
+    if (cancelled) throw new Error('Cancelled');
+
+    const prompt = userAnswers
+      ? buildSpecRefineAnswerPrompt(res.ctx.gate, res.ctx.ticketBody, userAnswers)
+      : buildSpecRefineInitialPrompt(res.ctx.gate, res.ctx.ticketBody);
+
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir);
+    innerCancel = epCancel;
+    if (cancelled) { epCancel(); throw new Error('Cancelled'); }
+
+    const result = await ep;
+    if (userAnswers) {
+      return applySpecRefineResult(ticketId, projectDir, result, true);
+    }
+    const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
+    return { passed, report: result };
+  })();
+
+  return { promise, cancel };
 }

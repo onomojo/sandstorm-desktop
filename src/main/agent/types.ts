@@ -91,6 +91,13 @@ export interface AgentBackend {
   /** Spawn a one-shot agent process that evaluates a prompt and returns the text result */
   runEphemeralAgent(prompt: string, projectDir: string, timeoutMs?: number): Promise<string>;
 
+  /** Spawn a cancellable one-shot agent process; returns a promise and a cancel function */
+  spawnEphemeralAgent(
+    prompt: string,
+    projectDir: string,
+    timeoutMs?: number
+  ): { promise: Promise<string>; cancel: () => void };
+
   // --- Authentication ---
 
   /** Check the current authentication status */

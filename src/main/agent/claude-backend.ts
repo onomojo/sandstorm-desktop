@@ -411,94 +411,114 @@ export class ClaudeBackend implements AgentBackend {
    * Uses -p (pipe/print) mode — no session persistence, no MCP tools.
    * Used for spec quality gate evaluation to avoid inflating the outer session.
    */
-  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs = 300_000): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const claudeBin = getClaudeBin();
-      const args = [
-        '-p', prompt,
-        '--output-format', 'stream-json',
-        '--dangerously-skip-permissions',
-        '--verbose',
-      ];
+  spawnEphemeralAgent(
+    prompt: string,
+    projectDir: string,
+    timeoutMs = 300_000,
+  ): { promise: Promise<string>; cancel: () => void } {
+    const claudeBin = getClaudeBin();
+    const args = [
+      '-p', prompt,
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
+      '--verbose',
+    ];
 
-      const child = spawn(claudeBin, args, {
-        cwd: projectDir,
-        env: getClaudeEnv(),
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+    const child = spawn(claudeBin, args, {
+      cwd: projectDir,
+      env: getClaudeEnv(),
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
 
-      let outputBuffer = '';
-      let fullText = '';
-      let stderrBuffer = '';
-      let settled = false;
+    let outputBuffer = '';
+    let fullText = '';
+    let stderrBuffer = '';
+    let settled = false;
+    let resolveFn!: (value: string) => void;
+    let rejectFn!: (reason: Error) => void;
 
-      const settle = (fn: () => void): void => {
-        if (settled) return;
-        settled = true;
-        clearTimeout(timer);
-        fn();
-      };
+    const promise = new Promise<string>((resolve, reject) => {
+      resolveFn = resolve;
+      rejectFn = reject;
+    });
 
-      const timer = setTimeout(() => {
-        if (child.exitCode === null) {
-          child.kill('SIGTERM');
-          setTimeout(() => {
-            if (child.exitCode === null) {
-              child.kill('SIGKILL');
-            }
-          }, 5_000);
-          settle(() => reject(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`)));
+    const settle = (fn: () => void): void => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      fn();
+    };
+
+    const timer = setTimeout(() => {
+      if (child.exitCode === null) {
+        child.kill('SIGTERM');
+        setTimeout(() => {
+          if (child.exitCode === null) child.kill('SIGKILL');
+        }, 5_000);
+        settle(() => rejectFn(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`)));
+      }
+    }, timeoutMs);
+
+    child.stdout?.on('data', (data: Buffer) => {
+      outputBuffer += data.toString();
+      const lines = outputBuffer.split('\n');
+      outputBuffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          const text = this.extractText(parsed);
+          if (text) fullText += text;
+        } catch {
+          // Skip non-JSON lines
         }
-      }, timeoutMs);
+      }
+    });
 
-      child.stdout?.on('data', (data: Buffer) => {
-        outputBuffer += data.toString();
-        const lines = outputBuffer.split('\n');
-        outputBuffer = lines.pop() || '';
+    child.stderr?.on('data', (data: Buffer) => {
+      stderrBuffer += data.toString();
+    });
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          try {
-            const parsed = JSON.parse(line);
-            const text = this.extractText(parsed);
-            if (text) fullText += text;
-          } catch {
-            // Skip non-JSON lines
-          }
+    child.on('close', (code) => {
+      if (outputBuffer.trim()) {
+        try {
+          const parsed = JSON.parse(outputBuffer);
+          const text = this.extractText(parsed);
+          if (text) fullText += text;
+        } catch {
+          // Skip
         }
-      });
-
-      child.stderr?.on('data', (data: Buffer) => {
-        stderrBuffer += data.toString();
-      });
-
-      child.on('close', (code) => {
-        // Process any remaining buffer
-        if (outputBuffer.trim()) {
-          try {
-            const parsed = JSON.parse(outputBuffer);
-            const text = this.extractText(parsed);
-            if (text) fullText += text;
-          } catch {
-            // Skip
-          }
+      }
+      settle(() => {
+        if (code !== 0 && !fullText.trim()) {
+          rejectFn(new Error(
+            `Ephemeral agent exited with code ${code}: ${stderrBuffer.trim() || 'unknown error'}`
+          ));
+        } else {
+          resolveFn(fullText);
         }
-
-        settle(() => {
-          if (code !== 0 && !fullText.trim()) {
-            reject(new Error(
-              `Ephemeral agent exited with code ${code}: ${stderrBuffer.trim() || 'unknown error'}`
-            ));
-          } else {
-            resolve(fullText);
-          }
-        });
-      });
-
-      child.on('error', (err) => {
-        settle(() => reject(err));
       });
     });
+
+    child.on('error', (err) => {
+      settle(() => rejectFn(err instanceof Error ? err : new Error(String(err))));
+    });
+
+    const cancel = (): void => {
+      settle(() => {
+        child.kill('SIGTERM');
+        setTimeout(() => {
+          if (child.exitCode === null) child.kill('SIGKILL');
+        }, 5_000);
+        rejectFn(new Error('Cancelled'));
+      });
+    };
+
+    return { promise, cancel };
+  }
+
+  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs = 300_000): Promise<string> {
+    return this.spawnEphemeralAgent(prompt, projectDir, timeoutMs).promise;
   }
 
   // --- Auth (AgentBackend interface) ---

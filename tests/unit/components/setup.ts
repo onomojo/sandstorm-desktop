@@ -159,6 +159,10 @@ export function mockSandstormApi() {
         passed: true, questions: [], gateSummary: 'Gate=PASS, questions=0',
         ticketUrl: 'https://github.com/o/r/issues/1', cached: false,
       }),
+      specCheckAsync: vi.fn().mockResolvedValue({ sessionId: 'test-session-id' }),
+      specRefineAsync: vi.fn().mockResolvedValue(undefined),
+      cancelRefinement: vi.fn().mockResolvedValue(undefined),
+      listRefinements: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue({
         url: 'https://github.com/o/r/issues/42', number: 42, ticketId: '42',
       }),
