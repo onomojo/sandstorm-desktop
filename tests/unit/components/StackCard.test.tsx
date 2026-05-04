@@ -94,6 +94,7 @@ describe('StackCard', () => {
       ['stopped', 'Stopped'],
       ['pushed', 'Pushed'],
       ['pr_created', 'PR Open'],
+      ['session_paused', 'Halted'],
     ];
 
     for (const [status, label] of statuses) {
@@ -203,5 +204,26 @@ describe('StackCard', () => {
   it('does not show model label when current_model is null', () => {
     render(<StackCard stack={makeStack({ id: 'no-model', current_model: null })} />);
     expect(screen.queryByTestId('stack-model-no-model')).toBeNull();
+  });
+
+  it('shows Resume button only for session_paused stacks', () => {
+    const { unmount } = render(
+      <StackCard stack={makeStack({ id: 'paused', status: 'session_paused' })} />
+    );
+    expect(screen.getByTestId('card-resume-paused')).toBeDefined();
+    unmount();
+
+    render(<StackCard stack={makeStack({ id: 'running', status: 'running' })} />);
+    expect(screen.queryByTestId('card-resume-running')).toBeNull();
+  });
+
+  it('calls resumeStackWithContinuation when Resume button is clicked', () => {
+    const resumeFn = vi.fn().mockResolvedValue({ halted: false, outcome: 'resuming_with_session' });
+    useAppStore.setState({ resumeStackWithContinuation: resumeFn } as any);
+
+    render(<StackCard stack={makeStack({ id: 'paused2', status: 'session_paused' })} />);
+    fireEvent.click(screen.getByTestId('card-resume-paused2'));
+
+    expect(resumeFn).toHaveBeenCalledWith('paused2');
   });
 });

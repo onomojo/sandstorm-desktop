@@ -17,6 +17,7 @@ export enum ErrorCode {
   INVALID_INPUT = 'INVALID_INPUT',
   INTERNAL_ERROR = 'INTERNAL_ERROR',
   GATE_CHECK_REQUIRED = 'GATE_CHECK_REQUIRED',
+  SESSION_HALTED = 'SESSION_HALTED',
 }
 
 export class SandstormError extends Error {

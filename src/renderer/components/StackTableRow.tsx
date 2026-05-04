@@ -15,6 +15,7 @@ const STATUS_COLORS: Record<string, string> = {
   pushed: 'bg-violet-400',
   pr_created: 'bg-violet-400',
   rate_limited: 'bg-orange-400 animate-pulse',
+  session_paused: 'bg-orange-400',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -29,6 +30,7 @@ const STATUS_LABELS: Record<string, string> = {
   pushed: 'Pushed',
   pr_created: 'PR Open',
   rate_limited: 'Limited',
+  session_paused: 'Halted',
 };
 
 const POPOVER_OPEN_DELAY_MS = 150;
@@ -46,7 +48,7 @@ export function StackTableRow({
   showProject?: boolean;
   columnWidths?: Record<string, number>;
 }) {
-  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog } = useAppStore();
+  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
   const [duration, setDuration] = useState(() =>
     getStackDuration(stack.created_at, stack.updated_at, stack.status),
@@ -118,6 +120,15 @@ export function StackTableRow({
   const handleMakePr = (e: React.MouseEvent) => {
     e.stopPropagation();
     setShowCreatePRDialog({ stackId: stack.id });
+  };
+
+  const handleResume = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await resumeStackWithContinuation(stack.id);
+    } catch (err) {
+      alert(`Failed to resume: ${err}`);
+    }
   };
 
   const handlePrLink = (e: React.MouseEvent) => {
@@ -205,6 +216,16 @@ export function StackTableRow({
         >
           <div className="flex items-center gap-1 justify-end">
             {/* Persistent primary action — always visible when applicable */}
+            {stack.status === 'session_paused' && (
+              <button
+                onClick={handleResume}
+                className="text-[10px] font-medium px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 transition-colors"
+                data-testid={`row-resume-${stack.id}`}
+                title="Resume this halted stack and continue the in-flight task"
+              >
+                ▶ Resume
+              </button>
+            )}
             {makePrEligible(stack) && (
               <button
                 onClick={handleMakePr}

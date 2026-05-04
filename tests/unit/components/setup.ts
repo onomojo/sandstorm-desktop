@@ -128,6 +128,7 @@ export function mockSandstormApi() {
       haltAll: vi.fn().mockResolvedValue([]),
       resumeAll: vi.fn().mockResolvedValue([]),
       resumeStack: vi.fn().mockResolvedValue(undefined),
+      resumeStackWithContinuation: vi.fn().mockResolvedValue({ halted: false, outcome: 'idle' }),
       forcePoll: vi.fn().mockResolvedValue({
         usage: null, level: 'normal', stale: false, halted: false,
         lastPollAt: null, consecutiveFailures: 0,

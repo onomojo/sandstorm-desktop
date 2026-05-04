@@ -15,6 +15,7 @@ const STATUS_COLORS: Record<string, string> = {
   pushed: 'bg-violet-400',
   pr_created: 'bg-violet-400',
   rate_limited: 'bg-orange-400 animate-pulse',
+  session_paused: 'bg-orange-400',
 };
 
 const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
@@ -29,6 +30,7 @@ const STATUS_BADGE: Record<string, { bg: string; text: string }> = {
   pushed: { bg: 'bg-violet-500/10 border-violet-500/20', text: 'text-violet-400' },
   pr_created: { bg: 'bg-violet-500/10 border-violet-500/20', text: 'text-violet-400' },
   rate_limited: { bg: 'bg-orange-500/10 border-orange-500/20', text: 'text-orange-400' },
+  session_paused: { bg: 'bg-orange-500/10 border-orange-500/20', text: 'text-orange-400' },
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -43,6 +45,7 @@ const STATUS_LABELS: Record<string, string> = {
   pushed: 'Pushed',
   pr_created: 'PR Open',
   rate_limited: 'Rate Limited',
+  session_paused: 'Halted',
 };
 
 function timeAgo(dateStr: string): string {
@@ -74,7 +77,7 @@ function formatMs(ms: number): string {
 }
 
 export function StackCard({ stack, showProject }: { stack: Stack; showProject?: boolean }) {
-  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog } = useAppStore();
+  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
 
   const runningCount = stack.services.filter(
@@ -111,6 +114,15 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
       refreshStacks();
     } catch (err) {
       alert(`Failed to start: ${err}`);
+    }
+  };
+
+  const handleResume = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    try {
+      await resumeStackWithContinuation(stack.id);
+    } catch (err) {
+      alert(`Failed to resume: ${err}`);
     }
   };
 
@@ -281,6 +293,22 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
             </svg>
             PR #{stack.pr_number}
           </a>
+        </div>
+      )}
+
+      {/* Resume callout — persistent, always visible for halted stacks */}
+      {stack.status === 'session_paused' && (
+        <div className="mt-3 ml-5">
+          <button
+            onClick={handleResume}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-emerald-500/10 text-emerald-400 border border-emerald-500/30 hover:bg-emerald-500/20 transition-colors active:scale-[0.98]"
+            data-testid={`card-resume-${stack.id}`}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polygon points="5 3 19 12 5 21 5 3"/>
+            </svg>
+            Resume
+          </button>
         </div>
       )}
 

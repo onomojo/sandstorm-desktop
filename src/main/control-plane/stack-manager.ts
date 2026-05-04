@@ -570,6 +570,113 @@ export class StackManager {
     return resumed;
   }
 
+  /**
+   * Resume a session_paused stack and continue the in-flight task.
+   * Cases:
+   *   A — running task with session_id  → resume Claude session with --resume
+   *   B — running task, no session_id   → interrupt old task, dispatch fresh
+   *   C — no running task               → containers come up, status → idle
+   * Throws if the stack is not found or containers cannot be started.
+   */
+  async resumeStackWithContinuation(
+    stackId: string,
+    isHalted: () => boolean = () => false
+  ): Promise<{
+    outcome: 'resuming_with_session' | 'resumed_fresh' | 'idle';
+  }> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    // Pre-flight: block resume if session token limit hasn't refreshed yet
+    if (isHalted()) {
+      throw new SandstormError(ErrorCode.SESSION_HALTED, 'Session token limit has not refreshed yet');
+    }
+
+    // Guard: only act on session_paused stacks
+    if (stack.status !== 'session_paused') {
+      return { outcome: 'idle' };
+    }
+
+    // Bring containers up synchronously
+    this.registry.updateStackStatus(stackId, 'building');
+    this.notifyUpdate();
+    try {
+      await this.ensureStackContainersRunning(stack, stackId);
+    } catch (err) {
+      // Revert to session_paused on container failure so the user can retry
+      this.registry.updateStackStatus(stackId, 'session_paused');
+      this.notifyUpdate();
+      throw err;
+    }
+
+    const runningTask = this.registry.getRunningTask(stackId);
+
+    if (!runningTask) {
+      // Case C: no in-flight task — leave stack idle
+      this.registry.updateStackStatus(stackId, 'idle');
+      this.notifyUpdate();
+      return { outcome: 'idle' };
+    }
+
+    if (runningTask.session_id) {
+      // Case A: resume with existing Claude session
+      await this.dispatchContinuation(stack, stackId, runningTask);
+      return { outcome: 'resuming_with_session' };
+    } else {
+      // Case B: session not yet logged — interrupt and redispatch fresh
+      this.registry.interruptTask(runningTask.id);
+      await this.dispatchTask(stackId, runningTask.prompt, runningTask.model ?? undefined, {
+        skipTicketFetch: true,
+      });
+      return { outcome: 'resumed_fresh' };
+    }
+  }
+
+  /**
+   * Re-dispatch an existing running task using `--resume <session_id>`.
+   * Does NOT create a new task row — the caller's existing task is reused and
+   * `resumed_at` is stamped so the UI can distinguish continuations.
+   */
+  private async dispatchContinuation(
+    stack: Stack,
+    stackId: string,
+    task: Task
+  ): Promise<void> {
+    const runtime = this.getRuntimeForStack(stack);
+    let claudeContainer = await this.findClaudeContainer(stack, runtime);
+
+    if (claudeContainer.status !== 'running') {
+      await this.ensureStackContainersRunning(stack, stackId);
+      claudeContainer = await this.findClaudeContainer(stack, runtime);
+    }
+
+    await this.waitForClaudeReady(claudeContainer.id, runtime);
+
+    this.registry.setTaskResumedAt(task.id, new Date().toISOString());
+    this.registry.updateStackStatus(stackId, 'running');
+    this.notifyUpdate();
+
+    const continuationPrompt =
+      'Continue the work that was halted by token limits. Keep going from where you left off.';
+
+    const cliArgs = ['task', stackId, '--resume', task.session_id!];
+    if (task.model) cliArgs.push('--model', task.model);
+    cliArgs.push(continuationPrompt);
+
+    const result = await this.runCli(stack.project_dir, cliArgs);
+    if (result.exitCode !== 0) {
+      this.registry.updateStackStatus(stackId, 'session_paused');
+      this.notifyUpdate();
+      throw new SandstormError(
+        ErrorCode.TASK_DISPATCH_FAILED,
+        result.stderr.trim() || result.stdout.trim() || 'Resume dispatch failed'
+      );
+    }
+
+    this.taskWatcher.watch(stackId, claudeContainer.id);
+    this.taskWatcher.streamOutput(stackId, claudeContainer.id, () => {}).catch(() => {});
+  }
+
   async teardownStack(stackId: string): Promise<void> {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
@@ -673,7 +780,7 @@ export class StackManager {
     stackId: string,
     prompt: string,
     model?: string,
-    opts?: { gateApproved?: boolean; forceBypass?: boolean }
+    opts?: { gateApproved?: boolean; forceBypass?: boolean; skipTicketFetch?: boolean }
   ): Promise<DispatchTaskResult> {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
@@ -706,8 +813,10 @@ export class StackManager {
     }
 
     // If the stack has a ticket number, fetch the full ticket context
-    // via the project's fetch-ticket script and prepend it to the prompt
-    if (stack.ticket) {
+    // via the project's fetch-ticket script and prepend it to the prompt.
+    // Skipped when the caller has already embedded ticket context in the prompt
+    // (e.g. re-dispatch of an interrupted task whose stored prompt includes it).
+    if (stack.ticket && !opts?.skipTicketFetch) {
       const ticketContext = await fetchTicketContext(stack.ticket, stack.project_dir);
       if (ticketContext) {
         prompt = `${ticketContext}\n\n---\n\n## Task\n\n${prompt}`;

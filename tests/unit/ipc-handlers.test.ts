@@ -3,6 +3,7 @@ import { EventEmitter } from 'events';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { SandstormError, ErrorCode } from '../../src/main/errors';
 
 // ---------------------------------------------------------------------------
 // Hoisted mocks — vi.mock factories are hoisted above all imports, so any
@@ -20,6 +21,7 @@ const {
   mockSpawn,
   mockFetchAccountUsage,
   mockRemoveProjectFromCrontab,
+  mockSessionMonitor,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
 
@@ -54,6 +56,7 @@ const {
     getGlobalTokenUsage: vi.fn(),
     getRateLimitState: vi.fn(),
     getWorkflowProgress: vi.fn(),
+    resumeStackWithContinuation: vi.fn(),
   };
 
   const mockDockerRuntime = {
@@ -95,6 +98,14 @@ const {
   const mockFetchAccountUsage = vi.fn();
   const mockRemoveProjectFromCrontab = vi.fn();
 
+  const mockSessionMonitor = {
+    getState: vi.fn(),
+    acknowledgeCritical: vi.fn(),
+    markResumed: vi.fn(),
+    updateSettings: vi.fn(),
+    forcePoll: vi.fn(),
+  };
+
   return {
     registeredHandlers,
     mockRegistry,
@@ -107,6 +118,7 @@ const {
     mockSpawn,
     mockFetchAccountUsage,
     mockRemoveProjectFromCrontab,
+    mockSessionMonitor,
   };
 });
 
@@ -138,6 +150,7 @@ vi.mock('../../src/main/index', () => ({
   podmanRuntime: mockPodmanRuntime,
   agentBackend: mockAgentBackend,
   dockerConnectionManager: mockDockerConnectionManager,
+  sessionMonitor: mockSessionMonitor,
   cliDir: '/tmp/sandstorm-cli',
 }));
 
@@ -818,6 +831,48 @@ describe('IPC Handlers', () => {
   });
 
   // =========================================================================
+  // Session Resume With Continuation
+  // =========================================================================
+  describe('session:resumeStackWithContinuation', () => {
+    it('returns halted=true when resumeStackWithContinuation throws SESSION_HALTED', async () => {
+      mockSessionMonitor.getState.mockReturnValue({
+        halted: true,
+        usage: { session: { resetsAt: '2026-05-04T15:00:00Z' } },
+      });
+      mockStackManager.resumeStackWithContinuation.mockRejectedValue(
+        new SandstormError(ErrorCode.SESSION_HALTED, 'Session token limit has not refreshed yet')
+      );
+
+      const result = await invokeHandler('session:resumeStackWithContinuation', 'stack-1');
+
+      expect(result).toEqual({ halted: true, resetAt: '2026-05-04T15:00:00Z' });
+      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function));
+    });
+
+    it('returns halted=true with null resetAt when usage is absent', async () => {
+      mockSessionMonitor.getState.mockReturnValue({ halted: true, usage: null });
+      mockStackManager.resumeStackWithContinuation.mockRejectedValue(
+        new SandstormError(ErrorCode.SESSION_HALTED, 'Session token limit has not refreshed yet')
+      );
+
+      const result = await invokeHandler('session:resumeStackWithContinuation', 'stack-1');
+
+      expect(result).toEqual({ halted: true, resetAt: null });
+      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function));
+    });
+
+    it('calls resumeStackWithContinuation with isHalted callback when monitor is not halted', async () => {
+      mockSessionMonitor.getState.mockReturnValue({ halted: false });
+      mockStackManager.resumeStackWithContinuation.mockResolvedValue({ status: 'running' });
+
+      const result = await invokeHandler('session:resumeStackWithContinuation', 'stack-1');
+
+      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function));
+      expect(result).toEqual({ halted: false, status: 'running' });
+    });
+  });
+
+  // =========================================================================
   // Auth
   // =========================================================================
   describe('auth', () => {
@@ -1218,6 +1273,7 @@ describe('IPC Handlers', () => {
       'session:haltAll',
       'session:resumeAll',
       'session:resumeStack',
+      'session:resumeStackWithContinuation',
       'session:forcePoll',
       'docker:status',
       'schedules:list',

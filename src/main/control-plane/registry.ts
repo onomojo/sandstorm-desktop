@@ -72,6 +72,7 @@ export interface Task {
   verify_finished_at: string | null;
   started_at: string;
   finished_at: string | null;
+  resumed_at: string | null;
 }
 
 export interface TokenUsage {
@@ -479,8 +480,14 @@ export class Registry {
       this.setSchemaVersion(13);
     }
 
+    if (currentVersion < 14) {
+      // Add resumed_at column to tasks for tracking session-pause continuations
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN resumed_at TEXT'); } catch { /* exists */ }
+      this.setSchemaVersion(14);
+    }
+
     // Future migrations go here:
-    // if (currentVersion < 14) { ... this.setSchemaVersion(14); }
+    // if (currentVersion < 15) { ... this.setSchemaVersion(15); }
   }
 
   // --- Projects ---
@@ -841,6 +848,12 @@ export class Registry {
     this.db.prepare(
       "UPDATE tasks SET status = 'interrupted', finished_at = datetime('now') WHERE id = ? AND status = 'running'"
     ).run(taskId);
+  }
+
+  setTaskResumedAt(taskId: number, ts: string): void {
+    this.db.prepare(
+      'UPDATE tasks SET resumed_at = ? WHERE id = ?'
+    ).run(ts, taskId);
   }
 
   getStackTokenUsage(stackId: string): TokenUsage {
