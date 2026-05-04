@@ -21,6 +21,8 @@
 
 MAX_INNER_ITERATIONS=5
 MAX_OUTER_ITERATIONS=5
+MAX_TOTAL_REVIEW_ITERATIONS=5  # global cap across all outer/inner iterations combined
+MAX_VERIFY_RETRIES=2            # consecutive verify-fail cap before halting as environmental
 
 # ─── Helpers ────────────────────────────────────────────────────────────────
 
@@ -223,6 +225,10 @@ is_infra_error_only() {
   if grep -qE 'Uncaught Exception|Unhandled Error' "$log_file"; then
     has_infra_errors=true
   fi
+  # Check for missing binary / command not found (shell-level, not test-level, failures)
+  if grep -qE '(command not found|: not found|executable file not found in \$PATH)' "$log_file"; then
+    has_infra_errors=true
+  fi
 
   if [ "$has_infra_errors" = true ]; then
     return 0  # Infrastructure errors only
@@ -407,6 +413,7 @@ while true; do
     TASK_NEEDS_HUMAN=0
     TOTAL_REVIEW_ITERATIONS=0
     TOTAL_VERIFY_RETRIES=0
+    VERIFY_BLOCKED_ENVIRONMENTAL=0
 
     while [ $OUTER_ITERATION -lt $MAX_OUTER_ITERATIONS ] && [ $TASK_DONE -eq 0 ] && [ $TASK_FAILED -eq 0 ]; do
       OUTER_ITERATION=$((OUTER_ITERATION + 1))
@@ -417,7 +424,7 @@ while true; do
       # ── Inner loop: execution ↔ review ──────────────────────────────
 
       REVIEW_PASSED=0
-      while [ $INNER_ITERATION -lt $MAX_INNER_ITERATIONS ] && [ $REVIEW_PASSED -eq 0 ]; do
+      while [ $INNER_ITERATION -lt $MAX_INNER_ITERATIONS ] && [ $TOTAL_REVIEW_ITERATIONS -lt $MAX_TOTAL_REVIEW_ITERATIONS ] && [ $REVIEW_PASSED -eq 0 ]; do
         INNER_ITERATION=$((INNER_ITERATION + 1))
         TOTAL_REVIEW_ITERATIONS=$((TOTAL_REVIEW_ITERATIONS + 1))
         # Update iteration count file for live monitoring
@@ -443,6 +450,10 @@ while true; do
 
           if [ $INNER_ITERATION -ge $MAX_INNER_ITERATIONS ]; then
             log_loop "Inner loop exhausted ($MAX_INNER_ITERATIONS iterations). Needs human intervention."
+            TASK_FAILED=1
+            break
+          elif [ $TOTAL_REVIEW_ITERATIONS -ge $MAX_TOTAL_REVIEW_ITERATIONS ]; then
+            log_loop "Global review cap reached ($TOTAL_REVIEW_ITERATIONS/$MAX_TOTAL_REVIEW_ITERATIONS total). Needs human intervention."
             TASK_FAILED=1
             break
           fi
@@ -500,6 +511,13 @@ while true; do
         fi
       done
 
+      # If inner loop exited because global review cap was hit (while condition false),
+      # REVIEW_PASSED remains 0 — catch it here before proceeding to verify.
+      if [ $TASK_FAILED -eq 0 ] && [ $REVIEW_PASSED -eq 0 ]; then
+        log_loop "Global review cap ($MAX_TOTAL_REVIEW_ITERATIONS total) reached without a passing review. Needs human intervention."
+        TASK_FAILED=1
+      fi
+
       if [ $TASK_FAILED -eq 1 ]; then
         break
       fi
@@ -526,6 +544,10 @@ while true; do
         log_loop "Verification hit an infrastructure error (not a code issue). Halting — needs human intervention."
         log_loop "All tests passed but the process failed due to environment issues (e.g. permission denied)."
         log_loop "This is NOT a failure in the code changes. Do not retry."
+        VERIFY_FAIL_FINGERPRINT=$(grep -m1 -E 'command not found|: not found|executable file not found|EACCES|permission denied|Uncaught Exception|Unhandled Error' /tmp/claude-verify.log 2>/dev/null | head -c 200 || true)
+        log_loop "Failure fingerprint: ${VERIFY_FAIL_FINGERPRINT}"
+        printf 'VERIFY_FAIL_FINGERPRINT: %s\n' "${VERIFY_FAIL_FINGERPRINT}" > /tmp/claude-verify-environmental.txt
+        VERIFY_BLOCKED_ENVIRONMENTAL=1
         TASK_FAILED=1
         break
       else
@@ -533,6 +555,18 @@ while true; do
         # Update verify retries file for live monitoring
         echo "${TOTAL_VERIFY_RETRIES}" > /tmp/claude-task.verify-retries
         log_loop "Verify FAILED, outer iteration $OUTER_ITERATION/$MAX_OUTER_ITERATIONS"
+
+        # Capture first notable error line for diagnostics (best-effort)
+        VERIFY_FAIL_FINGERPRINT=$(grep -m1 -E 'Error|error|FAIL|fail|not found|command not found' /tmp/claude-verify.log 2>/dev/null | head -c 200 || true)
+
+        if [ $TOTAL_VERIFY_RETRIES -ge $MAX_VERIFY_RETRIES ]; then
+          log_loop "Verify has failed $TOTAL_VERIFY_RETRIES time(s). Likely environmental or unresolvable. Halting — needs human intervention."
+          log_loop "Failure fingerprint: ${VERIFY_FAIL_FINGERPRINT}"
+          printf 'VERIFY_FAIL_FINGERPRINT: %s\n' "${VERIFY_FAIL_FINGERPRINT}" > /tmp/claude-verify-environmental.txt
+          VERIFY_BLOCKED_ENVIRONMENTAL=1
+          TASK_FAILED=1
+          break
+        fi
 
         if [ $OUTER_ITERATION -ge $MAX_OUTER_ITERATIONS ]; then
           log_loop "Outer loop exhausted ($MAX_OUTER_ITERATIONS iterations). Needs human intervention."
@@ -615,6 +649,10 @@ while true; do
       echo 1 > /tmp/claude-task.exit
       echo "needs_human" > /tmp/claude-task.status
       EXIT_CODE=1
+    elif [ $VERIFY_BLOCKED_ENVIRONMENTAL -eq 1 ]; then
+      echo 1 > /tmp/claude-task.exit
+      echo "verify_blocked_environmental" > /tmp/claude-task.status
+      EXIT_CODE=1
     else
       echo 1 > /tmp/claude-task.exit
       echo "failed" > /tmp/claude-task.status
@@ -631,6 +669,11 @@ while true; do
     elif [ $TASK_NEEDS_HUMAN -eq 1 ]; then
       echo "  STATUS: NEEDS HUMAN INTERVENTION (STOP_AND_ASK)"
       echo "  Reason: $(cat /tmp/claude-stop-reason.txt 2>/dev/null)"
+      echo "  Review iterations: $TOTAL_REVIEW_ITERATIONS"
+      echo "  Verify retries: $TOTAL_VERIFY_RETRIES"
+    elif [ $VERIFY_BLOCKED_ENVIRONMENTAL -eq 1 ]; then
+      echo "  STATUS: VERIFY BLOCKED — ENVIRONMENTAL FAILURE"
+      echo "  Fingerprint: $(cat /tmp/claude-verify-environmental.txt 2>/dev/null || echo '(none captured)')"
       echo "  Review iterations: $TOTAL_REVIEW_ITERATIONS"
       echo "  Verify retries: $TOTAL_VERIFY_RETRIES"
     elif [ $TASK_FAILED -eq 1 ]; then

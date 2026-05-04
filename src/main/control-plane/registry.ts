@@ -35,6 +35,7 @@ export type StackStatus =
   | 'completed'
   | 'failed'
   | 'needs_human'
+  | 'verify_blocked_environmental'
   | 'idle'
   | 'stopped'
   | 'pushed'
@@ -592,6 +593,19 @@ export class Registry {
     ).get(taskId) as { stack_id: string } | undefined;
     if (task) {
       this.updateStackStatus(task.stack_id, 'needs_human');
+    }
+  }
+
+  completeTaskVerifyBlockedEnvironmental(taskId: number, reason: string): void {
+    this.db.prepare(
+      "UPDATE tasks SET status = 'needs_human', exit_code = 1, warnings = ?, finished_at = datetime('now') WHERE id = ?"
+    ).run(reason, taskId);
+
+    const task = this.db.prepare(
+      'SELECT stack_id FROM tasks WHERE id = ?'
+    ).get(taskId) as { stack_id: string } | undefined;
+    if (task) {
+      this.updateStackStatus(task.stack_id, 'verify_blocked_environmental');
     }
   }
 
