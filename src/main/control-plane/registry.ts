@@ -541,6 +541,20 @@ export class Registry {
     ).all() as Stack[]);
   }
 
+  listNonTerminalStacks(): Stack[] {
+    return (this.db.prepare(
+      `SELECT s.*, (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model
+       FROM stacks s WHERE s.status IN ('building','rebuilding','up','running','idle') ORDER BY s.created_at DESC`
+    ).all() as Stack[]);
+  }
+
+  listHaltedStacks(): Stack[] {
+    return (this.db.prepare(
+      `SELECT s.*, (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model
+       FROM stacks s WHERE s.status IN ('session_paused','rate_limited') ORDER BY s.created_at DESC`
+    ).all() as Stack[]);
+  }
+
   updateStackStatus(id: string, status: StackStatus, error?: string): void {
     if (error !== undefined) {
       this.db.prepare(

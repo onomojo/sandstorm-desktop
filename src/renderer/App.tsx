@@ -13,6 +13,7 @@ import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { AccountUsageBar } from './components/AccountUsageBar';
 import { SessionWarningModal } from './components/SessionWarningModal';
 import { SessionTokenLimitModal } from './components/SessionTokenLimitModal';
+import { DockerUnavailableModal } from './components/DockerUnavailableModal';
 import trayIcon from './tray-icon.png';
 import buildVersion from './build-version.txt?raw';
 
@@ -26,6 +27,8 @@ const METRICS_POLL_INTERVAL = 15_000;
 const ACTIVITY_REPORT_THROTTLE = 10_000;
 
 export default function App() {
+  const [showDockerUnavailableModal, setShowDockerUnavailableModal] = React.useState(false);
+
   const {
     selectedStackId,
     showNewStackDialog,
@@ -66,10 +69,14 @@ export default function App() {
     const unsubDisconnected = window.sandstorm.on('docker:disconnected', () => {
       setDockerConnected(false);
     });
+    const unsubStartupUnavailable = window.sandstorm.on('docker:startup-unavailable', () => {
+      setShowDockerUnavailableModal(true);
+    });
 
     return () => {
       unsubConnected();
       unsubDisconnected();
+      unsubStartupUnavailable();
     };
   }, [setDockerConnected, refreshStacks, refreshMetrics]);
 
@@ -282,6 +289,11 @@ export default function App() {
 
       {/* Token-limit-not-refreshed modal — shown when user clicks Resume too early */}
       <SessionTokenLimitModal />
+
+      {/* Docker unavailable at startup — shown when Docker is not running on first launch */}
+      {showDockerUnavailableModal && (
+        <DockerUnavailableModal onDismiss={() => setShowDockerUnavailableModal(false)} />
+      )}
     </div>
   );
 }
