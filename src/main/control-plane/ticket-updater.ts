@@ -32,6 +32,11 @@ export function getCreatePrScriptStatus(projectDir: string): ScriptStatus {
   return getSandstormScriptStatus(projectDir, 'create-pr.sh');
 }
 
+/** Status check for start-ticket.sh. */
+export function getStartScriptStatus(projectDir: string): ScriptStatus {
+  return getSandstormScriptStatus(projectDir, 'start-ticket.sh');
+}
+
 /**
  * Write an updated body back to the project's ticket system by running
  * `.sandstorm/scripts/update-ticket.sh <ticket-id> <body>`. Provider-neutral —

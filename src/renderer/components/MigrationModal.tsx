@@ -11,6 +11,8 @@ interface MigrationModalProps {
   legacyPortMappings?: boolean;
   missingUpdateScript?: boolean;
   missingCreatePrScript?: boolean;
+  missingFetchScript?: boolean;
+  missingStartScript?: boolean;
   detectedTicketProvider?: TicketProvider;
   onComplete: () => void;
   onDismiss: () => void;
@@ -25,6 +27,8 @@ export function MigrationModal({
   legacyPortMappings,
   missingUpdateScript,
   missingCreatePrScript,
+  missingFetchScript,
+  missingStartScript,
   detectedTicketProvider,
   onComplete,
   onDismiss,
@@ -108,6 +112,20 @@ export function MigrationModal({
           return;
         }
       }
+      if (missingFetchScript) {
+        const installRes = await window.sandstorm.projects.installFetchScript(projectDir, scriptProvider);
+        if (!installRes.success) {
+          setError(installRes.error || 'Failed to install fetch-ticket.sh');
+          return;
+        }
+      }
+      if (missingStartScript) {
+        const installRes = await window.sandstorm.projects.installStartScript(projectDir, scriptProvider);
+        if (!installRes.success) {
+          setError(installRes.error || 'Failed to install start-ticket.sh');
+          return;
+        }
+      }
       onComplete();
     } catch (err) {
       setError(String(err));
@@ -136,6 +154,8 @@ export function MigrationModal({
               legacyPortMappings && 'legacy port mapping cleanup',
               missingUpdateScript && 'an update-ticket script',
               missingCreatePrScript && 'a create-pr script',
+              missingFetchScript && 'a fetch-ticket script',
+              missingStartScript && 'a start-ticket script',
             ].filter(Boolean).join(', ')
             .replace(/, ([^,]*)$/, ' and $1')}{' '}
             to work with the stack system.
@@ -229,16 +249,17 @@ export function MigrationModal({
                 </div>
               )}
 
-              {/* Provider scripts picker — single control for both
-                  update-ticket.sh (#318) and create-pr.sh (#320) since
-                  both pick from the same github / jira / skeleton template
-                  set. */}
-              {(missingUpdateScript || missingCreatePrScript) && (
+              {/* Provider scripts picker — single control for all missing
+                  provider scripts since they all pick from the same
+                  github / jira / skeleton template set. */}
+              {(missingUpdateScript || missingCreatePrScript || missingFetchScript || missingStartScript) && (
                 <div data-testid="provider-scripts-section">
                   <label className="block text-xs font-medium text-sandstorm-text-secondary mb-1.5">
                     Provider Scripts{' '}
                     <span className="text-sandstorm-muted font-normal">
                       ({[
+                        missingFetchScript && '.sandstorm/scripts/fetch-ticket.sh',
+                        missingStartScript && '.sandstorm/scripts/start-ticket.sh',
                         missingUpdateScript && '.sandstorm/scripts/update-ticket.sh',
                         missingCreatePrScript && '.sandstorm/scripts/create-pr.sh',
                       ].filter(Boolean).join(', ')})

@@ -518,6 +518,8 @@ declare global {
           legacyPortMappings?: boolean;
           missingUpdateScript?: boolean;
           missingCreatePrScript?: boolean;
+          missingFetchScript?: boolean;
+          missingStartScript?: boolean;
           detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
         }>;
         autoDetectVerify: (directory: string) => Promise<{
@@ -534,6 +536,14 @@ declare global {
           provider: 'github' | 'jira' | 'skeleton',
         ) => Promise<{ success: boolean; path?: string; error?: string }>;
         installCreatePrScript: (
+          directory: string,
+          provider: 'github' | 'jira' | 'skeleton',
+        ) => Promise<{ success: boolean; path?: string; error?: string }>;
+        installFetchScript: (
+          directory: string,
+          provider: 'github' | 'jira' | 'skeleton',
+        ) => Promise<{ success: boolean; path?: string; error?: string }>;
+        installStartScript: (
           directory: string,
           provider: 'github' | 'jira' | 'skeleton',
         ) => Promise<{ success: boolean; path?: string; error?: string }>;

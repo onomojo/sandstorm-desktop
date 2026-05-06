@@ -402,6 +402,8 @@ export function Dashboard() {
     legacyPortMappings: boolean;
     missingUpdateScript: boolean;
     missingCreatePrScript: boolean;
+    missingFetchScript: boolean;
+    missingStartScript: boolean;
     detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
   } | null>(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
@@ -461,6 +463,8 @@ export function Dashboard() {
               legacyPortMappings: migration.legacyPortMappings ?? false,
               missingUpdateScript: migration.missingUpdateScript ?? false,
               missingCreatePrScript: migration.missingCreatePrScript ?? false,
+              missingFetchScript: migration.missingFetchScript ?? false,
+              missingStartScript: migration.missingStartScript ?? false,
               detectedTicketProvider: migration.detectedTicketProvider,
             } : null);
             if (migration.needsMigration) {
@@ -898,6 +902,8 @@ export function Dashboard() {
           legacyPortMappings={migrationState.legacyPortMappings}
           missingUpdateScript={migrationState.missingUpdateScript}
           missingCreatePrScript={migrationState.missingCreatePrScript}
+          missingFetchScript={migrationState.missingFetchScript}
+          missingStartScript={migrationState.missingStartScript}
           detectedTicketProvider={migrationState.detectedTicketProvider}
           onComplete={() => {
             setShowMigrationModal(false);
@@ -926,6 +932,8 @@ export function Dashboard() {
                   legacyPortMappings: migration.legacyPortMappings ?? false,
                   missingUpdateScript: migration.missingUpdateScript ?? false,
                   missingCreatePrScript: migration.missingCreatePrScript ?? false,
+                  missingFetchScript: migration.missingFetchScript ?? false,
+                  missingStartScript: migration.missingStartScript ?? false,
                   detectedTicketProvider: migration.detectedTicketProvider,
                 });
                 setShowMigrationModal(true);
