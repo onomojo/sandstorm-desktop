@@ -794,6 +794,128 @@ describe('IPC Handlers', () => {
         expect(fs.readFileSync(verifyPath, 'utf-8')).toBe(newContent);
       });
     });
+
+    describe('projects:checkMigration', () => {
+      let tmpDir: string;
+
+      beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-checkMigration-'));
+        fs.mkdirSync(path.join(tmpDir, '.sandstorm', 'scripts'), { recursive: true });
+        fs.writeFileSync(path.join(tmpDir, '.sandstorm', 'config'), 'PROJECT_NAME=test');
+      });
+
+      afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+      });
+
+      it('reports missingFetchScript:true when fetch-ticket.sh is absent', async () => {
+        const result = await invokeHandler('projects:checkMigration', tmpDir) as Record<string, unknown>;
+        expect(result.missingFetchScript).toBe(true);
+        expect(result.needsMigration).toBe(true);
+      });
+
+      it('reports missingFetchScript:false when fetch-ticket.sh exists and is executable', async () => {
+        const scriptPath = path.join(tmpDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
+        fs.writeFileSync(scriptPath, '#!/bin/bash\necho ok\n', { mode: 0o755 });
+
+        const result = await invokeHandler('projects:checkMigration', tmpDir) as Record<string, unknown>;
+        expect(result.missingFetchScript).toBe(false);
+      });
+
+      it('reports missingStartScript:true when start-ticket.sh is absent', async () => {
+        const result = await invokeHandler('projects:checkMigration', tmpDir) as Record<string, unknown>;
+        expect(result.missingStartScript).toBe(true);
+        expect(result.needsMigration).toBe(true);
+      });
+
+      it('reports missingStartScript:false when start-ticket.sh exists and is executable', async () => {
+        const scriptPath = path.join(tmpDir, '.sandstorm', 'scripts', 'start-ticket.sh');
+        fs.writeFileSync(scriptPath, '#!/bin/bash\necho ok\n', { mode: 0o755 });
+
+        const result = await invokeHandler('projects:checkMigration', tmpDir) as Record<string, unknown>;
+        expect(result.missingStartScript).toBe(false);
+      });
+
+      it('returns needsMigration:false when .sandstorm/config does not exist', async () => {
+        const noConfigDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-noconfig-'));
+        try {
+          const result = await invokeHandler('projects:checkMigration', noConfigDir) as Record<string, unknown>;
+          expect(result.needsMigration).toBe(false);
+        } finally {
+          fs.rmSync(noConfigDir, { recursive: true, force: true });
+        }
+      });
+    });
+
+    describe('projects:installFetchScript', () => {
+      let tmpDir: string;
+      const templateDir = path.join('/tmp/sandstorm-cli', 'templates', 'github', 'scripts');
+      const templateSrc = path.join(templateDir, 'fetch-ticket.sh');
+
+      beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-installFetch-'));
+        fs.mkdirSync(templateDir, { recursive: true });
+        fs.writeFileSync(templateSrc, '#!/bin/bash\n# github fetch\n', { mode: 0o755 });
+      });
+
+      afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        if (fs.existsSync(templateSrc)) fs.unlinkSync(templateSrc);
+      });
+
+      it('copies fetch-ticket.sh from the bundled template to .sandstorm/scripts/', async () => {
+        const result = await invokeHandler('projects:installFetchScript', tmpDir, 'github') as { success: boolean; path?: string };
+
+        expect(result.success).toBe(true);
+        const dest = path.join(tmpDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
+        expect(fs.existsSync(dest)).toBe(true);
+        expect(result.path).toBe(dest);
+        expect(fs.readFileSync(dest, 'utf-8')).toBe('#!/bin/bash\n# github fetch\n');
+      });
+
+      it('returns success:false when template is missing for the provider', async () => {
+        fs.unlinkSync(templateSrc);
+
+        const result = await invokeHandler('projects:installFetchScript', tmpDir, 'github') as { success: boolean; error?: string };
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/fetch-ticket\.sh/);
+      });
+    });
+
+    describe('projects:installStartScript', () => {
+      let tmpDir: string;
+      const templateDir = path.join('/tmp/sandstorm-cli', 'templates', 'github', 'scripts');
+      const templateSrc = path.join(templateDir, 'start-ticket.sh');
+
+      beforeEach(() => {
+        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-installStart-'));
+        fs.mkdirSync(templateDir, { recursive: true });
+        fs.writeFileSync(templateSrc, '#!/bin/bash\n# github start\n', { mode: 0o755 });
+      });
+
+      afterEach(() => {
+        fs.rmSync(tmpDir, { recursive: true, force: true });
+        if (fs.existsSync(templateSrc)) fs.unlinkSync(templateSrc);
+      });
+
+      it('copies start-ticket.sh from the bundled template to .sandstorm/scripts/', async () => {
+        const result = await invokeHandler('projects:installStartScript', tmpDir, 'github') as { success: boolean; path?: string };
+
+        expect(result.success).toBe(true);
+        const dest = path.join(tmpDir, '.sandstorm', 'scripts', 'start-ticket.sh');
+        expect(fs.existsSync(dest)).toBe(true);
+        expect(result.path).toBe(dest);
+        expect(fs.readFileSync(dest, 'utf-8')).toBe('#!/bin/bash\n# github start\n');
+      });
+
+      it('returns success:false when template is missing for the provider', async () => {
+        fs.unlinkSync(templateSrc);
+
+        const result = await invokeHandler('projects:installStartScript', tmpDir, 'github') as { success: boolean; error?: string };
+        expect(result.success).toBe(false);
+        expect(result.error).toMatch(/start-ticket\.sh/);
+      });
+    });
   });
 
   // =========================================================================
@@ -1297,6 +1419,8 @@ describe('IPC Handlers', () => {
       'pr:create',
       'projects:installUpdateScript',
       'projects:installCreatePrScript',
+      'projects:installFetchScript',
+      'projects:installStartScript',
       'projects:detectTicketProvider',
     ];
 

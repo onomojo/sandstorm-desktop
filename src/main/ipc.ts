@@ -90,7 +90,9 @@ import { createTicket } from './control-plane/ticket-creator';
 import {
   getUpdateScriptStatus,
   getCreatePrScriptStatus,
+  getStartScriptStatus,
 } from './control-plane/ticket-updater';
+import { getScriptStatus as getFetchScriptStatus } from './control-plane/ticket-fetcher';
 import {
   detectTicketProvider,
   installUpdateScript,
@@ -450,7 +452,9 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       const legacyPortMappings = hasLegacyPortMappings(directory);
       const missingUpdateScript = getUpdateScriptStatus(directory) !== 'ok';
       const missingCreatePrScript = getCreatePrScriptStatus(directory) !== 'ok';
-      const needsProvider = missingUpdateScript || missingCreatePrScript;
+      const missingFetchScript = getFetchScriptStatus(directory) !== 'ok';
+      const missingStartScript = getStartScriptStatus(directory) !== 'ok';
+      const needsProvider = missingUpdateScript || missingCreatePrScript || missingFetchScript || missingStartScript;
       const detectedProvider = needsProvider ? detectTicketProvider(directory) : undefined;
 
       return {
@@ -461,7 +465,9 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           missingReviewPrompt ||
           legacyPortMappings ||
           missingUpdateScript ||
-          missingCreatePrScript,
+          missingCreatePrScript ||
+          missingFetchScript ||
+          missingStartScript,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
         missingSpecQualityGate,
@@ -470,6 +476,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         legacyPortMappings,
         missingUpdateScript,
         missingCreatePrScript,
+        missingFetchScript,
+        missingStartScript,
         detectedTicketProvider: detectedProvider,
       };
     } catch {
@@ -505,6 +513,42 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           cliDir,
           provider,
           scriptName: 'create-pr.sh',
+        });
+        return { success: true, path: dest };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'projects:installFetchScript',
+    async (_event, directory: string, provider: TicketProvider) => {
+      try {
+        const dest = installScript({
+          projectDir: directory,
+          cliDir,
+          provider,
+          scriptName: 'fetch-ticket.sh',
+        });
+        return { success: true, path: dest };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { success: false, error: msg };
+      }
+    },
+  );
+
+  ipcMain.handle(
+    'projects:installStartScript',
+    async (_event, directory: string, provider: TicketProvider) => {
+      try {
+        const dest = installScript({
+          projectDir: directory,
+          cliDir,
+          provider,
+          scriptName: 'start-ticket.sh',
         });
         return { success: true, path: dest };
       } catch (err) {
