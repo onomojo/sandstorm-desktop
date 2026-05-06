@@ -87,6 +87,29 @@ Every verification item must be executable autonomously with no human involvemen
 - No optional verification checkboxes that can be skipped.
 - If a verification step can't be expressed as an automated command, test, or assertion, it's not valid.
 - The fix isn't "make sure humans check the boxes" — it's "eliminate manual steps entirely".
+
+### Verify Before Asking — No Code-Derivable Questions to the User
+The evaluator has full code-reading access (Read, Glob, Grep, Bash) and MUST use it before surfacing any question to the user.
+
+Before adding any question to the gap list, the evaluator MUST:
+1. Attempt to answer it by reading the working tree (Read, Glob, Grep are sufficient; do not run destructive commands).
+2. If verified, state the verified fact and cite \`file:line\` in the report — do NOT ask the user.
+3. Only escalate questions whose answers cannot be found in the codebase (business logic, product direction, domain knowledge, decisions not encoded in code).
+
+Questions that MUST be answered from code, not the user:
+- File existence ("does X file exist?") — use Glob/Read.
+- Function signatures, parameters, return types — use Read/Grep.
+- "Where is X defined?" / "What does Y do?" / "What arguments does Z accept?" — use Grep/Read.
+- Control flow, feature flags, timeout values, constants — use Read.
+- What a script accepts, what a module exports — use Read.
+
+If a question is partially code-derivable:
+- State the verified fact with a \`file:line\` citation.
+- Ask only the residual judgment question (the part not in the code).
+
+Verification limit: static reading only. If answering requires executing code or hitting an external service, treat as "not feasible to verify statically" and escalate to the user.
+
+Hallucination guard: every claimed verification MUST include a \`file:line\` citation. A verification without a citation is not a verification.
 `;
 }
 
