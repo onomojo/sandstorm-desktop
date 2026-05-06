@@ -5,6 +5,7 @@ import { PortAllocator } from './control-plane/port-allocator';
 import { PortProxy } from './control-plane/port-proxy';
 import { TaskWatcher } from './control-plane/task-watcher';
 import { StackManager } from './control-plane/stack-manager';
+import { performReconciliation, runStartupReconciliation } from './control-plane/reconcile-status';
 import { DockerRuntime } from './runtime/docker';
 import { PodmanRuntime } from './runtime/podman';
 import { ContainerRuntime } from './runtime/types';
@@ -351,6 +352,21 @@ app.whenReady().then(async () => {
   } catch {
     // Non-fatal — renderer will check lazily when panel mounts
   }
+
+  // Startup status reconciliation — correct any drift from the last session.
+  // Runs after the window is created so events can reach the renderer.
+  mainWindow.webContents.once('did-finish-load', async () => {
+    try {
+      await runStartupReconciliation(
+        dockerRuntime,
+        () => performReconciliation(registry, dockerRuntime, podmanRuntime, taskWatcher),
+        (event) => mainWindow?.webContents.send(event),
+        () => registry.listNonTerminalStacks().length + registry.listHaltedStacks().length > 0,
+      );
+    } catch (err) {
+      console.error('[reconcile] Startup reconciliation failed:', err);
+    }
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {
