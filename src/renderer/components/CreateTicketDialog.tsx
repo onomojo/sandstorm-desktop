@@ -55,7 +55,7 @@ export function CreateTicketDialog() {
           <div>
             <h2 className="text-base font-semibold text-sandstorm-text">Create Ticket</h2>
             <p className="text-[11px] text-sandstorm-muted mt-0.5">
-              Files a new GitHub issue in this project
+              Files a new ticket in this project's ticket system
             </p>
           </div>
           <button
@@ -94,7 +94,7 @@ export function CreateTicketDialog() {
                   onClick={(e) => { e.preventDefault(); window.open(created.url, '_blank'); }}
                   className="ml-auto underline"
                 >
-                  Open on GitHub
+                  Open ticket
                 </a>
               </div>
               <p className="text-xs text-sandstorm-text-secondary">

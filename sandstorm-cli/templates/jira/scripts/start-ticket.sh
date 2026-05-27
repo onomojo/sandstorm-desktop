@@ -53,7 +53,7 @@ TRANS_RESPONSE=$(curl -s -w "\n%{http_code}" \
   "$BASE_URL/rest/api/2/issue/$TICKET_ID/transitions")
 
 HTTP_CODE=$(echo "$TRANS_RESPONSE" | tail -1)
-TRANS_BODY=$(echo "$TRANS_RESPONSE" | head -n -1)
+TRANS_BODY=$(echo "$TRANS_RESPONSE" | sed '$d')
 
 if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
   echo "Error: failed to fetch transitions (HTTP $HTTP_CODE)" >&2
@@ -99,7 +99,7 @@ MYSELF_RESPONSE=$(curl -s -w "\n%{http_code}" \
   "$BASE_URL/rest/api/2/myself")
 
 HTTP_CODE=$(echo "$MYSELF_RESPONSE" | tail -1)
-MYSELF_BODY=$(echo "$MYSELF_RESPONSE" | head -n -1)
+MYSELF_BODY=$(echo "$MYSELF_RESPONSE" | sed '$d')
 
 if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
   echo "Warning: could not retrieve account info (HTTP $HTTP_CODE) — skipping assignment." >&2

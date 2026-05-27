@@ -52,7 +52,7 @@ RESPONSE=$(curl -s -w "\n%{http_code}" \
   "$BASE_URL/rest/api/2/issue/$TICKET_ID?fields=summary,description,status,labels,reporter,created,comment")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
-BODY=$(echo "$RESPONSE" | head -n -1)
+BODY=$(echo "$RESPONSE" | sed '$d')
 
 if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
   echo "Error: Jira API returned HTTP $HTTP_CODE" >&2

@@ -37,7 +37,7 @@ describe('CreateTicketDialog', () => {
   it('files the ticket via tickets.create with the project dir + trimmed values', async () => {
     const user = userEvent.setup();
     api.tickets.create.mockResolvedValue({
-      url: 'https://github.com/o/r/issues/77', number: 77, ticketId: '77',
+      url: 'https://github.com/o/r/issues/77', ticketId: '77',
     });
     render(<CreateTicketDialog />);
 
@@ -55,7 +55,7 @@ describe('CreateTicketDialog', () => {
   it('shows the Refine button after success and hands off via store', async () => {
     const user = userEvent.setup();
     api.tickets.create.mockResolvedValue({
-      url: 'https://github.com/o/r/issues/77', number: 77, ticketId: '77',
+      url: 'https://github.com/o/r/issues/77', ticketId: '77',
     });
     render(<CreateTicketDialog />);
     await user.type(screen.getByTestId('create-ticket-title'), 't');
