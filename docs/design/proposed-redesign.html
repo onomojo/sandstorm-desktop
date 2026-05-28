@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<title>Sandstorm Skin 5 · Editorial</title>
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<script src="https://cdn.tailwindcss.com"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;1,400&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+<!--
+SKIN 5 — EDITORIAL  (Layout: left rail + centered board)
+============================================================
+Same structure as skin-1, reskinned with a magazine-like sensibility.
+Deep aubergine canvas, old-gold accent, dusty editorial state colors.
+Inter throughout — the editorial feel comes from the palette, the
+generous spacing, the thicker borders, and the slower rhythm rather
+than from a serif typeface.
+-->
+<style>
+  :root {
+    --bg: #15131b;
+    --rail: #0e0c15;
+    --line: #2a2536;
+    --card: #1d1a26;
+    --card-line: #2a2536;
+    --ink: #f0ebe1;
+    --muted: #9d9aa8;
+    --dim: #6e6a78;
+    --accent: #d4a854;
+    --refine: #d4a854;
+    --live: #d4a854;
+    --blue: #7fa3b8;
+    --violet: #b88dd1;
+    --green: #94b88d;
+  }
+  body { background: var(--bg); color: var(--ink); font-family: 'Inter', sans-serif; min-height: 100vh; overflow: hidden; font-weight: 400; letter-spacing: -0.005em; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  .serif { /* legacy class — now uses body Inter */ }
+  .col { flex: 1 1 0; min-width: 240px; }
+  .col-header { font-size: 11px; letter-spacing: 0.18em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+  .ticket-id { font-family: 'JetBrains Mono', monospace; font-size: 11px; color: var(--dim); font-weight: 500; }
+  .card { background: var(--card); border: 1.5px solid var(--card-line); border-radius: 4px; padding: 16px 18px; transition: all 0.25s ease; cursor: pointer; }
+  .card:hover { border-color: #3a3447; }
+  .chip { font-size: 10px; padding: 2px 9px; border-radius: 2px; font-weight: 500; letter-spacing: 0.08em; text-transform: uppercase; }
+  .pulse { width: 6px; height: 6px; border-radius: 999px; animation: pulse 2.4s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: 0.4 } }
+  .progress { height: 2px; border-radius: 0; background: rgba(212,168,84,0.1); overflow: hidden; }
+  .progress > div { height: 100%; background: var(--refine); }
+  .col-rail { width: 2px; height: 16px; border-radius: 0; }
+
+  .rail { background: var(--rail); border-right: 1px solid var(--line); }
+  .rail-section { padding: 20px 22px; border-bottom: 1px solid var(--line); }
+  .rail-label { font-size: 10px; letter-spacing: 0.2em; text-transform: uppercase; color: var(--dim); font-weight: 600; margin-bottom: 13px; }
+  .proj-pill { display: flex; align-items: center; gap: 11px; padding: 9px 12px; border-radius: 3px; cursor: pointer; transition: all 0.2s; position: relative; }
+  .proj-pill:hover { background: rgba(240,235,225,0.025); }
+  .proj-pill.active { background: rgba(212,168,84,0.08); }
+  .proj-pill .dot { width: 8px; height: 8px; border-radius: 999px; flex: none; }
+  .filter-row { display: flex; align-items: center; justify-content: space-between; padding: 7px 12px; border-radius: 3px; font-size: 13px; cursor: pointer; color: var(--muted); }
+  .filter-row:hover { background: rgba(240,235,225,0.025); }
+  .filter-row.active { color: var(--ink); }
+  .filter-row.active::before { content: '·'; color: var(--accent); margin-right: 8px; margin-left: -10px; font-weight: 700; }
+</style>
+</head>
+<body class="h-screen flex">
+
+<!-- LEFT RAIL -->
+<aside class="rail w-80 flex flex-col overflow-y-auto">
+
+  <div class="rail-section flex items-center gap-3">
+    <div class="w-7 h-7 rounded-sm" style="background: linear-gradient(135deg, #d4a854, #a67d2e)"></div>
+    <span class="serif tracking-tight text-[17px]" style="font-weight: 500">Sandstorm</span>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-label">Workspaces</div>
+    <div class="space-y-0.5">
+      <div class="proj-pill active group">
+        <div class="dot" style="background: var(--accent)"></div>
+        <span class="text-sm flex-1">sandstorm-desktop</span>
+        <span class="text-[11px] group-hover:opacity-0 transition-opacity" style="color: var(--accent)">9</span>
+        <button class="opacity-0 group-hover:opacity-100 transition-opacity absolute right-3 hover:text-white" style="color: var(--muted)" title="Project settings">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09a1.65 1.65 0 00-1-1.51 1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06a1.65 1.65 0 00.33-1.82 1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09a1.65 1.65 0 001.51-1 1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06a1.65 1.65 0 001.82.33H9a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06a1.65 1.65 0 00-.33 1.82V9a1.65 1.65 0 001.51 1H21a2 2 0 010 4h-.09a1.65 1.65 0 00-1.51 1z"/></svg>
+        </button>
+      </div>
+      <div class="proj-pill">
+        <div class="dot" style="background: #6e6a78"></div>
+        <span class="text-sm flex-1" style="color: var(--muted)">intent-reactor</span>
+        <span class="text-[11px]" style="color: var(--dim)">3</span>
+      </div>
+      <div class="proj-pill">
+        <div class="dot" style="background: #6e6a78"></div>
+        <span class="text-sm flex-1" style="color: var(--muted)">school-automation</span>
+        <span class="text-[11px]" style="color: var(--dim)">5</span>
+      </div>
+      <div class="proj-pill" style="color: var(--dim)">
+        <div class="dot" style="background: transparent; border: 1px dashed #3a3447"></div>
+        <span class="text-sm flex-1">+ Add project</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="rail-section">
+    <button class="w-full font-medium py-2.5 rounded-sm flex items-center justify-center gap-2" style="background: var(--accent); color: #15131b">
+      <svg width="14" height="14" viewBox="0 0 20 20" fill="currentColor"><path d="M10 3a1 1 0 011 1v5h5a1 1 0 110 2h-5v5a1 1 0 11-2 0v-5H4a1 1 0 110-2h5V4a1 1 0 011-1z"/></svg>
+      New ticket
+    </button>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-label">View</div>
+    <div class="space-y-0.5">
+      <div class="filter-row active"><span>All</span><span class="text-[11px]">9</span></div>
+      <div class="filter-row"><span>Mine</span><span class="text-[11px]">4</span></div>
+      <div class="filter-row"><span>Awaiting me</span><span class="text-[11px]">2</span></div>
+    </div>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-label flex items-center gap-1.5">
+      <svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 00-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0020 4.77 5.07 5.07 0 0019.91 1S18.73.65 16 2.48a13.38 13.38 0 00-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 005 4.77a5.44 5.44 0 00-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 009 18.13V22"/></svg>
+      Project · synced 12s ago
+    </div>
+    <div class="grid grid-cols-3 gap-2 text-center">
+      <div class="rounded-sm p-3" style="background: var(--card)"><div class="text-lg serif" style="font-weight: 500">9</div><div class="text-[10px] tracking-wider uppercase serif" style="color: var(--dim)">Tickets</div></div>
+      <div class="rounded-sm p-3" style="background: var(--card)"><div class="text-lg serif" style="font-weight: 500; color: var(--live)">1</div><div class="text-[10px] tracking-wider uppercase serif" style="color: var(--dim)">Live</div></div>
+      <div class="rounded-sm p-3" style="background: var(--card)"><div class="text-lg serif" style="font-weight: 500; color: var(--violet)">1</div><div class="text-[10px] tracking-wider uppercase serif" style="color: var(--dim)">PRs</div></div>
+    </div>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-label">Automation</div>
+    <div class="space-y-2.5 text-[13px]" style="color: var(--muted)">
+      <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full" style="background: var(--green)"></span><span class="flex-1">refine-to-comments</span><span class="mono text-[11px]" style="color: var(--dim)">09:00</span></div>
+      <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full" style="background: var(--green)"></span><span class="flex-1">babysit-prs</span><span class="mono text-[11px]" style="color: var(--dim)">5m</span></div>
+      <div class="flex items-center gap-2"><span class="w-1.5 h-1.5 rounded-full" style="background: var(--green)"></span><span class="flex-1">quality-gate-sweep</span><span class="mono text-[11px]" style="color: var(--dim)">02:00</span></div>
+    </div>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-label">Today's Usage</div>
+    <div class="flex items-center gap-3">
+      <svg width="48" height="48" viewBox="0 0 36 36" style="transform: rotate(-90deg)">
+        <circle cx="18" cy="18" r="15" stroke="#2a2536" stroke-width="3" fill="none"/>
+        <circle cx="18" cy="18" r="15" stroke="#d4a854" stroke-width="3" fill="none" stroke-dasharray="42 100" stroke-linecap="round"/>
+      </svg>
+      <div>
+        <div class="serif text-lg" style="font-weight: 500">412k</div>
+        <div class="text-[11px] italic serif" style="color: var(--dim)">of 1M · 41%</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="rail-section">
+    <div class="rail-label">Ask</div>
+    <div class="border rounded-sm p-3 flex items-center gap-3 cursor-pointer transition-colors" style="background: var(--card); border-color: var(--card-line)">
+      <div class="w-6 h-6 rounded-full flex-none" style="background: linear-gradient(135deg, #b88dd1, #d4a854)"></div>
+      <span class="text-sm flex-1 italic serif" style="color: var(--muted)">Ask Claude</span>
+    </div>
+  </div>
+
+  <div class="mt-auto rail-section flex items-center gap-3" style="border-bottom: none">
+    <div class="w-7 h-7 rounded-full flex items-center justify-center text-xs font-medium serif" style="background: #2a2536">B</div>
+    <div class="flex-1">
+      <div class="text-sm">Brian</div>
+      <div class="text-[11px]" style="color: var(--dim)">brian@onomojo.com</div>
+    </div>
+    <button style="color: var(--dim)" class="hover:text-white">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33"/></svg>
+    </button>
+  </div>
+</aside>
+
+<!-- CENTERED BOARD -->
+<main class="flex-1 flex flex-col overflow-hidden">
+  <div class="w-full flex flex-col flex-1 overflow-hidden">
+
+    <header class="px-10 pt-10 pb-5">
+      <div class="flex items-baseline gap-4">
+        <h1 class="serif text-3xl tracking-tight" style="font-weight: 500">sandstorm-desktop</h1>
+        <span class="text-sm italic serif" style="color: var(--muted)">9 tickets · 1 stack live</span>
+      </div>
+    </header>
+
+    <div class="flex-1 overflow-x-auto px-10 pb-8">
+      <div class="flex gap-4 h-full">
+
+        <div class="col flex flex-col h-full">
+          <div class="flex items-center gap-2 mb-4"><div class="col-rail" style="background: var(--dim)"></div><span class="col-header">Backlog</span><span class="text-xs ml-auto serif" style="color: var(--dim)">3</span></div>
+          <div class="space-y-2 flex-1 overflow-y-auto pr-1">
+            <div class="card"><div class="flex justify-between mb-2"><span class="ticket-id">#367</span><span class="chip" style="background:#2a2536; color:var(--muted)">draft</span></div><div class="text-sm">Add cancel-all-stacks shortcut</div></div>
+            <div class="card"><div class="flex justify-between mb-2"><span class="ticket-id">#368</span><span class="chip" style="background:#2a2536; color:var(--muted)">draft</span></div><div class="text-sm">Project tab icons</div></div>
+            <div class="card"><div class="flex justify-between mb-2"><span class="ticket-id">#369</span><span class="chip" style="background:#2a2536; color:var(--muted)">draft</span></div><div class="text-sm">Diff viewer keyboard nav</div></div>
+          </div>
+        </div>
+
+        <div class="col flex flex-col h-full">
+          <div class="flex items-center gap-2 mb-4"><div class="col-rail" style="background: var(--refine)"></div><span class="col-header" style="color: var(--refine)">Refining</span><span class="text-xs ml-auto serif" style="color: var(--dim)">1</span></div>
+          <div class="space-y-2 flex-1 overflow-y-auto pr-1">
+            <div class="card" style="border-color: rgba(212,168,84,0.3)">
+              <div class="flex justify-between mb-2"><span class="ticket-id">#366</span><span class="chip flex items-center gap-1" style="background: rgba(212,168,84,0.12); color: var(--refine)"><span class="pulse" style="background: var(--refine)"></span>Q&amp;A</span></div>
+              <div class="text-sm mb-3">Reduce orchestrator system prompt bloat</div>
+              <div class="progress mb-2"><div style="width: 60%"></div></div>
+              <div class="text-[11px] mb-3 italic serif" style="color: var(--muted)">3 questions awaiting</div>
+              <button class="w-full text-[12px] py-1.5 rounded-sm font-medium" style="background: var(--refine); color: #15131b">Answer</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="col flex flex-col h-full">
+          <div class="flex items-center gap-2 mb-4"><div class="col-rail" style="background: var(--blue)"></div><span class="col-header" style="color: var(--blue)">Spec Ready</span><span class="text-xs ml-auto serif" style="color: var(--dim)">2</span></div>
+          <div class="space-y-2 flex-1 overflow-y-auto pr-1">
+            <div class="card"><div class="flex justify-between mb-2"><span class="ticket-id">#359</span><span class="chip" style="background: rgba(127,163,184,0.12); color: var(--blue)">ready</span></div><div class="text-sm mb-3">Refinement modal bleeds between projects</div><button class="w-full text-[12px] py-1.5 rounded-sm border" style="background: transparent; border-color: var(--card-line); color: var(--muted)">Start stack</button></div>
+            <div class="card"><div class="flex justify-between mb-2"><span class="ticket-id">#356</span><span class="chip" style="background: rgba(127,163,184,0.12); color: var(--blue)">ready</span></div><div class="text-sm mb-3">Setup CI with github actions</div><button class="w-full text-[12px] py-1.5 rounded-sm border" style="background: transparent; border-color: var(--card-line); color: var(--muted)">Start stack</button></div>
+          </div>
+        </div>
+
+        <div class="col flex flex-col h-full">
+          <div class="flex items-center gap-2 mb-4"><div class="col-rail" style="background: var(--live)"></div><span class="col-header" style="color: var(--live)">In Stack</span><span class="text-xs ml-auto serif" style="color: var(--dim)">1</span></div>
+          <div class="space-y-2 flex-1 overflow-y-auto pr-1">
+            <div class="card" style="border-color: rgba(212,168,84,0.3)">
+              <div class="flex justify-between mb-2"><span class="ticket-id">#364</span><span class="chip flex items-center gap-1" style="background: rgba(212,168,84,0.12); color: var(--live)"><span class="pulse" style="background: var(--live)"></span>live</span></div>
+              <div class="text-sm mb-2">Surface tool-call activity and structured timing</div>
+              <div class="text-[11px] mb-2" style="color: var(--dim)"><span class="mono">feat/364</span> · <span class="italic serif">14m · 22 turns</span></div>
+              <div class="rounded-sm p-2 mono text-[10px] leading-relaxed mb-3" style="background: var(--bg); color: var(--muted); border: 1px solid var(--card-line)">
+                → Read claude-backend.ts<br>→ Grep extractText<br>→ Edit claude-backend.ts<br>→ Bash npm run typecheck
+              </div>
+              <button class="w-full text-[12px] py-1.5 rounded-sm border" style="background: transparent; border-color: var(--card-line); color: var(--muted)">Open stack</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="col flex flex-col h-full">
+          <div class="flex items-center gap-2 mb-4"><div class="col-rail" style="background: var(--violet)"></div><span class="col-header" style="color: var(--violet)">PR Open</span><span class="text-xs ml-auto serif" style="color: var(--dim)">1</span></div>
+          <div class="space-y-2 flex-1 overflow-y-auto pr-1">
+            <div class="card"><div class="flex justify-between mb-2"><span class="ticket-id">#358</span><span class="chip" style="background: rgba(184,141,209,0.14); color: var(--violet)">PR</span></div><div class="text-sm mb-2">Provider-neutral create-ticket script</div><div class="text-[11px] flex items-center gap-2 mb-3" style="color: var(--muted)"><span class="flex items-center gap-1"><span class="w-1.5 h-1.5 rounded-full" style="background: var(--green)"></span>CI green</span><span>·</span><span class="italic serif">1 approval</span></div><button class="w-full text-[12px] py-1.5 rounded-sm font-medium" style="background: var(--violet); color: #15131b">Merge</button></div>
+          </div>
+        </div>
+
+        <div class="col flex flex-col h-full">
+          <div class="flex items-center gap-2 mb-4"><div class="col-rail" style="background: var(--green)"></div><span class="col-header" style="color: var(--green)">Merged</span><span class="text-xs ml-auto serif" style="color: var(--dim)">3</span></div>
+          <div class="space-y-2 flex-1 overflow-y-auto pr-1">
+            <div class="card opacity-60"><div class="flex justify-between mb-2"><span class="ticket-id">#365</span><span class="chip" style="background: rgba(148,184,141,0.12); color: var(--green)">merged</span></div><div class="text-sm">Replace per-project ticket scripts</div></div>
+            <div class="card opacity-60"><div class="flex justify-between mb-2"><span class="ticket-id">#362</span><span class="chip" style="background: rgba(148,184,141,0.12); color: var(--green)">merged</span></div><div class="text-sm">Stream live refinement progress</div></div>
+            <div class="card opacity-60"><div class="flex justify-between mb-2"><span class="ticket-id">#351</span><span class="chip" style="background: rgba(148,184,141,0.12); color: var(--green)">merged</span></div><div class="text-sm">Verify-before-asking criterion</div></div>
+          </div>
+        </div>
+
+      </div>
+    </div>
+  </div>
+</main>
+
+</body>
+</html>
