@@ -93,6 +93,7 @@ import {
   getStartScriptStatus,
 } from './control-plane/ticket-updater';
 import { getScriptStatus as getFetchScriptStatus } from './control-plane/ticket-fetcher';
+import type { EphemeralStreamEvent } from './agent/types';
 import {
   detectTicketProvider,
   installUpdateScript,
@@ -1191,7 +1192,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     persistRefinement(session);
     emitRefinementUpdate(session);
 
-    const onChunk = (delta: string): void => {
+    const onChunk = (event: EphemeralStreamEvent): void => {
+      const delta = event.kind === 'tool_use'
+        ? `→ ${event.summary}\n`
+        : event.delta;
       mainWindow?.webContents.send('refinement:progress', { sessionId: id, delta });
     };
 

@@ -155,6 +155,7 @@ vi.mock('../../src/main/scheduler/scheduler-manager', () => ({
 // Import after mocks
 // ---------------------------------------------------------------------------
 import { registerIpcHandlers } from '../../src/main/ipc';
+import type { EphemeralStreamEvent } from '../../src/main/agent/types';
 
 // ---------------------------------------------------------------------------
 // Helper
@@ -182,13 +183,13 @@ describe('refinement streaming — IPC chain', () => {
     registerIpcHandlers(mockMainWindow as unknown as import('electron').BrowserWindow);
   });
 
-  it('forwards onChunk deltas to the renderer via refinement:progress', async () => {
-    let capturedOnChunk: ((delta: string) => void) | undefined;
+  it('forwards text onChunk events to the renderer via refinement:progress', async () => {
+    let capturedOnChunk: ((event: EphemeralStreamEvent) => void) | undefined;
 
     // Simulate a subprocess that is still running (promise never resolves here).
     // We capture the onChunk callback so we can fire it manually.
     mockSpawnSpecCheck.mockImplementation(
-      (_ticketId: unknown, _projectDir: unknown, onChunk: (delta: string) => void) => {
+      (_ticketId: unknown, _projectDir: unknown, onChunk: (event: EphemeralStreamEvent) => void) => {
         capturedOnChunk = onChunk;
         return {
           promise: new Promise<Record<string, unknown>>(() => {}),
@@ -212,10 +213,10 @@ describe('refinement streaming — IPC chain', () => {
     // The IPC handler must have called spawnSpecCheck and wired up onChunk.
     expect(capturedOnChunk).toBeDefined();
 
-    // Fire two scripted stream-json text chunks, just as the real Claude CLI
-    // subprocess would emit them from its stdout parse loop.
-    capturedOnChunk!('Evaluating Problem Statement...');
-    capturedOnChunk!(' Checking Scope Boundaries...');
+    // Fire two scripted text events, just as the real Claude CLI subprocess
+    // would emit them from its stdout parse loop.
+    capturedOnChunk!({ kind: 'text', delta: 'Evaluating Problem Statement...' });
+    capturedOnChunk!({ kind: 'text', delta: ' Checking Scope Boundaries...' });
 
     // Both deltas must have been forwarded to the renderer on the correct channel
     // with the session's ID so the store can route them to the right session.
@@ -229,11 +230,39 @@ describe('refinement streaming — IPC chain', () => {
     );
   });
 
-  it('scopes refinement:progress events to the originating session ID', async () => {
-    const onChunks: Array<(delta: string) => void> = [];
+  it('formats tool_use events as → indicator lines in refinement:progress', async () => {
+    let capturedOnChunk: ((event: EphemeralStreamEvent) => void) | undefined;
 
     mockSpawnSpecCheck.mockImplementation(
-      (_ticketId: unknown, _projectDir: unknown, onChunk: (delta: string) => void) => {
+      (_ticketId: unknown, _projectDir: unknown, onChunk: (event: EphemeralStreamEvent) => void) => {
+        capturedOnChunk = onChunk;
+        return {
+          promise: new Promise<Record<string, unknown>>(() => {}),
+          cancel: vi.fn(),
+        };
+      },
+    );
+
+    const result = (await invokeHandler(
+      'tickets:specCheckAsync',
+      'TICKET-123',
+      '/tmp/my-project',
+    )) as { sessionId: string };
+    const { sessionId } = result;
+
+    capturedOnChunk!({ kind: 'tool_use', name: 'Read', summary: 'Read(src/main/foo.ts)' });
+
+    expect(mockMainWindow.webContents.send).toHaveBeenCalledWith(
+      'refinement:progress',
+      { sessionId, delta: '→ Read(src/main/foo.ts)\n' },
+    );
+  });
+
+  it('scopes refinement:progress events to the originating session ID', async () => {
+    const onChunks: Array<(event: EphemeralStreamEvent) => void> = [];
+
+    mockSpawnSpecCheck.mockImplementation(
+      (_ticketId: unknown, _projectDir: unknown, onChunk: (event: EphemeralStreamEvent) => void) => {
         onChunks.push(onChunk);
         return {
           promise: new Promise<Record<string, unknown>>(() => {}),
@@ -252,8 +281,8 @@ describe('refinement streaming — IPC chain', () => {
     expect(onChunks).toHaveLength(2);
     expect(r1.sessionId).not.toBe(r2.sessionId);
 
-    onChunks[0]('delta for session 1');
-    onChunks[1]('delta for session 2');
+    onChunks[0]({ kind: 'text', delta: 'delta for session 1' });
+    onChunks[1]({ kind: 'text', delta: 'delta for session 2' });
 
     const progressCalls = mockMainWindow.webContents.send.mock.calls.filter(
       ([channel]) => channel === 'refinement:progress',

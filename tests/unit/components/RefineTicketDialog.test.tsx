@@ -374,6 +374,50 @@ describe('RefineTicketDialog', () => {
       render(<RefineTicketDialog />);
       expect(screen.queryByTestId('refine-stream-panel')).toBeNull();
     });
+
+    it('renders indicator lines (→ prefix) with italic + dimmer styling', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'running', phase: 'check', startedAt: Date.now(),
+          streamingOutput: 'Evaluating spec…\n→ Read(src/main/foo.ts)\nDone.',
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+      render(<RefineTicketDialog />);
+      const panel = screen.getByTestId('refine-stream-panel');
+      // The indicator line should be present in the panel text
+      expect(panel.textContent).toContain('→ Read(src/main/foo.ts)');
+      // Find the span containing the indicator line and verify it has the dimmer class
+      const spans = panel.querySelectorAll('span');
+      const indicatorSpan = Array.from(spans).find((s) =>
+        s.textContent?.includes('→ Read(src/main/foo.ts)'),
+      );
+      expect(indicatorSpan).toBeDefined();
+      expect(indicatorSpan!.className).toContain('opacity-50');
+      expect(indicatorSpan!.className).toContain('italic');
+    });
+
+    it('renders prose lines without indicator styling', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'running', phase: 'check', startedAt: Date.now(),
+          streamingOutput: 'Evaluating spec quality…',
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+      render(<RefineTicketDialog />);
+      const panel = screen.getByTestId('refine-stream-panel');
+      const spans = panel.querySelectorAll('span');
+      const proseSpan = Array.from(spans).find((s) =>
+        s.textContent?.includes('Evaluating spec quality…'),
+      );
+      expect(proseSpan).toBeDefined();
+      // Prose spans have no className (undefined → no dimming/italic)
+      expect(proseSpan!.className || '').not.toContain('opacity-50');
+      expect(proseSpan!.className || '').not.toContain('italic');
+    });
   });
 
   describe('appendRefinementStreamChunk store action', () => {

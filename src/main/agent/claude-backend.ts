@@ -21,8 +21,11 @@ import {
   AgentSessionHistory,
   OuterClaudeSessionTokens,
   StackInfo,
+  EphemeralStreamEvent,
   zeroSessionTokens,
 } from './types';
+import { appendEphemeralTiming, type EphemeralTimingRecord } from './ephemeral-timing';
+import { extractStreamEvents } from './ephemeral-stream-events';
 import { resolveOuterClaudeTools } from './tools-allowlist';
 import { composeSystemPromptWithSkills } from './skill-enumeration';
 import { TokenTelemetry, ToolCallRecord, isTelemetryEnabled } from './token-telemetry';
@@ -100,6 +103,7 @@ export class ClaudeBackend implements AgentBackend {
   private telemetry: TokenTelemetry;
   private rawCapture: RawCaptureSupervisor;
   private rawCaptureByTab = new Map<string, RawCaptureSession>();
+  private ephemeralTimingPath: string;
 
   constructor(
     timeoutMs?: number,
@@ -111,6 +115,16 @@ export class ClaudeBackend implements AgentBackend {
     this.initLogger();
     this.telemetry = this.initTelemetry();
     this.rawCapture = this.initRawCapture();
+    this.ephemeralTimingPath = this.resolveEphemeralTimingPath();
+  }
+
+  private resolveEphemeralTimingPath(): string {
+    try {
+      const dir = typeof app !== 'undefined' && app.getPath ? app.getPath('userData') : os.tmpdir();
+      return path.join(dir, 'sandstorm-desktop-ephemeral-timing.jsonl');
+    } catch {
+      return path.join(os.tmpdir(), 'sandstorm-desktop-ephemeral-timing.jsonl');
+    }
   }
 
   /**
@@ -415,7 +429,7 @@ export class ClaudeBackend implements AgentBackend {
     prompt: string,
     projectDir: string,
     timeoutMs = 300_000,
-    onChunk?: (delta: string) => void,
+    onChunk?: (event: EphemeralStreamEvent) => void,
   ): { promise: Promise<string>; cancel: () => void } {
     const claudeBin = getClaudeBin();
     const args = [
@@ -424,6 +438,12 @@ export class ClaudeBackend implements AgentBackend {
       '--dangerously-skip-permissions',
       '--verbose',
     ];
+
+    const spawnedAt = Date.now();
+    let firstChunkAt: number | null = null;
+    let turnCount = 0;
+    let isCancelled = false;
+    let timingWritten = false;
 
     const child = spawn(claudeBin, args, {
       cwd: projectDir,
@@ -443,6 +463,25 @@ export class ClaudeBackend implements AgentBackend {
       rejectFn = reject;
     });
 
+    const writeTimingRecord = (exitCode: number | null, errorMessage?: string): void => {
+      if (timingWritten) return;
+      timingWritten = true;
+      const closedAt = Date.now();
+      const record: EphemeralTimingRecord = {
+        ts: new Date(closedAt).toISOString(),
+        spawnedAt,
+        firstChunkAt,
+        closedAt,
+        elapsedMs: closedAt - spawnedAt,
+        exitCode,
+        promptChars: prompt.length,
+        turnCount,
+        cancelled: isCancelled,
+        ...(errorMessage != null ? { errorMessage } : {}),
+      };
+      appendEphemeralTiming(this.ephemeralTimingPath, record);
+    };
+
     const settle = (fn: () => void): void => {
       if (settled) return;
       settled = true;
@@ -452,6 +491,7 @@ export class ClaudeBackend implements AgentBackend {
 
     const timer = setTimeout(() => {
       if (child.exitCode === null) {
+        isCancelled = true;
         child.kill('SIGTERM');
         setTimeout(() => {
           if (child.exitCode === null) child.kill('SIGKILL');
@@ -468,10 +508,14 @@ export class ClaudeBackend implements AgentBackend {
         if (!line.trim()) continue;
         try {
           const parsed = JSON.parse(line);
-          const text = this.extractText(parsed);
-          if (text) {
-            fullText += text;
-            if (!settled) onChunk?.(text);
+          if (parsed.type === 'assistant') turnCount += 1;
+          const events = extractStreamEvents(parsed);
+          for (const event of events) {
+            if (event.kind === 'text') fullText += event.delta;
+            if (!settled && onChunk) {
+              if (firstChunkAt === null) firstChunkAt = Date.now();
+              onChunk(event);
+            }
           }
         } catch {
           // Skip non-JSON lines
@@ -487,12 +531,16 @@ export class ClaudeBackend implements AgentBackend {
       if (outputBuffer.trim()) {
         try {
           const parsed = JSON.parse(outputBuffer);
-          const text = this.extractText(parsed);
-          if (text) fullText += text;
+          if (parsed.type === 'assistant') turnCount += 1;
+          const events = extractStreamEvents(parsed);
+          for (const event of events) {
+            if (event.kind === 'text') fullText += event.delta;
+          }
         } catch {
           // Skip
         }
       }
+      writeTimingRecord(code);
       settle(() => {
         if (code !== 0 && !fullText.trim()) {
           rejectFn(new Error(
@@ -505,10 +553,13 @@ export class ClaudeBackend implements AgentBackend {
     });
 
     child.on('error', (err) => {
+      const msg = err instanceof Error ? err.message : String(err);
+      writeTimingRecord(null, msg);
       settle(() => rejectFn(err instanceof Error ? err : new Error(String(err))));
     });
 
     const cancel = (): void => {
+      isCancelled = true;
       settle(() => {
         child.kill('SIGTERM');
         setTimeout(() => {
@@ -1125,6 +1176,7 @@ export class ClaudeBackend implements AgentBackend {
     }
     return null;
   }
+
 
   destroy(): void {
     for (const session of this.sessions.values()) {

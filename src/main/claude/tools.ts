@@ -24,6 +24,7 @@ import type {
 } from '../scheduler/schedule-service';
 import { validateProjectDir } from '../validation';
 import { updateTicketBody } from '../control-plane/ticket-updater';
+import type { EphemeralStreamEvent } from '../agent/types';
 
 export { validateProjectDir };
 
@@ -487,7 +488,7 @@ async function handleSpecRefine(
 export function spawnSpecCheck(
   ticketId: string,
   projectDir: string,
-  onChunk?: (delta: string) => void,
+  onChunk?: (event: EphemeralStreamEvent) => void,
 ): { promise: Promise<Record<string, unknown>>; cancel: () => void } {
   let innerCancel: (() => void) | null = null;
   let cancelled = false;
@@ -521,7 +522,7 @@ export function spawnSpecRefine(
   ticketId: string,
   projectDir: string,
   userAnswers?: string,
-  onChunk?: (delta: string) => void,
+  onChunk?: (event: EphemeralStreamEvent) => void,
 ): { promise: Promise<Record<string, unknown>>; cancel: () => void } {
   let innerCancel: (() => void) | null = null;
   let cancelled = false;

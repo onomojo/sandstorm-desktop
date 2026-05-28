@@ -1277,10 +1277,10 @@ describe('ClaudeBackend.spawnEphemeralAgent — onChunk streaming callback', () 
     return spawnedProcesses[spawnedProcesses.length - 1];
   }
 
-  it('invokes onChunk for each extracted text delta', async () => {
+  it('invokes onChunk for each extracted text delta as EphemeralStreamEvent', async () => {
     const backendUnderTest = new ClaudeBackend(60_000);
-    const chunks: string[] = [];
-    const { promise } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (d) => chunks.push(d));
+    const chunks: import('../../src/main/agent/types').EphemeralStreamEvent[] = [];
+    const { promise } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (e) => chunks.push(e));
     const proc = getEphemeralProcess();
 
     const line1 = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'hello ' }] } });
@@ -1291,15 +1291,44 @@ describe('ClaudeBackend.spawnEphemeralAgent — onChunk streaming callback', () 
 
     const result = await promise;
     expect(result).toBe('hello world');
-    expect(chunks).toEqual(['hello ', 'world']);
+    expect(chunks).toEqual([
+      { kind: 'text', delta: 'hello ' },
+      { kind: 'text', delta: 'world' },
+    ]);
+
+    backendUnderTest.destroy();
+  });
+
+  it('invokes onChunk with tool_use events for tool_use blocks', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const chunks: import('../../src/main/agent/types').EphemeralStreamEvent[] = [];
+    const { promise } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (e) => chunks.push(e));
+    const proc = getEphemeralProcess();
+
+    const line = JSON.stringify({
+      type: 'assistant',
+      message: {
+        content: [
+          { type: 'tool_use', id: 'tu_1', name: 'Read', input: { file_path: 'src/foo.ts' } },
+        ],
+      },
+    });
+    proc.stdout.emit('data', Buffer.from(line + '\n'));
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+
+    await promise;
+    expect(chunks).toHaveLength(1);
+    expect(chunks[0]).toMatchObject({ kind: 'tool_use', name: 'Read' });
+    expect((chunks[0] as { summary: string }).summary).toContain('src/foo.ts');
 
     backendUnderTest.destroy();
   });
 
   it('does not invoke onChunk for malformed / non-JSON lines', async () => {
     const backendUnderTest = new ClaudeBackend(60_000);
-    const chunks: string[] = [];
-    const { promise } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (d) => chunks.push(d));
+    const chunks: import('../../src/main/agent/types').EphemeralStreamEvent[] = [];
+    const { promise } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (e) => chunks.push(e));
     const proc = getEphemeralProcess();
 
     proc.stdout.emit('data', Buffer.from('not json\n'));
@@ -1309,15 +1338,15 @@ describe('ClaudeBackend.spawnEphemeralAgent — onChunk streaming callback', () 
     proc.emit('close', 0);
 
     await promise;
-    expect(chunks).toEqual(['ok']);
+    expect(chunks).toEqual([{ kind: 'text', delta: 'ok' }]);
 
     backendUnderTest.destroy();
   });
 
   it('does not invoke onChunk after cancel', async () => {
     const backendUnderTest = new ClaudeBackend(60_000);
-    const chunks: string[] = [];
-    const { promise, cancel } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (d) => chunks.push(d));
+    const chunks: import('../../src/main/agent/types').EphemeralStreamEvent[] = [];
+    const { promise, cancel } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (e) => chunks.push(e));
     const proc = getEphemeralProcess();
 
     cancel();
@@ -1578,6 +1607,150 @@ describe('Raw API-request capture wiring (#299)', () => {
     }).rawCapture;
     expect(supervisor.enabled).toBe(true);
     backend.destroy();
+  });
+});
+
+describe('spawnEphemeralAgent — timing record integration', () => {
+  beforeEach(() => {
+    spawnedProcesses.length = 0;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  it('writes timing record with correct fields on normal completion', async () => {
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const { promise } = backendUnderTest.spawnEphemeralAgent(
+      'hello world',
+      '/tmp',
+      5_000,
+      () => {}
+    );
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+
+    proc.stdout.emit('data', Buffer.from(
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } }) + '\n'
+    ));
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+
+    await promise;
+
+    const timingCalls = vi.mocked(fs.appendFileSync).mock.calls.filter((c) =>
+      String(c[0]).endsWith('sandstorm-desktop-ephemeral-timing.jsonl')
+    );
+    expect(timingCalls.length).toBe(1);
+    const record = JSON.parse(timingCalls[0][1] as string);
+    expect(record.exitCode).toBe(0);
+    expect(record.promptChars).toBe('hello world'.length);
+    expect(record.turnCount).toBe(1);
+    expect(record.cancelled).toBe(false);
+    expect(record.errorMessage).toBeUndefined();
+    expect(record.firstChunkAt).not.toBeNull();
+    expect(typeof record.spawnedAt).toBe('number');
+    expect(typeof record.elapsedMs).toBe('number');
+
+    backendUnderTest.destroy();
+  });
+
+  it('writes timing record with cancelled:true when cancel() is called mid-stream', async () => {
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const { promise, cancel } = backendUnderTest.spawnEphemeralAgent(
+      'test prompt',
+      '/tmp',
+      5_000,
+      () => {}
+    );
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+
+    proc.stdout.emit('data', Buffer.from(
+      JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'partial' }] } }) + '\n'
+    ));
+
+    cancel();
+
+    // Close fires after the kill
+    proc.exitCode = 143;
+    proc.emit('close', 143);
+
+    await expect(promise).rejects.toThrow('Cancelled');
+
+    const timingCalls = vi.mocked(fs.appendFileSync).mock.calls.filter((c) =>
+      String(c[0]).endsWith('sandstorm-desktop-ephemeral-timing.jsonl')
+    );
+    expect(timingCalls.length).toBe(1);
+    const record = JSON.parse(timingCalls[0][1] as string);
+    expect(record.cancelled).toBe(true);
+    expect(record.turnCount).toBe(1);
+    expect(record.firstChunkAt).not.toBeNull();
+    expect(record.errorMessage).toBeUndefined();
+
+    backendUnderTest.destroy();
+  });
+
+  it('writes timing record with cancelled:true and null firstChunkAt on timeout', async () => {
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const { promise } = backendUnderTest.spawnEphemeralAgent('test', '/tmp', 3_000);
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+
+    // Trigger the 3s timeout
+    vi.advanceTimersByTime(3_100);
+
+    // Close fires after the kill
+    proc.exitCode = 143;
+    proc.emit('close', 143);
+
+    await expect(promise).rejects.toThrow('Ephemeral agent timed out after 3000ms');
+
+    const timingCalls = vi.mocked(fs.appendFileSync).mock.calls.filter((c) =>
+      String(c[0]).endsWith('sandstorm-desktop-ephemeral-timing.jsonl')
+    );
+    expect(timingCalls.length).toBe(1);
+    const record = JSON.parse(timingCalls[0][1] as string);
+    expect(record.cancelled).toBe(true);
+    expect(record.firstChunkAt).toBeNull();
+    expect(record.turnCount).toBe(0);
+    expect(record.errorMessage).toBeUndefined();
+
+    backendUnderTest.destroy();
+  });
+
+  it('writes timing record with errorMessage and null exitCode on startup error', async () => {
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const { promise } = backendUnderTest.spawnEphemeralAgent('test', '/tmp', 5_000);
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+
+    proc.emit('error', new Error('ENOENT: claude not found'));
+
+    await expect(promise).rejects.toThrow('ENOENT: claude not found');
+
+    const timingCalls = vi.mocked(fs.appendFileSync).mock.calls.filter((c) =>
+      String(c[0]).endsWith('sandstorm-desktop-ephemeral-timing.jsonl')
+    );
+    expect(timingCalls.length).toBe(1);
+    const record = JSON.parse(timingCalls[0][1] as string);
+    expect(record.exitCode).toBeNull();
+    expect(record.errorMessage).toBe('ENOENT: claude not found');
+    expect(record.turnCount).toBe(0);
+    expect(record.firstChunkAt).toBeNull();
+    expect(record.cancelled).toBe(false);
+
+    backendUnderTest.destroy();
   });
 });
 
