@@ -1379,6 +1379,78 @@ describe('ClaudeBackend.spawnEphemeralAgent — onChunk streaming callback', () 
   });
 });
 
+describe('spawnEphemeralAgent — env trim and CLI args (#370)', () => {
+  beforeEach(() => {
+    spawnedProcesses.length = 0;
+  });
+
+  afterEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does NOT pass --verbose (renderer does not consume verbose chatter)', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000);
+
+    const callArgs = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const spawnedArgs: string[] = callArgs[1];
+    expect(spawnedArgs).not.toContain('--verbose');
+
+    backendUnderTest.destroy();
+  });
+
+  it('still passes the required ephemeral CLI flags', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000);
+
+    const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+    expect(spawnedArgs).toContain('-p');
+    expect(spawnedArgs).toContain('--output-format');
+    expect(spawnedArgs).toContain('stream-json');
+    expect(spawnedArgs).toContain('--dangerously-skip-permissions');
+
+    backendUnderTest.destroy();
+  });
+
+  it('sets CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 in the spawn env', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000);
+
+    const callOpts = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][2];
+    expect(callOpts.env.CLAUDE_CODE_DISABLE_CLAUDE_MDS).toBe('1');
+
+    backendUnderTest.destroy();
+  });
+
+  it('sets CLAUDE_CODE_PLUGIN_CACHE_DIR to a non-empty path', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000);
+
+    const callOpts = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][2];
+    expect(callOpts.env.CLAUDE_CODE_PLUGIN_CACHE_DIR).toBeTruthy();
+    expect(typeof callOpts.env.CLAUDE_CODE_PLUGIN_CACHE_DIR).toBe('string');
+    expect(callOpts.env.CLAUDE_CODE_PLUGIN_CACHE_DIR.length).toBeGreaterThan(0);
+
+    backendUnderTest.destroy();
+  });
+});
+
 describe('Outer-Claude session token accumulation (agent:token-usage IPC)', () => {
   let backend: AgentBackend;
   let mockWindow: { webContents: { send: ReturnType<typeof vi.fn> } };

@@ -8,6 +8,27 @@ function suggestStackName(ticketId: string): string {
   return id ? `ticket-${id}` : '';
 }
 
+/** MM:SS elapsed since a startedAt epoch ms. Ticks once per second while mounted. */
+export function formatElapsed(ms: number): string {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`;
+}
+
+function ElapsedTimer({ startedAt }: { startedAt: number }) {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, []);
+  return (
+    <span className="font-mono tabular-nums" data-testid="refine-elapsed-timer">
+      {formatElapsed(now - startedAt)}
+    </span>
+  );
+}
+
 export function RefineTicketDialog() {
   const {
     setShowRefineTicketDialog,
@@ -242,7 +263,13 @@ export function RefineTicketDialog() {
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="animate-spin">
                   <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="48" strokeDashoffset="32"/>
                 </svg>
-                {isStarting ? 'Starting stack…' : 'Running spec gate…'}
+                <span>{isStarting ? 'Starting stack…' : 'Running spec gate…'}</span>
+                {!isStarting && session?.startedAt && (
+                  <>
+                    <span className="text-sandstorm-border">·</span>
+                    <ElapsedTimer startedAt={session.startedAt} />
+                  </>
+                )}
               </div>
               {!isStarting && (
                 <div

@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { handleToolCall, validateProjectDir } from '../../src/main/claude/tools';
+import { handleToolCall, validateProjectDir, _clearTicketBodyCacheForTests } from '../../src/main/claude/tools';
 
 // Mock the stackManager, agentBackend, and registry imports
 vi.mock('../../src/main/index', () => ({
@@ -61,6 +61,7 @@ const mockGetProviderConfig = vi.mocked(registry.getProjectTicketConfig);
 describe('MCP tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    _clearTicketBodyCacheForTests();
     // Default: provider is configured as GitHub
     mockGetProviderConfig.mockReturnValue({ provider: 'github' });
   });
@@ -711,6 +712,62 @@ describe('MCP tools', () => {
       expect(prompt).toContain('Dependency Contracts');
       expect(prompt).toContain('Automated Visual Verification');
       expect(prompt).toContain('All Verification Automatable');
+    });
+
+    describe('ticket body cache (#370)', () => {
+      beforeEach(() => {
+        _clearTicketBodyCacheForTests();
+      });
+
+      it('reuses the cached body for repeated calls within the TTL window', async () => {
+        vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: cached body');
+        vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Spec Quality Gate: PASS\n\n### Results\n| C | Result |\n|---|---|\n| X | PASS |',
+        );
+
+        await handleToolCall('spec_check', { ticketId: '42', projectDir: '/proj' });
+        await handleToolCall('spec_check', { ticketId: '42', projectDir: '/proj' });
+
+        expect(vi.mocked(fetchTicketWithConfig)).toHaveBeenCalledTimes(1);
+      });
+
+      it('refetches when the cache key differs (project or ticket)', async () => {
+        vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body');
+        vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
+        vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+          '## Spec Quality Gate: PASS\n\n### Results\n| C | Result |\n|---|---|\n| X | PASS |',
+        );
+
+        await handleToolCall('spec_check', { ticketId: '42', projectDir: '/proj' });
+        await handleToolCall('spec_check', { ticketId: '43', projectDir: '/proj' });
+        await handleToolCall('spec_check', { ticketId: '42', projectDir: '/other' });
+
+        expect(vi.mocked(fetchTicketWithConfig)).toHaveBeenCalledTimes(3);
+      });
+
+      it('refetches after the TTL expires', async () => {
+        vi.useFakeTimers();
+        try {
+          vi.setSystemTime(new Date('2026-05-28T12:00:00Z'));
+          vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body');
+          vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
+          vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+            '## Spec Quality Gate: PASS\n\n### Results\n| C | Result |\n|---|---|\n| X | PASS |',
+          );
+
+          await handleToolCall('spec_check', { ticketId: '42', projectDir: '/proj' });
+
+          // Advance past the 30s TTL.
+          vi.setSystemTime(new Date('2026-05-28T12:00:31Z'));
+
+          await handleToolCall('spec_check', { ticketId: '42', projectDir: '/proj' });
+
+          expect(vi.mocked(fetchTicketWithConfig)).toHaveBeenCalledTimes(2);
+        } finally {
+          vi.useRealTimers();
+        }
+      });
     });
 
     it('spec_refine refinement prompt includes enhanced evaluation criteria', async () => {

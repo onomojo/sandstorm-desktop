@@ -5,7 +5,7 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
-import { RefineTicketDialog } from '../../../src/renderer/components/RefineTicketDialog';
+import { RefineTicketDialog, formatElapsed } from '../../../src/renderer/components/RefineTicketDialog';
 import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
 
@@ -319,6 +319,51 @@ describe('RefineTicketDialog', () => {
       useAppStore.setState({ refineTicketPrefill: null });
       render(<RefineTicketDialog />);
       expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('elapsed timer (#370)', () => {
+    it('formatElapsed formats whole seconds as MM:SS', () => {
+      expect(formatElapsed(0)).toBe('00:00');
+      expect(formatElapsed(999)).toBe('00:00');
+      expect(formatElapsed(1_000)).toBe('00:01');
+      expect(formatElapsed(59_000)).toBe('00:59');
+      expect(formatElapsed(60_000)).toBe('01:00');
+      expect(formatElapsed(125_000)).toBe('02:05');
+      expect(formatElapsed(3_600_000)).toBe('60:00');
+    });
+
+    it('clamps negative inputs to 00:00', () => {
+      expect(formatElapsed(-1)).toBe('00:00');
+      expect(formatElapsed(-99_999)).toBe('00:00');
+    });
+
+    it('renders the elapsed timer next to "Running spec gate…" while running', () => {
+      const start = Date.now() - 7_000; // 7s ago
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'running', phase: 'check', startedAt: start,
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+      render(<RefineTicketDialog />);
+      const timer = screen.getByTestId('refine-elapsed-timer');
+      // Timer should be present and show a MM:SS value.
+      expect(timer.textContent).toMatch(/^\d{2}:\d{2}$/);
+    });
+
+    it('does not render the elapsed timer once the session transitions to ready', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'ready', phase: 'check', startedAt: Date.now(),
+          result: { passed: true, questions: [], gateSummary: '', ticketUrl: null, cached: false },
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+      render(<RefineTicketDialog />);
+      expect(screen.queryByTestId('refine-elapsed-timer')).toBeNull();
     });
   });
 

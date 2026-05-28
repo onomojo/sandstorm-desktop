@@ -10,6 +10,7 @@
 import path from 'path';
 import { stackManager, agentBackend, registry } from '../index';
 import { fetchTicketWithConfig, updateTicketWithConfig } from '../control-plane/ticket-config';
+import type { ProjectTicketConfig } from '../control-plane/registry';
 import { getSpecQualityGate } from '../spec-quality-gate';
 import {
   createSchedule,
@@ -184,6 +185,34 @@ interface SpecContext {
   gate: string;
 }
 
+/**
+ * Short-window cache for ticket bodies. The spec gate fetches the same
+ * (projectDir, ticketId) repeatedly within a single refine flow — initial
+ * check, after-answers pass, manual re-runs. Caching for 30s avoids the
+ * provider round-trip without holding stale data. #370.
+ */
+const TICKET_BODY_TTL_MS = 30_000;
+const ticketBodyCache = new Map<string, { body: string; fetchedAt: number }>();
+
+export function _clearTicketBodyCacheForTests(): void {
+  ticketBodyCache.clear();
+}
+
+async function getTicketBodyCached(
+  ticketId: string,
+  config: ProjectTicketConfig,
+  projectDir: string,
+): Promise<string | null> {
+  const key = `${projectDir}|${ticketId}`;
+  const hit = ticketBodyCache.get(key);
+  if (hit && Date.now() - hit.fetchedAt < TICKET_BODY_TTL_MS) {
+    return hit.body;
+  }
+  const body = await fetchTicketWithConfig(ticketId, config, projectDir);
+  if (body) ticketBodyCache.set(key, { body, fetchedAt: Date.now() });
+  return body;
+}
+
 /** Shared pre-checks before calling the LLM. Returns an error result or the resolved context. */
 async function resolveSpecContext(
   ticketId: string,
@@ -205,7 +234,7 @@ async function resolveSpecContext(
     };
   }
 
-  const ticketBody = await fetchTicketWithConfig(ticketId, config, projectDir);
+  const ticketBody = await getTicketBodyCached(ticketId, config, projectDir);
   if (!ticketBody) {
     return {
       ok: false,
