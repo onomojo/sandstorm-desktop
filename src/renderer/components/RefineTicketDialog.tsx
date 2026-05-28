@@ -250,7 +250,19 @@ export function RefineTicketDialog() {
                   className="h-32 overflow-y-auto bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 font-mono text-[11px] text-sandstorm-muted whitespace-pre-wrap"
                   data-testid="refine-stream-panel"
                 >
-                  {streamingOutput || <span className="opacity-50">Waiting for output…</span>}
+                  {streamingOutput
+                    ? streamingOutput.split('\n').map((line, i, arr) => {
+                        const isIndicator = line.startsWith('→ ');
+                        return (
+                          <span
+                            key={i}
+                            className={isIndicator ? 'opacity-50 italic' : undefined}
+                          >
+                            {line}{i < arr.length - 1 ? '\n' : ''}
+                          </span>
+                        );
+                      })
+                    : <span className="opacity-50">Waiting for output…</span>}
                 </div>
               )}
             </div>

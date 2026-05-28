@@ -6,6 +6,15 @@
 
 import { BrowserWindow } from 'electron';
 
+/**
+ * Discriminated event emitted by spawnEphemeralAgent's onChunk callback.
+ * 'text' carries streamed assistant prose; 'tool_use' carries a compact
+ * one-line indicator of which tool the model invoked and on what.
+ */
+export type EphemeralStreamEvent =
+  | { kind: 'text'; delta: string }
+  | { kind: 'tool_use'; name: string; summary: string };
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -96,7 +105,7 @@ export interface AgentBackend {
     prompt: string,
     projectDir: string,
     timeoutMs?: number,
-    onChunk?: (delta: string) => void,
+    onChunk?: (event: EphemeralStreamEvent) => void,
   ): { promise: Promise<string>; cancel: () => void };
 
   // --- Authentication ---

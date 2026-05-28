@@ -91,6 +91,7 @@ import {
 } from './control-plane/pr-creator';
 import { createTicketWithConfig } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
+import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
 
 /**
@@ -1120,7 +1121,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     persistRefinement(session);
     emitRefinementUpdate(session);
 
-    const onChunk = (delta: string): void => {
+    const onChunk = (event: EphemeralStreamEvent): void => {
+      const delta = event.kind === 'tool_use'
+        ? `→ ${event.summary}\n`
+        : event.delta;
       mainWindow?.webContents.send('refinement:progress', { sessionId: id, delta });
     };
 
