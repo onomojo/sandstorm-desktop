@@ -22,6 +22,7 @@ import {
   OuterClaudeSessionTokens,
   StackInfo,
   EphemeralStreamEvent,
+  EphemeralSessionHandle,
   zeroSessionTokens,
 } from './types';
 import { appendEphemeralTiming, type EphemeralTimingRecord } from './ephemeral-timing';
@@ -583,6 +584,160 @@ export class ClaudeBackend implements AgentBackend {
 
   runEphemeralAgent(prompt: string, projectDir: string, timeoutMs = 300_000): Promise<string> {
     return this.spawnEphemeralAgent(prompt, projectDir, timeoutMs).promise;
+  }
+
+  /**
+   * Long-lived stream-json process for multi-turn ephemeral flows (#370 item 5).
+   * Mirrors the persistent-session flag set (`--print --input-format stream-json
+   * --output-format stream-json --dangerously-skip-permissions`) and reuses the
+   * same env-trim as `spawnEphemeralAgent` (no global CLAUDE.md, empty plugin
+   * cache). Each `sendFollowUp` writes an NDJSON user message to stdin and
+   * resolves when the next `type:"result"` event arrives.
+   */
+  spawnEphemeralSession(
+    initialPrompt: string,
+    projectDir: string,
+    timeoutMs = 300_000,
+    onChunk?: (event: EphemeralStreamEvent) => void,
+  ): EphemeralSessionHandle {
+    const claudeBin = getClaudeBin();
+    const args = [
+      '--print',
+      '--input-format', 'stream-json',
+      '--output-format', 'stream-json',
+      '--dangerously-skip-permissions',
+    ];
+
+    const child = spawn(claudeBin, args, {
+      cwd: projectDir,
+      env: {
+        ...getClaudeEnv(),
+        CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+        CLAUDE_CODE_PLUGIN_CACHE_DIR: this.ensureEmptyPluginCacheDir(),
+      },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    let outputBuffer = '';
+    let stderrBuffer = '';
+    let currentText = '';
+    let currentResolve: ((value: string) => void) | null = null;
+    let currentReject: ((err: Error) => void) | null = null;
+    let isDisposed = false;
+    let idleTimer: NodeJS.Timeout | null = null;
+
+    const resetIdleTimer = (): void => {
+      if (idleTimer) clearTimeout(idleTimer);
+      idleTimer = setTimeout(() => {
+        if (currentReject) currentReject(new Error(`Ephemeral session timed out after ${timeoutMs}ms`));
+        dispose();
+      }, timeoutMs);
+    };
+
+    const dispose = (): void => {
+      if (isDisposed) return;
+      isDisposed = true;
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      try { child.stdin?.end(); } catch { /* noop */ }
+      try { child.kill('SIGTERM'); } catch { /* noop */ }
+      setTimeout(() => {
+        try { if (child.exitCode === null) child.kill('SIGKILL'); } catch { /* noop */ }
+      }, 5_000);
+      if (currentReject) {
+        const reject = currentReject;
+        currentResolve = null;
+        currentReject = null;
+        reject(new Error('Session disposed'));
+      }
+    };
+
+    child.stdout?.on('data', (data: Buffer) => {
+      outputBuffer += data.toString();
+      const lines = outputBuffer.split('\n');
+      outputBuffer = lines.pop() || '';
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        try {
+          const parsed = JSON.parse(line);
+          const events = extractStreamEvents(parsed);
+          for (const event of events) {
+            if (event.kind === 'text') currentText += event.delta;
+            onChunk?.(event);
+          }
+          if (parsed.type === 'result' && currentResolve) {
+            const text = currentText;
+            currentText = '';
+            const resolve = currentResolve;
+            currentResolve = null;
+            currentReject = null;
+            if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+            resolve(text);
+          }
+        } catch {
+          // Skip non-JSON lines
+        }
+      }
+    });
+
+    child.stderr?.on('data', (data: Buffer) => {
+      stderrBuffer += data.toString();
+    });
+
+    child.on('close', (code) => {
+      isDisposed = true;
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      if (currentReject) {
+        const reject = currentReject;
+        currentResolve = null;
+        currentReject = null;
+        reject(new Error(
+          `Ephemeral session exited with code ${code}: ${stderrBuffer.trim() || 'unknown error'}`,
+        ));
+      }
+    });
+
+    child.on('error', (err) => {
+      isDisposed = true;
+      if (idleTimer) { clearTimeout(idleTimer); idleTimer = null; }
+      if (currentReject) {
+        const reject = currentReject;
+        currentResolve = null;
+        currentReject = null;
+        reject(err instanceof Error ? err : new Error(String(err)));
+      }
+    });
+
+    const sendMessage = (text: string): Promise<string> => {
+      if (isDisposed) return Promise.reject(new Error('Session disposed'));
+      if (currentResolve || currentReject) {
+        return Promise.reject(new Error('Previous turn still in flight'));
+      }
+      return new Promise<string>((resolve, reject) => {
+        currentResolve = resolve;
+        currentReject = reject;
+        currentText = '';
+        resetIdleTimer();
+        const ndjson = JSON.stringify({
+          type: 'user',
+          message: { role: 'user', content: text },
+        });
+        try {
+          child.stdin?.write(ndjson + '\n');
+        } catch (err) {
+          currentResolve = null;
+          currentReject = null;
+          reject(err instanceof Error ? err : new Error(String(err)));
+        }
+      });
+    };
+
+    const initialResult = sendMessage(initialPrompt);
+
+    return {
+      initialResult,
+      sendFollowUp: sendMessage,
+      dispose,
+    };
   }
 
   // --- Auth (AgentBackend interface) ---

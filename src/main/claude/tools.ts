@@ -24,7 +24,7 @@ import type {
   UpdateSchedulePatch,
 } from '../scheduler/schedule-service';
 import { validateProjectDir } from '../validation';
-import type { EphemeralStreamEvent } from '../agent/types';
+import type { EphemeralStreamEvent, EphemeralSessionHandle } from '../agent/types';
 
 export { validateProjectDir };
 
@@ -544,7 +544,46 @@ export function spawnSpecCheck(
 }
 
 /**
- * Cancellable version of spec_refine for the async refinement path.
+ * Pool of held EphemeralSessionHandles for in-flight refine flows (#370 item 5).
+ * Keyed by `<projectDir>|<ticketId>`. The initial-questions pass spawns one and
+ * stashes it here; the after-answers pass picks it up so the second turn reuses
+ * the model's exploration context from the first. Idle sessions are disposed
+ * after 10 minutes to prevent leaked processes if the user walks away.
+ */
+const REFINE_SESSION_IDLE_TTL_MS = 600_000;
+interface PooledRefineSession {
+  handle: EphemeralSessionHandle;
+  idleTimer: NodeJS.Timeout;
+}
+const refineSessionPool = new Map<string, PooledRefineSession>();
+
+function refineSessionKey(projectDir: string, ticketId: string): string {
+  return `${projectDir}|${ticketId}`;
+}
+
+function disposeRefineSession(key: string): void {
+  const pooled = refineSessionPool.get(key);
+  if (!pooled) return;
+  clearTimeout(pooled.idleTimer);
+  try { pooled.handle.dispose(); } catch { /* noop */ }
+  refineSessionPool.delete(key);
+}
+
+function storeRefineSession(key: string, handle: EphemeralSessionHandle): void {
+  // Replace any pre-existing session for the same key.
+  disposeRefineSession(key);
+  const idleTimer = setTimeout(() => disposeRefineSession(key), REFINE_SESSION_IDLE_TTL_MS);
+  refineSessionPool.set(key, { handle, idleTimer });
+}
+
+export function _disposeAllRefineSessionsForTests(): void {
+  for (const key of [...refineSessionPool.keys()]) disposeRefineSession(key);
+}
+
+/**
+ * Cancellable version of spec_refine for the async refinement path. Reuses
+ * one Claude subprocess across the initial-questions and after-answers
+ * passes when both happen within the same refine flow (#370 item 5).
  */
 export function spawnSpecRefine(
   ticketId: string,
@@ -552,11 +591,11 @@ export function spawnSpecRefine(
   userAnswers?: string,
   onChunk?: (event: EphemeralStreamEvent) => void,
 ): { promise: Promise<Record<string, unknown>>; cancel: () => void } {
-  let innerCancel: (() => void) | null = null;
   let cancelled = false;
+  let activeDispose: (() => void) | null = null;
   const cancel = (): void => {
     cancelled = true;
-    innerCancel?.();
+    activeDispose?.();
   };
 
   const promise: Promise<Record<string, unknown>> = (async (): Promise<Record<string, unknown>> => {
@@ -564,19 +603,68 @@ export function spawnSpecRefine(
     if (!res.ok) return res.result;
     if (cancelled) throw new Error('Cancelled');
 
-    const prompt = userAnswers
-      ? buildSpecRefineAnswerPrompt(res.ctx.gate, res.ctx.ticketBody, userAnswers)
-      : buildSpecRefineInitialPrompt(res.ctx.gate, res.ctx.ticketBody);
+    const key = refineSessionKey(projectDir, ticketId);
 
-    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 300_000, onChunk);
-    innerCancel = epCancel;
-    if (cancelled) { epCancel(); throw new Error('Cancelled'); }
-
-    const result = await ep;
     if (userAnswers) {
+      // After-answers pass. Reuse the held session if we have one; otherwise
+      // cold-start with the full answer prompt.
+      const pooled = refineSessionPool.get(key);
+      const answerPrompt = buildSpecRefineAnswerPrompt(res.ctx.gate, res.ctx.ticketBody, userAnswers);
+
+      if (pooled) {
+        clearTimeout(pooled.idleTimer);
+        activeDispose = () => disposeRefineSession(key);
+        if (cancelled) { disposeRefineSession(key); throw new Error('Cancelled'); }
+        try {
+          const result = await pooled.handle.sendFollowUp(answerPrompt);
+          return applySpecRefineResult(ticketId, projectDir, result, true);
+        } finally {
+          disposeRefineSession(key);
+        }
+      }
+
+      // No pooled session (timed out, app restarted, etc.) — fall back to a
+      // cold ephemeral so the user's answers still produce a result.
+      const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(
+        answerPrompt, projectDir, 300_000, onChunk,
+      );
+      activeDispose = epCancel;
+      if (cancelled) { epCancel(); throw new Error('Cancelled'); }
+      const result = await ep;
       return applySpecRefineResult(ticketId, projectDir, result, true);
     }
+
+    // Initial-questions pass. Spawn a long-lived session so the after-answers
+    // pass can reuse it.
+    const initialPrompt = buildSpecRefineInitialPrompt(res.ctx.gate, res.ctx.ticketBody);
+    const handle = agentBackend.spawnEphemeralSession(initialPrompt, projectDir, 300_000, onChunk);
+    // Cancel during the initial pass must dispose the live handle even though
+    // it isn't pooled yet — otherwise SIGTERM never reaches the held subprocess.
+    activeDispose = (): void => {
+      try { handle.dispose(); } catch { /* noop */ }
+      disposeRefineSession(key);
+    };
+    if (cancelled) { handle.dispose(); throw new Error('Cancelled'); }
+
+    let result: string;
+    try {
+      result = await handle.initialResult;
+    } catch (err) {
+      // Initial pass failed — make sure nothing is held.
+      try { handle.dispose(); } catch { /* noop */ }
+      throw err;
+    }
+
+    if (cancelled) { handle.dispose(); throw new Error('Cancelled'); }
+
+    // Pool the session so the after-answers pass can reuse it. If the gate
+    // already passed without questions, dispose immediately — no follow-up.
     const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
+    if (passed) {
+      try { handle.dispose(); } catch { /* noop */ }
+    } else {
+      storeRefineSession(key, handle);
+    }
     return { passed, report: result };
   })();
 

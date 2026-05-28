@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { handleToolCall, validateProjectDir, _clearTicketBodyCacheForTests } from '../../src/main/claude/tools';
+import { handleToolCall, validateProjectDir, _clearTicketBodyCacheForTests, _disposeAllRefineSessionsForTests, spawnSpecRefine } from '../../src/main/claude/tools';
+import type { EphemeralSessionHandle } from '../../src/main/agent/types';
 
 // Mock the stackManager, agentBackend, and registry imports
 vi.mock('../../src/main/index', () => ({
@@ -10,6 +11,8 @@ vi.mock('../../src/main/index', () => ({
   },
   agentBackend: {
     runEphemeralAgent: vi.fn().mockResolvedValue(''),
+    spawnEphemeralAgent: vi.fn(),
+    spawnEphemeralSession: vi.fn(),
   },
   registry: {
     getProjectTicketConfig: vi.fn().mockReturnValue({ provider: 'github' }),
@@ -790,6 +793,112 @@ describe('MCP tools', () => {
       expect(prompt).toContain('Automated Visual Verification');
       expect(prompt).toContain('All Verification Automatable');
       expect(prompt).toContain('Replace resolved assumptions with verified facts');
+    });
+  });
+
+  describe('spawnSpecRefine — process reuse across initial+answers (#370 item 5)', () => {
+    let fakeHandle: EphemeralSessionHandle & {
+      initialResolve: (text: string) => void;
+      followUpResolve: (text: string) => void;
+      disposeMock: ReturnType<typeof vi.fn>;
+      sendFollowUpMock: ReturnType<typeof vi.fn>;
+    };
+
+    function makeFakeHandle(): typeof fakeHandle {
+      let initialResolve!: (text: string) => void;
+      let followUpResolve: ((text: string) => void) | null = null;
+      const initialResult = new Promise<string>((res) => { initialResolve = res; });
+      const sendFollowUpMock = vi.fn().mockImplementation((_prompt: string): Promise<string> => {
+        return new Promise<string>((res) => { followUpResolve = res; });
+      });
+      const disposeMock = vi.fn();
+      return {
+        initialResult,
+        sendFollowUp: sendFollowUpMock,
+        dispose: disposeMock,
+        initialResolve,
+        followUpResolve: (text: string) => { followUpResolve?.(text); },
+        disposeMock,
+        sendFollowUpMock,
+      };
+    }
+
+    beforeEach(() => {
+      _disposeAllRefineSessionsForTests();
+      _clearTicketBodyCacheForTests();
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body');
+      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
+      fakeHandle = makeFakeHandle();
+      vi.mocked(agentBackend.spawnEphemeralSession).mockReturnValue(fakeHandle);
+    });
+
+    it('initial pass with FAIL pools the handle for reuse', async () => {
+      const { promise } = spawnSpecRefine('42', '/proj');
+      fakeHandle.initialResolve(
+        '## Spec Quality Gate: FAIL\n\n### Questions Requiring User Answers\n1. What?',
+      );
+      const result = await promise as { passed: boolean; report: string };
+      expect(result.passed).toBe(false);
+      // Handle is still alive — pooled, not disposed.
+      expect(fakeHandle.disposeMock).not.toHaveBeenCalled();
+    });
+
+    it('after-answers pass reuses the pooled handle via sendFollowUp', async () => {
+      // Pool a session from the initial pass.
+      const { promise: initial } = spawnSpecRefine('42', '/proj');
+      fakeHandle.initialResolve('## Spec Quality Gate: FAIL\n\n### Questions\n1. What?');
+      await initial;
+
+      vi.mocked(updateTicketWithConfig).mockResolvedValue(undefined);
+
+      // After-answers pass — must use the same handle, not spawn a new one.
+      vi.mocked(agentBackend.spawnEphemeralAgent).mockClear();
+      const { promise: followUp } = spawnSpecRefine('42', '/proj', 'Answer text');
+
+      // Wait until sendFollowUp has actually been invoked, then resolve its result.
+      await vi.waitFor(() => expect(fakeHandle.sendFollowUpMock).toHaveBeenCalledTimes(1));
+      fakeHandle.followUpResolve(
+        '## Updated Ticket Body\n\n# Issue: Updated\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |',
+      );
+      await followUp;
+
+      expect(vi.mocked(agentBackend.spawnEphemeralAgent)).not.toHaveBeenCalled();
+      // After-answers pass disposes when done.
+      expect(fakeHandle.disposeMock).toHaveBeenCalled();
+    });
+
+    it('initial pass with PASS disposes immediately (no follow-up expected)', async () => {
+      const { promise } = spawnSpecRefine('42', '/proj');
+      fakeHandle.initialResolve(
+        '## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |',
+      );
+      await promise;
+      expect(fakeHandle.disposeMock).toHaveBeenCalled();
+    });
+
+    it('after-answers cold-starts via spawnEphemeralAgent when no pooled session exists', async () => {
+      // No pool — simulate stale session / app restart by calling directly with answers.
+      const coldEp = { promise: Promise.resolve('## Updated Ticket Body\n\n# Issue: Cold\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |'), cancel: vi.fn() };
+      vi.mocked(agentBackend.spawnEphemeralAgent).mockReturnValue(coldEp);
+      vi.mocked(updateTicketWithConfig).mockResolvedValue(undefined);
+
+      const { promise } = spawnSpecRefine('42', '/proj', 'Answer text');
+      await promise;
+
+      expect(vi.mocked(agentBackend.spawnEphemeralAgent)).toHaveBeenCalledTimes(1);
+      // The pooled session machinery was never touched on this fallback path.
+      expect(fakeHandle.sendFollowUpMock).not.toHaveBeenCalled();
+    });
+
+    it('cancel during the initial pass (after spawn) disposes the held handle', async () => {
+      const { promise, cancel } = spawnSpecRefine('42', '/proj');
+      // Wait until spawnEphemeralSession has actually been invoked.
+      await vi.waitFor(() => expect(agentBackend.spawnEphemeralSession).toHaveBeenCalled());
+      cancel();
+      // Unblock the initial await so the cancellation path can finalize.
+      fakeHandle.initialResolve('## Spec Quality Gate: FAIL\n\n### Questions\n1. What?');
+      await expect(promise).rejects.toThrow('Cancelled');
+      expect(fakeHandle.disposeMock).toHaveBeenCalled();
     });
   });
 });
