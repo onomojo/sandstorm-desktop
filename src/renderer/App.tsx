@@ -47,6 +47,7 @@ export default function App() {
     showSessionWarningModal,
     setShowSessionWarningModal,
     upsertRefinementSession,
+    appendRefinementStreamChunk,
     error,
   } = useAppStore();
 
@@ -106,7 +107,15 @@ export default function App() {
       upsertRefinementSession(data as Parameters<typeof upsertRefinementSession>[0]);
     });
 
-    return () => { unsubRefinement(); };
+    const unsubProgress = window.sandstorm.on('refinement:progress', (data: unknown) => {
+      const { sessionId, delta } = data as { sessionId: string; delta: string };
+      appendRefinementStreamChunk(sessionId, delta);
+    });
+
+    return () => {
+      unsubRefinement();
+      unsubProgress();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

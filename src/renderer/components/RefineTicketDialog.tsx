@@ -1,4 +1,4 @@
-import React, { useState, useMemo, useCallback, useEffect } from 'react';
+import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
 import { useAppStore, SpecGateResult, RefinementSession } from '../store';
 
 type LocalPhase = 'input' | 'starting';
@@ -149,6 +149,15 @@ export function RefineTicketDialog() {
     setShowRefineTicketDialog(false);
   };
 
+  const streamingOutput = session?.streamingOutput ?? '';
+  const streamPanelRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll the streaming panel to the bottom as new content arrives.
+  useEffect(() => {
+    const el = streamPanelRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [streamingOutput]);
+
   const isRunning = session?.status === 'running' || localPhase === 'starting';
   const isStarting = localPhase === 'starting';
   const noSession = !session;
@@ -228,11 +237,22 @@ export function RefineTicketDialog() {
           )}
 
           {isRunning && (
-            <div className="text-xs text-sandstorm-muted flex items-center gap-2" data-testid="refine-running">
-              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="animate-spin">
-                <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="48" strokeDashoffset="32"/>
-              </svg>
-              {isStarting ? 'Starting stack…' : 'Running spec gate…'}
+            <div className="space-y-2" data-testid="refine-running">
+              <div className="text-xs text-sandstorm-muted flex items-center gap-2">
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" className="animate-spin">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="48" strokeDashoffset="32"/>
+                </svg>
+                {isStarting ? 'Starting stack…' : 'Running spec gate…'}
+              </div>
+              {!isStarting && (
+                <div
+                  ref={streamPanelRef}
+                  className="h-32 overflow-y-auto bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 font-mono text-[11px] text-sandstorm-muted whitespace-pre-wrap"
+                  data-testid="refine-stream-panel"
+                >
+                  {streamingOutput || <span className="opacity-50">Waiting for output…</span>}
+                </div>
+              )}
             </div>
           )}
 
