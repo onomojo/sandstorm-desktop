@@ -15,6 +15,21 @@ export type EphemeralStreamEvent =
   | { kind: 'text'; delta: string }
   | { kind: 'tool_use'; name: string; summary: string };
 
+/**
+ * Long-lived stream-json subprocess that can answer follow-up prompts
+ * (#370 item 5). spec_refine spawns one of these for the initial
+ * questions pass, then reuses the same process to feed the user's
+ * answers — keeping the model's exploration context warm across turns.
+ */
+export interface EphemeralSessionHandle {
+  /** Resolves with the assistant's text response to the initial prompt. */
+  initialResult: Promise<string>;
+  /** Send a follow-up prompt on the same process. Resolves with the assistant's text response. */
+  sendFollowUp(prompt: string): Promise<string>;
+  /** Terminate the held subprocess. Idempotent. */
+  dispose(): void;
+}
+
 export interface ChatMessage {
   role: 'user' | 'assistant';
   content: string;
@@ -107,6 +122,19 @@ export interface AgentBackend {
     timeoutMs?: number,
     onChunk?: (event: EphemeralStreamEvent) => void,
   ): { promise: Promise<string>; cancel: () => void };
+
+  /**
+   * Spawn a long-lived stream-json agent process that can answer multiple
+   * prompts in sequence (#370 item 5). Used by spec_refine to reuse the
+   * model's exploration context across the initial-questions and
+   * after-answers passes instead of cold-spawning twice.
+   */
+  spawnEphemeralSession(
+    initialPrompt: string,
+    projectDir: string,
+    timeoutMs?: number,
+    onChunk?: (event: EphemeralStreamEvent) => void,
+  ): EphemeralSessionHandle;
 
   // --- Authentication ---
 
