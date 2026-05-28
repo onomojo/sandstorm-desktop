@@ -1,6 +1,19 @@
 import { execFile } from 'child_process';
+import fs from 'fs';
 import path from 'path';
-import { getSandstormScriptStatus } from './ticket-updater';
+
+type ScriptStatus = 'ok' | 'missing' | 'not_executable';
+
+function getSandstormScriptStatus(projectDir: string, scriptName: string): ScriptStatus {
+  const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', scriptName);
+  if (!fs.existsSync(scriptPath)) return 'missing';
+  try {
+    fs.accessSync(scriptPath, fs.constants.X_OK);
+    return 'ok';
+  } catch {
+    return 'not_executable';
+  }
+}
 
 export interface TicketComment {
   author: string;
