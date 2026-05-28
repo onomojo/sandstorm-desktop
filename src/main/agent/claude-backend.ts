@@ -436,7 +436,6 @@ export class ClaudeBackend implements AgentBackend {
       '-p', prompt,
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
-      '--verbose',
     ];
 
     const spawnedAt = Date.now();
@@ -445,9 +444,19 @@ export class ClaudeBackend implements AgentBackend {
     let isCancelled = false;
     let timingWritten = false;
 
+    // Match the persistent session's env-trim (#302, #303): skip loading
+    // the user's global ~/.claude/CLAUDE.md and point the plugin cache at
+    // an empty dir so globally-installed Claude Code plugins (Gmail/Gcal/
+    // Gdrive MCPs, LSP, skill-creator, etc.) don't register on every refine
+    // spawn. Each tool-call turn would otherwise re-send a bloated system
+    // prompt. #370.
     const child = spawn(claudeBin, args, {
       cwd: projectDir,
-      env: getClaudeEnv(),
+      env: {
+        ...getClaudeEnv(),
+        CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
+        CLAUDE_CODE_PLUGIN_CACHE_DIR: this.ensureEmptyPluginCacheDir(),
+      },
       stdio: ['ignore', 'pipe', 'pipe'],
     });
 
