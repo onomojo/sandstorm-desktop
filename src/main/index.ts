@@ -277,6 +277,7 @@ async function initializeApp(): Promise<void> {
                 handleToolCall('spec_check', { ticketId, projectDir }) as Promise<import('./control-plane/ticket-spec').SpecGateReport>,
               (ticketId, projectDir, userAnswers) =>
                 handleToolCall('spec_refine', { ticketId, projectDir, userAnswers }) as Promise<import('./control-plane/ticket-spec').SpecGateReport>,
+              (projectDir) => registry.getProjectTicketConfig(projectDir),
             );
             const deps = buildRefineToCommentsDeps(
               (ticketId, projectDir) => runSpecCheck(ticketId, projectDir, specDeps),
