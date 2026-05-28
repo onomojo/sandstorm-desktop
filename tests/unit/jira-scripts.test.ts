@@ -527,3 +527,121 @@ describe('update-ticket.sh', () => {
     expect(result.stderr).toContain('400');
   });
 });
+
+// ---------------------------------------------------------------------------
+// create-ticket.sh
+// ---------------------------------------------------------------------------
+
+describe('create-ticket.sh', () => {
+  const CREATE_ENV = { ...VALID_ENV, JIRA_PROJECT_KEY: 'PROJ' };
+  const CREATED_RESPONSE = JSON.stringify({
+    id: '10001',
+    key: 'PROJ-456',
+    self: 'https://test.atlassian.net/rest/api/2/issue/10001',
+  });
+
+  it('exits 1 with usage when title is missing', async () => {
+    const result = await runScript('create-ticket.sh', [], CREATE_ENV, tmpDir);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Usage:');
+  });
+
+  it('exits 1 with usage when body is missing', async () => {
+    const result = await runScript('create-ticket.sh', ['title only'], CREATE_ENV, tmpDir);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Usage:');
+  });
+
+  it('exits 1 and names all missing env vars (including JIRA_PROJECT_KEY)', async () => {
+    const result = await runScript('create-ticket.sh', ['t', 'b'], {}, tmpDir);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('JIRA_URL');
+    expect(result.stderr).toContain('JIRA_USERNAME');
+    expect(result.stderr).toContain('JIRA_API_TOKEN');
+    expect(result.stderr).toContain('JIRA_PROJECT_KEY');
+    expect(result.stderr).toContain('restart the desktop app');
+  });
+
+  it('exits 1 when only JIRA_PROJECT_KEY is missing', async () => {
+    const { JIRA_PROJECT_KEY: _, ...env } = CREATE_ENV;
+    const result = await runScript('create-ticket.sh', ['t', 'b'], env, tmpDir);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('JIRA_PROJECT_KEY');
+  });
+
+  it('rejects JIRA_URL with REST path', async () => {
+    const env = { ...CREATE_ENV, JIRA_URL: 'https://test.atlassian.net/rest/api/2' };
+    const result = await runScript('create-ticket.sh', ['t', 'b'], env, tmpDir);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('site root');
+  });
+
+  it('POSTs to /rest/api/2/issue and prints the browse URL on success', async () => {
+    stub.setRoutes([{ method: 'POST', urlContains: '/rest/api/2/issue', status: 201, body: CREATED_RESPONSE }]);
+    const result = await runScript('create-ticket.sh', ['Title', 'Body'], { ...CREATE_ENV, ...stub.env() }, tmpDir);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('https://test.atlassian.net/browse/PROJ-456');
+
+    const log = stub.getLog();
+    expect(log[0]).toMatchObject({ method: 'POST', url: expect.stringContaining('/rest/api/2/issue') });
+  });
+
+  it('sends the expected fields in the POST payload', async () => {
+    stub.setRoutes([{ method: 'POST', urlContains: '/rest/api/2/issue', status: 201, body: CREATED_RESPONSE }]);
+    await runScript('create-ticket.sh', ['My Title', 'My Body'], { ...CREATE_ENV, ...stub.env() }, tmpDir);
+
+    const log = stub.getLog();
+    const parsed = JSON.parse(log[0].data) as { fields: Record<string, unknown> };
+    expect(parsed.fields).toMatchObject({
+      project: { key: 'PROJ' },
+      summary: 'My Title',
+      description: 'My Body',
+      issuetype: { name: 'Task' },
+    });
+  });
+
+  it('honors JIRA_ISSUE_TYPE override', async () => {
+    stub.setRoutes([{ method: 'POST', urlContains: '/rest/api/2/issue', status: 201, body: CREATED_RESPONSE }]);
+    const env = { ...CREATE_ENV, ...stub.env(), JIRA_ISSUE_TYPE: 'Story' };
+    await runScript('create-ticket.sh', ['Title', 'Body'], env, tmpDir);
+
+    const log = stub.getLog();
+    const parsed = JSON.parse(log[0].data) as { fields: { issuetype: { name: string } } };
+    expect(parsed.fields.issuetype.name).toBe('Story');
+  });
+
+  it('round-trips multi-line body with quotes and backslashes', async () => {
+    stub.setRoutes([{ method: 'POST', urlContains: '/rest/api/2/issue', status: 201, body: CREATED_RESPONSE }]);
+    const body = 'Line 1\nLine 2 with "quotes"\nLine 3 with \\backslash\\';
+    await runScript('create-ticket.sh', ['Title', body], { ...CREATE_ENV, ...stub.env() }, tmpDir);
+
+    const log = stub.getLog();
+    const parsed = JSON.parse(log[0].data) as { fields: { description: string } };
+    expect(parsed.fields.description).toBe(body);
+  });
+
+  it('exits 1 and reports HTTP error on non-2xx response', async () => {
+    stub.setRoutes([{ method: 'POST', urlContains: '/rest/api/2/issue', status: 400, body: '{"errorMessages":["Field required: priority"]}' }]);
+    const result = await runScript('create-ticket.sh', ['t', 'b'], { ...CREATE_ENV, ...stub.env() }, tmpDir);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('400');
+  });
+
+  it('exits 1 when API responds with no issue key', async () => {
+    stub.setRoutes([{ method: 'POST', urlContains: '/rest/api/2/issue', status: 201, body: '{"id":"10001"}' }]);
+    const result = await runScript('create-ticket.sh', ['t', 'b'], { ...CREATE_ENV, ...stub.env() }, tmpDir);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('issue key');
+  });
+
+  it('normalises JIRA_URL trailing slash (no double-slashes in the request)', async () => {
+    stub.setRoutes([{ method: 'POST', urlContains: '/rest/api/2/issue', status: 201, body: CREATED_RESPONSE }]);
+    const env = { ...CREATE_ENV, ...stub.env(), JIRA_URL: 'https://test.atlassian.net/' };
+    const result = await runScript('create-ticket.sh', ['t', 'b'], env, tmpDir);
+    expect(result.exitCode).toBe(0);
+    const log = stub.getLog();
+    expect(log[0].url).not.toContain('//rest');
+    // And the browse URL should also be slash-clean
+    expect(result.stdout.trim()).toBe('https://test.atlassian.net/browse/PROJ-456');
+  });
+});

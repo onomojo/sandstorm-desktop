@@ -60,7 +60,7 @@ RESPONSE=$(curl -s -w "\n%{http_code}" \
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 if [ "$HTTP_CODE" -lt 200 ] || [ "$HTTP_CODE" -ge 300 ]; then
   echo "Error: update failed (HTTP $HTTP_CODE)" >&2
-  RESP_BODY=$(echo "$RESPONSE" | head -n -1)
+  RESP_BODY=$(echo "$RESPONSE" | sed '$d')
   echo "$RESP_BODY" | jq -r '.errorMessages[]? // empty' >&2 2>/dev/null || true
   exit 1
 fi

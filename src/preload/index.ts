@@ -211,7 +211,7 @@ export interface SandstormAPI {
     specRefineAsync: (sessionId: string, ticketId: string, projectDir: string, userAnswers: string) => Promise<void>;
     cancelRefinement: (sessionId: string) => Promise<void>;
     listRefinements: () => Promise<unknown[]>;
-    create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
+    create: (projectDir: string, title: string, body: string) => Promise<{ url: string; ticketId: string }>;
   };
   pr: {
     draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
