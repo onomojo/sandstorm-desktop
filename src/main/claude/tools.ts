@@ -9,7 +9,7 @@
 
 import path from 'path';
 import { stackManager, agentBackend, registry } from '../index';
-import { fetchTicketContext, getScriptStatus } from '../control-plane/ticket-fetcher';
+import { fetchTicketWithConfig, updateTicketWithConfig } from '../control-plane/ticket-config';
 import { getSpecQualityGate } from '../spec-quality-gate';
 import {
   createSchedule,
@@ -23,7 +23,6 @@ import type {
   UpdateSchedulePatch,
 } from '../scheduler/schedule-service';
 import { validateProjectDir } from '../validation';
-import { updateTicketBody } from '../control-plane/ticket-updater';
 
 export { validateProjectDir };
 
@@ -190,39 +189,28 @@ async function resolveSpecContext(
   projectDir: string,
   toolName: string,
 ): Promise<{ ok: false; result: Record<string, unknown> } | { ok: true; ctx: SpecContext }> {
-  const scriptPath = path.join(projectDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
-  console.log(`[sandstorm] ${toolName}: projectDir="${projectDir}", scriptPath="${scriptPath}"`);
+  console.log(`[sandstorm] ${toolName}: projectDir="${projectDir}", ticketId="${ticketId}"`);
 
-  const scriptStatus = getScriptStatus(projectDir);
-  if (scriptStatus === 'missing') {
+  const config = registry.getProjectTicketConfig(projectDir);
+  if (!config) {
     return {
       ok: false,
       result: {
         passed: false,
         reason:
-          `fetch-ticket.sh not found at ${scriptPath}. ` +
-          "Run 'sandstorm init' to auto-generate it for your ticket system (Jira or GitHub Issues), " +
-          "or create it manually: the script receives a ticket ID as $1 and must output the ticket body to stdout.",
-      },
-    };
-  }
-  if (scriptStatus === 'not_executable') {
-    return {
-      ok: false,
-      result: {
-        passed: false,
-        reason: `fetch-ticket.sh exists but is not executable. Fix with: chmod +x ${scriptPath}`,
+          'No ticket provider configured for this project. ' +
+          'Configure GitHub or Jira in Project Settings.',
       },
     };
   }
 
-  const ticketBody = await fetchTicketContext(ticketId, projectDir);
+  const ticketBody = await fetchTicketWithConfig(ticketId, config, projectDir);
   if (!ticketBody) {
     return {
       ok: false,
       result: {
         passed: false,
-        reason: `fetch-ticket.sh ran but returned no output for ticket "${ticketId}". Check the script's implementation and that the ticket ID is correct.`,
+        reason: `Ticket provider returned no output for ticket "${ticketId}". Check that the ticket ID is correct and credentials are valid.`,
       },
     };
   }
@@ -429,10 +417,21 @@ async function applySpecRefineResult(
   const bodyMatch = rawResult.match(/## Updated Ticket Body\s*\n([\s\S]*?)(?=\n## Spec Quality Gate)/);
   const updatedBody = bodyMatch ? bodyMatch[1].trim() : null;
 
-  // Commit the refined body back to GitHub (#318).
+  // Commit the refined body back to the ticket system.
   if (updatedBody) {
+    const config = registry.getProjectTicketConfig(projectDir);
+    if (!config) {
+      return {
+        passed: false,
+        report: rawResult,
+        updatedBody,
+        error:
+          'Refinement evaluated successfully but no ticket provider is configured, so the updated body ' +
+          'could not be written back. Configure GitHub or Jira in Project Settings.',
+      };
+    }
     try {
-      await updateTicketBody(ticketId, projectDir, updatedBody);
+      await updateTicketWithConfig(ticketId, updatedBody, config, projectDir);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return {

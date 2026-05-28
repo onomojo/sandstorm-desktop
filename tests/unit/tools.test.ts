@@ -11,7 +11,9 @@ vi.mock('../../src/main/index', () => ({
   agentBackend: {
     runEphemeralAgent: vi.fn().mockResolvedValue(''),
   },
-  registry: {},
+  registry: {
+    getProjectTicketConfig: vi.fn().mockReturnValue({ provider: 'github' }),
+  },
 }));
 
 vi.mock('../../src/main/scheduler', () => ({
@@ -39,32 +41,28 @@ vi.mock('../../src/main/scheduler/scheduler-manager', () => ({
   syncAllProjectsCrontab: vi.fn().mockResolvedValue(undefined),
 }));
 
-vi.mock('../../src/main/control-plane/ticket-fetcher', () => ({
-  fetchTicketContext: vi.fn().mockResolvedValue(null),
-  getScriptStatus: vi.fn().mockReturnValue('ok'),
+vi.mock('../../src/main/control-plane/ticket-config', () => ({
+  fetchTicketWithConfig: vi.fn().mockResolvedValue(null),
+  updateTicketWithConfig: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../src/main/spec-quality-gate', () => ({
   getSpecQualityGate: vi.fn().mockReturnValue(''),
 }));
 
-vi.mock('../../src/main/control-plane/ticket-updater', () => ({
-  updateTicketBody: vi.fn().mockResolvedValue(undefined),
-  getUpdateScriptStatus: vi.fn().mockReturnValue('ok'),
-}));
-
-import { stackManager, agentBackend } from '../../src/main/index';
-import { fetchTicketContext, getScriptStatus } from '../../src/main/control-plane/ticket-fetcher';
+import { stackManager, agentBackend, registry } from '../../src/main/index';
+import { fetchTicketWithConfig, updateTicketWithConfig } from '../../src/main/control-plane/ticket-config';
 import { getSpecQualityGate } from '../../src/main/spec-quality-gate';
 import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from '../../src/main/scheduler';
 import { syncAllProjectsCrontab } from '../../src/main/scheduler/scheduler-manager';
-import { updateTicketBody } from '../../src/main/control-plane/ticket-updater';
+
+const mockGetProviderConfig = vi.mocked(registry.getProjectTicketConfig);
 
 describe('MCP tools', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    // Default: script exists and is executable (individual tests override as needed)
-    vi.mocked(getScriptStatus).mockReturnValue('ok');
+    // Default: provider is configured as GitHub
+    mockGetProviderConfig.mockReturnValue({ provider: 'github' });
   });
 
   describe('handleToolCall — model passthrough', () => {
@@ -103,26 +101,41 @@ describe('MCP tools', () => {
         'test-stack',
         'Fix a typo',
         'auto',
-        { gateApproved: undefined, forceBypass: undefined }
+        expect.anything()
       );
     });
 
-    it('passes concrete model through for dispatch_task', async () => {
+    it('passes gateApproved through to dispatchTask', async () => {
       await handleToolCall('dispatch_task', {
         stackId: 'test-stack',
-        prompt: 'Refactor auth',
-        model: 'sonnet',
+        prompt: 'Some task',
+        gateApproved: true,
       });
 
       expect(stackManager.dispatchTask).toHaveBeenCalledWith(
         'test-stack',
-        'Refactor auth',
-        'sonnet',
-        { gateApproved: undefined, forceBypass: undefined }
+        'Some task',
+        undefined,
+        { gateApproved: true, forceBypass: undefined }
       );
     });
 
-    it('treats omitted model as undefined', async () => {
+    it('passes forceBypass through to dispatchTask', async () => {
+      await handleToolCall('dispatch_task', {
+        stackId: 'test-stack',
+        prompt: 'Some task',
+        forceBypass: true,
+      });
+
+      expect(stackManager.dispatchTask).toHaveBeenCalledWith(
+        'test-stack',
+        'Some task',
+        undefined,
+        { gateApproved: undefined, forceBypass: true }
+      );
+    });
+
+    it('passes no gate flags through when neither provided', async () => {
       await handleToolCall('dispatch_task', {
         stackId: 'test-stack',
         prompt: 'Some task',
@@ -138,31 +151,18 @@ describe('MCP tools', () => {
   });
 
   describe('handleToolCall — spec_check', () => {
-    it('returns passed:false with reason when fetch-ticket.sh is missing', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('missing');
+    it('returns passed:false with reason when no ticket provider is configured', async () => {
+      mockGetProviderConfig.mockReturnValue(null);
       const result = await handleToolCall('spec_check', {
         ticketId: '999',
         projectDir: '/proj',
       }) as { passed: boolean; reason: string };
       expect(result.passed).toBe(false);
-      expect(result.reason).toContain('fetch-ticket.sh not found');
-      expect(result.reason).toContain('sandstorm init');
+      expect(result.reason).toContain('No ticket provider configured');
     });
 
-    it('returns passed:false with reason when fetch-ticket.sh is not executable', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('not_executable');
-      const result = await handleToolCall('spec_check', {
-        ticketId: '999',
-        projectDir: '/proj',
-      }) as { passed: boolean; reason: string };
-      expect(result.passed).toBe(false);
-      expect(result.reason).toContain('not executable');
-      expect(result.reason).toContain('chmod');
-    });
-
-    it('returns passed:false with reason when script runs but returns no output', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('ok');
-      vi.mocked(fetchTicketContext).mockResolvedValue(null);
+    it('returns passed:false with reason when fetch returns no output', async () => {
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue(null);
       const result = await handleToolCall('spec_check', {
         ticketId: '999',
         projectDir: '/proj',
@@ -172,7 +172,7 @@ describe('MCP tools', () => {
     });
 
     it('returns error when quality gate is not configured', async () => {
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Test\nSome body');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Test\nSome body');
       vi.mocked(getSpecQualityGate).mockReturnValue('');
       const result = await handleToolCall('spec_check', {
         ticketId: '42',
@@ -184,7 +184,7 @@ describe('MCP tools', () => {
     });
 
     it('spawns ephemeral agent and returns passed=true when report says PASS', async () => {
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Fix bug\nDetailed description');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Fix bug\nDetailed description');
       vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: PASS\n\n### Results\n| Criterion | Result |\n|---|---|\n| Problem Statement | PASS |'
@@ -204,7 +204,7 @@ describe('MCP tools', () => {
     });
 
     it('returns passed=false when report says FAIL', async () => {
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Vague task');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Vague task');
       vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: FAIL\n\n### Gaps\n- [ ] Missing problem statement'
@@ -219,7 +219,7 @@ describe('MCP tools', () => {
     });
 
     it('spec_check prompt includes assumption resolution phase', async () => {
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Test\nBody');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Test\nBody');
       vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: PASS\n\n### Assumption Resolution\n| # | Assumption | Type | Resolution |\n|---|---|---|---|'
@@ -368,39 +368,30 @@ describe('MCP tools', () => {
     });
 
     it('spec_check accepts valid absolute projectDir', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('missing');
+      mockGetProviderConfig.mockReturnValue(null);
       const result = await handleToolCall('spec_check', {
         ticketId: '42',
         projectDir: '/home/user/my-project',
       }) as { passed: boolean; reason: string };
-      // Should proceed to script check, not fail on validation
+      // Should proceed past validation and fail on provider config
       expect(result.passed).toBe(false);
-      expect(result.reason).toContain('/home/user/my-project/.sandstorm/scripts/fetch-ticket.sh');
+      expect(result.reason).toContain('No ticket provider configured');
     });
   });
 
-  describe('handleToolCall — error messages include full paths', () => {
-    it('spec_check missing script error includes absolute path', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('missing');
+  describe('handleToolCall — error messages', () => {
+    it('spec_check unconfigured provider error is actionable', async () => {
+      mockGetProviderConfig.mockReturnValue(null);
       const result = await handleToolCall('spec_check', {
         ticketId: '42',
         projectDir: '/home/user/my-project',
       }) as { passed: boolean; reason: string };
-      expect(result.reason).toContain('/home/user/my-project/.sandstorm/scripts/fetch-ticket.sh');
-    });
-
-    it('spec_check not-executable error includes absolute path', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('not_executable');
-      const result = await handleToolCall('spec_check', {
-        ticketId: '42',
-        projectDir: '/home/user/my-project',
-      }) as { passed: boolean; reason: string };
-      expect(result.reason).toContain('chmod +x /home/user/my-project/.sandstorm/scripts/fetch-ticket.sh');
+      expect(result.reason).toContain('No ticket provider configured');
+      expect(result.reason).toContain('Project Settings');
     });
 
     it('spec_check no-quality-gate error includes absolute path', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('ok');
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Ticket body');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Ticket body');
       vi.mocked(getSpecQualityGate).mockReturnValue('');
       const result = await handleToolCall('spec_check', {
         ticketId: '42',
@@ -409,18 +400,17 @@ describe('MCP tools', () => {
       expect(result.error).toContain('/home/user/my-project/.sandstorm/spec-quality-gate.md');
     });
 
-    it('spec_refine missing script error includes absolute path', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('missing');
+    it('spec_refine unconfigured provider error is actionable', async () => {
+      mockGetProviderConfig.mockReturnValue(null);
       const result = await handleToolCall('spec_refine', {
         ticketId: '42',
         projectDir: '/home/user/my-project',
       }) as { passed: boolean; reason: string };
-      expect(result.reason).toContain('/home/user/my-project/.sandstorm/scripts/fetch-ticket.sh');
+      expect(result.reason).toContain('No ticket provider configured');
     });
 
     it('spec_refine no-quality-gate error includes absolute path', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('ok');
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Ticket body');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Ticket body');
       vi.mocked(getSpecQualityGate).mockReturnValue('');
       const result = await handleToolCall('spec_refine', {
         ticketId: '42',
@@ -553,19 +543,18 @@ describe('MCP tools', () => {
   });
 
   describe('handleToolCall — spec_refine', () => {
-    it('returns passed:false with reason when fetch-ticket.sh is missing', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('missing');
+    it('returns passed:false with reason when no ticket provider is configured', async () => {
+      mockGetProviderConfig.mockReturnValue(null);
       const result = await handleToolCall('spec_refine', {
         ticketId: '999',
         projectDir: '/proj',
       }) as { passed: boolean; reason: string };
       expect(result.passed).toBe(false);
-      expect(result.reason).toContain('fetch-ticket.sh not found');
+      expect(result.reason).toContain('No ticket provider configured');
     });
 
-    it('returns passed:false with reason when script runs but returns no output', async () => {
-      vi.mocked(getScriptStatus).mockReturnValue('ok');
-      vi.mocked(fetchTicketContext).mockResolvedValue(null);
+    it('returns passed:false with reason when fetch returns no output', async () => {
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue(null);
       const result = await handleToolCall('spec_refine', {
         ticketId: '999',
         projectDir: '/proj',
@@ -575,7 +564,7 @@ describe('MCP tools', () => {
     });
 
     it('returns initial gaps when called without userAnswers', async () => {
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Incomplete spec');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Incomplete spec');
       vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: FAIL\n\n### Questions to Resolve Gaps\n1. What problem does this solve?'
@@ -591,7 +580,7 @@ describe('MCP tools', () => {
     });
 
     it('incorporates user answers and re-evaluates when called with userAnswers', async () => {
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Incomplete spec');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Incomplete spec');
       vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Updated Ticket Body\n\n# Issue: Better spec\nThe problem is X.\n\n## Spec Quality Gate: PASS\n\n### Results\n| Criterion | Result |\n|---|---|\n| Problem Statement | PASS |'
@@ -611,16 +600,13 @@ describe('MCP tools', () => {
       expect(result.updatedBody).toContain('Better spec');
     });
 
-    // #318 — refine must write the updated body back to GitHub. Without
-    // this, refinements live only in the renderer's transient state and
-    // are lost between sessions.
-    describe('GitHub write-back (#318)', () => {
+    describe('ticket write-back', () => {
       beforeEach(() => {
-        vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: stale');
+        vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: stale');
         vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement');
       });
 
-      it('calls updateTicketBody with the refined body when refinement produces one', async () => {
+      it('calls updateTicketWithConfig with the refined body when refinement produces one', async () => {
         vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
           '## Updated Ticket Body\n\n# Issue: Refined\nWith answers.\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|',
         );
@@ -631,15 +617,16 @@ describe('MCP tools', () => {
           userAnswers: 'My answer',
         });
 
-        expect(updateTicketBody).toHaveBeenCalledTimes(1);
-        expect(updateTicketBody).toHaveBeenCalledWith(
+        expect(updateTicketWithConfig).toHaveBeenCalledTimes(1);
+        expect(updateTicketWithConfig).toHaveBeenCalledWith(
           '42',
-          '/proj',
           '# Issue: Refined\nWith answers.',
+          expect.objectContaining({ provider: 'github' }),
+          '/proj',
         );
       });
 
-      it('writes back even when the refinement still FAILs (so iterative loops build on each other)', async () => {
+      it('writes back even when the refinement still FAILs (iterative loops)', async () => {
         vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
           '## Updated Ticket Body\n\n# Issue: Refined v1\nPartial.\n\n## Spec Quality Gate: FAIL\n\n### Questions to Resolve Remaining Gaps\n1. Still need X?',
         );
@@ -650,13 +637,12 @@ describe('MCP tools', () => {
           userAnswers: 'Partial answer',
         }) as { passed: boolean; updatedBody: string | null };
 
-        expect(updateTicketBody).toHaveBeenCalledOnce();
-        expect(updateTicketBody).toHaveBeenCalledWith('42', '/proj', '# Issue: Refined v1\nPartial.');
+        expect(updateTicketWithConfig).toHaveBeenCalledOnce();
         expect(result.passed).toBe(false);
         expect(result.updatedBody).toContain('Refined v1');
       });
 
-      it('does NOT call updateTicketBody on the initial call (no userAnswers, no updatedBody)', async () => {
+      it('does NOT call updateTicketWithConfig on the initial call (no userAnswers)', async () => {
         vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
           '## Spec Quality Gate: FAIL\n\n### Questions to Resolve Gaps\n1. What problem?',
         );
@@ -666,14 +652,14 @@ describe('MCP tools', () => {
           projectDir: '/proj',
         });
 
-        expect(updateTicketBody).not.toHaveBeenCalled();
+        expect(updateTicketWithConfig).not.toHaveBeenCalled();
       });
 
-      it('returns an error when gh write-back fails so the renderer can surface it', async () => {
+      it('returns an error when write-back fails so the renderer can surface it', async () => {
         vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
           '## Updated Ticket Body\n\n# Issue: Refined\n\n## Spec Quality Gate: PASS',
         );
-        vi.mocked(updateTicketBody).mockRejectedValueOnce(new Error('gh: not authenticated'));
+        vi.mocked(updateTicketWithConfig).mockRejectedValueOnce(new Error('gh: not authenticated'));
 
         const result = await handleToolCall('spec_refine', {
           ticketId: '42',
@@ -687,7 +673,6 @@ describe('MCP tools', () => {
       });
 
       it('returns an error when refinement should have produced an updatedBody but did not', async () => {
-        // Agent ignored the format and skipped the "## Updated Ticket Body" section.
         vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
           '## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|',
         );
@@ -698,7 +683,7 @@ describe('MCP tools', () => {
           userAnswers: 'A',
         }) as { passed: boolean; updatedBody: string | null; error?: string };
 
-        expect(updateTicketBody).not.toHaveBeenCalled();
+        expect(updateTicketWithConfig).not.toHaveBeenCalled();
         expect(result.passed).toBe(false);
         expect(result.error).toMatch(/did not produce/i);
         expect(result.updatedBody).toBeNull();
@@ -706,7 +691,7 @@ describe('MCP tools', () => {
     });
 
     it('spec_refine initial prompt includes assumption resolution and enhanced checks', async () => {
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Test\nBody');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Test\nBody');
       vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: FAIL\n\n### Questions to Resolve Gaps\n1. What is X?'
@@ -729,7 +714,7 @@ describe('MCP tools', () => {
     });
 
     it('spec_refine refinement prompt includes enhanced evaluation criteria', async () => {
-      vi.mocked(fetchTicketContext).mockResolvedValue('# Issue: Test\nBody');
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Test\nBody');
       vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Updated Ticket Body\n\n# Issue: Updated\n\n## Spec Quality Gate: PASS\n\n### Results\n| Criterion | Result |\n|---|---|\n| Problem Statement | PASS |'

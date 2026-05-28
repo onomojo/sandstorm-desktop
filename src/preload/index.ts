@@ -35,11 +35,8 @@ export interface SandstormAPI {
       missingSpecQualityGate?: boolean;
       missingReviewPrompt?: boolean;
       networksMigrated?: boolean;
-      missingUpdateScript?: boolean;
-      missingCreatePrScript?: boolean;
-      missingFetchScript?: boolean;
-      missingStartScript?: boolean;
-      detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
+      legacyPortMappings?: boolean;
+      ticketProviderUnconfigured?: boolean;
     }>;
     autoDetectVerify: (directory: string) => Promise<{
       verifyScript: string;
@@ -50,25 +47,6 @@ export interface SandstormAPI {
       verifyScript: string,
       serviceDescriptions: Record<string, string>,
     ) => Promise<{ success: boolean; error?: string }>;
-    installUpdateScript: (
-      directory: string,
-      provider: 'github' | 'jira' | 'skeleton',
-    ) => Promise<{ success: boolean; path?: string; error?: string }>;
-    installCreatePrScript: (
-      directory: string,
-      provider: 'github' | 'jira' | 'skeleton',
-    ) => Promise<{ success: boolean; path?: string; error?: string }>;
-    installFetchScript: (
-      directory: string,
-      provider: 'github' | 'jira' | 'skeleton',
-    ) => Promise<{ success: boolean; path?: string; error?: string }>;
-    installStartScript: (
-      directory: string,
-      provider: 'github' | 'jira' | 'skeleton',
-    ) => Promise<{ success: boolean; path?: string; error?: string }>;
-    detectTicketProvider: (
-      directory: string,
-    ) => Promise<{ provider: 'github' | 'jira' | 'skeleton' }>;
     generateCompose: (directory: string) => Promise<{
       success: boolean;
       yaml?: string;
@@ -171,6 +149,26 @@ export interface SandstormAPI {
     removeProject: (projectDir: string) => Promise<void>;
     getEffective: (projectDir: string) => Promise<{ inner_model: string; outer_model: string }>;
   };
+  projectTicketConfig: {
+    get: (projectDir: string) => Promise<{
+      provider: 'github' | 'jira';
+      jira_url?: string | null;
+      jira_username?: string | null;
+      jira_api_token?: string | null;
+      jira_project_key?: string | null;
+      jira_issue_type?: string | null;
+      ticket_prefix?: string | null;
+    } | null>;
+    set: (projectDir: string, config: {
+      provider: 'github' | 'jira';
+      jira_url?: string | null;
+      jira_username?: string | null;
+      jira_api_token?: string | null;
+      jira_project_key?: string | null;
+      jira_issue_type?: string | null;
+      ticket_prefix?: string | null;
+    }) => Promise<void>;
+  };
   session: {
     getState: () => Promise<unknown>;
     getSettings: () => Promise<unknown>;
@@ -232,16 +230,6 @@ const api: SandstormAPI = {
     autoDetectVerify: (directory) => ipcRenderer.invoke('projects:autoDetectVerify', directory),
     saveMigration: (directory: string, verifyScript: string, serviceDescriptions: Record<string, string>) =>
       ipcRenderer.invoke('projects:saveMigration', directory, verifyScript, serviceDescriptions),
-    installUpdateScript: (directory: string, provider: 'github' | 'jira' | 'skeleton') =>
-      ipcRenderer.invoke('projects:installUpdateScript', directory, provider),
-    installCreatePrScript: (directory: string, provider: 'github' | 'jira' | 'skeleton') =>
-      ipcRenderer.invoke('projects:installCreatePrScript', directory, provider),
-    installFetchScript: (directory: string, provider: 'github' | 'jira' | 'skeleton') =>
-      ipcRenderer.invoke('projects:installFetchScript', directory, provider),
-    installStartScript: (directory: string, provider: 'github' | 'jira' | 'skeleton') =>
-      ipcRenderer.invoke('projects:installStartScript', directory, provider),
-    detectTicketProvider: (directory: string) =>
-      ipcRenderer.invoke('projects:detectTicketProvider', directory),
     generateCompose: (directory: string) =>
       ipcRenderer.invoke('projects:generateCompose', directory),
     saveComposeSetup: (directory: string, composeYaml: string, composeFile: string) =>
@@ -346,6 +334,10 @@ const api: SandstormAPI = {
     setProject: (projectDir, settings) => ipcRenderer.invoke('modelSettings:setProject', projectDir, settings),
     removeProject: (projectDir) => ipcRenderer.invoke('modelSettings:removeProject', projectDir),
     getEffective: (projectDir) => ipcRenderer.invoke('modelSettings:getEffective', projectDir),
+  },
+  projectTicketConfig: {
+    get: (projectDir) => ipcRenderer.invoke('projectTicketConfig:get', projectDir),
+    set: (projectDir, config) => ipcRenderer.invoke('projectTicketConfig:set', projectDir, config),
   },
   session: {
     getState: () => ipcRenderer.invoke('session:getState'),

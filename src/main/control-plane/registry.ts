@@ -136,6 +136,18 @@ export interface ModelSettings {
   outer_model: string;
 }
 
+export type TicketProvider = 'github' | 'jira';
+
+export interface ProjectTicketConfig {
+  provider: TicketProvider;
+  jira_url?: string | null;
+  jira_username?: string | null;
+  jira_api_token?: string | null;
+  jira_project_key?: string | null;
+  jira_issue_type?: string | null;
+  ticket_prefix?: string | null;
+}
+
 export interface SessionMonitorSettingsRecord {
   warningThreshold: number;
   criticalThreshold: number;
@@ -486,8 +498,22 @@ export class Registry {
       this.setSchemaVersion(14);
     }
 
-    // Future migrations go here:
-    // if (currentVersion < 15) { ... this.setSchemaVersion(15); }
+    if (currentVersion < 15) {
+      // Per-project ticket provider configuration: GitHub or Jira, stored with credentials
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS project_ticket_config (
+          key              TEXT PRIMARY KEY,
+          provider         TEXT NOT NULL,
+          jira_url         TEXT,
+          jira_username    TEXT,
+          jira_api_token   TEXT,
+          jira_project_key TEXT,
+          jira_issue_type  TEXT,
+          ticket_prefix    TEXT
+        );
+      `);
+      this.setSchemaVersion(15);
+    }
   }
 
   // --- Projects ---
@@ -1049,6 +1075,48 @@ export class Registry {
   removeProjectModelSettings(projectDir: string): void {
     const key = `project:${path.resolve(projectDir)}`;
     this.db.prepare('DELETE FROM model_settings WHERE key = ?').run(key);
+  }
+
+  // --- Project Ticket Config ---
+
+  getProjectTicketConfig(projectDir: string): ProjectTicketConfig | null {
+    const key = `project:${path.resolve(projectDir)}`;
+    const row = this.db.prepare(
+      'SELECT provider, jira_url, jira_username, jira_api_token, jira_project_key, jira_issue_type, ticket_prefix FROM project_ticket_config WHERE key = ?'
+    ).get(key) as Omit<ProjectTicketConfig, 'provider'> & { provider: string } | undefined;
+    if (!row) return null;
+    return {
+      provider: row.provider as TicketProvider,
+      jira_url: row.jira_url,
+      jira_username: row.jira_username,
+      jira_api_token: row.jira_api_token,
+      jira_project_key: row.jira_project_key,
+      jira_issue_type: row.jira_issue_type,
+      ticket_prefix: row.ticket_prefix,
+    };
+  }
+
+  setProjectTicketConfig(projectDir: string, config: ProjectTicketConfig): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    this.db.prepare(
+      `INSERT OR REPLACE INTO project_ticket_config
+        (key, provider, jira_url, jira_username, jira_api_token, jira_project_key, jira_issue_type, ticket_prefix)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+    ).run(
+      key,
+      config.provider,
+      config.jira_url ?? null,
+      config.jira_username ?? null,
+      config.jira_api_token ?? null,
+      config.jira_project_key ?? null,
+      config.jira_issue_type ?? null,
+      config.ticket_prefix ?? null,
+    );
+  }
+
+  removeProjectTicketConfig(projectDir: string): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    this.db.prepare('DELETE FROM project_ticket_config WHERE key = ?').run(key);
   }
 
   /**

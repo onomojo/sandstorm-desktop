@@ -212,7 +212,7 @@ describe('MigrationModal', () => {
     expect(screen.queryByTestId('review-prompt-editor')).toBeNull();
   });
 
-  it('shows provider scripts section when missingFetchScript is true', async () => {
+  it('shows ticket provider section when ticketProviderUnconfigured is true', async () => {
     api.projects.autoDetectVerify.mockResolvedValue({
       verifyScript: '#!/bin/bash\nset -e\n',
       serviceDescriptions: {},
@@ -222,51 +222,30 @@ describe('MigrationModal', () => {
       <MigrationModal
         {...defaultProps}
         missingVerifyScript={false}
-        missingFetchScript={true}
+        ticketProviderUnconfigured={true}
       />,
     );
 
     await waitFor(() => {
-      expect(screen.getByTestId('provider-scripts-section')).toBeDefined();
+      expect(screen.getByTestId('ticket-provider-section')).toBeDefined();
     });
 
-    expect(screen.getByText(/fetch-ticket\.sh/)).toBeDefined();
+    expect(screen.getByTestId('ticket-provider-github')).toBeDefined();
+    expect(screen.getByTestId('ticket-provider-jira')).toBeDefined();
   });
 
-  it('shows provider scripts section when missingStartScript is true', async () => {
-    api.projects.autoDetectVerify.mockResolvedValue({
-      verifyScript: '#!/bin/bash\nset -e\n',
-      serviceDescriptions: {},
-    });
-
-    render(
-      <MigrationModal
-        {...defaultProps}
-        missingVerifyScript={false}
-        missingStartScript={true}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId('provider-scripts-section')).toBeDefined();
-    });
-
-    expect(screen.getByText(/start-ticket\.sh/)).toBeDefined();
-  });
-
-  it('calls installFetchScript on save when missingFetchScript is true', async () => {
+  it('calls projectTicketConfig.set on save when ticketProviderUnconfigured is true', async () => {
     api.projects.autoDetectVerify.mockResolvedValue({
       verifyScript: '#!/bin/bash\nset -e\n',
       serviceDescriptions: {},
     });
     api.projects.saveMigration.mockResolvedValue({ success: true });
-    api.projects.installFetchScript.mockResolvedValue({ success: true });
 
     render(
       <MigrationModal
         {...defaultProps}
         missingVerifyScript={true}
-        missingFetchScript={true}
+        ticketProviderUnconfigured={true}
       />,
     );
 
@@ -277,100 +256,15 @@ describe('MigrationModal', () => {
     fireEvent.click(screen.getByTestId('migration-save-btn'));
 
     await waitFor(() => {
-      expect(api.projects.installFetchScript).toHaveBeenCalledWith(
+      expect(api.projectTicketConfig.set).toHaveBeenCalledWith(
         '/test/project',
-        expect.any(String),
+        expect.objectContaining({ provider: 'github' }),
       );
       expect(defaultProps.onComplete).toHaveBeenCalled();
     });
   });
 
-  it('calls installStartScript on save when missingStartScript is true', async () => {
-    api.projects.autoDetectVerify.mockResolvedValue({
-      verifyScript: '#!/bin/bash\nset -e\n',
-      serviceDescriptions: {},
-    });
-    api.projects.saveMigration.mockResolvedValue({ success: true });
-    api.projects.installStartScript.mockResolvedValue({ success: true });
-
-    render(
-      <MigrationModal
-        {...defaultProps}
-        missingVerifyScript={true}
-        missingStartScript={true}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId('migration-save-btn')).toBeDefined();
-    });
-
-    fireEvent.click(screen.getByTestId('migration-save-btn'));
-
-    await waitFor(() => {
-      expect(api.projects.installStartScript).toHaveBeenCalledWith(
-        '/test/project',
-        expect.any(String),
-      );
-      expect(defaultProps.onComplete).toHaveBeenCalled();
-    });
-  });
-
-  it('shows error when installFetchScript fails', async () => {
-    api.projects.autoDetectVerify.mockResolvedValue({
-      verifyScript: '#!/bin/bash\nset -e\n',
-      serviceDescriptions: {},
-    });
-    api.projects.saveMigration.mockResolvedValue({ success: true });
-    api.projects.installFetchScript.mockResolvedValue({ success: false, error: 'fetch install failed' });
-
-    render(
-      <MigrationModal
-        {...defaultProps}
-        missingVerifyScript={true}
-        missingFetchScript={true}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId('migration-save-btn')).toBeDefined();
-    });
-
-    fireEvent.click(screen.getByTestId('migration-save-btn'));
-
-    await waitFor(() => {
-      expect(screen.getByText('fetch install failed')).toBeDefined();
-    });
-  });
-
-  it('shows error when installStartScript fails', async () => {
-    api.projects.autoDetectVerify.mockResolvedValue({
-      verifyScript: '#!/bin/bash\nset -e\n',
-      serviceDescriptions: {},
-    });
-    api.projects.saveMigration.mockResolvedValue({ success: true });
-    api.projects.installStartScript.mockResolvedValue({ success: false, error: 'start install failed' });
-
-    render(
-      <MigrationModal
-        {...defaultProps}
-        missingVerifyScript={true}
-        missingStartScript={true}
-      />,
-    );
-
-    await waitFor(() => {
-      expect(screen.getByTestId('migration-save-btn')).toBeDefined();
-    });
-
-    fireEvent.click(screen.getByTestId('migration-save-btn'));
-
-    await waitFor(() => {
-      expect(screen.getByText('start install failed')).toBeDefined();
-    });
-  });
-
-  it('includes fetch-ticket and start-ticket in missing items summary', async () => {
+  it('includes "ticket provider" in the missing items summary', async () => {
     api.projects.autoDetectVerify.mockResolvedValue({
       verifyScript: '#!/bin/bash\nset -e\n',
       serviceDescriptions: {},
@@ -380,14 +274,12 @@ describe('MigrationModal', () => {
       <MigrationModal
         {...defaultProps}
         missingVerifyScript={false}
-        missingFetchScript={true}
-        missingStartScript={true}
+        ticketProviderUnconfigured={true}
       />,
     );
 
     await waitFor(() => {
-      expect(screen.getByText(/fetch-ticket script/)).toBeDefined();
-      expect(screen.getByText(/start-ticket script/)).toBeDefined();
+      expect(screen.getByText(/ticket provider/)).toBeDefined();
     });
   });
 
