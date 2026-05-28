@@ -475,6 +475,8 @@ interface AppState {
   openRefinementSession: (sessionId: string) => void;
   /** Add or update a refinement session (called on refinement:update events). */
   upsertRefinementSession: (session: RefinementSession) => void;
+  /** Append a streaming text chunk to a running session's output. */
+  appendRefinementStreamChunk: (sessionId: string, delta: string) => void;
   /** Remove a refinement session (after cancel or dismiss). */
   removeRefinementSession: (sessionId: string) => void;
   /** Set which session id is shown in the refine dialog. */
@@ -720,6 +722,8 @@ export interface RefinementSession {
   result?: SpecGateResult;
   error?: string;
   startedAt: number;
+  /** Live streamed output from the ephemeral gate subprocess while running. */
+  streamingOutput?: string;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -1018,13 +1022,26 @@ export const useAppStore = create<AppState>((set, get) => ({
     if ((session as { status?: string }).status === 'cancelled') {
       return { refinementSessions: state.refinementSessions.filter((s) => s.id !== session.id) };
     }
+    // Clear streamingOutput when the session leaves the running state.
+    const normalized = session.status !== 'running'
+      ? { ...session, streamingOutput: undefined }
+      : session;
     const idx = state.refinementSessions.findIndex((s) => s.id === session.id);
     if (idx >= 0) {
       const next = [...state.refinementSessions];
-      next[idx] = session;
+      next[idx] = normalized;
       return { refinementSessions: next };
     }
-    return { refinementSessions: [...state.refinementSessions, session] };
+    return { refinementSessions: [...state.refinementSessions, normalized] };
+  }),
+  appendRefinementStreamChunk: (sessionId, delta) => set((state) => {
+    const idx = state.refinementSessions.findIndex((s) => s.id === sessionId);
+    if (idx < 0) return {};
+    const session = state.refinementSessions[idx];
+    if (session.status !== 'running') return {};
+    const next = [...state.refinementSessions];
+    next[idx] = { ...session, streamingOutput: (session.streamingOutput ?? '') + delta };
+    return { refinementSessions: next };
   }),
   removeRefinementSession: (sessionId) => set((state) => ({
     refinementSessions: state.refinementSessions.filter((s) => s.id !== sessionId),

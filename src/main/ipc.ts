@@ -1191,9 +1191,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     persistRefinement(session);
     emitRefinementUpdate(session);
 
+    const onChunk = (delta: string): void => {
+      mainWindow?.webContents.send('refinement:progress', { sessionId: id, delta });
+    };
+
     const { promise, cancel } = phase === 'check'
-      ? spawnSpecCheck(ticketId, projectDir)
-      : spawnSpecRefine(ticketId, projectDir, userAnswers);
+      ? spawnSpecCheck(ticketId, projectDir, onChunk)
+      : spawnSpecRefine(ticketId, projectDir, userAnswers, onChunk);
 
     activeRefinements.set(id, { session, cancel });
 

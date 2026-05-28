@@ -415,6 +415,7 @@ export class ClaudeBackend implements AgentBackend {
     prompt: string,
     projectDir: string,
     timeoutMs = 300_000,
+    onChunk?: (delta: string) => void,
   ): { promise: Promise<string>; cancel: () => void } {
     const claudeBin = getClaudeBin();
     const args = [
@@ -468,7 +469,10 @@ export class ClaudeBackend implements AgentBackend {
         try {
           const parsed = JSON.parse(line);
           const text = this.extractText(parsed);
-          if (text) fullText += text;
+          if (text) {
+            fullText += text;
+            if (!settled) onChunk?.(text);
+          }
         } catch {
           // Skip non-JSON lines
         }

@@ -487,6 +487,7 @@ async function handleSpecRefine(
 export function spawnSpecCheck(
   ticketId: string,
   projectDir: string,
+  onChunk?: (delta: string) => void,
 ): { promise: Promise<Record<string, unknown>>; cancel: () => void } {
   let innerCancel: (() => void) | null = null;
   let cancelled = false;
@@ -501,7 +502,7 @@ export function spawnSpecCheck(
     if (cancelled) throw new Error('Cancelled');
 
     const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody);
-    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir);
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 300_000, onChunk);
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
 
@@ -520,6 +521,7 @@ export function spawnSpecRefine(
   ticketId: string,
   projectDir: string,
   userAnswers?: string,
+  onChunk?: (delta: string) => void,
 ): { promise: Promise<Record<string, unknown>>; cancel: () => void } {
   let innerCancel: (() => void) | null = null;
   let cancelled = false;
@@ -537,7 +539,7 @@ export function spawnSpecRefine(
       ? buildSpecRefineAnswerPrompt(res.ctx.gate, res.ctx.ticketBody, userAnswers)
       : buildSpecRefineInitialPrompt(res.ctx.gate, res.ctx.ticketBody);
 
-    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir);
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 300_000, onChunk);
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
 

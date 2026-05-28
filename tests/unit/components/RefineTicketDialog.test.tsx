@@ -321,4 +321,126 @@ describe('RefineTicketDialog', () => {
       expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
     });
   });
+
+  describe('streaming output panel', () => {
+    it('shows the stream panel when session is running', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'running', phase: 'check', startedAt: Date.now(),
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+      render(<RefineTicketDialog />);
+      expect(screen.getByTestId('refine-stream-panel')).toBeDefined();
+    });
+
+    it('renders streamed text in the panel', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'running', phase: 'check', startedAt: Date.now(),
+          streamingOutput: 'Evaluating spec quality…\nChecking scope…',
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+      render(<RefineTicketDialog />);
+      const panel = screen.getByTestId('refine-stream-panel');
+      expect(panel.textContent).toContain('Evaluating spec quality');
+    });
+
+    it('shows placeholder when streamingOutput is empty', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'running', phase: 'check', startedAt: Date.now(),
+          streamingOutput: '',
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+      render(<RefineTicketDialog />);
+      expect(screen.getByText('Waiting for output…')).toBeDefined();
+    });
+
+    it('does not show the stream panel when session is ready (pass)', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'ready', phase: 'check', startedAt: Date.now(),
+          result: { passed: true, questions: [], gateSummary: '', ticketUrl: null, cached: false },
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+      render(<RefineTicketDialog />);
+      expect(screen.queryByTestId('refine-stream-panel')).toBeNull();
+    });
+  });
+
+  describe('appendRefinementStreamChunk store action', () => {
+    it('appends delta to streamingOutput for a running session', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'sess', ticketId: '1', projectDir: '/p',
+          status: 'running', phase: 'check', startedAt: 0,
+          streamingOutput: 'hello ',
+        }],
+      });
+      useAppStore.getState().appendRefinementStreamChunk('sess', 'world');
+      const s = useAppStore.getState().refinementSessions[0];
+      expect(s.streamingOutput).toBe('hello world');
+    });
+
+    it('ignores delta for a non-running session', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'sess', ticketId: '1', projectDir: '/p',
+          status: 'ready', phase: 'check', startedAt: 0,
+        }],
+      });
+      useAppStore.getState().appendRefinementStreamChunk('sess', 'ignored');
+      const s = useAppStore.getState().refinementSessions[0];
+      expect(s.streamingOutput).toBeUndefined();
+    });
+
+    it('ignores delta for unknown session id', () => {
+      useAppStore.setState({ refinementSessions: [] });
+      expect(() => useAppStore.getState().appendRefinementStreamChunk('unknown', 'x')).not.toThrow();
+    });
+  });
+
+  describe('upsertRefinementSession clears streamingOutput on completion', () => {
+    it('clears streamingOutput when status transitions to ready', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'sess', ticketId: '1', projectDir: '/p',
+          status: 'running', phase: 'check', startedAt: 0,
+          streamingOutput: 'some output',
+        }],
+      });
+      useAppStore.getState().upsertRefinementSession({
+        id: 'sess', ticketId: '1', projectDir: '/p',
+        status: 'ready', phase: 'check', startedAt: 0,
+        result: { passed: true, questions: [], gateSummary: '', ticketUrl: null, cached: false },
+      });
+      const s = useAppStore.getState().refinementSessions[0];
+      expect(s.streamingOutput).toBeUndefined();
+    });
+
+    it('clears streamingOutput when status transitions to errored', () => {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'sess', ticketId: '1', projectDir: '/p',
+          status: 'running', phase: 'check', startedAt: 0,
+          streamingOutput: 'partial',
+        }],
+      });
+      useAppStore.getState().upsertRefinementSession({
+        id: 'sess', ticketId: '1', projectDir: '/p',
+        status: 'errored', phase: 'check', startedAt: 0,
+        error: 'something failed',
+      });
+      const s = useAppStore.getState().refinementSessions[0];
+      expect(s.streamingOutput).toBeUndefined();
+    });
+  });
 });

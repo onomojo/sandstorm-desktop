@@ -1262,6 +1262,94 @@ describe('ClaudeBackend.runEphemeralAgent — promise settlement', () => {
   });
 });
 
+describe('ClaudeBackend.spawnEphemeralAgent — onChunk streaming callback', () => {
+  beforeEach(() => {
+    spawnedProcesses.length = 0;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function getEphemeralProcess(): MockChildProcess {
+    return spawnedProcesses[spawnedProcesses.length - 1];
+  }
+
+  it('invokes onChunk for each extracted text delta', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const chunks: string[] = [];
+    const { promise } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (d) => chunks.push(d));
+    const proc = getEphemeralProcess();
+
+    const line1 = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'hello ' }] } });
+    const line2 = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'world' }] } });
+    proc.stdout.emit('data', Buffer.from(line1 + '\n' + line2 + '\n'));
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+
+    const result = await promise;
+    expect(result).toBe('hello world');
+    expect(chunks).toEqual(['hello ', 'world']);
+
+    backendUnderTest.destroy();
+  });
+
+  it('does not invoke onChunk for malformed / non-JSON lines', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const chunks: string[] = [];
+    const { promise } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (d) => chunks.push(d));
+    const proc = getEphemeralProcess();
+
+    proc.stdout.emit('data', Buffer.from('not json\n'));
+    const line = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'ok' }] } });
+    proc.stdout.emit('data', Buffer.from(line + '\n'));
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+
+    await promise;
+    expect(chunks).toEqual(['ok']);
+
+    backendUnderTest.destroy();
+  });
+
+  it('does not invoke onChunk after cancel', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const chunks: string[] = [];
+    const { promise, cancel } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, (d) => chunks.push(d));
+    const proc = getEphemeralProcess();
+
+    cancel();
+    // Emit text after cancel — should not fire onChunk
+    const line = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'late' }] } });
+    proc.stdout.emit('data', Buffer.from(line + '\n'));
+
+    await expect(promise).rejects.toThrow('Cancelled');
+    expect(chunks).toEqual([]);
+
+    backendUnderTest.destroy();
+  });
+
+  it('still resolves with the full concatenated text when onChunk is provided', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const { promise } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, () => {});
+    const proc = getEphemeralProcess();
+
+    const line1 = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'part1 ' }] } });
+    const line2 = JSON.stringify({ type: 'assistant', message: { content: [{ type: 'text', text: 'part2' }] } });
+    proc.stdout.emit('data', Buffer.from(line1 + '\n'));
+    proc.stdout.emit('data', Buffer.from(line2 + '\n'));
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+
+    const result = await promise;
+    expect(result).toBe('part1 part2');
+
+    backendUnderTest.destroy();
+  });
+});
+
 describe('Outer-Claude session token accumulation (agent:token-usage IPC)', () => {
   let backend: AgentBackend;
   let mockWindow: { webContents: { send: ReturnType<typeof vi.fn> } };

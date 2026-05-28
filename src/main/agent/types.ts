@@ -95,7 +95,8 @@ export interface AgentBackend {
   spawnEphemeralAgent(
     prompt: string,
     projectDir: string,
-    timeoutMs?: number
+    timeoutMs?: number,
+    onChunk?: (delta: string) => void,
   ): { promise: Promise<string>; cancel: () => void };
 
   // --- Authentication ---
