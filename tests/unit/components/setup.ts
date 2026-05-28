@@ -19,11 +19,6 @@ export function mockSandstormApi() {
       checkMigration: vi.fn().mockResolvedValue({ needsMigration: false }),
       autoDetectVerify: vi.fn().mockResolvedValue({ verifyScript: '#!/bin/bash\nset -e\n', serviceDescriptions: {} }),
       saveMigration: vi.fn().mockResolvedValue({ success: true }),
-      installUpdateScript: vi.fn().mockResolvedValue({ success: true }),
-      installCreatePrScript: vi.fn().mockResolvedValue({ success: true }),
-      installFetchScript: vi.fn().mockResolvedValue({ success: true }),
-      installStartScript: vi.fn().mockResolvedValue({ success: true }),
-      detectTicketProvider: vi.fn().mockResolvedValue({ provider: 'github' }),
       generateCompose: vi.fn().mockResolvedValue({ success: true, yaml: 'services:\n  claude:\n    image: test\n', composeFile: 'docker-compose.yml', services: [] }),
       saveComposeSetup: vi.fn().mockResolvedValue({ success: true }),
     },
@@ -116,6 +111,10 @@ export function mockSandstormApi() {
       setProject: vi.fn().mockResolvedValue(undefined),
       removeProject: vi.fn().mockResolvedValue(undefined),
       getEffective: vi.fn().mockResolvedValue({ inner_model: 'sonnet', outer_model: 'opus' }),
+    },
+    projectTicketConfig: {
+      get: vi.fn().mockResolvedValue(null),
+      set: vi.fn().mockResolvedValue(undefined),
     },
     session: {
       getState: vi.fn().mockResolvedValue({

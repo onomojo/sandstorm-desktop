@@ -7,6 +7,7 @@ import {
   runSpecRefine,
   type SpecGateDeps,
 } from '../../src/main/control-plane/ticket-spec';
+import type { ProjectTicketConfig } from '../../src/main/control-plane/registry';
 
 const PASS_REPORT = `## Spec Quality Gate: PASS
 
@@ -28,10 +29,12 @@ const FAIL_REPORT = `## Spec Quality Gate: FAIL
 | Specificity | FAIL |
 `;
 
+const GITHUB_CONFIG: ProjectTicketConfig = { provider: 'github' };
+
 function makeDeps(overrides: Partial<SpecGateDeps> = {}): SpecGateDeps {
   return {
     fetchTicket: vi.fn().mockResolvedValue('a body'),
-    scriptStatus: vi.fn().mockReturnValue('ok'),
+    getProviderConfig: vi.fn().mockReturnValue(GITHUB_CONFIG),
     runCheck: vi.fn().mockResolvedValue({ passed: true, report: PASS_REPORT }),
     runRefine: vi.fn().mockResolvedValue({ passed: true, report: PASS_REPORT }),
     readSpecReadyHash: vi.fn().mockResolvedValue(''),
@@ -98,11 +101,11 @@ describe('shortBodyHash', () => {
 });
 
 describe('runSpecCheck', () => {
-  it('returns an error when fetch-ticket.sh is missing', async () => {
-    const deps = makeDeps({ scriptStatus: vi.fn().mockReturnValue('missing') });
+  it('returns an error when no ticket provider is configured', async () => {
+    const deps = makeDeps({ getProviderConfig: vi.fn().mockReturnValue(null) });
     const result = await runSpecCheck('1', '/proj', deps);
     expect(result.passed).toBe(false);
-    expect(result.error).toMatch(/fetch-ticket\.sh is missing/);
+    expect(result.error).toMatch(/No ticket provider configured/);
     expect(deps.runCheck).not.toHaveBeenCalled();
   });
 
@@ -161,6 +164,14 @@ describe('runSpecCheck', () => {
 });
 
 describe('runSpecRefine', () => {
+  it('returns an error when no ticket provider is configured', async () => {
+    const deps = makeDeps({ getProviderConfig: vi.fn().mockReturnValue(null) });
+    const result = await runSpecRefine('1', '/proj', 'answers', deps);
+    expect(result.passed).toBe(false);
+    expect(result.error).toMatch(/No ticket provider configured/);
+    expect(deps.runRefine).not.toHaveBeenCalled();
+  });
+
   it('passes user answers to the refine handler', async () => {
     const deps = makeDeps({
       runRefine: vi.fn().mockResolvedValue({ passed: true, report: PASS_REPORT }),
@@ -171,9 +182,7 @@ describe('runSpecRefine', () => {
 
   it('re-fetches the body and tags spec-ready on PASS', async () => {
     const fresh = '# updated body';
-    const fetch = vi.fn()
-      // First call (none in refine path) — but post-PASS we re-fetch
-      .mockResolvedValue(fresh);
+    const fetch = vi.fn().mockResolvedValue(fresh);
     const deps = makeDeps({
       fetchTicket: fetch,
       runRefine: vi.fn().mockResolvedValue({ passed: true, report: PASS_REPORT }),

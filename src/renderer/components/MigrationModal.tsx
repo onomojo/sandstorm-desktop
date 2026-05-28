@@ -1,7 +1,5 @@
 import React, { useState, useEffect } from 'react';
 
-type TicketProvider = 'github' | 'jira' | 'skeleton';
-
 interface MigrationModalProps {
   projectDir: string;
   missingVerifyScript: boolean;
@@ -9,11 +7,7 @@ interface MigrationModalProps {
   missingSpecQualityGate?: boolean;
   missingReviewPrompt?: boolean;
   legacyPortMappings?: boolean;
-  missingUpdateScript?: boolean;
-  missingCreatePrScript?: boolean;
-  missingFetchScript?: boolean;
-  missingStartScript?: boolean;
-  detectedTicketProvider?: TicketProvider;
+  ticketProviderUnconfigured?: boolean;
   onComplete: () => void;
   onDismiss: () => void;
 }
@@ -25,11 +19,7 @@ export function MigrationModal({
   missingSpecQualityGate,
   missingReviewPrompt,
   legacyPortMappings,
-  missingUpdateScript,
-  missingCreatePrScript,
-  missingFetchScript,
-  missingStartScript,
-  detectedTicketProvider,
+  ticketProviderUnconfigured,
   onComplete,
   onDismiss,
 }: MigrationModalProps) {
@@ -37,10 +27,7 @@ export function MigrationModal({
   const [serviceDescriptions, setServiceDescriptions] = useState<Record<string, string>>({});
   const [specQualityGate, setSpecQualityGate] = useState('');
   const [reviewPrompt, setReviewPrompt] = useState('');
-  // The two provider scripts (update-ticket.sh, create-pr.sh) are both per-
-  // provider (github/jira/skeleton). Keep one picker — they ship from the
-  // same template set.
-  const [scriptProvider, setScriptProvider] = useState<TicketProvider>(detectedTicketProvider ?? 'github');
+  const [ticketProvider, setTicketProvider] = useState<'github' | 'jira'>('github');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -79,15 +66,12 @@ export function MigrationModal({
         setError(result.error || 'Failed to save migration');
         return;
       }
-      // Save spec quality gate if it was missing
       if (missingSpecQualityGate && specQualityGate) {
         await window.sandstorm.specGate.save(projectDir, specQualityGate);
       }
-      // Save review prompt if it was missing
       if (missingReviewPrompt && reviewPrompt) {
         await window.sandstorm.reviewPrompt.save(projectDir, reviewPrompt);
       }
-      // Clean up legacy port mappings
       if (legacyPortMappings) {
         const portResult = await window.sandstorm.ports.cleanupLegacy(projectDir);
         if (!portResult.success) {
@@ -95,36 +79,8 @@ export function MigrationModal({
           return;
         }
       }
-      // Install the provider scripts (update-ticket.sh #318, create-pr.sh
-      // #320). Both pick from the same github / jira / skeleton template
-      // set — one provider choice, one save path.
-      if (missingUpdateScript) {
-        const installRes = await window.sandstorm.projects.installUpdateScript(projectDir, scriptProvider);
-        if (!installRes.success) {
-          setError(installRes.error || 'Failed to install update-ticket.sh');
-          return;
-        }
-      }
-      if (missingCreatePrScript) {
-        const installRes = await window.sandstorm.projects.installCreatePrScript(projectDir, scriptProvider);
-        if (!installRes.success) {
-          setError(installRes.error || 'Failed to install create-pr.sh');
-          return;
-        }
-      }
-      if (missingFetchScript) {
-        const installRes = await window.sandstorm.projects.installFetchScript(projectDir, scriptProvider);
-        if (!installRes.success) {
-          setError(installRes.error || 'Failed to install fetch-ticket.sh');
-          return;
-        }
-      }
-      if (missingStartScript) {
-        const installRes = await window.sandstorm.projects.installStartScript(projectDir, scriptProvider);
-        if (!installRes.success) {
-          setError(installRes.error || 'Failed to install start-ticket.sh');
-          return;
-        }
+      if (ticketProviderUnconfigured) {
+        await window.sandstorm.projectTicketConfig.set(projectDir, { provider: ticketProvider });
       }
       onComplete();
     } catch (err) {
@@ -138,6 +94,15 @@ export function MigrationModal({
     setServiceDescriptions((prev) => ({ ...prev, [service]: value }));
   };
 
+  const needsItems = [
+    missingVerifyScript && 'a verify script',
+    missingServiceLabels && 'service descriptions',
+    missingSpecQualityGate && 'a spec quality gate',
+    missingReviewPrompt && 'a review prompt',
+    legacyPortMappings && 'legacy port mapping cleanup',
+    ticketProviderUnconfigured && 'a ticket provider',
+  ].filter(Boolean) as string[];
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" data-testid="migration-modal">
       <div className="bg-sandstorm-surface border border-sandstorm-border rounded-2xl shadow-2xl w-full max-w-lg mx-4 max-h-[80vh] flex flex-col">
@@ -145,19 +110,8 @@ export function MigrationModal({
         <div className="px-6 py-4 border-b border-sandstorm-border">
           <h2 className="text-base font-semibold text-sandstorm-text">Project Migration Needed</h2>
           <p className="text-xs text-sandstorm-muted mt-1">
-            This project needs
-            {[
-              missingVerifyScript && 'a verify script',
-              missingServiceLabels && 'service descriptions',
-              missingSpecQualityGate && 'a spec quality gate',
-              missingReviewPrompt && 'a review prompt',
-              legacyPortMappings && 'legacy port mapping cleanup',
-              missingUpdateScript && 'an update-ticket script',
-              missingCreatePrScript && 'a create-pr script',
-              missingFetchScript && 'a fetch-ticket script',
-              missingStartScript && 'a start-ticket script',
-            ].filter(Boolean).join(', ')
-            .replace(/, ([^,]*)$/, ' and $1')}{' '}
+            This project needs{' '}
+            {needsItems.join(', ').replace(/, ([^,]*)$/, ' and $1')}{' '}
             to work with the stack system.
           </p>
         </div>
@@ -224,7 +178,7 @@ export function MigrationModal({
                     Spec Quality Gate (.sandstorm/spec-quality-gate.md)
                   </label>
                   <p className="text-[11px] text-sandstorm-muted mb-2">
-                    Defines what a "ready" ticket looks like before agent dispatch. Customize the criteria to match your project.
+                    Defines what a "ready" ticket looks like before agent dispatch.
                   </p>
                   <textarea
                     value={specQualityGate}
@@ -244,56 +198,42 @@ export function MigrationModal({
                     Legacy Port Mappings
                   </label>
                   <p className="text-[11px] text-sandstorm-muted mb-2">
-                    This project has static port mappings in its sandstorm compose file. Ports are now exposed on demand via proxy containers. Saving will remove the static port mappings.
+                    This project has static port mappings. Saving will remove them and switch to on-demand port exposure.
                   </p>
                 </div>
               )}
 
-              {/* Provider scripts picker — single control for all missing
-                  provider scripts since they all pick from the same
-                  github / jira / skeleton template set. */}
-              {(missingUpdateScript || missingCreatePrScript || missingFetchScript || missingStartScript) && (
-                <div data-testid="provider-scripts-section">
+              {/* Ticket provider picker */}
+              {ticketProviderUnconfigured && (
+                <div data-testid="ticket-provider-section">
                   <label className="block text-xs font-medium text-sandstorm-text-secondary mb-1.5">
-                    Provider Scripts{' '}
-                    <span className="text-sandstorm-muted font-normal">
-                      ({[
-                        missingFetchScript && '.sandstorm/scripts/fetch-ticket.sh',
-                        missingStartScript && '.sandstorm/scripts/start-ticket.sh',
-                        missingUpdateScript && '.sandstorm/scripts/update-ticket.sh',
-                        missingCreatePrScript && '.sandstorm/scripts/create-pr.sh',
-                      ].filter(Boolean).join(', ')})
-                    </span>
+                    Ticket Provider
                   </label>
                   <p className="text-[11px] text-sandstorm-muted mb-2">
-                    {missingUpdateScript && missingCreatePrScript
-                      ? 'Lets the refine step commit bodies back to your ticket system and lets Make PR open pull requests via your git host. Without these, both flows fail.'
-                      : missingUpdateScript
-                        ? 'Lets the refine step commit the refined body back to your ticket system. Without this, refinements are lost between sessions.'
-                        : 'Lets Make PR open pull requests via your git host. Without this, the PR button fails.'}
-                    {detectedTicketProvider && (
-                      <> Auto-detected: <span className="font-mono text-sandstorm-text-secondary">{detectedTicketProvider}</span>.</>
-                    )}
+                    Which issue tracker does this project use? This replaces the old per-project scripts — ticket operations are now built into Sandstorm Desktop.
                   </p>
                   <div className="flex gap-2">
-                    {(['github', 'jira', 'skeleton'] as const).map((p) => (
+                    {(['github', 'jira'] as const).map((p) => (
                       <button
                         key={p}
                         type="button"
-                        onClick={() => setScriptProvider(p)}
+                        onClick={() => setTicketProvider(p)}
                         className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-all ${
-                          scriptProvider === p
+                          ticketProvider === p
                             ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
                             : 'border-sandstorm-border bg-sandstorm-bg text-sandstorm-muted hover:border-sandstorm-border-light'
                         }`}
-                        data-testid={`script-provider-${p}`}
+                        data-testid={`ticket-provider-${p}`}
                       >
-                        {p === 'github' && 'GitHub'}
-                        {p === 'jira' && 'Jira'}
-                        {p === 'skeleton' && 'Custom (edit later)'}
+                        {p === 'github' ? 'GitHub Issues' : 'Jira'}
                       </button>
                     ))}
                   </div>
+                  {ticketProvider === 'jira' && (
+                    <p className="text-[10px] text-sandstorm-muted mt-2">
+                      Configure Jira credentials in Project Settings → Ticketing after setup.
+                    </p>
+                  )}
                 </div>
               )}
 
@@ -304,7 +244,7 @@ export function MigrationModal({
                     Review Prompt (.sandstorm/review-prompt.md)
                   </label>
                   <p className="text-[11px] text-sandstorm-muted mb-2">
-                    Instructions for the review agent that evaluates code changes. Customize to match your project's standards.
+                    Instructions for the review agent that evaluates code changes.
                   </p>
                   <textarea
                     value={reviewPrompt}

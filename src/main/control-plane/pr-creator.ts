@@ -35,7 +35,6 @@ async function gitCommits(workspace: string, baseBranch = 'main'): Promise<strin
     );
     return stdout.trim();
   } catch {
-    // Fall back to last 10 commits if base branch is missing.
     try {
       const { stdout } = await execFileAsync(
         'git',
@@ -122,9 +121,7 @@ ${opts.taskOutputTail || '(no task output)'}
  */
 export function parseDraftResponse(raw: string): DraftedPR {
   let text = raw.trim();
-  // Strip ```json fences if present
   text = text.replace(/^```(?:json)?\s*/i, '').replace(/```\s*$/i, '').trim();
-  // Find the first JSON object
   const start = text.indexOf('{');
   const end = text.lastIndexOf('}');
   if (start === -1 || end === -1 || end <= start) {
@@ -218,8 +215,18 @@ export interface CreatePRResult {
 }
 
 export interface CreatePRDeps {
-  /** Run push + PR script for the current branch. Returns combined output. */
-  runPush: (title: string, prBodyFile: string) => Promise<{ stdout: string; stderr: string }>;
+  /** Run git add/commit/push for the current branch in the container. */
+  runGitPush: (commitMsg: string) => Promise<void>;
+  /**
+   * Run `gh pr create` on the host workspace. Returns gh's stdout.
+   * Should throw on non-zero exit so the retry loop records the failure.
+   */
+  createPROnHost: (
+    title: string,
+    bodyFilePath: string,
+    head: string,
+    base: string,
+  ) => Promise<string>;
   /** Checkout a new branch (from current HEAD) in the container/workspace. */
   checkoutBranch: (branch: string) => Promise<void>;
   /** Record the PR after a successful creation. */
@@ -234,15 +241,16 @@ export interface CreatePRArgs {
   body: string;
   /** Current branch. Defaults to reading HEAD from workspace when omitted. */
   initialBranch?: string;
+  /** Base branch for the PR. Defaults to 'main'. */
+  baseBranch?: string;
 }
 
 /**
  * Create a pull request with automatic branch-bump recovery.
  *
- * Runs up to MAX_PR_ATTEMPTS times. On each failure (SANDSTORM_PR_FAILED marker
- * in output or no URL emitted), computes the next -vN branch, checks it out,
- * and retries. Returns { url, number } on the first success. Throws after all
- * attempts are exhausted, with all per-attempt reasons in the message.
+ * On each attempt: pushes the branch via git, then creates the PR on the host
+ * via `gh pr create`. On failure (thrown error or no URL in output), computes
+ * the next -vN branch, checks it out, and retries up to MAX_PR_ATTEMPTS times.
  */
 export async function createPullRequest(
   args: CreatePRArgs,
@@ -252,9 +260,9 @@ export async function createPullRequest(
   fs.mkdirSync(tmpDir, { recursive: true });
   const tmpName = `pr-body-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.md`;
   const hostBodyPath = path.join(tmpDir, tmpName);
-  const containerBodyPath = `/app/.sandstorm/${tmpName}`;
   fs.writeFileSync(hostBodyPath, args.body, 'utf-8');
 
+  const baseBranch = args.baseBranch ?? 'main';
   const initialBranch = args.initialBranch ?? await gitCurrentBranch(deps.workspace);
   const failureReasons: string[] = [];
   let currentBranch = initialBranch;
@@ -273,19 +281,26 @@ export async function createPullRequest(
         }
       }
 
-      let stdout = '';
-      let stderr = '';
       try {
-        ({ stdout, stderr } = await deps.runPush(args.title, containerBodyPath));
+        await deps.runGitPush(args.title);
       } catch (err) {
         failureReasons.push(
-          `attempt ${attempt + 1} on branch "${currentBranch}": ${String(err)}`,
+          `attempt ${attempt + 1} on branch "${currentBranch}": git push failed: ${String(err)}`,
         );
         continue;
       }
 
-      const combined = stdout + '\n' + stderr;
-      const urlMatch = combined.match(PR_URL_PATTERN);
+      let prOutput = '';
+      try {
+        prOutput = await deps.createPROnHost(args.title, hostBodyPath, currentBranch, baseBranch);
+      } catch (err) {
+        failureReasons.push(
+          `attempt ${attempt + 1} on branch "${currentBranch}": PR creation failed: ${String(err)}`,
+        );
+        continue;
+      }
+
+      const urlMatch = prOutput.match(PR_URL_PATTERN);
       if (urlMatch) {
         const url = urlMatch[0];
         const number = Number(urlMatch[1]);
@@ -293,9 +308,9 @@ export async function createPullRequest(
         return { url, number };
       }
 
-      const failureMatch = combined.match(/SANDSTORM_PR_FAILED:([^\n]*)/);
-      const reason = failureMatch ? failureMatch[1].trim() : 'no PR URL emitted';
-      failureReasons.push(`attempt ${attempt + 1} on branch "${currentBranch}": ${reason}`);
+      failureReasons.push(
+        `attempt ${attempt + 1} on branch "${currentBranch}": no PR URL emitted from gh`,
+      );
     }
 
     throw new Error(

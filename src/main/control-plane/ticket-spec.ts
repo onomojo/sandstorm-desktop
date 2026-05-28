@@ -1,6 +1,7 @@
 import { execFile } from 'child_process';
 import { promisify } from 'util';
-import { fetchTicketContext, getScriptStatus } from './ticket-fetcher';
+import { fetchTicketWithConfig } from './ticket-config';
+import type { ProjectTicketConfig } from './registry';
 
 const execFileAsync = promisify(execFile);
 
@@ -16,7 +17,7 @@ export interface SpecGateResult {
   gateSummary: string;
   ticketUrl: string | null;
   cached: boolean;
-  /** Set when the ticket can't be evaluated (missing fetch script, etc.). */
+  /** Set when the ticket can't be evaluated (unconfigured provider, etc.). */
   error?: string;
 }
 
@@ -69,6 +70,7 @@ export function extractQuestions(report: string): string[] {
 /**
  * Look up `spec-ready:sha-<hash>` labels on the issue and return the hash
  * suffix if any. Empty string when `gh` isn't available or the call fails.
+ * GitHub-specific; returns empty string for Jira tickets (cache disabled).
  */
 async function readSpecReadyHash(ticketId: string): Promise<string> {
   try {
@@ -103,15 +105,10 @@ async function readTicketUrl(ticketId: string): Promise<string> {
 
 /** Compute the short body hash used by sandstorm-spec.sh for idempotency. */
 export function shortBodyHash(body: string): string {
-  // Match `sha256sum | cut -c1-12` shape.
-  // We avoid pulling node:crypto here — keeps this module test-friendly.
-  // The hash is opaque; consistency with the shell script is not required
-  // because this module is the only producer/consumer of the in-process value.
   let h = 0;
   for (let i = 0; i < body.length; i++) {
     h = ((h << 5) - h + body.charCodeAt(i)) | 0;
   }
-  // Pack as 12-char hex — pad/wrap so collisions are still rare for short bodies.
   const u = h >>> 0;
   return u.toString(16).padStart(8, '0').repeat(2).slice(0, 12);
 }
@@ -119,6 +116,7 @@ export function shortBodyHash(body: string): string {
 /**
  * Replace existing `spec-ready:sha-*` labels with a fresh one tracking the
  * current body. Best-effort — failures (no gh, no perms, network) are swallowed.
+ * GitHub-specific; no-op for Jira tickets.
  */
 async function markSpecReady(ticketId: string, hash: string): Promise<void> {
   if (!hash) return;
@@ -147,7 +145,8 @@ async function markSpecReady(ticketId: string, hash: string): Promise<void> {
 
 export interface SpecGateDeps {
   fetchTicket: (ticketId: string, projectDir: string) => Promise<string | null>;
-  scriptStatus: (projectDir: string) => 'ok' | 'missing' | 'not_executable';
+  /** Returns the stored ticket provider config, or null if unconfigured. */
+  getProviderConfig: (projectDir: string) => ProjectTicketConfig | null;
   runCheck: (ticketId: string, projectDir: string) => Promise<SpecGateReport>;
   runRefine: (
     ticketId: string,
@@ -171,18 +170,16 @@ export async function runSpecCheck(
   projectDir: string,
   deps: SpecGateDeps
 ): Promise<SpecGateResult> {
-  const status = deps.scriptStatus(projectDir);
-  if (status !== 'ok') {
+  const config = deps.getProviderConfig(projectDir);
+  if (!config) {
     return {
       passed: false,
       questions: [],
-      gateSummary: `fetch-ticket.sh ${status}`,
+      gateSummary: 'No ticket provider configured',
       ticketUrl: null,
       cached: false,
       error:
-        status === 'missing'
-          ? 'fetch-ticket.sh is missing — run `sandstorm init` to generate it.'
-          : 'fetch-ticket.sh exists but is not executable. Run `chmod +x .sandstorm/scripts/fetch-ticket.sh`.',
+        'No ticket provider configured for this project. Configure GitHub or Jira in Project Settings.',
     };
   }
 
@@ -191,10 +188,10 @@ export async function runSpecCheck(
     return {
       passed: false,
       questions: [],
-      gateSummary: 'fetch-ticket.sh returned no output',
+      gateSummary: 'Ticket provider returned no output',
       ticketUrl: null,
       cached: false,
-      error: `fetch-ticket.sh ran but returned no output for ticket "${ticketId}".`,
+      error: `Ticket provider returned no output for ticket "${ticketId}".`,
     };
   }
 
@@ -251,9 +248,7 @@ export async function runSpecCheck(
 
 /**
  * Run a refinement step — pipes the user's answers to the spec-refine
- * handler, then trims the response. The MCP handler writes the updated
- * ticket body back to GitHub itself, so we only need to surface the
- * verdict + any remaining questions.
+ * handler, then trims the response.
  */
 export async function runSpecRefine(
   ticketId: string,
@@ -261,18 +256,16 @@ export async function runSpecRefine(
   userAnswers: string,
   deps: SpecGateDeps
 ): Promise<SpecGateResult> {
-  const status = deps.scriptStatus(projectDir);
-  if (status !== 'ok') {
+  const config = deps.getProviderConfig(projectDir);
+  if (!config) {
     return {
       passed: false,
       questions: [],
-      gateSummary: `fetch-ticket.sh ${status}`,
+      gateSummary: 'No ticket provider configured',
       ticketUrl: null,
       cached: false,
       error:
-        status === 'missing'
-          ? 'fetch-ticket.sh is missing — run `sandstorm init` to generate it.'
-          : 'fetch-ticket.sh exists but is not executable.',
+        'No ticket provider configured for this project. Configure GitHub or Jira in Project Settings.',
     };
   }
 
@@ -303,7 +296,6 @@ export async function runSpecRefine(
   const reportText = report.report || '';
 
   if (passed) {
-    // Refine just rewrote the ticket body — re-fetch + re-hash before tagging.
     const fresh = await deps.fetchTicket(ticketId, projectDir);
     if (fresh) {
       await deps.markSpecReady(ticketId, shortBodyHash(fresh));
@@ -320,8 +312,9 @@ export async function runSpecRefine(
 }
 
 /**
- * Default deps wired to the real ticket-fetcher + tools.ts handlers.
- * Exposed so the IPC layer doesn't have to know how to wire the graph.
+ * Default deps wired to the real ticket-config + tools.ts handlers.
+ * The `getProviderConfig` dep is injected from the IPC layer so this module
+ * does not depend on the registry directly.
  */
 export function defaultSpecGateDeps(
   runCheck: (ticketId: string, projectDir: string) => Promise<SpecGateReport>,
@@ -329,11 +322,16 @@ export function defaultSpecGateDeps(
     ticketId: string,
     projectDir: string,
     userAnswers?: string
-  ) => Promise<SpecGateReport>
+  ) => Promise<SpecGateReport>,
+  getProviderConfig: (projectDir: string) => ProjectTicketConfig | null,
 ): SpecGateDeps {
   return {
-    fetchTicket: fetchTicketContext,
-    scriptStatus: getScriptStatus,
+    fetchTicket: async (ticketId, projectDir) => {
+      const config = getProviderConfig(projectDir);
+      if (!config) return null;
+      return fetchTicketWithConfig(ticketId, config, projectDir);
+    },
+    getProviderConfig,
     runCheck,
     runRefine,
     readSpecReadyHash,
@@ -349,24 +347,28 @@ export interface FetchTicketResult {
 
 /**
  * Fetch the rendered ticket body for the renderer. Returns the body and
- * (best-effort) the GitHub URL.
+ * (best-effort) the issue URL. The config is read from the registry by
+ * the IPC layer and passed in here.
  */
 export async function fetchTicketForRenderer(
   ticketId: string,
-  projectDir: string
+  config: ProjectTicketConfig | null,
+  projectDir: string,
 ): Promise<FetchTicketResult> {
-  const status = getScriptStatus(projectDir);
-  if (status !== 'ok') {
+  if (!config) {
     throw new Error(
-      status === 'missing'
-        ? 'fetch-ticket.sh is missing — run `sandstorm init` to generate it.'
-        : 'fetch-ticket.sh exists but is not executable.'
+      'No ticket provider configured for this project. Configure GitHub or Jira in Project Settings.'
     );
   }
-  const body = await fetchTicketContext(ticketId, projectDir);
+  const body = await fetchTicketWithConfig(ticketId, config, projectDir);
   if (!body) {
-    throw new Error(`fetch-ticket.sh returned no output for ticket "${ticketId}".`);
+    throw new Error(`Ticket provider returned no output for ticket "${ticketId}".`);
   }
-  const url = await readTicketUrl(ticketId);
-  return { body, url: url || null };
+  let url: string | null = null;
+  if (config.provider === 'jira' && config.jira_url) {
+    url = `${config.jira_url.replace(/\/$/, '')}/browse/${ticketId}`;
+  } else {
+    url = await readTicketUrl(ticketId) || null;
+  }
+  return { body, url };
 }

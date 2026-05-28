@@ -277,9 +277,9 @@ case "$COMMAND" in
         cp "$PROJECT_ROOT/.sandstorm/verify.sh" "$WORKSPACE/.sandstorm/verify.sh" 2>/dev/null || true
       fi
       # Copy host .sandstorm/scripts/ into the workspace so container-side tools
-      # (create-pr.sh, fetch-ticket.sh, etc.) are reachable at /app/.sandstorm/scripts/.
+      # (scheduled/*.sh) are reachable at /app/.sandstorm/scripts/.
       # Use -rp to preserve executable bits and recurse into subdirs (e.g. scheduled/).
-      # No-op silently when the host has no scripts dir (uninitialized project).
+      # No-op silently when the host has no scripts dir.
       if [ -d "$PROJECT_ROOT/.sandstorm/scripts" ]; then
         mkdir -p "$WORKSPACE/.sandstorm/scripts"
         cp -rp "$PROJECT_ROOT/.sandstorm/scripts/." "$WORKSPACE/.sandstorm/scripts/" 2>/dev/null || true
@@ -566,27 +566,6 @@ case "$COMMAND" in
         git add -A
         git diff --cached --quiet || git commit -m "'"${COMMIT_MSG}"'"
         git push -u origin "'"${CURRENT_BRANCH}"'"
-        # One PR-creation path: .sandstorm/scripts/create-pr.sh, invoked
-        # here with either the caller-provided title + body file or the
-        # default commit-message-as-title + short default body. No
-        # separate desktop-side path.
-        if git log origin/main.."'"${CURRENT_BRANCH}"'" --oneline | head -1 | grep -q .; then
-          if [ -x /app/.sandstorm/scripts/create-pr.sh ]; then
-            PR_ARGS=(--title "'"${EFFECTIVE_PR_TITLE}"'" --base main --head "'"${CURRENT_BRANCH}"'")
-            if [ -n "'"${PR_BODY_FILE}"'" ]; then
-              PR_ARGS+=(--body-file "'"${PR_BODY_FILE}"'")
-            else
-              PR_ARGS+=(--body "Changes from Sandstorm stack '"${STACK_ID}"'")
-            fi
-            if ! /app/.sandstorm/scripts/create-pr.sh "${PR_ARGS[@]}"; then
-              echo "SANDSTORM_PR_FAILED:create-pr.sh exited non-zero" >&2
-            fi
-          else
-            echo "SANDSTORM_PR_FAILED:no create-pr script at .sandstorm/scripts/create-pr.sh" >&2
-            echo "No create-pr script found at .sandstorm/scripts/create-pr.sh — skipping PR creation."
-            echo "Run sandstorm init to configure a ticket provider, or create the script manually."
-          fi
-        fi
         git remote set-url origin "https://github.com/'"${GIT_REPO}"'.git"
       '
 

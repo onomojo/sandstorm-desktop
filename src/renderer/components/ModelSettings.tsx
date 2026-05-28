@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { useAppStore, ModelSettings as ModelSettingsType } from '../store';
+import { useAppStore, ModelSettings as ModelSettingsType, ProjectTicketConfig } from '../store';
 
-type Tab = 'global' | 'project';
+type Tab = 'global' | 'project' | 'ticketing';
 
 const INNER_MODEL_OPTIONS = [
   { id: 'auto', label: 'Auto', desc: 'Outer Claude triages' },
@@ -64,6 +64,8 @@ export function ModelSettingsModal() {
     activeProject,
     getProjectModelSettings,
     setProjectModelSettings,
+    getProjectTicketConfig,
+    setProjectTicketConfig,
   } = useAppStore();
 
   const project = activeProject();
@@ -74,13 +76,25 @@ export function ModelSettingsModal() {
   const [globalOuter, setGlobalOuter] = useState(globalModelSettings.outer_model);
   const [globalDirty, setGlobalDirty] = useState(false);
 
-  // Project settings state
+  // Project model settings state
   const [projectInner, setProjectInner] = useState('global');
   const [projectOuter, setProjectOuter] = useState('global');
   const [projectDirty, setProjectDirty] = useState(false);
   const [projectLoaded, setProjectLoaded] = useState(false);
 
+  // Ticket config state
+  const [ticketProvider, setTicketProvider] = useState<'github' | 'jira'>('github');
+  const [jiraUrl, setJiraUrl] = useState('');
+  const [jiraUsername, setJiraUsername] = useState('');
+  const [jiraApiToken, setJiraApiToken] = useState('');
+  const [jiraProjectKey, setJiraProjectKey] = useState('');
+  const [jiraIssueType, setJiraIssueType] = useState('');
+  const [ticketPrefix, setTicketPrefix] = useState('');
+  const [ticketDirty, setTicketDirty] = useState(false);
+  const [ticketLoaded, setTicketLoaded] = useState(false);
+
   const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     refreshGlobalModelSettings();
@@ -105,15 +119,43 @@ export function ModelSettingsModal() {
     setProjectDirty(false);
   }, [project, getProjectModelSettings]);
 
+  const loadTicketConfig = useCallback(async () => {
+    if (!project) return;
+    const config = await getProjectTicketConfig(project.directory);
+    if (config) {
+      setTicketProvider(config.provider);
+      setJiraUrl(config.jira_url ?? '');
+      setJiraUsername(config.jira_username ?? '');
+      setJiraApiToken(config.jira_api_token ?? '');
+      setJiraProjectKey(config.jira_project_key ?? '');
+      setJiraIssueType(config.jira_issue_type ?? '');
+      setTicketPrefix(config.ticket_prefix ?? '');
+    } else {
+      setTicketProvider('github');
+      setJiraUrl('');
+      setJiraUsername('');
+      setJiraApiToken('');
+      setJiraProjectKey('');
+      setJiraIssueType('');
+      setTicketPrefix('');
+    }
+    setTicketLoaded(true);
+    setTicketDirty(false);
+  }, [project, getProjectTicketConfig]);
+
   useEffect(() => {
     loadProjectSettings();
-  }, [loadProjectSettings]);
+    loadTicketConfig();
+  }, [loadProjectSettings, loadTicketConfig]);
 
   const handleSaveGlobal = async () => {
     setSaving(true);
+    setError(null);
     try {
       await setGlobalModelSettings({ inner_model: globalInner, outer_model: globalOuter });
       setGlobalDirty(false);
+    } catch (err) {
+      setError(String(err));
     } finally {
       setSaving(false);
     }
@@ -122,20 +164,58 @@ export function ModelSettingsModal() {
   const handleSaveProject = async () => {
     if (!project) return;
     setSaving(true);
+    setError(null);
     try {
       await setProjectModelSettings(project.directory, {
         inner_model: projectInner,
         outer_model: projectOuter,
       });
       setProjectDirty(false);
+    } catch (err) {
+      setError(String(err));
     } finally {
       setSaving(false);
     }
   };
 
+  const handleSaveTicket = async () => {
+    if (!project) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const config: ProjectTicketConfig = {
+        provider: ticketProvider,
+        jira_url: ticketProvider === 'jira' ? jiraUrl.trim() || null : null,
+        jira_username: ticketProvider === 'jira' ? jiraUsername.trim() || null : null,
+        jira_api_token: ticketProvider === 'jira' ? jiraApiToken.trim() || null : null,
+        jira_project_key: ticketProvider === 'jira' ? jiraProjectKey.trim() || null : null,
+        jira_issue_type: ticketProvider === 'jira' ? jiraIssueType.trim() || null : null,
+        ticket_prefix: ticketPrefix.trim() || null,
+      };
+      await setProjectTicketConfig(project.directory, config);
+      setTicketDirty(false);
+    } catch (err) {
+      setError(String(err));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleSave = () => {
+    if (activeTab === 'global') return handleSaveGlobal();
+    if (activeTab === 'project') return handleSaveProject();
+    return handleSaveTicket();
+  };
+
+  const isDirty =
+    activeTab === 'global' ? globalDirty :
+    activeTab === 'project' ? projectDirty :
+    ticketDirty;
+
   const tabs: { id: Tab; label: string; disabled?: boolean }[] = [
     { id: 'global', label: 'Global Defaults' },
     { id: 'project', label: project ? `Project: ${project.name}` : 'Project', disabled: !project },
+    { id: 'ticketing', label: 'Ticketing', disabled: !project },
   ];
 
   const effectiveInner = projectInner === 'global' ? globalInner : projectInner;
@@ -146,12 +226,12 @@ export function ModelSettingsModal() {
       className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in"
       onClick={(e) => { if (e.target === e.currentTarget) setShowModelSettings(false); }}
     >
-      <div className="bg-sandstorm-surface border border-sandstorm-border rounded-xl w-[520px] max-h-[90vh] overflow-y-auto shadow-dialog animate-slide-up">
+      <div className="bg-sandstorm-surface border border-sandstorm-border rounded-xl w-[540px] max-h-[90vh] overflow-y-auto shadow-dialog animate-slide-up">
         {/* Header */}
         <div className="px-6 py-4 border-b border-sandstorm-border flex items-center justify-between">
           <div>
-            <h2 className="text-base font-semibold text-sandstorm-text">Model Settings</h2>
-            <p className="text-[11px] text-sandstorm-muted mt-0.5">Configure default models for inner and outer Claude</p>
+            <h2 className="text-base font-semibold text-sandstorm-text">Project Configuration</h2>
+            <p className="text-[11px] text-sandstorm-muted mt-0.5">Configure models and ticket provider for this project</p>
           </div>
           <button
             onClick={() => setShowModelSettings(false)}
@@ -169,7 +249,7 @@ export function ModelSettingsModal() {
           {tabs.map((tab) => (
             <button
               key={tab.id}
-              onClick={() => !tab.disabled && setActiveTab(tab.id)}
+              onClick={() => { if (!tab.disabled) { setActiveTab(tab.id); setError(null); } }}
               disabled={tab.disabled}
               className={`px-4 py-2.5 text-xs font-medium rounded-t-lg transition-all border-b-2 -mb-px ${
                 activeTab === tab.id
@@ -295,6 +375,136 @@ export function ModelSettingsModal() {
               </div>
             </>
           )}
+
+          {activeTab === 'ticketing' && project && ticketLoaded && (
+            <>
+              <div>
+                <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
+                  Ticket Provider
+                </label>
+                <p className="text-[10px] text-sandstorm-muted mb-2">
+                  Which system does this project use for issue tracking?
+                </p>
+                <div className="flex gap-2">
+                  {(['github', 'jira'] as const).map((p) => (
+                    <button
+                      key={p}
+                      onClick={() => { setTicketProvider(p); setTicketDirty(true); }}
+                      className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-all ${
+                        ticketProvider === p
+                          ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
+                          : 'border-sandstorm-border bg-sandstorm-bg text-sandstorm-muted hover:border-sandstorm-border-light'
+                      }`}
+                      data-testid={`ticket-provider-${p}`}
+                    >
+                      {p === 'github' ? 'GitHub Issues' : 'Jira'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {ticketProvider === 'github' && (
+                <div className="bg-sandstorm-bg border border-sandstorm-border rounded-lg px-4 py-3">
+                  <p className="text-[11px] text-sandstorm-muted">
+                    GitHub Issues uses ambient <span className="font-mono text-sandstorm-text-secondary">gh</span> authentication. Make sure you are logged in with <span className="font-mono text-sandstorm-text-secondary">gh auth login</span>.
+                  </p>
+                </div>
+              )}
+
+              {ticketProvider === 'jira' && (
+                <div className="space-y-3" data-testid="jira-fields">
+                  <div>
+                    <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">
+                      Jira URL <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="url"
+                      value={jiraUrl}
+                      onChange={(e) => { setJiraUrl(e.target.value); setTicketDirty(true); }}
+                      placeholder="https://yourcompany.atlassian.net"
+                      className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+                      data-testid="jira-url"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">
+                      Username (email) <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="email"
+                      value={jiraUsername}
+                      onChange={(e) => { setJiraUsername(e.target.value); setTicketDirty(true); }}
+                      placeholder="you@company.com"
+                      className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+                      data-testid="jira-username"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">
+                      API Token <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="password"
+                      value={jiraApiToken}
+                      onChange={(e) => { setJiraApiToken(e.target.value); setTicketDirty(true); }}
+                      placeholder="Your Jira API token"
+                      className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+                      data-testid="jira-api-token"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">
+                      Project Key <span className="text-red-400">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={jiraProjectKey}
+                      onChange={(e) => { setJiraProjectKey(e.target.value.toUpperCase()); setTicketDirty(true); }}
+                      placeholder="PROJ"
+                      className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs font-mono text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+                      data-testid="jira-project-key"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">
+                      Issue Type <span className="text-sandstorm-muted font-normal">(optional, default: Task)</span>
+                    </label>
+                    <input
+                      type="text"
+                      value={jiraIssueType}
+                      onChange={(e) => { setJiraIssueType(e.target.value); setTicketDirty(true); }}
+                      placeholder="Task"
+                      className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+                      data-testid="jira-issue-type"
+                    />
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">
+                  Ticket Prefix <span className="text-sandstorm-muted font-normal">(optional)</span>
+                </label>
+                <p className="text-[10px] text-sandstorm-muted mb-1">
+                  Used to identify ticket IDs in branch names and prompts (e.g. PROJ-)
+                </p>
+                <input
+                  type="text"
+                  value={ticketPrefix}
+                  onChange={(e) => { setTicketPrefix(e.target.value); setTicketDirty(true); }}
+                  placeholder="e.g. PROJ-"
+                  className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs font-mono text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+                  data-testid="ticket-prefix"
+                />
+              </div>
+            </>
+          )}
+
+          {error && (
+            <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-lg px-3 py-2">
+              {error}
+            </div>
+          )}
         </div>
 
         {/* Footer */}
@@ -306,8 +516,8 @@ export function ModelSettingsModal() {
             Cancel
           </button>
           <button
-            onClick={activeTab === 'global' ? handleSaveGlobal : handleSaveProject}
-            disabled={saving || (activeTab === 'global' ? !globalDirty : !projectDirty)}
+            onClick={handleSave}
+            disabled={saving || !isDirty}
             className="px-5 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white text-xs font-medium rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.98] shadow-glow"
             data-testid="model-settings-save"
           >

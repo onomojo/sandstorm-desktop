@@ -31,6 +31,8 @@ const {
     removeProject: vi.fn(),
     getProject: vi.fn(),
     getPorts: vi.fn(),
+    getProjectTicketConfig: vi.fn().mockReturnValue(null),
+    setProjectTicketConfig: vi.fn(),
   };
 
   const mockStackManager = {
@@ -808,32 +810,24 @@ describe('IPC Handlers', () => {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       });
 
-      it('reports missingFetchScript:true when fetch-ticket.sh is absent', async () => {
+      it('reports ticketProviderUnconfigured:true when no provider is stored in registry', async () => {
+        mockRegistry.getProjectTicketConfig.mockReturnValue(null);
         const result = await invokeHandler('projects:checkMigration', tmpDir) as Record<string, unknown>;
-        expect(result.missingFetchScript).toBe(true);
+        expect(result.ticketProviderUnconfigured).toBe(true);
         expect(result.needsMigration).toBe(true);
       });
 
-      it('reports missingFetchScript:false when fetch-ticket.sh exists and is executable', async () => {
+      it('reports ticketProviderUnconfigured:false when provider is configured', async () => {
+        mockRegistry.getProjectTicketConfig.mockReturnValue({ provider: 'github' });
+        const result = await invokeHandler('projects:checkMigration', tmpDir) as Record<string, unknown>;
+        expect(result.ticketProviderUnconfigured).toBe(false);
+      });
+
+      it('deletes old ticket scripts from .sandstorm/scripts/ if present', async () => {
         const scriptPath = path.join(tmpDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
         fs.writeFileSync(scriptPath, '#!/bin/bash\necho ok\n', { mode: 0o755 });
-
-        const result = await invokeHandler('projects:checkMigration', tmpDir) as Record<string, unknown>;
-        expect(result.missingFetchScript).toBe(false);
-      });
-
-      it('reports missingStartScript:true when start-ticket.sh is absent', async () => {
-        const result = await invokeHandler('projects:checkMigration', tmpDir) as Record<string, unknown>;
-        expect(result.missingStartScript).toBe(true);
-        expect(result.needsMigration).toBe(true);
-      });
-
-      it('reports missingStartScript:false when start-ticket.sh exists and is executable', async () => {
-        const scriptPath = path.join(tmpDir, '.sandstorm', 'scripts', 'start-ticket.sh');
-        fs.writeFileSync(scriptPath, '#!/bin/bash\necho ok\n', { mode: 0o755 });
-
-        const result = await invokeHandler('projects:checkMigration', tmpDir) as Record<string, unknown>;
-        expect(result.missingStartScript).toBe(false);
+        await invokeHandler('projects:checkMigration', tmpDir);
+        expect(fs.existsSync(scriptPath)).toBe(false);
       });
 
       it('returns needsMigration:false when .sandstorm/config does not exist', async () => {
@@ -847,73 +841,24 @@ describe('IPC Handlers', () => {
       });
     });
 
-    describe('projects:installFetchScript', () => {
-      let tmpDir: string;
-      const templateDir = path.join('/tmp/sandstorm-cli', 'templates', 'github', 'scripts');
-      const templateSrc = path.join(templateDir, 'fetch-ticket.sh');
-
-      beforeEach(() => {
-        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-installFetch-'));
-        fs.mkdirSync(templateDir, { recursive: true });
-        fs.writeFileSync(templateSrc, '#!/bin/bash\n# github fetch\n', { mode: 0o755 });
+    describe('projectTicketConfig:get and :set', () => {
+      it('returns the stored ticket config via get', async () => {
+        const config = { provider: 'github' as const };
+        mockRegistry.getProjectTicketConfig.mockReturnValue(config);
+        const result = await invokeHandler('projectTicketConfig:get', '/proj') as typeof config | null;
+        expect(result).toEqual(config);
       });
 
-      afterEach(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-        if (fs.existsSync(templateSrc)) fs.unlinkSync(templateSrc);
+      it('returns null when no ticket config is stored', async () => {
+        mockRegistry.getProjectTicketConfig.mockReturnValue(null);
+        const result = await invokeHandler('projectTicketConfig:get', '/proj');
+        expect(result).toBeNull();
       });
 
-      it('copies fetch-ticket.sh from the bundled template to .sandstorm/scripts/', async () => {
-        const result = await invokeHandler('projects:installFetchScript', tmpDir, 'github') as { success: boolean; path?: string };
-
-        expect(result.success).toBe(true);
-        const dest = path.join(tmpDir, '.sandstorm', 'scripts', 'fetch-ticket.sh');
-        expect(fs.existsSync(dest)).toBe(true);
-        expect(result.path).toBe(dest);
-        expect(fs.readFileSync(dest, 'utf-8')).toBe('#!/bin/bash\n# github fetch\n');
-      });
-
-      it('returns success:false when template is missing for the provider', async () => {
-        fs.unlinkSync(templateSrc);
-
-        const result = await invokeHandler('projects:installFetchScript', tmpDir, 'github') as { success: boolean; error?: string };
-        expect(result.success).toBe(false);
-        expect(result.error).toMatch(/fetch-ticket\.sh/);
-      });
-    });
-
-    describe('projects:installStartScript', () => {
-      let tmpDir: string;
-      const templateDir = path.join('/tmp/sandstorm-cli', 'templates', 'github', 'scripts');
-      const templateSrc = path.join(templateDir, 'start-ticket.sh');
-
-      beforeEach(() => {
-        tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'ipc-installStart-'));
-        fs.mkdirSync(templateDir, { recursive: true });
-        fs.writeFileSync(templateSrc, '#!/bin/bash\n# github start\n', { mode: 0o755 });
-      });
-
-      afterEach(() => {
-        fs.rmSync(tmpDir, { recursive: true, force: true });
-        if (fs.existsSync(templateSrc)) fs.unlinkSync(templateSrc);
-      });
-
-      it('copies start-ticket.sh from the bundled template to .sandstorm/scripts/', async () => {
-        const result = await invokeHandler('projects:installStartScript', tmpDir, 'github') as { success: boolean; path?: string };
-
-        expect(result.success).toBe(true);
-        const dest = path.join(tmpDir, '.sandstorm', 'scripts', 'start-ticket.sh');
-        expect(fs.existsSync(dest)).toBe(true);
-        expect(result.path).toBe(dest);
-        expect(fs.readFileSync(dest, 'utf-8')).toBe('#!/bin/bash\n# github start\n');
-      });
-
-      it('returns success:false when template is missing for the provider', async () => {
-        fs.unlinkSync(templateSrc);
-
-        const result = await invokeHandler('projects:installStartScript', tmpDir, 'github') as { success: boolean; error?: string };
-        expect(result.success).toBe(false);
-        expect(result.error).toMatch(/start-ticket\.sh/);
+      it('calls setProjectTicketConfig via set handler', async () => {
+        const config = { provider: 'jira' as const, jira_url: 'https://x.atlassian.net', jira_username: 'u', jira_api_token: 't', jira_project_key: 'X', jira_issue_type: null, ticket_prefix: null };
+        await invokeHandler('projectTicketConfig:set', '/proj', config);
+        expect(mockRegistry.setProjectTicketConfig).toHaveBeenCalledWith('/proj', config);
       });
     });
   });
@@ -1417,11 +1362,8 @@ describe('IPC Handlers', () => {
       'tickets:create',
       'pr:draftBody',
       'pr:create',
-      'projects:installUpdateScript',
-      'projects:installCreatePrScript',
-      'projects:installFetchScript',
-      'projects:installStartScript',
-      'projects:detectTicketProvider',
+      'projectTicketConfig:get',
+      'projectTicketConfig:set',
     ];
 
     it('registers all expected IPC channels', () => {
