@@ -23,6 +23,15 @@ export type ScheduleAction =
        * segment or absolute path) is rejected.
        */
       scriptName: string;
+    }
+  | {
+      kind: 'refine-to-comments';
+      /**
+       * Label used to find candidate tickets (default: "needs-spec").
+       * Tickets with this label authored by the current user are processed.
+       * On gate-pass the label is swapped to "spec-ready".
+       */
+      ticketLabel?: string;
     };
 
 export interface Schedule {

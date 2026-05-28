@@ -13,6 +13,8 @@ import {
 import type { ScheduleAction } from '../../src/main/scheduler/types';
 
 const runScript = (scriptName: string): ScheduleAction => ({ kind: 'run-script', scriptName });
+const refineToComments = (ticketLabel?: string): ScheduleAction =>
+  ticketLabel !== undefined ? { kind: 'refine-to-comments', ticketLabel } : { kind: 'refine-to-comments' };
 
 let tmpDir: string;
 
@@ -82,6 +84,34 @@ describe('schedule-service', () => {
           cronExpression: '0 * * * *',
           // Cast through unknown to simulate a bad payload crossing the IPC boundary.
           action: { kind: 'legacy-prompt' } as unknown as ScheduleAction,
+        })
+      ).toThrow('Invalid schedule action');
+    });
+
+    it('creates refine-to-comments action without ticketLabel (uses default)', () => {
+      const schedule = createSchedule({
+        projectDir: tmpDir,
+        cronExpression: '0 * * * *',
+        action: refineToComments(),
+      });
+      expect(schedule.action).toEqual({ kind: 'refine-to-comments' });
+    });
+
+    it('creates refine-to-comments action with a custom ticketLabel', () => {
+      const schedule = createSchedule({
+        projectDir: tmpDir,
+        cronExpression: '0 * * * *',
+        action: refineToComments('my-label'),
+      });
+      expect(schedule.action).toEqual({ kind: 'refine-to-comments', ticketLabel: 'my-label' });
+    });
+
+    it('rejects refine-to-comments action with empty ticketLabel', () => {
+      expect(() =>
+        createSchedule({
+          projectDir: tmpDir,
+          cronExpression: '0 * * * *',
+          action: refineToComments(''),
         })
       ).toThrow('Invalid schedule action');
     });
@@ -256,6 +286,40 @@ describe('schedule-service', () => {
         updateSchedule(tmpDir, created.id, {
           action: { kind: 'run-script', scriptName: '' },
         }),
+      ).toThrow('Invalid schedule action');
+    });
+
+    it('accepts refine-to-comments action patch without ticketLabel', () => {
+      const created = createSchedule({
+        projectDir: tmpDir,
+        cronExpression: '0 * * * *',
+        action: runScript('test.sh'),
+      });
+
+      const updated = updateSchedule(tmpDir, created.id, { action: refineToComments() });
+      expect(updated.action).toEqual({ kind: 'refine-to-comments' });
+    });
+
+    it('accepts refine-to-comments action patch with custom ticketLabel', () => {
+      const created = createSchedule({
+        projectDir: tmpDir,
+        cronExpression: '0 * * * *',
+        action: runScript('test.sh'),
+      });
+
+      const updated = updateSchedule(tmpDir, created.id, { action: refineToComments('custom-label') });
+      expect(updated.action).toEqual({ kind: 'refine-to-comments', ticketLabel: 'custom-label' });
+    });
+
+    it('rejects refine-to-comments action patch with empty ticketLabel', () => {
+      const created = createSchedule({
+        projectDir: tmpDir,
+        cronExpression: '0 * * * *',
+        action: runScript('test.sh'),
+      });
+
+      expect(() =>
+        updateSchedule(tmpDir, created.id, { action: refineToComments('') }),
       ).toThrow('Invalid schedule action');
     });
 

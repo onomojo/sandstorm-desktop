@@ -26,6 +26,9 @@ function isValidAction(a: unknown): a is ScheduleAction {
   if (obj.kind === 'run-script') {
     return typeof obj.scriptName === 'string' && obj.scriptName.trim().length > 0;
   }
+  if (obj.kind === 'refine-to-comments') {
+    return obj.ticketLabel === undefined || (typeof obj.ticketLabel === 'string' && obj.ticketLabel.trim().length > 0);
+  }
   return false;
 }
 
@@ -114,7 +117,7 @@ export function createSchedule(input: CreateScheduleInput): Schedule {
   }
 
   if (!isValidAction(action)) {
-    throw new Error('Invalid schedule action: expected { kind: "run-script", scriptName: string }');
+    throw new Error('Invalid schedule action: unsupported kind or missing required fields');
   }
 
   const now = new Date().toISOString();
@@ -169,7 +172,7 @@ export function updateSchedule(
 
   if (patch.action !== undefined) {
     if (!isValidAction(patch.action)) {
-      throw new Error('Invalid schedule action: expected { kind: "run-script", scriptName: string }');
+      throw new Error('Invalid schedule action: unsupported kind or missing required fields');
     }
     store.schedules[idx].action = patch.action;
   }

@@ -268,6 +268,28 @@ async function initializeApp(): Promise<void> {
             );
             return response;
           }
+          case 'refine-to-comments': {
+            const { runRefineToComments, buildRefineToCommentsDeps } = await import('./scheduler/refine-to-comments');
+            const { handleToolCall } = await import('./claude/tools');
+            const { defaultSpecGateDeps, runSpecCheck, runSpecRefine } = await import('./control-plane/ticket-spec');
+            const specDeps = defaultSpecGateDeps(
+              (ticketId, projectDir) =>
+                handleToolCall('spec_check', { ticketId, projectDir }) as Promise<import('./control-plane/ticket-spec').SpecGateReport>,
+              (ticketId, projectDir, userAnswers) =>
+                handleToolCall('spec_refine', { ticketId, projectDir, userAnswers }) as Promise<import('./control-plane/ticket-spec').SpecGateReport>,
+            );
+            const deps = buildRefineToCommentsDeps(
+              (ticketId, projectDir) => runSpecCheck(ticketId, projectDir, specDeps),
+              (ticketId, projectDir, userAnswers) => runSpecRefine(ticketId, projectDir, userAnswers, specDeps),
+            );
+            const label = schedule.action.ticketLabel ?? 'needs-spec';
+            const result = await runRefineToComments(project.directory, label, deps);
+            console.log(
+              `[scheduler] refine-to-comments: processed=${result.processed} passed=${result.passed} failed=${result.failed}`,
+            );
+            const dispatchId = `dispatch_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+            return { ok: true, dispatchId };
+          }
           default: {
             const unknownKind = (schedule.action as { kind?: string }).kind;
             return {
