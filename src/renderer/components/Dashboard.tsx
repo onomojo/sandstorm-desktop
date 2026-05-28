@@ -400,11 +400,7 @@ export function Dashboard() {
     missingSpecQualityGate: boolean;
     missingReviewPrompt: boolean;
     legacyPortMappings: boolean;
-    missingUpdateScript: boolean;
-    missingCreatePrScript: boolean;
-    missingFetchScript: boolean;
-    missingStartScript: boolean;
-    detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
+    ticketProviderUnconfigured: boolean;
   } | null>(null);
   const [showMigrationModal, setShowMigrationModal] = useState(false);
   const [showComposeSetup, setShowComposeSetup] = useState(false);
@@ -461,11 +457,7 @@ export function Dashboard() {
               missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
               missingReviewPrompt: migration.missingReviewPrompt ?? false,
               legacyPortMappings: migration.legacyPortMappings ?? false,
-              missingUpdateScript: migration.missingUpdateScript ?? false,
-              missingCreatePrScript: migration.missingCreatePrScript ?? false,
-              missingFetchScript: migration.missingFetchScript ?? false,
-              missingStartScript: migration.missingStartScript ?? false,
-              detectedTicketProvider: migration.detectedTicketProvider,
+              ticketProviderUnconfigured: migration.ticketProviderUnconfigured ?? false,
             } : null);
             if (migration.needsMigration) {
               setShowMigrationModal(true);
@@ -900,11 +892,7 @@ export function Dashboard() {
           missingSpecQualityGate={migrationState.missingSpecQualityGate}
           missingReviewPrompt={migrationState.missingReviewPrompt}
           legacyPortMappings={migrationState.legacyPortMappings}
-          missingUpdateScript={migrationState.missingUpdateScript}
-          missingCreatePrScript={migrationState.missingCreatePrScript}
-          missingFetchScript={migrationState.missingFetchScript}
-          missingStartScript={migrationState.missingStartScript}
-          detectedTicketProvider={migrationState.detectedTicketProvider}
+          ticketProviderUnconfigured={migrationState.ticketProviderUnconfigured}
           onComplete={() => {
             setShowMigrationModal(false);
             setMigrationState(null);
@@ -930,11 +918,7 @@ export function Dashboard() {
                   missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
                   missingReviewPrompt: migration.missingReviewPrompt ?? false,
                   legacyPortMappings: migration.legacyPortMappings ?? false,
-                  missingUpdateScript: migration.missingUpdateScript ?? false,
-                  missingCreatePrScript: migration.missingCreatePrScript ?? false,
-                  missingFetchScript: migration.missingFetchScript ?? false,
-                  missingStartScript: migration.missingStartScript ?? false,
-                  detectedTicketProvider: migration.detectedTicketProvider,
+                  ticketProviderUnconfigured: migration.ticketProviderUnconfigured ?? false,
                 });
                 setShowMigrationModal(true);
               }

@@ -7,7 +7,8 @@ import { PortProxy } from './port-proxy';
 import { TaskWatcher, WorkflowProgressData } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
-import { fetchTicketContext, referencesTicket } from './ticket-fetcher';
+import { fetchTicketWithConfig } from './ticket-config';
+import { referencesTicket } from './ticket-fetcher';
 
 declare const __GIT_COMMIT__: string;
 
@@ -813,13 +814,16 @@ export class StackManager {
     }
 
     // If the stack has a ticket number, fetch the full ticket context
-    // via the project's fetch-ticket script and prepend it to the prompt.
+    // via the built-in provider and prepend it to the prompt.
     // Skipped when the caller has already embedded ticket context in the prompt
     // (e.g. re-dispatch of an interrupted task whose stored prompt includes it).
     if (stack.ticket && !opts?.skipTicketFetch) {
-      const ticketContext = await fetchTicketContext(stack.ticket, stack.project_dir);
-      if (ticketContext) {
-        prompt = `${ticketContext}\n\n---\n\n## Task\n\n${prompt}`;
+      const ticketConfig = this.registry.getProjectTicketConfig(stack.project_dir);
+      if (ticketConfig) {
+        const ticketContext = await fetchTicketWithConfig(stack.ticket, ticketConfig, stack.project_dir);
+        if (ticketContext) {
+          prompt = `${ticketContext}\n\n---\n\n## Task\n\n${prompt}`;
+        }
       }
     }
 

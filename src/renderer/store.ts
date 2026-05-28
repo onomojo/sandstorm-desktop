@@ -328,6 +328,16 @@ export interface ModelSettings {
   outer_model: string;
 }
 
+export interface ProjectTicketConfig {
+  provider: 'github' | 'jira';
+  jira_url?: string | null;
+  jira_username?: string | null;
+  jira_api_token?: string | null;
+  jira_project_key?: string | null;
+  jira_issue_type?: string | null;
+  ticket_prefix?: string | null;
+}
+
 export interface StaleWorkspace {
   stackId: string;
   project: string;
@@ -420,6 +430,10 @@ interface AppState {
   getProjectModelSettings: (projectDir: string) => Promise<ModelSettings | null>;
   setProjectModelSettings: (projectDir: string, settings: Partial<ModelSettings>) => Promise<void>;
   removeProjectModelSettings: (projectDir: string) => Promise<void>;
+
+  // Project ticket config
+  getProjectTicketConfig: (projectDir: string) => Promise<ProjectTicketConfig | null>;
+  setProjectTicketConfig: (projectDir: string, config: ProjectTicketConfig) => Promise<void>;
 
   // Session monitor
   sessionMonitorState: SessionMonitorState | null;
@@ -518,11 +532,7 @@ declare global {
           missingSpecQualityGate?: boolean;
           missingReviewPrompt?: boolean;
           legacyPortMappings?: boolean;
-          missingUpdateScript?: boolean;
-          missingCreatePrScript?: boolean;
-          missingFetchScript?: boolean;
-          missingStartScript?: boolean;
-          detectedTicketProvider?: 'github' | 'jira' | 'skeleton';
+          ticketProviderUnconfigured?: boolean;
         }>;
         autoDetectVerify: (directory: string) => Promise<{
           verifyScript: string;
@@ -533,25 +543,6 @@ declare global {
           verifyScript: string,
           serviceDescriptions: Record<string, string>,
         ) => Promise<{ success: boolean; error?: string }>;
-        installUpdateScript: (
-          directory: string,
-          provider: 'github' | 'jira' | 'skeleton',
-        ) => Promise<{ success: boolean; path?: string; error?: string }>;
-        installCreatePrScript: (
-          directory: string,
-          provider: 'github' | 'jira' | 'skeleton',
-        ) => Promise<{ success: boolean; path?: string; error?: string }>;
-        installFetchScript: (
-          directory: string,
-          provider: 'github' | 'jira' | 'skeleton',
-        ) => Promise<{ success: boolean; path?: string; error?: string }>;
-        installStartScript: (
-          directory: string,
-          provider: 'github' | 'jira' | 'skeleton',
-        ) => Promise<{ success: boolean; path?: string; error?: string }>;
-        detectTicketProvider: (
-          directory: string,
-        ) => Promise<{ provider: 'github' | 'jira' | 'skeleton' }>;
         generateCompose: (directory: string) => Promise<{
           success: boolean;
           yaml?: string;
@@ -648,6 +639,10 @@ declare global {
         setProject: (projectDir: string, settings: Partial<ModelSettings>) => Promise<void>;
         removeProject: (projectDir: string) => Promise<void>;
         getEffective: (projectDir: string) => Promise<ModelSettings>;
+      };
+      projectTicketConfig: {
+        get: (projectDir: string) => Promise<ProjectTicketConfig | null>;
+        set: (projectDir: string, config: ProjectTicketConfig) => Promise<void>;
       };
       session: {
         getState: () => Promise<SessionMonitorState>;
@@ -865,6 +860,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeProjectModelSettings: async (projectDir) => {
     await window.sandstorm.modelSettings.removeProject(projectDir);
+  },
+
+  // Project ticket config
+  getProjectTicketConfig: async (projectDir) => {
+    return window.sandstorm.projectTicketConfig.get(projectDir);
+  },
+
+  setProjectTicketConfig: async (projectDir, config) => {
+    await window.sandstorm.projectTicketConfig.set(projectDir, config);
   },
 
   // Session monitor

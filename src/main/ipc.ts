@@ -1,7 +1,10 @@
 import { ipcMain, dialog, BrowserWindow, app } from 'electron';
-import { spawn } from 'child_process';
+import { spawn, execFile } from 'child_process';
+import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
+
+const execFileAsync = promisify(execFile);
 import {
   registry,
   stackManager,
@@ -86,20 +89,9 @@ import {
   workspacePathFor,
   createPullRequest,
 } from './control-plane/pr-creator';
-import { createTicket } from './control-plane/ticket-creator';
-import {
-  getUpdateScriptStatus,
-  getCreatePrScriptStatus,
-  getStartScriptStatus,
-} from './control-plane/ticket-updater';
-import { getScriptStatus as getFetchScriptStatus } from './control-plane/ticket-fetcher';
+import { createTicketWithConfig } from './control-plane/ticket-config';
+import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
-import {
-  detectTicketProvider,
-  installUpdateScript,
-  installScript,
-  type TicketProvider,
-} from './control-plane/ticket-provider';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
 
 /**
@@ -448,15 +440,25 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         // Non-critical — don't block migration check
       }
 
+      // Delete the 5 obsolete ticket scripts that are now built into sandstorm-desktop.
+      // These were previously copied per-project from templates. This deletion is
+      // idempotent — missing files are silently skipped, and scheduled/ is never touched.
+      const scriptsDir = path.join(sandstormDir, 'scripts');
+      const obsoleteScripts = [
+        'fetch-ticket.sh',
+        'update-ticket.sh',
+        'create-ticket.sh',
+        'start-ticket.sh',
+        'create-pr.sh',
+      ];
+      for (const scriptName of obsoleteScripts) {
+        try { fs.unlinkSync(path.join(scriptsDir, scriptName)); } catch { /* missing = no-op */ }
+      }
+
       const missingSpecQualityGate = isSpecQualityGateMissing(directory);
       const missingReviewPrompt = isReviewPromptMissing(directory);
       const legacyPortMappings = hasLegacyPortMappings(directory);
-      const missingUpdateScript = getUpdateScriptStatus(directory) !== 'ok';
-      const missingCreatePrScript = getCreatePrScriptStatus(directory) !== 'ok';
-      const missingFetchScript = getFetchScriptStatus(directory) !== 'ok';
-      const missingStartScript = getStartScriptStatus(directory) !== 'ok';
-      const needsProvider = missingUpdateScript || missingCreatePrScript || missingFetchScript || missingStartScript;
-      const detectedProvider = needsProvider ? detectTicketProvider(directory) : undefined;
+      const ticketProviderUnconfigured = registry.getProjectTicketConfig(directory) === null;
 
       return {
         needsMigration:
@@ -465,102 +467,28 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           missingSpecQualityGate ||
           missingReviewPrompt ||
           legacyPortMappings ||
-          missingUpdateScript ||
-          missingCreatePrScript ||
-          missingFetchScript ||
-          missingStartScript,
+          ticketProviderUnconfigured,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
         missingSpecQualityGate,
         missingReviewPrompt,
         networksMigrated,
         legacyPortMappings,
-        missingUpdateScript,
-        missingCreatePrScript,
-        missingFetchScript,
-        missingStartScript,
-        detectedTicketProvider: detectedProvider,
+        ticketProviderUnconfigured,
       };
     } catch {
       return { needsMigration: false };
     }
   });
 
-  // Install the update-ticket.sh template for the chosen provider into
-  // .sandstorm/scripts/. Used by the migration modal when an existing
-  // project lacks the script (initialized before #318 landed).
-  ipcMain.handle(
-    'projects:installUpdateScript',
-    async (_event, directory: string, provider: TicketProvider) => {
-      try {
-        const dest = installUpdateScript({ projectDir: directory, cliDir, provider });
-        return { success: true, path: dest };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { success: false, error: msg };
-      }
-    },
-  );
+  // --- Project Ticket Config ---
 
-  // Install create-pr.sh from the chosen provider template. Same pattern as
-  // installUpdateScript — used by the migration modal when a project lacks
-  // the unified PR-creation script (#320).
-  ipcMain.handle(
-    'projects:installCreatePrScript',
-    async (_event, directory: string, provider: TicketProvider) => {
-      try {
-        const dest = installScript({
-          projectDir: directory,
-          cliDir,
-          provider,
-          scriptName: 'create-pr.sh',
-        });
-        return { success: true, path: dest };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { success: false, error: msg };
-      }
-    },
-  );
+  ipcMain.handle('projectTicketConfig:get', (_event, projectDir: string) => {
+    return registry.getProjectTicketConfig(projectDir);
+  });
 
-  ipcMain.handle(
-    'projects:installFetchScript',
-    async (_event, directory: string, provider: TicketProvider) => {
-      try {
-        const dest = installScript({
-          projectDir: directory,
-          cliDir,
-          provider,
-          scriptName: 'fetch-ticket.sh',
-        });
-        return { success: true, path: dest };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { success: false, error: msg };
-      }
-    },
-  );
-
-  ipcMain.handle(
-    'projects:installStartScript',
-    async (_event, directory: string, provider: TicketProvider) => {
-      try {
-        const dest = installScript({
-          projectDir: directory,
-          cliDir,
-          provider,
-          scriptName: 'start-ticket.sh',
-        });
-        return { success: true, path: dest };
-      } catch (err) {
-        const msg = err instanceof Error ? err.message : String(err);
-        return { success: false, error: msg };
-      }
-    },
-  );
-
-  ipcMain.handle('projects:detectTicketProvider', (_event, directory: string) => {
-    return { provider: detectTicketProvider(directory) };
+  ipcMain.handle('projectTicketConfig:set', (_event, projectDir: string, config: ProjectTicketConfig) => {
+    registry.setProjectTicketConfig(projectDir, config);
   });
 
   ipcMain.handle('projects:autoDetectVerify', async (_event, directory: string) => {
@@ -1148,6 +1076,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       handleToolCall('spec_check', { ticketId, projectDir }) as Promise<SpecGateReport>,
     (ticketId, projectDir, userAnswers) =>
       handleToolCall('spec_refine', { ticketId, projectDir, userAnswers }) as Promise<SpecGateReport>,
+    (projectDir) => registry.getProjectTicketConfig(projectDir),
   );
 
   // In-memory map of active refinement sessions (id → session + cancel handle).
@@ -1251,7 +1180,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   }
 
   ipcMain.handle('tickets:fetch', async (_event, ticketId: string, projectDir: string) => {
-    return fetchTicketForRenderer(ticketId, projectDir);
+    const config = registry.getProjectTicketConfig(projectDir);
+    return fetchTicketForRenderer(ticketId, config, projectDir);
   });
 
   ipcMain.handle('tickets:specCheck', async (_event, ticketId: string, projectDir: string) => {
@@ -1299,7 +1229,11 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   ipcMain.handle(
     'tickets:create',
     async (_event, projectDir: string, title: string, body: string) => {
-      return createTicket({ projectDir, title, body });
+      const config = registry.getProjectTicketConfig(projectDir);
+      if (!config) {
+        throw new Error('No ticket provider configured for this project. Configure GitHub or Jira in Project Settings.');
+      }
+      return createTicketWithConfig({ title, body, config, cwd: projectDir });
     },
   );
 
@@ -1337,8 +1271,17 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         { stackId, title, body },
         {
           workspace,
-          runPush: (t, bodyFile) =>
-            stackManager.push(stackId, t, { prTitle: t, prBodyFile: bodyFile }),
+          runGitPush: async (commitMsg) => {
+            await stackManager.push(stackId, commitMsg);
+          },
+          createPROnHost: async (prTitle, bodyFilePath, head, base) => {
+            const { stdout } = await execFileAsync(
+              'gh',
+              ['pr', 'create', '--title', prTitle, '--body-file', bodyFilePath, '--base', base, '--head', head],
+              { cwd: workspace, timeout: 60000, maxBuffer: 1024 * 1024 },
+            );
+            return stdout;
+          },
           checkoutBranch: (branch) =>
             stackManager.execInContainer(stackId, ['git', 'checkout', '-b', branch]),
           setPullRequest: (url, num) => stackManager.setPullRequest(stackId, url, num),
