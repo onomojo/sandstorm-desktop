@@ -247,6 +247,121 @@ describe('store: moveTicketColumn', () => {
     const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
     expect(entry?.column).toBe('backlog');
   });
+
+  // #388: rejection used to be swallowed with .catch(() => {}) which left the
+  // card silently reverted to backlog with no error surfaced — directly producing
+  // the reporter's "stuck in backlog and no feedback" symptom.
+  it('surfaces moveTicketColumnError when setColumn IPC rejects (#388)', async () => {
+    useAppStore.setState({ moveTicketColumnError: null });
+    Object.defineProperty(window, 'sandstorm', {
+      value: {
+        tickets: { list: vi.fn().mockResolvedValue([]) },
+        ticketBoard: { setColumn: vi.fn().mockRejectedValue(new Error('IPC boom')) },
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    await useAppStore.getState().moveTicketColumn('42', PROJECT_DIR, 'spec_ready');
+    const err = useAppStore.getState().moveTicketColumnError;
+    expect(err).toBeTruthy();
+    expect(err).toMatch(/42/);
+    expect(err).toMatch(/spec_ready/);
+    expect(err).toMatch(/IPC boom/);
+  });
+
+  it('clears moveTicketColumnError on a subsequent successful move (#388)', async () => {
+    useAppStore.setState({ moveTicketColumnError: 'prior failure' });
+    await useAppStore.getState().moveTicketColumn('42', PROJECT_DIR, 'spec_ready');
+    expect(useAppStore.getState().moveTicketColumnError).toBeNull();
+  });
+
+  it('clearMoveTicketColumnError() resets the surfaced error (#388)', () => {
+    useAppStore.setState({ moveTicketColumnError: 'something failed' });
+    useAppStore.getState().clearMoveTicketColumnError();
+    expect(useAppStore.getState().moveTicketColumnError).toBeNull();
+  });
+});
+
+// #388: spec-gate-pass → spec_ready transition is wired in the store's
+// upsertRefinementSession handler (not the dialog) so that it fires even when
+// the user closed the Refine dialog while the async gate was still running.
+describe('store: upsertRefinementSession → spec_ready transition (#388)', () => {
+  beforeEach(() => {
+    setupSandstormMock();
+    useAppStore.setState({
+      boardTickets: [
+        { ticket_id: '310', project_dir: PROJECT_DIR, column: 'refining', title: 'T', updated_at: '' },
+      ],
+      refinementSessions: [],
+      moveTicketColumnError: null,
+    });
+  });
+
+  it('moves to spec_ready when status becomes ready && passed', async () => {
+    useAppStore.getState().upsertRefinementSession({
+      id: 'sess', ticketId: '310', projectDir: PROJECT_DIR,
+      status: 'ready', phase: 'check', startedAt: 0,
+      result: { passed: true, questions: [], gateSummary: 'PASS', ticketUrl: null, cached: false },
+    });
+
+    // setColumn is fire-and-forget from upsert; wait a microtask for the optimistic update.
+    await new Promise(r => setTimeout(r, 0));
+    expect((window.sandstorm as any).ticketBoard.setColumn).toHaveBeenCalledWith('310', PROJECT_DIR, 'spec_ready');
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '310');
+    expect(entry?.column).toBe('spec_ready');
+  });
+
+  it('does NOT move to spec_ready when gate failed', async () => {
+    useAppStore.getState().upsertRefinementSession({
+      id: 'sess', ticketId: '310', projectDir: PROJECT_DIR,
+      status: 'ready', phase: 'check', startedAt: 0,
+      result: { passed: false, questions: [], gateSummary: 'FAIL', ticketUrl: null, cached: false },
+    });
+    await new Promise(r => setTimeout(r, 0));
+    expect((window.sandstorm as any).ticketBoard.setColumn).not.toHaveBeenCalled();
+  });
+
+  it('does NOT move to spec_ready while the session is still running', async () => {
+    useAppStore.getState().upsertRefinementSession({
+      id: 'sess', ticketId: '310', projectDir: PROJECT_DIR,
+      status: 'running', phase: 'check', startedAt: 0,
+    });
+    await new Promise(r => setTimeout(r, 0));
+    expect((window.sandstorm as any).ticketBoard.setColumn).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent on a re-emit — fires moveTicketColumn exactly once', async () => {
+    const passedSession = {
+      id: 'sess', ticketId: '310', projectDir: PROJECT_DIR,
+      status: 'ready' as const, phase: 'check' as const, startedAt: 0,
+      result: { passed: true, questions: [], gateSummary: 'PASS', ticketUrl: null, cached: false },
+    };
+    useAppStore.getState().upsertRefinementSession(passedSession);
+    await new Promise(r => setTimeout(r, 0));
+    expect((window.sandstorm as any).ticketBoard.setColumn).toHaveBeenCalledTimes(1);
+
+    // A second upsert with the same ready+passed state must NOT re-fire.
+    // Otherwise an in-flight 'in_stack' move could be demoted to 'spec_ready'.
+    useAppStore.getState().upsertRefinementSession(passedSession);
+    await new Promise(r => setTimeout(r, 0));
+    expect((window.sandstorm as any).ticketBoard.setColumn).toHaveBeenCalledTimes(1);
+  });
+
+  it('final state is in_stack when Start Stack fires immediately after gate pass', async () => {
+    // Simulate the documented edge case: gate-pass move fires, then user clicks
+    // Start Stack which fires moveTicketColumn(in_stack). Final persisted state
+    // must be in_stack (the later move wins).
+    useAppStore.getState().upsertRefinementSession({
+      id: 'sess', ticketId: '310', projectDir: PROJECT_DIR,
+      status: 'ready', phase: 'check', startedAt: 0,
+      result: { passed: true, questions: [], gateSummary: 'PASS', ticketUrl: null, cached: false },
+    });
+    await useAppStore.getState().moveTicketColumn('310', PROJECT_DIR, 'in_stack');
+    await new Promise(r => setTimeout(r, 0));
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '310');
+    expect(entry?.column).toBe('in_stack');
+  });
 });
 
 describe('store: openCreatePRDialogForTicket revert-on-cancel', () => {

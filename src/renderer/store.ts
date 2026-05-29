@@ -477,6 +477,10 @@ interface AppState {
   boardTickets: TicketBoardEntry[];
   boardTicketsLoading: boolean;
   boardTicketsError: string | null;
+  /** Surfaced when persisting a column move via IPC fails — separate from the load-error field so the UI can show it independently. */
+  moveTicketColumnError: string | null;
+  /** Clears the surfaced column-move error. */
+  clearMoveTicketColumnError: () => void;
   lastTicketFetchAt: number | null;
   refreshBoardTickets: (projectDir: string) => Promise<void>;
   moveTicketColumn: (ticketId: string, projectDir: string, column: KanbanColumn) => Promise<void>;
@@ -983,10 +987,13 @@ export const useAppStore = create<AppState>((set, get) => ({
   boardTickets: [],
   boardTicketsLoading: false,
   boardTicketsError: null,
+  moveTicketColumnError: null,
   lastTicketFetchAt: null,
   _refineDialogContext: null,
   _newStackDialogContext: null,
   _prDialogContext: null,
+
+  clearMoveTicketColumnError: () => set({ moveTicketColumnError: null }),
 
   refreshBoardTickets: async (projectDir: string) => {
     try {
@@ -1007,7 +1014,15 @@ export const useAppStore = create<AppState>((set, get) => ({
         t.ticket_id === ticketId ? { ...t, column } : t
       ),
     }));
-    await window.sandstorm.ticketBoard.setColumn(ticketId, projectDir, column).catch(() => {
+    try {
+      await window.sandstorm.ticketBoard.setColumn(ticketId, projectDir, column);
+      // Clear any prior surfaced move error on success.
+      if (get().moveTicketColumnError !== null) set({ moveTicketColumnError: null });
+    } catch (err) {
+      // Persistence failed — revert the optimistic update AND surface the error.
+      // Without surfacing, the user sees a card revert to its old column with no explanation
+      // (the original silent rollback that caused #388 reports of "stuck in backlog").
+      console.error('[moveTicketColumn]', err);
       if (previousColumn !== undefined) {
         set((state) => ({
           boardTickets: state.boardTickets.map((t) =>
@@ -1015,7 +1030,9 @@ export const useAppStore = create<AppState>((set, get) => ({
           ),
         }));
       }
-    });
+      const message = err instanceof Error ? err.message : String(err);
+      set({ moveTicketColumnError: `Failed to move ticket #${ticketId} to ${column}: ${message}` });
+    }
   },
 
   openRefineDialogFromCard: (ticketId, projectDir, previousColumn) => {
@@ -1157,22 +1174,41 @@ export const useAppStore = create<AppState>((set, get) => ({
     showRefineTicketDialog: true,
     currentRefinementSessionId: sessionId,
   }),
-  upsertRefinementSession: (session) => set((state) => {
-    if ((session as { status?: string }).status === 'cancelled') {
-      return { refinementSessions: state.refinementSessions.filter((s) => s.id !== session.id) };
+  upsertRefinementSession: (session) => {
+    let firedSpecReady = false;
+    set((state) => {
+      if ((session as { status?: string }).status === 'cancelled') {
+        return { refinementSessions: state.refinementSessions.filter((s) => s.id !== session.id) };
+      }
+      // Clear streamingOutput when the session leaves the running state.
+      const normalized = session.status !== 'running'
+        ? { ...session, streamingOutput: undefined }
+        : session;
+      const idx = state.refinementSessions.findIndex((s) => s.id === session.id);
+
+      // Detect the spec-gate-pass transition exactly once per session.
+      // Idempotency contract (#388): when (status === 'ready' && result.passed) becomes true,
+      // fire moveTicketColumn(ticketId, projectDir, 'spec_ready'). If the previous stored
+      // session already satisfied the condition, this is a re-emit and we must not re-fire
+      // (would otherwise demote a ticket the user has already advanced to in_stack).
+      const wasPassed = idx >= 0
+        && state.refinementSessions[idx].status === 'ready'
+        && state.refinementSessions[idx].result?.passed === true;
+      const isPassed = normalized.status === 'ready' && normalized.result?.passed === true;
+      firedSpecReady = isPassed && !wasPassed;
+
+      if (idx >= 0) {
+        const next = [...state.refinementSessions];
+        next[idx] = normalized;
+        return { refinementSessions: next };
+      }
+      return { refinementSessions: [...state.refinementSessions, normalized] };
+    });
+
+    if (firedSpecReady) {
+      void get().moveTicketColumn(session.ticketId, session.projectDir, 'spec_ready');
     }
-    // Clear streamingOutput when the session leaves the running state.
-    const normalized = session.status !== 'running'
-      ? { ...session, streamingOutput: undefined }
-      : session;
-    const idx = state.refinementSessions.findIndex((s) => s.id === session.id);
-    if (idx >= 0) {
-      const next = [...state.refinementSessions];
-      next[idx] = normalized;
-      return { refinementSessions: next };
-    }
-    return { refinementSessions: [...state.refinementSessions, normalized] };
-  }),
+  },
   appendRefinementStreamChunk: (sessionId, delta) => set((state) => {
     const idx = state.refinementSessions.findIndex((s) => s.id === sessionId);
     if (idx < 0) return {};

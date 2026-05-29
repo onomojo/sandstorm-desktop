@@ -94,4 +94,21 @@ describe('KanbanBoard', () => {
     render(<KanbanBoard />);
     expect(screen.getByTestId('kanban-board-no-project')).toBeDefined();
   });
+
+  // #388: when a column-move IPC fails, the optimistic update reverts. Before
+  // the fix, that revert was silent and the user assumed the click did nothing.
+  // The error banner now makes the failure visible and clearable.
+  it('shows move-ticket-column error banner when moveTicketColumnError is set (#388)', () => {
+    useAppStore.setState({ moveTicketColumnError: 'Failed to move ticket #42 to spec_ready: IPC boom' });
+    render(<KanbanBoard />);
+    const banner = screen.getByTestId('move-ticket-column-error');
+    expect(banner).toBeDefined();
+    expect(banner.getAttribute('title')).toMatch(/IPC boom/);
+  });
+
+  it('does not render the move-error banner when no error is set (#388)', () => {
+    useAppStore.setState({ moveTicketColumnError: null });
+    render(<KanbanBoard />);
+    expect(screen.queryByTestId('move-ticket-column-error')).toBeNull();
+  });
 });

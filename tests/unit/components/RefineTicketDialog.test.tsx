@@ -427,6 +427,36 @@ describe('RefineTicketDialog', () => {
     expect(useAppStore.getState().refinementSessions).toHaveLength(0);
   });
 
+  // #388: Refine-dialog "Start Stack" must move the ticket column to 'in_stack'.
+  // Before the fix, handleStartStack created the stack but never called
+  // moveTicketColumn — leaving the ticket visually stuck in spec_ready/backlog.
+  it('persists in_stack column after Start Stack succeeds (#388)', async () => {
+    api.tickets.fetch.mockResolvedValue({ body: '# title\nbody', url: null });
+    api.stacks.create.mockResolvedValue({ id: 'ticket-310', project: 'proj', status: 'building', services: [] });
+
+    useAppStore.setState({
+      boardTickets: [
+        { ticket_id: '310', project_dir: '/proj', column: 'spec_ready', title: 'T', updated_at: '' },
+      ],
+      refinementSessions: [{
+        id: 'session-1', ticketId: '310', projectDir: '/proj',
+        status: 'ready', phase: 'check', startedAt: Date.now(),
+        result: { passed: true, questions: [], gateSummary: 'Gate=PASS', ticketUrl: null, cached: false },
+      }],
+      currentRefinementSessionId: 'session-1',
+    });
+    render(<RefineTicketDialog />);
+    fireEvent.click(screen.getByTestId('refine-start-stack'));
+
+    await waitFor(() => {
+      expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('310', '/proj', 'in_stack');
+    });
+    await waitFor(() => {
+      const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '310');
+      expect(entry?.column).toBe('in_stack');
+    });
+  });
+
   it('shows the cached banner copy when gate result is cached', () => {
     useAppStore.setState({
       refinementSessions: [{
