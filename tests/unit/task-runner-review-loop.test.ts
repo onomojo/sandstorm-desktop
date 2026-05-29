@@ -435,7 +435,7 @@ describe('task-runner.sh dual-loop workflow', () => {
     it('does not use `local` in the outer/inner while loops', () => {
       // Find all `local ` usages and verify they are inside function bodies.
       // Functions in the script: log_loop, run_claude, check_for_diff, run_review, run_verify, check_for_stop_and_ask
-      const functionNames = ['log_loop', 'run_claude', 'check_for_diff', 'run_review', 'run_verify', 'is_infra_error_only', 'check_for_stop_and_ask']
+      const functionNames = ['log_loop', 'run_claude', 'check_for_diff', 'run_review', 'run_verify', 'is_infra_error_only', 'check_for_stop_and_ask', 'run_meta_review', 'inject_meta_review_guidance']
 
       // Collect the line ranges of all function bodies
       const functionRanges: Array<{ start: number; end: number }> = []
@@ -659,6 +659,271 @@ describe('task-runner.sh dual-loop workflow', () => {
       const untrackedCount = (taskRunner.match(/git ls-files --others --exclude-standard/g) ?? []).length
       // At least 2 occurrences (one per fix prompt) — the check_for_diff call also has one
       expect(untrackedCount).toBeGreaterThanOrEqual(2)
+    })
+  })
+
+  // ── Meta-review step ────────────────────────────────────────────────
+
+  describe('meta-review step', () => {
+    it('has a run_meta_review function', () => {
+      expect(taskRunner).toContain('run_meta_review()')
+    })
+
+    it('has an inject_meta_review_guidance function', () => {
+      expect(taskRunner).toContain('inject_meta_review_guidance()')
+    })
+
+    it('initializes CONSECUTIVE_REVIEW_FAILS to 0 before the dual loop', () => {
+      const loopStart = taskRunner.indexOf('ORIGINAL_PROMPT="$PROMPT"')
+      const init = taskRunner.indexOf('CONSECUTIVE_REVIEW_FAILS=0', loopStart)
+      expect(init).toBeGreaterThan(loopStart)
+    })
+
+    it('initializes META_REVIEW_FIRED_REVIEW to 0 before the dual loop', () => {
+      const loopStart = taskRunner.indexOf('ORIGINAL_PROMPT="$PROMPT"')
+      const init = taskRunner.indexOf('META_REVIEW_FIRED_REVIEW=0', loopStart)
+      expect(init).toBeGreaterThan(loopStart)
+    })
+
+    it('initializes META_REVIEW_FIRED_VERIFY to 0 before the dual loop', () => {
+      const loopStart = taskRunner.indexOf('ORIGINAL_PROMPT="$PROMPT"')
+      const init = taskRunner.indexOf('META_REVIEW_FIRED_VERIFY=0', loopStart)
+      expect(init).toBeGreaterThan(loopStart)
+    })
+
+    it('initializes META_REVIEW_STALE_TEST to 0 before the dual loop', () => {
+      const loopStart = taskRunner.indexOf('ORIGINAL_PROMPT="$PROMPT"')
+      const init = taskRunner.indexOf('META_REVIEW_STALE_TEST=0', loopStart)
+      expect(init).toBeGreaterThan(loopStart)
+    })
+
+    it('increments CONSECUTIVE_REVIEW_FAILS on review fail', () => {
+      expect(taskRunner).toContain('CONSECUTIVE_REVIEW_FAILS=$((CONSECUTIVE_REVIEW_FAILS + 1))')
+    })
+
+    it('resets CONSECUTIVE_REVIEW_FAILS to 0 on review pass', () => {
+      // Reset must appear in the review-pass branch, before the review-fail branch
+      const passSection = taskRunner.indexOf('REVIEW_PASSED=1')
+      const reset = taskRunner.indexOf('CONSECUTIVE_REVIEW_FAILS=0', passSection)
+      const failSection = taskRunner.indexOf('CONSECUTIVE_REVIEW_FAILS=$((CONSECUTIVE_REVIEW_FAILS + 1))')
+      expect(reset).toBeGreaterThan(passSection)
+      expect(reset).toBeLessThan(failSection)
+    })
+
+    it('triggers meta-review when CONSECUTIVE_REVIEW_FAILS reaches 2', () => {
+      expect(taskRunner).toContain('CONSECUTIVE_REVIEW_FAILS -ge 2')
+    })
+
+    it('triggers meta-review only when META_REVIEW_FIRED_REVIEW is 0 (fire-once guard)', () => {
+      expect(taskRunner).toContain('META_REVIEW_FIRED_REVIEW -eq 0')
+    })
+
+    it('sets META_REVIEW_FIRED_REVIEW=1 before calling run_meta_review in review branch', () => {
+      const triggerBlock = taskRunner.indexOf('CONSECUTIVE_REVIEW_FAILS -ge 2')
+      const firedSet = taskRunner.indexOf('META_REVIEW_FIRED_REVIEW=1', triggerBlock)
+      expect(firedSet).toBeGreaterThan(triggerBlock)
+    })
+
+    it('halts with TASK_NEEDS_HUMAN when review meta-review finds no viable path', () => {
+      const reviewMetaTrigger = taskRunner.indexOf('META_REVIEW_FIRED_REVIEW=1')
+      const needsHuman = taskRunner.indexOf('TASK_NEEDS_HUMAN=1', reviewMetaTrigger)
+      expect(needsHuman).toBeGreaterThan(reviewMetaTrigger)
+    })
+
+    it('meta-review in review branch fires before building review fix prompt', () => {
+      const metaTrigger = taskRunner.indexOf('CONSECUTIVE_REVIEW_FAILS -ge 2')
+      const fixPrompt = taskRunner.indexOf('Sending review feedback to execution agent', metaTrigger)
+      expect(fixPrompt).toBeGreaterThan(metaTrigger)
+    })
+
+    it('meta-review reads review verdict artifacts', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('claude-review-verdict-')
+    })
+
+    it('meta-review reads verify output artifacts', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('claude-verify-output-')
+    })
+
+    it('meta-review reads phase timing artifact', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('claude-phase-timing.txt')
+    })
+
+    it('meta-review reads execution summary artifact', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('claude-execution-summary.txt')
+    })
+
+    it('meta-review reads task log tail', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('claude-task.log')
+    })
+
+    it('meta-review prompt instructs agent to detect recurring failures (a)', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('Recurring/repeated failures')
+    })
+
+    it('meta-review prompt instructs agent to detect symptom-vs-root-cause fixing (b)', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('Symptom-vs-root-cause fixing')
+    })
+
+    it('meta-review prompt instructs agent to detect intent-vs-validation mismatch (c)', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('Intent-vs-validation mismatch')
+    })
+
+    it('meta-review prompt instructs agent to detect degenerate verdicts (d)', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('Degenerate/low-substance verdicts')
+    })
+
+    it('meta-review prompt instructs agent to emit META_VERDICT marker token', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('META_VERDICT: VIABLE')
+      expect(body).toContain('META_VERDICT: NO_VIABLE_PATH')
+    })
+
+    it('meta-review prompt instructs agent to emit STALE_TEST_MISMATCH marker token', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('STALE_TEST_MISMATCH: YES')
+      expect(body).toContain('STALE_TEST_MISMATCH: NO')
+    })
+
+    it('meta-review writes output to /tmp/claude-meta-review.txt', () => {
+      expect(taskRunner).toContain('/tmp/claude-meta-review.txt')
+    })
+
+    it('meta-review parses META_VERDICT: VIABLE from task log tail', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('grep -q "META_VERDICT: VIABLE"')
+    })
+
+    it('meta-review parses STALE_TEST_MISMATCH: YES from task log tail', () => {
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('grep -q "STALE_TEST_MISMATCH: YES"')
+    })
+
+    it('meta-review treats absent META_VERDICT token as NO_VIABLE_PATH (fail-safe)', () => {
+      // The else branch (no VIABLE found) returns 1 — halting
+      const fn = taskRunner.indexOf('run_meta_review()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('NO_VIABLE_PATH (or absent)')
+    })
+
+    it('inject_meta_review_guidance strips META_VERDICT marker lines before injecting', () => {
+      const fn = taskRunner.indexOf('inject_meta_review_guidance()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('grep -v "^META_VERDICT:"')
+    })
+
+    it('inject_meta_review_guidance strips STALE_TEST_MISMATCH marker lines before injecting', () => {
+      const fn = taskRunner.indexOf('inject_meta_review_guidance()')
+      const fnEnd = taskRunner.indexOf('\n}', fn + 10)
+      const body = taskRunner.substring(fn, fnEnd)
+      expect(body).toContain('grep -v "^STALE_TEST_MISMATCH:"')
+    })
+
+    it('review fix prompt calls inject_meta_review_guidance at the top', () => {
+      const feedbackSection = taskRunner.indexOf('Sending review feedback to execution agent')
+      const fixPromptStart = taskRunner.indexOf('local_fix_prompt=', feedbackSection)
+      const inject = taskRunner.indexOf('inject_meta_review_guidance', fixPromptStart)
+      const reviewContent = taskRunner.indexOf('Your code changes were reviewed', fixPromptStart)
+      expect(inject).toBeGreaterThan(fixPromptStart)
+      expect(inject).toBeLessThan(reviewContent)
+    })
+
+    it('verify fix prompt calls inject_meta_review_guidance at the top', () => {
+      const feedbackSection = taskRunner.indexOf('Sending verify failure to execution agent')
+      const fixPromptStart = taskRunner.indexOf('local_verify_fix=', feedbackSection)
+      const inject = taskRunner.indexOf('inject_meta_review_guidance', fixPromptStart)
+      const verifyContent = taskRunner.indexOf('passed review but failed verification', fixPromptStart)
+      expect(inject).toBeGreaterThan(fixPromptStart)
+      expect(inject).toBeLessThan(verifyContent)
+    })
+
+    it('review fix prompt drops "Do NOT modify tests" line when META_REVIEW_STALE_TEST=1', () => {
+      const feedbackSection = taskRunner.indexOf('Sending review feedback to execution agent')
+      const fixPromptStart = taskRunner.indexOf('local_fix_prompt=', feedbackSection)
+      const fixPromptEnd = taskRunner.indexOf('} > "$local_fix_prompt"', fixPromptStart)
+      const body = taskRunner.substring(fixPromptStart, fixPromptEnd)
+      expect(body).toContain('META_REVIEW_STALE_TEST -eq 0')
+    })
+
+    it('verify fix prompt drops "Do NOT modify tests" line when META_REVIEW_STALE_TEST=1', () => {
+      const feedbackSection = taskRunner.indexOf('Sending verify failure to execution agent')
+      const fixPromptStart = taskRunner.indexOf('local_verify_fix=', feedbackSection)
+      const fixPromptEnd = taskRunner.indexOf('} > "$local_verify_fix"', fixPromptStart)
+      const body = taskRunner.substring(fixPromptStart, fixPromptEnd)
+      expect(body).toContain('META_REVIEW_STALE_TEST -eq 0')
+    })
+  })
+
+  // ── Meta-review verify branch ────────────────────────────────────────
+
+  describe('meta-review verify branch', () => {
+    it('triggers meta-review when verify retry cap is hit and META_REVIEW_FIRED_VERIFY is 0', () => {
+      expect(taskRunner).toContain('META_REVIEW_FIRED_VERIFY -eq 0')
+    })
+
+    it('sets META_REVIEW_FIRED_VERIFY=1 before calling run_meta_review in verify branch', () => {
+      const verifyCapBlock = taskRunner.indexOf('TOTAL_VERIFY_RETRIES -ge $MAX_VERIFY_RETRIES')
+      const firedSet = taskRunner.indexOf('META_REVIEW_FIRED_VERIFY=1', verifyCapBlock)
+      expect(firedSet).toBeGreaterThan(verifyCapBlock)
+    })
+
+    it('raises MAX_VERIFY_RETRIES by 1 when meta-review returns VIABLE (cap-raise)', () => {
+      expect(taskRunner).toContain('MAX_VERIFY_RETRIES=$((MAX_VERIFY_RETRIES + 1))')
+    })
+
+    it('cap-raise appears inside the META_REVIEW_FIRED_VERIFY=0 branch', () => {
+      const verifyCapBlock = taskRunner.indexOf('META_REVIEW_FIRED_VERIFY -eq 0')
+      const capRaise = taskRunner.indexOf('MAX_VERIFY_RETRIES=$((MAX_VERIFY_RETRIES + 1))', verifyCapBlock)
+      const elseOfFireOnce = taskRunner.indexOf('else\n            log_loop "Verify has failed', verifyCapBlock)
+      expect(capRaise).toBeGreaterThan(verifyCapBlock)
+      expect(capRaise).toBeLessThan(elseOfFireOnce)
+    })
+
+    it('halts with VERIFY_BLOCKED_ENVIRONMENTAL when meta-review finds no viable path on verify', () => {
+      const verifyCapBlock = taskRunner.indexOf('META_REVIEW_FIRED_VERIFY=1')
+      const blocked = taskRunner.indexOf('VERIFY_BLOCKED_ENVIRONMENTAL=1', verifyCapBlock)
+      expect(blocked).toBeGreaterThan(verifyCapBlock)
+    })
+
+    it('still-failing guided iteration halts (fire-once guard else branch)', () => {
+      // The else branch (META_REVIEW_FIRED_VERIFY != 0) logs the existing halt message
+      expect(taskRunner).toContain('Likely environmental or unresolvable. Halting — needs human intervention.')
     })
   })
 
