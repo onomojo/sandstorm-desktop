@@ -122,6 +122,35 @@ describe('listBoardTickets', () => {
   });
 });
 
+// --- tickets:create board-seeding simulation ---
+// Simulates the main-process behavior added in #385: after tickets:create
+// resolves, the handler calls registry.seedBoardTicket so the card appears
+// immediately without waiting for a provider list call.
+
+describe('tickets:create seeding behavior', () => {
+  it('listBoardTickets includes the new ticket after seeding at creation time', () => {
+    registry.seedBoardTicket('99', '/proj', 'My new ticket');
+    const rows = registry.listBoardTickets('/proj');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ticket_id).toBe('99');
+    expect(rows[0].column).toBe('backlog');
+    expect(rows[0].title).toBe('My new ticket');
+  });
+
+  it('card appears in backlog even when provider list call returns empty', () => {
+    // Simulate: tickets:create succeeded and seeded the board.
+    // Provider list (tickets:list) returns [] — simulating a lag.
+    registry.seedBoardTicket('100', '/proj', 'Another ticket');
+
+    // Normally tickets:list would call provider and get [], then listBoardTickets.
+    // Since we seeded in step 1, the ticket must still be present.
+    const rows = registry.listBoardTickets('/proj');
+    const found = rows.find(r => r.ticket_id === '100');
+    expect(found).toBeDefined();
+    expect(found?.column).toBe('backlog');
+  });
+});
+
 // --- Store-level tests ---
 
 import { useAppStore } from '../../src/renderer/store';
