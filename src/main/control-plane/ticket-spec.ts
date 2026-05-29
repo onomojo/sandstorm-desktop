@@ -5,6 +5,17 @@ import type { ProjectTicketConfig } from './registry';
 
 const execFileAsync = promisify(execFile);
 
+export interface RefineQuestionOption {
+  id: string;
+  label: string;
+}
+
+export interface RefineQuestion {
+  id: string;
+  question: string;
+  options: RefineQuestionOption[];
+}
+
 /**
  * Trimmed result returned to the renderer for spec check / refine. Mirrors
  * the JSON shape that `sandstorm-spec.sh` emits when invoked from a skill —
@@ -13,7 +24,7 @@ const execFileAsync = promisify(execFile);
  */
 export interface SpecGateResult {
   passed: boolean;
-  questions: string[];
+  questions: RefineQuestion[];
   gateSummary: string;
   ticketUrl: string | null;
   cached: boolean;
@@ -37,20 +48,28 @@ export function extractGateSummary(report: string): string {
   if (/##\s+Spec Quality Gate:\s*PASS/i.test(report)) verdict = 'PASS';
   else if (/##\s+Spec Quality Gate:\s*FAIL/i.test(report)) verdict = 'FAIL';
   if (!verdict) return 'Gate verdict not parsed';
-  const qcount = (report.match(/^[0-9]+\.\s/gm) || []).length;
+  const qcount = extractQuestions(report).length;
   return `Gate=${verdict}, questions=${qcount}`;
 }
 
 /**
- * Mirrors the awk parser in sandstorm-spec.sh: only pulls numbered items
- * sitting under a `### Questions` or `### Gaps` heading, stopping at the
- * next `## ` boundary. Returns an empty array when nothing matches.
+ * Parses structured questions from a spec gate report. Looks for a ```json
+ * fence under a `### Questions` or `### Gaps` heading and parses it as
+ * RefineQuestion[]. Falls back to the legacy numbered-list parser (coercing
+ * each line to a RefineQuestion with no options) when no valid JSON block is found.
  */
-export function extractQuestions(report: string): string[] {
+export function extractQuestions(report: string): RefineQuestion[] {
   if (!report) return [];
+
+  // Try JSON block parser first.
+  const jsonResult = tryParseJsonBlock(report);
+  if (jsonResult !== null) return jsonResult;
+
+  // Fallback: legacy numbered-item parser.
   const lines = report.split('\n');
   let capture = false;
-  const out: string[] = [];
+  const out: RefineQuestion[] = [];
+  let idx = 0;
   for (const line of lines) {
     if (/^### (Questions|Gaps)/i.test(line)) {
       capture = true;
@@ -62,9 +81,73 @@ export function extractQuestions(report: string): string[] {
     }
     if (!capture) continue;
     const m = line.match(/^[0-9]+\.\s*(.*)$/);
-    if (m && m[1].trim()) out.push(m[1].trim());
+    if (m && m[1].trim()) {
+      out.push({ id: `q${idx + 1}`, question: m[1].trim(), options: [] });
+      idx++;
+    }
   }
   return out;
+}
+
+/**
+ * Locate the first ```json fence following a ### Questions/Gaps heading and
+ * parse it as RefineQuestion[]. Returns null on missing block, parse error,
+ * or invalid shape.
+ */
+function tryParseJsonBlock(report: string): RefineQuestion[] | null {
+  const lines = report.split('\n');
+  let inSection = false;
+  let inFence = false;
+  const fenceLines: string[] = [];
+
+  for (const line of lines) {
+    if (/^### (Questions|Gaps)/i.test(line)) {
+      inSection = true;
+      continue;
+    }
+    if (inSection && /^## /.test(line)) {
+      break;
+    }
+    if (!inSection) continue;
+
+    if (!inFence && line.trim() === '```json') {
+      inFence = true;
+      continue;
+    }
+    if (inFence) {
+      if (line.trim() === '```') break;
+      fenceLines.push(line);
+    }
+  }
+
+  if (fenceLines.length === 0) return null;
+
+  try {
+    const parsed: unknown = JSON.parse(fenceLines.join('\n'));
+    if (!Array.isArray(parsed)) return null;
+    const result: RefineQuestion[] = [];
+    for (const item of parsed) {
+      if (typeof item !== 'object' || item === null) return null;
+      const obj = item as Record<string, unknown>;
+      if (typeof obj.question !== 'string') return null;
+      const id = typeof obj.id === 'string' ? obj.id : `q${result.length + 1}`;
+      const options: RefineQuestionOption[] = [];
+      if (Array.isArray(obj.options)) {
+        for (const opt of obj.options) {
+          if (typeof opt === 'object' && opt !== null) {
+            const o = opt as Record<string, unknown>;
+            if (typeof o.id === 'string' && typeof o.label === 'string') {
+              options.push({ id: o.id, label: o.label });
+            }
+          }
+        }
+      }
+      result.push({ id, question: obj.question, options });
+    }
+    return result;
+  } catch {
+    return null;
+  }
 }
 
 /**

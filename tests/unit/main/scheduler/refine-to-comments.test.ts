@@ -9,7 +9,7 @@ import {
   type RefineToCommentsDeps,
 } from '../../../../src/main/scheduler/refine-to-comments';
 import type { TicketEntry, TicketComment } from '../../../../src/main/control-plane/ticket-comments';
-import type { SpecGateResult } from '../../../../src/main/control-plane/ticket-spec';
+import type { SpecGateResult, RefineQuestion } from '../../../../src/main/control-plane/ticket-spec';
 
 const PASS_RESULT: SpecGateResult = {
   passed: true,
@@ -19,9 +19,25 @@ const PASS_RESULT: SpecGateResult = {
   cached: false,
 };
 
+const FAIL_QUESTIONS: RefineQuestion[] = [
+  {
+    id: 'q1',
+    question: 'What does "fast" mean?',
+    options: [
+      { id: 'a', label: 'Under 100ms' },
+      { id: 'b', label: 'Under 1s' },
+    ],
+  },
+  {
+    id: 'q2',
+    question: 'Which provider handles auth?',
+    options: [],
+  },
+];
+
 const FAIL_RESULT: SpecGateResult = {
   passed: false,
-  questions: ['What does "fast" mean?', 'Which provider handles auth?'],
+  questions: FAIL_QUESTIONS,
   gateSummary: 'Gate=FAIL, questions=2',
   ticketUrl: null,
   cached: false,
@@ -103,19 +119,38 @@ describe('getUserAnswersAfterBot', () => {
 });
 
 describe('formatQuestionComment', () => {
+  const questions: RefineQuestion[] = [
+    { id: 'q1', question: 'What is X?', options: [{ id: 'a', label: 'Option A' }, { id: 'b', label: 'Option B' }] },
+    { id: 'q2', question: 'Why Y?', options: [] },
+  ];
+
   it('includes the bot marker', () => {
-    const result = formatQuestionComment(['Q1', 'Q2'], 'Gate=FAIL, questions=2');
+    const result = formatQuestionComment(questions, 'Gate=FAIL, questions=2');
     expect(result).toContain(BOT_COMMENT_MARKER);
   });
 
   it('formats questions as numbered list', () => {
-    const result = formatQuestionComment(['What is X?', 'Why Y?'], '');
+    const result = formatQuestionComment(questions, '');
     expect(result).toContain('1. What is X?');
     expect(result).toContain('2. Why Y?');
   });
 
+  it('renders options as lettered markdown sub-items', () => {
+    const result = formatQuestionComment(questions, '');
+    expect(result).toContain('   - A) Option A');
+    expect(result).toContain('   - B) Option B');
+  });
+
+  it('does not emit option lines when a question has no options', () => {
+    const noOpts: RefineQuestion[] = [{ id: 'q1', question: 'Open ended?', options: [] }];
+    const result = formatQuestionComment(noOpts, '');
+    expect(result).toContain('1. Open ended?');
+    expect(result).not.toContain('   - A)');
+  });
+
   it('includes gate summary when provided', () => {
-    const result = formatQuestionComment(['Q'], 'Gate=FAIL, questions=1');
+    const single: RefineQuestion[] = [{ id: 'q1', question: 'Q', options: [] }];
+    const result = formatQuestionComment(single, 'Gate=FAIL, questions=1');
     expect(result).toContain('Gate=FAIL, questions=1');
   });
 });

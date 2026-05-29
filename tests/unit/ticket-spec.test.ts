@@ -29,6 +29,37 @@ const FAIL_REPORT = `## Spec Quality Gate: FAIL
 | Specificity | FAIL |
 `;
 
+const FAIL_REPORT_JSON = `## Spec Quality Gate: FAIL
+
+### Questions
+
+\`\`\`json
+[
+  {
+    "id": "q1",
+    "question": "What does fast mean?",
+    "options": [
+      { "id": "a", "label": "Under 100ms" },
+      { "id": "b", "label": "Under 1s" }
+    ]
+  },
+  {
+    "id": "q2",
+    "question": "Cache strategy?",
+    "options": [
+      { "id": "a", "label": "Full body" },
+      { "id": "b", "label": "Hash only" }
+    ]
+  }
+]
+\`\`\`
+
+### Results
+| Criterion | Result |
+|-----------|--------|
+| Specificity | FAIL |
+`;
+
 const GITHUB_CONFIG: ProjectTicketConfig = { provider: 'github' };
 
 function makeDeps(overrides: Partial<SpecGateDeps> = {}): SpecGateDeps {
@@ -49,8 +80,12 @@ describe('extractGateSummary', () => {
     expect(extractGateSummary(PASS_REPORT)).toBe('Gate=PASS, questions=0');
   });
 
-  it('parses FAIL verdict and counts numbered questions', () => {
+  it('parses FAIL verdict and counts numbered questions (fallback)', () => {
     expect(extractGateSummary(FAIL_REPORT)).toBe('Gate=FAIL, questions=2');
+  });
+
+  it('parses FAIL verdict and counts JSON questions', () => {
+    expect(extractGateSummary(FAIL_REPORT_JSON)).toBe('Gate=FAIL, questions=2');
   });
 
   it('returns empty string when report is empty', () => {
@@ -63,25 +98,65 @@ describe('extractGateSummary', () => {
 });
 
 describe('extractQuestions', () => {
-  it('pulls numbered items under a Questions heading', () => {
-    expect(extractQuestions(FAIL_REPORT)).toEqual([
-      'What does "fast" mean here in concrete numbers?',
-      'Should we cache the full body or just the hash?',
+  it('parses JSON block under a Questions heading', () => {
+    const questions = extractQuestions(FAIL_REPORT_JSON);
+    expect(questions).toHaveLength(2);
+    expect(questions[0].id).toBe('q1');
+    expect(questions[0].question).toBe('What does fast mean?');
+    expect(questions[0].options).toEqual([
+      { id: 'a', label: 'Under 100ms' },
+      { id: 'b', label: 'Under 1s' },
     ]);
+    expect(questions[1].id).toBe('q2');
+    expect(questions[1].question).toBe('Cache strategy?');
   });
 
-  it('also captures items under a Gaps heading', () => {
+  it('falls back to numbered list when no JSON block (legacy)', () => {
+    const questions = extractQuestions(FAIL_REPORT);
+    expect(questions).toHaveLength(2);
+    expect(questions[0].question).toBe('What does "fast" mean here in concrete numbers?');
+    expect(questions[0].options).toEqual([]);
+    expect(questions[1].question).toBe('Should we cache the full body or just the hash?');
+    expect(questions[1].options).toEqual([]);
+  });
+
+  it('also captures items under a Gaps heading (fallback)', () => {
     const r = `### Gaps\n1. First gap\n2. Second gap\n## Next\n3. Outside`;
-    expect(extractQuestions(r)).toEqual(['First gap', 'Second gap']);
+    const questions = extractQuestions(r);
+    expect(questions).toHaveLength(2);
+    expect(questions[0].question).toBe('First gap');
+    expect(questions[1].question).toBe('Second gap');
+  });
+
+  it('also captures JSON block under a Gaps heading', () => {
+    const r = `### Gaps\n\n\`\`\`json\n[{"id":"q1","question":"Gap Q?","options":[{"id":"a","label":"Yes"},{"id":"b","label":"No"}]}]\n\`\`\`\n## Next`;
+    const questions = extractQuestions(r);
+    expect(questions).toHaveLength(1);
+    expect(questions[0].question).toBe('Gap Q?');
+    expect(questions[0].options).toHaveLength(2);
   });
 
   it('returns empty array when no Questions/Gaps heading exists', () => {
     expect(extractQuestions(PASS_REPORT)).toEqual([]);
   });
 
-  it('stops capturing at the next ## heading boundary', () => {
+  it('stops capturing at the next ## heading boundary (fallback)', () => {
     const r = `### Questions\n1. Inside\n## Other\n2. Outside`;
-    expect(extractQuestions(r)).toEqual(['Inside']);
+    const questions = extractQuestions(r);
+    expect(questions).toHaveLength(1);
+    expect(questions[0].question).toBe('Inside');
+  });
+
+  it('falls back gracefully when JSON block is malformed', () => {
+    const r = `### Questions\n\`\`\`json\nnot valid json\n\`\`\``;
+    expect(extractQuestions(r)).toEqual([]);
+  });
+
+  it('returns empty options array when options key is missing in JSON item', () => {
+    const r = `### Questions\n\n\`\`\`json\n[{"id":"q1","question":"A question?"}]\n\`\`\``;
+    const questions = extractQuestions(r);
+    expect(questions).toHaveLength(1);
+    expect(questions[0].options).toEqual([]);
   });
 });
 
@@ -148,7 +223,8 @@ describe('runSpecCheck', () => {
     });
     const result = await runSpecCheck('1', '/proj', deps);
     expect(result.passed).toBe(false);
-    expect(result.questions.length).toBe(2);
+    expect(result.questions).toHaveLength(2);
+    expect(result.questions[0]).toMatchObject({ question: expect.any(String), options: [] });
     expect(result.gateSummary).toBe('Gate=FAIL, questions=2');
     expect(deps.markSpecReady).not.toHaveBeenCalled();
   });
@@ -199,7 +275,8 @@ describe('runSpecRefine', () => {
     });
     const result = await runSpecRefine('1', '/proj', 'answers', deps);
     expect(result.passed).toBe(false);
-    expect(result.questions.length).toBe(2);
+    expect(result.questions).toHaveLength(2);
+    expect(result.questions[0]).toMatchObject({ question: expect.any(String), options: [] });
     expect(deps.markSpecReady).not.toHaveBeenCalled();
   });
 });

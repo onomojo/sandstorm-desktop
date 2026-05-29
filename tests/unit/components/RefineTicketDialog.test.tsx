@@ -6,8 +6,38 @@ import React from 'react';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { RefineTicketDialog, formatElapsed } from '../../../src/renderer/components/RefineTicketDialog';
-import { useAppStore } from '../../../src/renderer/store';
+import { useAppStore, type RefineQuestion } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
+
+const MULTI_OPT_QUESTIONS: RefineQuestion[] = [
+  {
+    id: 'q1',
+    question: 'What is X?',
+    options: [
+      { id: 'a', label: 'Option A' },
+      { id: 'b', label: 'Option B' },
+    ],
+  },
+  {
+    id: 'q2',
+    question: 'What is Y?',
+    options: [
+      { id: 'a', label: 'Yes' },
+      { id: 'b', label: 'No' },
+    ],
+  },
+];
+
+const SINGLE_OPT_QUESTION: RefineQuestion[] = [
+  {
+    id: 'q1',
+    question: 'What is X?',
+    options: [
+      { id: 'a', label: 'Option A' },
+      { id: 'b', label: 'Option B' },
+    ],
+  },
+];
 
 describe('RefineTicketDialog', () => {
   let api: ReturnType<typeof mockSandstormApi>;
@@ -130,7 +160,7 @@ describe('RefineTicketDialog', () => {
         status: 'ready', phase: 'check', startedAt: Date.now(),
         result: {
           passed: false,
-          questions: ['What is X?', 'What is Y?'],
+          questions: MULTI_OPT_QUESTIONS,
           gateSummary: 'Gate=FAIL, questions=2',
           ticketUrl: null, cached: false,
         },
@@ -144,6 +174,81 @@ describe('RefineTicketDialog', () => {
     expect(screen.getByTestId('refine-answer-1')).toBeDefined();
     const submit = screen.getByTestId('refine-submit-answers');
     expect(submit.hasAttribute('disabled')).toBe(true);
+  });
+
+  it('renders radio buttons for each option per question', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'session-1', ticketId: '310', projectDir: '/proj',
+        status: 'ready', phase: 'check', startedAt: Date.now(),
+        result: {
+          passed: false,
+          questions: MULTI_OPT_QUESTIONS,
+          gateSummary: 'Gate=FAIL, questions=2',
+          ticketUrl: null, cached: false,
+        },
+      }],
+      currentRefinementSessionId: 'session-1',
+    });
+    render(<RefineTicketDialog />);
+    // 2 options per question × 2 questions = 4 radio inputs
+    const radios = screen.getAllByRole('radio');
+    expect(radios).toHaveLength(4);
+    // 1 textarea per question = 2 textareas
+    const textareas = screen.getAllByRole('textbox');
+    expect(textareas).toHaveLength(2);
+  });
+
+  it('submit is enabled when an option is selected (no text required)', async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'session-1', ticketId: '310', projectDir: '/proj',
+        status: 'ready', phase: 'check', startedAt: Date.now(),
+        result: {
+          passed: false,
+          questions: MULTI_OPT_QUESTIONS,
+          gateSummary: 'Gate=FAIL, questions=2',
+          ticketUrl: null, cached: false,
+        },
+      }],
+      currentRefinementSessionId: 'session-1',
+    });
+    render(<RefineTicketDialog />);
+    const submit = screen.getByTestId('refine-submit-answers');
+    expect(submit.hasAttribute('disabled')).toBe(true);
+
+    // Select one option for q1 — submit still disabled (q2 unanswered)
+    await user.click(screen.getByTestId('refine-option-0-a'));
+    expect(submit.hasAttribute('disabled')).toBe(true);
+
+    // Select one option for q2 — now both answered, submit enabled
+    await user.click(screen.getByTestId('refine-option-1-a'));
+    expect(submit.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('submit is enabled when additional context text is provided (no option required)', async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'session-1', ticketId: '310', projectDir: '/proj',
+        status: 'ready', phase: 'check', startedAt: Date.now(),
+        result: {
+          passed: false,
+          questions: MULTI_OPT_QUESTIONS,
+          gateSummary: 'Gate=FAIL, questions=2',
+          ticketUrl: null, cached: false,
+        },
+      }],
+      currentRefinementSessionId: 'session-1',
+    });
+    render(<RefineTicketDialog />);
+    const submit = screen.getByTestId('refine-submit-answers');
+
+    // Type text into both textareas
+    await user.type(screen.getByTestId('refine-answer-0'), 'custom detail for q1');
+    await user.type(screen.getByTestId('refine-answer-1'), 'custom detail for q2');
+    expect(submit.hasAttribute('disabled')).toBe(false);
   });
 
   it('shows Run Gate button when gate failed with zero questions and calls specCheckAsync on click', async () => {
@@ -175,7 +280,7 @@ describe('RefineTicketDialog', () => {
     });
   });
 
-  it('calls specRefineAsync with formatted Q/A when answers are submitted', async () => {
+  it('calls specRefineAsync with formatted Q/Selected/Additional serialization when option selected', async () => {
     const user = userEvent.setup();
     useAppStore.setState({
       refinementSessions: [{
@@ -183,7 +288,44 @@ describe('RefineTicketDialog', () => {
         status: 'ready', phase: 'check', startedAt: Date.now(),
         result: {
           passed: false,
-          questions: ['What is X?'],
+          questions: SINGLE_OPT_QUESTION,
+          gateSummary: 'Gate=FAIL, questions=1',
+          ticketUrl: null, cached: false,
+        },
+      }],
+      currentRefinementSessionId: 'session-1',
+    });
+    render(<RefineTicketDialog />);
+    // Select option A and add extra context
+    await user.click(screen.getByTestId('refine-option-0-a'));
+    await user.type(screen.getByTestId('refine-answer-0'), 'extra detail');
+    fireEvent.click(screen.getByTestId('refine-submit-answers'));
+
+    await waitFor(() => {
+      expect(api.tickets.specRefineAsync).toHaveBeenCalledWith(
+        'session-1',
+        '310',
+        '/proj',
+        expect.stringContaining('Q1: What is X?'),
+      );
+    });
+    await waitFor(() => {
+      const call = (api.tickets.specRefineAsync as ReturnType<typeof vi.fn>).mock.calls[0];
+      const body: string = call[3];
+      expect(body).toContain('Selected: Option A');
+      expect(body).toContain('Additional context: extra detail');
+    });
+  });
+
+  it('calls specRefineAsync with (none) selected when only text is provided', async () => {
+    const user = userEvent.setup();
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'session-1', ticketId: '310', projectDir: '/proj',
+        status: 'ready', phase: 'check', startedAt: Date.now(),
+        result: {
+          passed: false,
+          questions: SINGLE_OPT_QUESTION,
           gateSummary: 'Gate=FAIL, questions=1',
           ticketUrl: null, cached: false,
         },
@@ -195,12 +337,11 @@ describe('RefineTicketDialog', () => {
     fireEvent.click(screen.getByTestId('refine-submit-answers'));
 
     await waitFor(() => {
-      expect(api.tickets.specRefineAsync).toHaveBeenCalledWith(
-        'session-1',
-        '310',
-        '/proj',
-        expect.stringContaining('Q1: What is X?\nA: X is foo'),
-      );
+      const call = (api.tickets.specRefineAsync as ReturnType<typeof vi.fn>).mock.calls[0];
+      const body: string = call[3];
+      expect(body).toContain('Q1: What is X?');
+      expect(body).toContain('Selected: (none)');
+      expect(body).toContain('Additional context: X is foo');
     });
   });
 

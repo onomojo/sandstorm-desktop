@@ -695,10 +695,21 @@ declare global {
   }
 }
 
+export interface RefineQuestionOption {
+  id: string;
+  label: string;
+}
+
+export interface RefineQuestion {
+  id: string;
+  question: string;
+  options: RefineQuestionOption[];
+}
+
 /** Renderer-side mirror of `SpecGateResult` from main/control-plane/ticket-spec.ts. */
 export interface SpecGateResult {
   passed: boolean;
-  questions: string[];
+  questions: RefineQuestion[];
   gateSummary: string;
   ticketUrl: string | null;
   cached: boolean;
