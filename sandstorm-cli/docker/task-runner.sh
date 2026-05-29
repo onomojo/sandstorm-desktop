@@ -201,6 +201,134 @@ run_review() {
   fi
 }
 
+# Run the meta-review agent to analyze a stuck dual-loop and emit process guidance.
+# Triggered when the same phase has failed consecutively (threshold: 2).
+# Sets global META_REVIEW_STALE_TEST=1 if STALE_TEST_MISMATCH: YES is detected.
+# Writes guidance prose to /tmp/claude-meta-review.txt.
+# Returns 0 if META_VERDICT: VIABLE, 1 if NO_VIABLE_PATH or unclear.
+# Args: $1 = phase ("review" or "verify"), $2 = iteration number
+run_meta_review() {
+  local phase="$1"
+  local iteration="${2:-1}"
+
+  log_loop "Running meta-review (stuck $phase loop — consecutive failures reached threshold)..."
+
+  local meta_prompt_file="/tmp/claude-meta-review-prompt.txt"
+  local meta_task_log="/tmp/claude-meta-review-task.log"
+  local meta_raw_log="/tmp/claude-meta-review-raw.log"
+
+  {
+    echo "You are a process analyst reviewing a stuck AI development loop. DO NOT re-review the code changes. Analyze WHY the loop is stuck and provide concrete guidance to break it out."
+    echo ""
+    echo "The inner execution agent has been running a dual-loop where the '$phase' phase has failed twice consecutively without making progress."
+    echo ""
+    echo "## Artifacts"
+    echo ""
+    echo "### Review verdicts (per iteration)"
+    for f in /tmp/claude-review-verdict-*.txt; do
+      [ -f "$f" ] || continue
+      local vname
+      vname=$(basename "$f")
+      local vsize
+      vsize=$(stat -c%s "$f" 2>/dev/null || echo 0)
+      echo ""
+      echo "--- $vname (${vsize} bytes) ---"
+      cat "$f"
+    done
+    echo ""
+    echo "### Verify outputs (per iteration)"
+    for f in /tmp/claude-verify-output-*.txt; do
+      [ -f "$f" ] || continue
+      local vname2
+      vname2=$(basename "$f")
+      echo ""
+      echo "--- $vname2 ---"
+      tail -30 "$f"
+    done
+    echo ""
+    echo "### Phase timing"
+    cat /tmp/claude-phase-timing.txt 2>/dev/null || echo "(missing)"
+    echo ""
+    echo "### Execution summary"
+    cat /tmp/claude-execution-summary.txt 2>/dev/null || echo "(missing)"
+    echo ""
+    echo "### Task log tail"
+    tail -30 /tmp/claude-task.log 2>/dev/null || echo "(missing)"
+    echo ""
+    echo "## Analysis instructions"
+    echo ""
+    echo "Look for these patterns:"
+    echo "(a) Recurring/repeated failures — the same error or finding appears across multiple iterations with no meaningful change"
+    echo "(b) Symptom-vs-root-cause fixing — the agent patches around the real problem instead of addressing it directly"
+    echo "(c) Intent-vs-validation mismatch — tests assert against a UI, API, or behavior that the current task intentionally redesigned (stale tests)"
+    echo "(d) Degenerate/low-substance verdicts — a review verdict is suspiciously small in bytes (a real review that finds issues would be much longer)"
+    echo ""
+    echo "## Output format"
+    echo ""
+    echo "Write a SHORT (under 20 lines) structured process-guidance note with:"
+    echo "1. The likely root cause of the repeated failure"
+    echo "2. An explicit instruction: what to STOP doing, what to do INSTEAD"
+    echo "3. If no viable automatic path exists, say so clearly"
+    echo ""
+    echo "Then, as the LAST TWO LINES of your output, emit EXACTLY these marker tokens (one per line, nothing else on the same line):"
+    echo ""
+    echo "Either:  META_VERDICT: VIABLE"
+    echo "Or:      META_VERDICT: NO_VIABLE_PATH"
+    echo ""
+    echo "Either:  STALE_TEST_MISMATCH: YES"
+    echo "Or:      STALE_TEST_MISMATCH: NO"
+    echo ""
+    echo "STALE_TEST_MISMATCH: YES means the tests are asserting against a UI, API, or behavior that the current task INTENTIONALLY changed — the tests need updating to match the new design, not vice versa."
+    echo "META_VERDICT: NO_VIABLE_PATH means you conclude there is no automatic fix available and the task needs human intervention."
+  } > "$meta_prompt_file"
+
+  run_claude "$meta_prompt_file" "$meta_raw_log" "$meta_task_log" "meta_review" "$iteration" "${MODEL_ARGS[@]}"
+  local meta_exit=$?
+
+  rm -f "$meta_prompt_file"
+
+  # Copy output to fixed path for injection into subsequent prompts
+  cp "$meta_task_log" /tmp/claude-meta-review.txt 2>/dev/null || true
+
+  if [ $meta_exit -ne 0 ]; then
+    log_loop "Meta-review agent crashed (exit $meta_exit) — treating as NO_VIABLE_PATH"
+    META_REVIEW_STALE_TEST=0
+    return 1
+  fi
+
+  # Parse verdict from task log tail (mirrors run_review at lines 184–201)
+  local tail_output
+  tail_output=$(tail -10 "$meta_task_log" 2>/dev/null)
+
+  if echo "$tail_output" | grep -q "STALE_TEST_MISMATCH: YES"; then
+    META_REVIEW_STALE_TEST=1
+    log_loop "Meta-review: stale test mismatch detected — stale-test scope override active for guided iteration"
+  else
+    META_REVIEW_STALE_TEST=0
+  fi
+
+  if echo "$tail_output" | grep -q "META_VERDICT: VIABLE"; then
+    log_loop "Meta-review verdict: VIABLE — guided retry authorized"
+    return 0
+  else
+    log_loop "Meta-review verdict: NO_VIABLE_PATH (or absent) — halting for human intervention"
+    return 1
+  fi
+}
+
+# Inject meta-review guidance (if present) with marker lines stripped.
+# Outputs nothing if /tmp/claude-meta-review.txt is absent or empty.
+inject_meta_review_guidance() {
+  local meta_file="/tmp/claude-meta-review.txt"
+  if [ ! -f "$meta_file" ] || [ ! -s "$meta_file" ]; then
+    return
+  fi
+  echo "## Process Guidance (meta-review — read this before anything else)"
+  echo ""
+  grep -v "^META_VERDICT:" "$meta_file" | grep -v "^STALE_TEST_MISMATCH:" || true
+  echo ""
+}
+
 # Classify test results: checks if vitest output indicates all tests passed
 # but only has infrastructure errors (uncaught exceptions, permission errors).
 # Returns 0 if infrastructure-only errors detected, 1 otherwise.
@@ -331,6 +459,7 @@ while true; do
     rm -f /tmp/claude-verify-output-*.txt
     rm -f /tmp/claude-execution-summary.txt
     rm -f /tmp/claude-phase-timing.txt
+    rm -f /tmp/claude-meta-review.txt
 
     # Initialize phase timing file
     > /tmp/claude-phase-timing.txt
@@ -436,6 +565,10 @@ while true; do
     TOTAL_REVIEW_ITERATIONS=0
     TOTAL_VERIFY_RETRIES=0
     VERIFY_BLOCKED_ENVIRONMENTAL=0
+    CONSECUTIVE_REVIEW_FAILS=0
+    META_REVIEW_FIRED_REVIEW=0
+    META_REVIEW_FIRED_VERIFY=0
+    META_REVIEW_STALE_TEST=0
 
     while [ $OUTER_ITERATION -lt $MAX_OUTER_ITERATIONS ] && [ $TASK_DONE -eq 0 ] && [ $TASK_FAILED -eq 0 ]; do
       OUTER_ITERATION=$((OUTER_ITERATION + 1))
@@ -463,12 +596,14 @@ while true; do
           # Save numbered review verdict
           echo "REVIEW_PASS" > "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt"
           REVIEW_PASSED=1
+          CONSECUTIVE_REVIEW_FAILS=0
           log_loop "Review passed at inner iteration $INNER_ITERATION"
         else
           echo "review_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           # Save numbered review verdict (copy full review output)
           cp /tmp/claude-review-output.txt "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt" 2>/dev/null || echo "REVIEW_FAIL" > "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt"
           log_loop "Review iteration $INNER_ITERATION/$MAX_INNER_ITERATIONS: FAIL"
+          CONSECUTIVE_REVIEW_FAILS=$((CONSECUTIVE_REVIEW_FAILS + 1))
 
           if [ $INNER_ITERATION -ge $MAX_INNER_ITERATIONS ]; then
             log_loop "Inner loop exhausted ($MAX_INNER_ITERATIONS iterations). Needs human intervention."
@@ -480,11 +615,23 @@ while true; do
             break
           fi
 
+          # Meta-review trigger: fire on 2nd consecutive review fail (fire-once per task)
+          if [ $CONSECUTIVE_REVIEW_FAILS -ge 2 ] && [ $META_REVIEW_FIRED_REVIEW -eq 0 ]; then
+            META_REVIEW_FIRED_REVIEW=1
+            if ! run_meta_review "review" "$TOTAL_REVIEW_ITERATIONS"; then
+              log_loop "Meta-review found no viable path — halting for human intervention"
+              TASK_NEEDS_HUMAN=1
+              TASK_FAILED=1
+              break
+            fi
+          fi
+
           # Feed review feedback back to execution agent
           log_loop "Sending review feedback to execution agent..."
           echo "execution_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           local_fix_prompt="/tmp/claude-fix-prompt.txt"
           {
+            inject_meta_review_guidance
             echo "Your code changes were reviewed and issues were found. Please fix the following issues:"
             echo ""
             cat /tmp/claude-review-output.txt
@@ -505,7 +652,9 @@ while true; do
             echo ""
             echo "- Fix ONLY the issues listed in the review above."
             echo "- Do NOT modify any file that is not in scope for the original task."
-            echo "- Do NOT modify tests to make them pass — fix the production code instead."
+            if [ $META_REVIEW_STALE_TEST -eq 0 ]; then
+              echo "- Do NOT modify tests to make them pass — fix the production code instead."
+            fi
             echo "- Do NOT loosen test assertions, skip test cases, or weaken error checks."
             echo "- If you determine that the review cannot be satisfied without modifying"
             echo "  out-of-scope files, output exactly:"
@@ -582,12 +731,28 @@ while true; do
         VERIFY_FAIL_FINGERPRINT=$(grep -m1 -E 'Error|error|FAIL|fail|not found|command not found' /tmp/claude-verify.log 2>/dev/null | head -c 200 || true)
 
         if [ $TOTAL_VERIFY_RETRIES -ge $MAX_VERIFY_RETRIES ]; then
-          log_loop "Verify has failed $TOTAL_VERIFY_RETRIES time(s). Likely environmental or unresolvable. Halting — needs human intervention."
-          log_loop "Failure fingerprint: ${VERIFY_FAIL_FINGERPRINT}"
-          printf 'VERIFY_FAIL_FINGERPRINT: %s\n' "${VERIFY_FAIL_FINGERPRINT}" > /tmp/claude-verify-environmental.txt
-          VERIFY_BLOCKED_ENVIRONMENTAL=1
-          TASK_FAILED=1
-          break
+          if [ $META_REVIEW_FIRED_VERIFY -eq 0 ]; then
+            log_loop "Verify has failed $TOTAL_VERIFY_RETRIES time(s) — running meta-review before halting..."
+            META_REVIEW_FIRED_VERIFY=1
+            if run_meta_review "verify" "$TOTAL_VERIFY_RETRIES"; then
+              log_loop "Meta-review: viable path — allowing one extra guided verify iteration"
+              MAX_VERIFY_RETRIES=$((MAX_VERIFY_RETRIES + 1))
+            else
+              log_loop "Meta-review found no viable path. Halting — needs human intervention."
+              log_loop "Failure fingerprint: ${VERIFY_FAIL_FINGERPRINT}"
+              printf 'VERIFY_FAIL_FINGERPRINT: %s\n' "${VERIFY_FAIL_FINGERPRINT}" > /tmp/claude-verify-environmental.txt
+              VERIFY_BLOCKED_ENVIRONMENTAL=1
+              TASK_FAILED=1
+              break
+            fi
+          else
+            log_loop "Verify has failed $TOTAL_VERIFY_RETRIES time(s). Likely environmental or unresolvable. Halting — needs human intervention."
+            log_loop "Failure fingerprint: ${VERIFY_FAIL_FINGERPRINT}"
+            printf 'VERIFY_FAIL_FINGERPRINT: %s\n' "${VERIFY_FAIL_FINGERPRINT}" > /tmp/claude-verify-environmental.txt
+            VERIFY_BLOCKED_ENVIRONMENTAL=1
+            TASK_FAILED=1
+            break
+          fi
         fi
 
         if [ $OUTER_ITERATION -ge $MAX_OUTER_ITERATIONS ]; then
@@ -601,6 +766,7 @@ while true; do
         echo "execution_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
         local_verify_fix="/tmp/claude-verify-fix-prompt.txt"
         {
+          inject_meta_review_guidance
           echo "Your code changes passed review but failed verification. Please fix the following errors:"
           echo ""
           cat /tmp/claude-verify.log
@@ -621,7 +787,9 @@ while true; do
           echo ""
           echo "- Fix ONLY the verification failures listed above."
           echo "- Do NOT modify any file that is not in scope for the original task."
-          echo "- Do NOT modify tests to make them pass — fix the production code instead."
+          if [ $META_REVIEW_STALE_TEST -eq 0 ]; then
+            echo "- Do NOT modify tests to make them pass — fix the production code instead."
+          fi
           echo "- Do NOT loosen test assertions, skip test cases, or weaken error checks."
           echo "- If you determine that verify cannot pass without modifying out-of-scope"
           echo "  files or tests, output exactly:"
@@ -656,6 +824,8 @@ while true; do
     rm -f /tmp/claude-review-raw.log
     rm -f /tmp/claude-review-task.log
     rm -f /tmp/claude-verify.log
+    rm -f /tmp/claude-meta-review-task.log
+    rm -f /tmp/claude-meta-review-raw.log
     # NOTE: Do NOT delete numbered verdict/verify/summary/timing files —
     # they are read by the task-watcher for persistent metadata archival.
 
