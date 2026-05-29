@@ -21,7 +21,7 @@ const {
   mockSpawn,
   mockFetchAccountUsage,
   mockRemoveProjectFromCrontab,
-  mockListTickets,
+  mockListTicketsWithConfig,
   mockSessionMonitor,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
@@ -103,7 +103,7 @@ const {
   const mockSpawn = vi.fn();
   const mockFetchAccountUsage = vi.fn();
   const mockRemoveProjectFromCrontab = vi.fn();
-  const mockListTickets = vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT: not found'), { code: 'ENOENT' }));
+  const mockListTicketsWithConfig = vi.fn().mockResolvedValue([]);
 
   const mockSessionMonitor = {
     getState: vi.fn(),
@@ -125,7 +125,7 @@ const {
     mockSpawn,
     mockFetchAccountUsage,
     mockRemoveProjectFromCrontab,
-    mockListTickets,
+    mockListTicketsWithConfig,
     mockSessionMonitor,
   };
 });
@@ -198,7 +198,7 @@ vi.mock('../../src/main/scheduler/scheduler-manager', () => ({
 }));
 
 vi.mock('../../src/main/control-plane/ticket-lister', () => ({
-  listTickets: (...args: unknown[]) => mockListTickets(...args),
+  listTicketsWithConfig: (...args: unknown[]) => mockListTicketsWithConfig(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -1275,35 +1275,58 @@ describe('IPC Handlers', () => {
   // Ticket Board
   // =========================================================================
   describe('tickets:list', () => {
-    it('returns listBoardTickets result when provider is unavailable (fallback path)', async () => {
-      // mockListTickets defaults to rejecting with ENOENT — handler falls through to DB rows
+    it('skips the provider fetch and returns DB rows when no provider is configured', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce(null);
       const boardRows = [
         { ticket_id: 'T-1', project_dir: '/proj', column: 'backlog', title: 'First ticket', updated_at: '' },
       ];
       mockRegistry.listBoardTickets.mockReturnValue(boardRows);
+      mockListTicketsWithConfig.mockClear();
+      mockRegistry.seedBoardTicket.mockClear();
 
       const result = await invokeHandler('tickets:list', '/proj');
+
+      expect(mockListTicketsWithConfig).not.toHaveBeenCalled();
+      expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
       expect(mockRegistry.listBoardTickets).toHaveBeenCalled();
       expect(result).toEqual(boardRows);
     });
 
-    it('calls seedBoardTicket for each provider ticket when listTickets succeeds', async () => {
+    it('returns DB rows when the provider fetch throws (graceful degradation)', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
+      mockListTicketsWithConfig.mockRejectedValueOnce(new Error('gh not authenticated'));
+      const boardRows = [
+        { ticket_id: 'T-9', project_dir: '/proj', column: 'backlog', title: 'Existing', updated_at: '' },
+      ];
+      mockRegistry.listBoardTickets.mockReturnValue(boardRows);
+
+      const result = await invokeHandler('tickets:list', '/proj');
+
+      expect(result).toEqual(boardRows);
+    });
+
+    it('passes the project config to the provider and seeds each returned ticket', async () => {
+      const config = { provider: 'github' };
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce(config);
       const providerTickets = [
         { id: 'T-1', title: 'First ticket', author: 'alice' },
         { id: 'T-2', title: 'Second ticket', author: 'bob' },
       ];
-      mockListTickets.mockResolvedValueOnce(providerTickets);
+      mockListTicketsWithConfig.mockResolvedValueOnce(providerTickets);
       mockRegistry.listBoardTickets.mockReturnValue([]);
+      mockRegistry.seedBoardTicket.mockClear();
 
       await invokeHandler('tickets:list', '/proj');
 
+      expect(mockListTicketsWithConfig).toHaveBeenCalledWith(config, '/proj');
       expect(mockRegistry.seedBoardTicket).toHaveBeenCalledTimes(2);
       expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('T-1', '/proj', 'First ticket');
       expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('T-2', '/proj', 'Second ticket');
     });
 
     it('does not call seedBoardTicket when provider returns no tickets', async () => {
-      mockListTickets.mockResolvedValueOnce([]);
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
+      mockListTicketsWithConfig.mockResolvedValueOnce([]);
       mockRegistry.seedBoardTicket.mockClear();
 
       await invokeHandler('tickets:list', '/proj');
