@@ -28,7 +28,7 @@ import type { EphemeralStreamEvent, EphemeralSessionHandle } from '../agent/type
 
 export { validateProjectDir };
 
-
+const SCHEDULED_REFINE_TIMEOUT_MS = 1_800_000;
 
 export async function handleToolCall(
   name: string,
@@ -340,7 +340,7 @@ async function handleSpecCheck(
   const { ctx } = res;
 
   const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS);
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
   return {
@@ -540,13 +540,13 @@ async function handleSpecRefine(
 
   if (!userAnswers) {
     const prompt = buildSpecRefineInitialPrompt(ctx.gate, ctx.ticketBody);
-    const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
+    const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS);
     const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
     return { passed, report: result };
   }
 
   const prompt = buildSpecRefineAnswerPrompt(ctx.gate, ctx.ticketBody, userAnswers);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir);
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS);
   return applySpecRefineResult(ticketId, projectDir, result, true);
 }
 
@@ -572,7 +572,7 @@ export function spawnSpecCheck(
     if (cancelled) throw new Error('Cancelled');
 
     const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody);
-    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 300_000, onChunk);
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk);
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
 
@@ -667,7 +667,7 @@ export function spawnSpecRefine(
       // No pooled session (timed out, app restarted, etc.) — fall back to a
       // cold ephemeral so the user's answers still produce a result.
       const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(
-        answerPrompt, projectDir, 300_000, onChunk,
+        answerPrompt, projectDir, 0, onChunk,
       );
       activeDispose = epCancel;
       if (cancelled) { epCancel(); throw new Error('Cancelled'); }
@@ -678,7 +678,7 @@ export function spawnSpecRefine(
     // Initial-questions pass. Spawn a long-lived session so the after-answers
     // pass can reuse it.
     const initialPrompt = buildSpecRefineInitialPrompt(res.ctx.gate, res.ctx.ticketBody);
-    const handle = agentBackend.spawnEphemeralSession(initialPrompt, projectDir, 300_000, onChunk);
+    const handle = agentBackend.spawnEphemeralSession(initialPrompt, projectDir, 0, onChunk);
     // Cancel during the initial pass must dispose the live handle even though
     // it isn't pooled yet — otherwise SIGTERM never reaches the held subprocess.
     activeDispose = (): void => {

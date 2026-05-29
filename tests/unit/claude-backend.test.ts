@@ -1891,3 +1891,88 @@ describe('Outer Claude context-bloat suppression (#302, #303)', () => {
     backend.destroy();
   });
 });
+
+describe('ClaudeBackend — disabled-timeout sentinel and scheduled ceiling (#375)', () => {
+  beforeEach(() => {
+    spawnedProcesses.length = 0;
+    vi.useFakeTimers();
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+    vi.clearAllMocks();
+  });
+
+  function getEphemeralProcess(): MockChildProcess {
+    return spawnedProcesses[spawnedProcesses.length - 1];
+  }
+
+  it('spawnEphemeralAgent with 0 timeout never rejects with a timeout error (stays pending past 300_000ms)', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+    let settled = false;
+    const { promise } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 0);
+    promise.then(() => { settled = true; }).catch(() => { settled = true; });
+
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(settled).toBe(false);
+
+    backendUnderTest.destroy();
+  });
+
+  it('spawnEphemeralSession with 0 timeout never rejects with a timeout error (initialResult stays pending past 300_000ms)', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+    let settled = false;
+    const handle = backendUnderTest.spawnEphemeralSession('prompt', '/tmp', 0);
+    handle.initialResult.then(() => { settled = true; }).catch(() => { settled = true; });
+
+    await vi.advanceTimersByTimeAsync(600_000);
+
+    expect(settled).toBe(false);
+
+    handle.dispose();
+    backendUnderTest.destroy();
+  });
+
+  it('spawnEphemeralAgent with 0 timeout: cancel() still SIGTERMs child and rejects with Cancelled', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const { promise, cancel } = backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 0);
+    const proc = getEphemeralProcess();
+
+    cancel();
+    proc.exitCode = 143;
+    proc.emit('close', 143);
+
+    await expect(promise).rejects.toThrow('Cancelled');
+    expect(proc.killed).toBe(true);
+
+    backendUnderTest.destroy();
+  });
+
+  it('runEphemeralAgent with 1_800_000ms stays pending at 1_799_999ms and rejects at the ceiling', async () => {
+    const backendUnderTest = new ClaudeBackend(60_000);
+    let settled = false;
+    const promise = backendUnderTest.runEphemeralAgent('prompt', '/tmp', 1_800_000);
+    promise.then(() => { settled = true; }).catch(() => { settled = true; });
+
+    // Below old 5-min default — must still be pending
+    await vi.advanceTimersByTimeAsync(299_999);
+    expect(settled).toBe(false);
+
+    // Just below the 30-min ceiling
+    await vi.advanceTimersByTimeAsync(1_500_000); // total 1_799_999ms
+    expect(settled).toBe(false);
+
+    // Cross the ceiling
+    await vi.advanceTimersByTimeAsync(2); // total 1_800_001ms
+    expect(settled).toBe(true);
+
+    const proc = getEphemeralProcess();
+    proc.exitCode = 143;
+    proc.emit('close', 143);
+
+    await expect(promise).rejects.toThrow('Ephemeral agent timed out after 1800000ms');
+
+    backendUnderTest.destroy();
+  });
+});
