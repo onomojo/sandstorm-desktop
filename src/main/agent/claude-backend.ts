@@ -499,16 +499,19 @@ export class ClaudeBackend implements AgentBackend {
       fn();
     };
 
-    const timer = setTimeout(() => {
-      if (child.exitCode === null) {
-        isCancelled = true;
-        child.kill('SIGTERM');
-        setTimeout(() => {
-          if (child.exitCode === null) child.kill('SIGKILL');
-        }, 5_000);
-        settle(() => rejectFn(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`)));
-      }
-    }, timeoutMs);
+    let timer: NodeJS.Timeout | undefined;
+    if (timeoutMs != null && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        if (child.exitCode === null) {
+          isCancelled = true;
+          child.kill('SIGTERM');
+          setTimeout(() => {
+            if (child.exitCode === null) child.kill('SIGKILL');
+          }, 5_000);
+          settle(() => rejectFn(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`)));
+        }
+      }, timeoutMs);
+    }
 
     child.stdout?.on('data', (data: Buffer) => {
       outputBuffer += data.toString();
@@ -628,6 +631,7 @@ export class ClaudeBackend implements AgentBackend {
 
     const resetIdleTimer = (): void => {
       if (idleTimer) clearTimeout(idleTimer);
+      if (timeoutMs == null || timeoutMs <= 0) return;
       idleTimer = setTimeout(() => {
         if (currentReject) currentReject(new Error(`Ephemeral session timed out after ${timeoutMs}ms`));
         dispose();

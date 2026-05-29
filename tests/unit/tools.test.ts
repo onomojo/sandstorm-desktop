@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { handleToolCall, validateProjectDir, _clearTicketBodyCacheForTests, _disposeAllRefineSessionsForTests, spawnSpecRefine } from '../../src/main/claude/tools';
+import { handleToolCall, validateProjectDir, _clearTicketBodyCacheForTests, _disposeAllRefineSessionsForTests, spawnSpecRefine, spawnSpecCheck } from '../../src/main/claude/tools';
 import type { EphemeralSessionHandle } from '../../src/main/agent/types';
 
 // Mock the stackManager, agentBackend, and registry imports
@@ -201,7 +201,8 @@ describe('MCP tools', () => {
 
       expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
         expect.stringContaining('Fix bug'),
-        '/proj'
+        '/proj',
+        1_800_000
       );
       expect(result.passed).toBe(true);
       expect(result.report).toContain('PASS');
@@ -598,7 +599,8 @@ describe('MCP tools', () => {
 
       expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
         expect.stringContaining('auth tokens expire silently'),
-        '/proj'
+        '/proj',
+        1_800_000
       );
       expect(result.passed).toBe(true);
       expect(result.updatedBody).toContain('Better spec');
@@ -899,6 +901,80 @@ describe('MCP tools', () => {
       fakeHandle.initialResolve('## Spec Quality Gate: FAIL\n\n### Questions\n1. What?');
       await expect(promise).rejects.toThrow('Cancelled');
       expect(fakeHandle.disposeMock).toHaveBeenCalled();
+    });
+
+    it('cancel during pooled follow-up disposes the session and rejects with Cancelled', async () => {
+      // Establish a pooled session from the initial pass.
+      const { promise: initial } = spawnSpecRefine('42', '/proj');
+      fakeHandle.initialResolve('## Spec Quality Gate: FAIL\n\n### Questions\n1. What?');
+      await initial;
+
+      // Wire disposeMock to reject the pending sendFollowUp promise, mirroring
+      // the real EphemeralSessionHandle.dispose() behavior.
+      let rejectFollowUp!: (err: Error) => void;
+      const pendingFollowUp = new Promise<string>((_, rej) => { rejectFollowUp = rej; });
+      fakeHandle.sendFollowUpMock.mockReturnValue(pendingFollowUp);
+      fakeHandle.disposeMock.mockImplementation(() => rejectFollowUp(new Error('Cancelled')));
+
+      vi.mocked(updateTicketWithConfig).mockResolvedValue(undefined);
+
+      const { promise: followUp, cancel } = spawnSpecRefine('42', '/proj', 'Answer text');
+
+      await vi.waitFor(() => expect(fakeHandle.sendFollowUpMock).toHaveBeenCalled());
+      cancel();
+
+      await expect(followUp).rejects.toThrow('Cancelled');
+      expect(fakeHandle.disposeMock).toHaveBeenCalled();
+    });
+
+    it('cancel during cold-fallback invokes epCancel and rejects with Cancelled', async () => {
+      // No pooled session — simulate stale/app-restart scenario.
+      let rejectEp!: (err: Error) => void;
+      const ep = new Promise<string>((_, reject) => { rejectEp = reject; });
+      const epCancelMock = vi.fn(() => rejectEp(new Error('Cancelled')));
+      vi.mocked(agentBackend.spawnEphemeralAgent).mockReturnValue({ promise: ep, cancel: epCancelMock });
+      vi.mocked(updateTicketWithConfig).mockResolvedValue(undefined);
+
+      const { promise, cancel } = spawnSpecRefine('42', '/proj', 'Answer text');
+
+      await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
+      cancel();
+
+      await expect(promise).rejects.toThrow('Cancelled');
+      expect(epCancelMock).toHaveBeenCalled();
+    });
+  });
+
+  describe('spawnSpecCheck — cancel regression guard (#375)', () => {
+    let cancelFn: ReturnType<typeof vi.fn>;
+
+    beforeEach(() => {
+      _clearTicketBodyCacheForTests();
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body');
+      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
+      // The mock cancel function rejects the promise, mirroring real spawnEphemeralAgent behavior.
+      let rejectEp!: (err: Error) => void;
+      const ep = new Promise<string>((_, reject) => { rejectEp = reject; });
+      cancelFn = vi.fn(() => rejectEp(new Error('Cancelled')));
+      vi.mocked(agentBackend.spawnEphemeralAgent).mockReturnValue({ promise: ep, cancel: cancelFn });
+    });
+
+    it('cancel() propagates to the inner ephemeral agent and rejects with Cancelled', async () => {
+      const { promise, cancel } = spawnSpecCheck('42', '/proj');
+
+      await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
+      cancel();
+
+      await expect(promise).rejects.toThrow('Cancelled');
+      expect(cancelFn).toHaveBeenCalled();
+    });
+
+    it('spawnSpecCheck passes 0 as timeout to spawnEphemeralAgent (interactive, no ceiling)', async () => {
+      spawnSpecCheck('42', '/proj');
+
+      await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
+      const [, , timeoutArg] = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls[0];
+      expect(timeoutArg).toBe(0);
     });
   });
 });
