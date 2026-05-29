@@ -1,4 +1,6 @@
 import { create } from 'zustand';
+import { KANBAN_COLUMNS } from './types/kanban';
+import type { KanbanColumn } from './types/kanban';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -338,6 +340,23 @@ export interface ProjectTicketConfig {
   ticket_prefix?: string | null;
 }
 
+export { KANBAN_COLUMNS };
+export type { KanbanColumn };
+
+/** Returns tickets for the given project directory, or all tickets if no directory is provided. */
+export function selectProjectTickets(boardTickets: TicketBoardEntry[], projectDir: string | undefined): TicketBoardEntry[] {
+  return projectDir ? boardTickets.filter((t) => t.project_dir === projectDir) : boardTickets;
+}
+
+export interface TicketBoardEntry {
+  ticket_id: string;
+  project_dir: string;
+  column: KanbanColumn;
+  title: string;
+  created_at?: string;
+  updated_at: string;
+}
+
 export interface StaleWorkspace {
   stackId: string;
   project: string;
@@ -453,6 +472,23 @@ interface AppState {
   sessionHaltAll: () => Promise<string[]>;
   sessionResumeAll: () => Promise<string[]>;
   resumeStackWithContinuation: (stackId: string) => Promise<void>;
+
+  // Kanban board
+  boardTickets: TicketBoardEntry[];
+  boardTicketsLoading: boolean;
+  boardTicketsError: string | null;
+  lastTicketFetchAt: number | null;
+  refreshBoardTickets: (projectDir: string) => Promise<void>;
+  moveTicketColumn: (ticketId: string, projectDir: string, column: KanbanColumn) => Promise<void>;
+  /** Opens the refine dialog from a kanban card and moves the ticket to 'refining' optimistically. Reverts on cancel. */
+  openRefineDialogFromCard: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
+  /** Opens the new stack dialog for a ticket and moves it to 'in_stack' optimistically. Reverts on cancel. */
+  openNewStackDialogForTicket: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
+  /** Opens the Create PR dialog for a ticket and moves it to 'pr_open' optimistically. Reverts on cancel. */
+  openCreatePRDialogForTicket: (stackId: string, ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
+  _refineDialogContext: { ticketId: string; projectDir: string; previousColumn: KanbanColumn } | null;
+  _newStackDialogContext: { ticketId: string; projectDir: string; previousColumn: KanbanColumn; stackCreated: boolean } | null;
+  _prDialogContext: { stackId: string; ticketId: string; projectDir: string; previousColumn: KanbanColumn; prCreated: boolean } | null;
 
   // Schedules (per-project)
   schedules: ScheduleEntry[];
@@ -685,6 +721,10 @@ declare global {
         cancelRefinement: (sessionId: string) => Promise<void>;
         listRefinements: () => Promise<RefinementSession[]>;
         create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
+        list: (projectDir: string) => Promise<TicketBoardEntry[]>;
+      };
+      ticketBoard: {
+        setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
       };
       pr: {
         draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
@@ -939,6 +979,68 @@ export const useAppStore = create<AppState>((set, get) => ({
     await get().refreshStacks();
   },
 
+  // Kanban board
+  boardTickets: [],
+  boardTicketsLoading: false,
+  boardTicketsError: null,
+  lastTicketFetchAt: null,
+  _refineDialogContext: null,
+  _newStackDialogContext: null,
+  _prDialogContext: null,
+
+  refreshBoardTickets: async (projectDir: string) => {
+    try {
+      set({ boardTicketsLoading: true });
+      const tickets = await window.sandstorm.tickets.list(projectDir);
+      set({ boardTickets: tickets as TicketBoardEntry[], boardTicketsLoading: false, boardTicketsError: null, lastTicketFetchAt: Date.now() });
+    } catch (err) {
+      console.error('[refreshBoardTickets]', err);
+      set({ boardTicketsLoading: false, boardTicketsError: String(err) });
+    }
+  },
+
+  moveTicketColumn: async (ticketId: string, projectDir: string, column: KanbanColumn) => {
+    const previousColumn = get().boardTickets.find(t => t.ticket_id === ticketId)?.column;
+    // Optimistic update — match only on ticket_id; boardTickets are already project-scoped.
+    set((state) => ({
+      boardTickets: state.boardTickets.map((t) =>
+        t.ticket_id === ticketId ? { ...t, column } : t
+      ),
+    }));
+    await window.sandstorm.ticketBoard.setColumn(ticketId, projectDir, column).catch(() => {
+      if (previousColumn !== undefined) {
+        set((state) => ({
+          boardTickets: state.boardTickets.map((t) =>
+            t.ticket_id === ticketId ? { ...t, column: previousColumn } : t
+          ),
+        }));
+      }
+    });
+  },
+
+  openRefineDialogFromCard: (ticketId, projectDir, previousColumn) => {
+    set({
+      showRefineTicketDialog: true,
+      refineTicketPrefill: ticketId,
+      currentRefinementSessionId: null,
+      _refineDialogContext: { ticketId, projectDir, previousColumn },
+    });
+    void get().moveTicketColumn(ticketId, projectDir, 'refining');
+  },
+
+  openNewStackDialogForTicket: (ticketId, projectDir, previousColumn) => {
+    set({ showNewStackDialog: true, _newStackDialogContext: { ticketId, projectDir, previousColumn, stackCreated: false } });
+    void get().moveTicketColumn(ticketId, projectDir, 'in_stack');
+  },
+
+  openCreatePRDialogForTicket: (stackId, ticketId, projectDir, previousColumn) => {
+    set({
+      showCreatePRDialog: { stackId },
+      _prDialogContext: { stackId, ticketId, projectDir, previousColumn, prCreated: false },
+    });
+    void get().moveTicketColumn(ticketId, projectDir, 'pr_open');
+  },
+
   // Schedules
   schedules: [],
   schedulesLoading: false,
@@ -1012,13 +1114,35 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Stack actions
   setStacks: (stacks) => set({ stacks }),
   selectStack: (id) => set({ selectedStackId: id }),
-  setShowNewStackDialog: (show) => set({ showNewStackDialog: show }),
-  setShowRefineTicketDialog: (show) => set({
-    showRefineTicketDialog: show,
+  setShowNewStackDialog: (show) => {
+    if (!show) {
+      const ctx = get()._newStackDialogContext;
+      if (ctx) {
+        set({ _newStackDialogContext: null });
+        if (!ctx.stackCreated) {
+          void get().moveTicketColumn(ctx.ticketId, ctx.projectDir, ctx.previousColumn);
+        }
+      }
+    }
+    set({ showNewStackDialog: show });
+  },
+  setShowRefineTicketDialog: (show) => {
+    if (!show) {
+      const ctx = get()._refineDialogContext;
+      if (ctx) {
+        const hasSession = get().refinementSessions.some(
+          s => s.ticketId === ctx.ticketId && s.projectDir === ctx.projectDir
+        );
+        set({ _refineDialogContext: null });
+        if (!hasSession) {
+          void get().moveTicketColumn(ctx.ticketId, ctx.projectDir, ctx.previousColumn);
+        }
+      }
+    }
     // Closing the dialog drops any pending prefill so a later cold-open
     // doesn't accidentally hydrate from a stale id.
-    refineTicketPrefill: show ? get().refineTicketPrefill : null,
-  }),
+    set({ showRefineTicketDialog: show, refineTicketPrefill: show ? get().refineTicketPrefill : null });
+  },
   openRefineTicketDialogWith: (ticketId) => set({
     showRefineTicketDialog: true,
     refineTicketPrefill: ticketId,
@@ -1067,7 +1191,18 @@ export const useAppStore = create<AppState>((set, get) => ({
   setCurrentRefinementSessionId: (id) => set({ currentRefinementSessionId: id }),
   setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
   setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
-  setShowCreatePRDialog: (state) => set({ showCreatePRDialog: state }),
+  setShowCreatePRDialog: (state) => {
+    if (!state) {
+      const ctx = get()._prDialogContext;
+      if (ctx) {
+        set({ _prDialogContext: null });
+        if (!ctx.prCreated) {
+          void get().moveTicketColumn(ctx.ticketId, ctx.projectDir, ctx.previousColumn);
+        }
+      }
+    }
+    set({ showCreatePRDialog: state });
+  },
   setPrDraft: (stackId, draft) =>
     set((state) => ({
       prDraftCache: { ...state.prDraftCache, [stackId]: draft },
@@ -1084,7 +1219,27 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshStacks: async () => {
     try {
       const stacks = await window.sandstorm.stacks.list();
-      set({ stacks, error: null });
+      const state = get();
+      const updates: Partial<typeof state> = { stacks, error: null };
+
+      // Mark new-stack dialog context as succeeded if a matching stack is now visible
+      const newStackCtx = state._newStackDialogContext;
+      if (newStackCtx && !newStackCtx.stackCreated) {
+        if (stacks.some((s) => s.ticket === newStackCtx.ticketId)) {
+          updates._newStackDialogContext = { ...newStackCtx, stackCreated: true };
+        }
+      }
+
+      // Mark PR dialog context as succeeded if the stack now has a pr_url
+      const prCtx = state._prDialogContext;
+      if (prCtx && !prCtx.prCreated) {
+        const foundStack = stacks.find((s) => s.id === prCtx.stackId);
+        if (foundStack?.pr_url) {
+          updates._prDialogContext = { ...prCtx, prCreated: true };
+        }
+      }
+
+      set(updates as Parameters<typeof set>[0]);
     } catch (err) {
       set({ error: `Failed to refresh stacks: ${err}` });
     }

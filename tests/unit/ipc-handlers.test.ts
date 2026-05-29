@@ -21,6 +21,7 @@ const {
   mockSpawn,
   mockFetchAccountUsage,
   mockRemoveProjectFromCrontab,
+  mockListTickets,
   mockSessionMonitor,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
@@ -33,6 +34,9 @@ const {
     getPorts: vi.fn(),
     getProjectTicketConfig: vi.fn().mockReturnValue(null),
     setProjectTicketConfig: vi.fn(),
+    seedBoardTicket: vi.fn(),
+    listBoardTickets: vi.fn().mockReturnValue([]),
+    setBoardTicketColumn: vi.fn(),
   };
 
   const mockStackManager = {
@@ -99,6 +103,7 @@ const {
   const mockSpawn = vi.fn();
   const mockFetchAccountUsage = vi.fn();
   const mockRemoveProjectFromCrontab = vi.fn();
+  const mockListTickets = vi.fn().mockRejectedValue(Object.assign(new Error('ENOENT: not found'), { code: 'ENOENT' }));
 
   const mockSessionMonitor = {
     getState: vi.fn(),
@@ -120,6 +125,7 @@ const {
     mockSpawn,
     mockFetchAccountUsage,
     mockRemoveProjectFromCrontab,
+    mockListTickets,
     mockSessionMonitor,
   };
 });
@@ -189,6 +195,10 @@ vi.mock('../../src/main/scheduler/scheduler-manager', () => ({
     const parts = dir.split('/');
     return parts[parts.length - 1].toLowerCase().replace(/[^a-z0-9_-]/g, '-');
   }),
+}));
+
+vi.mock('../../src/main/control-plane/ticket-lister', () => ({
+  listTickets: (...args: unknown[]) => mockListTickets(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -1262,6 +1272,69 @@ describe('IPC Handlers', () => {
   });
 
   // =========================================================================
+  // Ticket Board
+  // =========================================================================
+  describe('tickets:list', () => {
+    it('returns listBoardTickets result when provider is unavailable (fallback path)', async () => {
+      // mockListTickets defaults to rejecting with ENOENT — handler falls through to DB rows
+      const boardRows = [
+        { ticket_id: 'T-1', project_dir: '/proj', column: 'backlog', title: 'First ticket', updated_at: '' },
+      ];
+      mockRegistry.listBoardTickets.mockReturnValue(boardRows);
+
+      const result = await invokeHandler('tickets:list', '/proj');
+      expect(mockRegistry.listBoardTickets).toHaveBeenCalled();
+      expect(result).toEqual(boardRows);
+    });
+
+    it('calls seedBoardTicket for each provider ticket when listTickets succeeds', async () => {
+      const providerTickets = [
+        { id: 'T-1', title: 'First ticket', author: 'alice' },
+        { id: 'T-2', title: 'Second ticket', author: 'bob' },
+      ];
+      mockListTickets.mockResolvedValueOnce(providerTickets);
+      mockRegistry.listBoardTickets.mockReturnValue([]);
+
+      await invokeHandler('tickets:list', '/proj');
+
+      expect(mockRegistry.seedBoardTicket).toHaveBeenCalledTimes(2);
+      expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('T-1', '/proj', 'First ticket');
+      expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('T-2', '/proj', 'Second ticket');
+    });
+
+    it('does not call seedBoardTicket when provider returns no tickets', async () => {
+      mockListTickets.mockResolvedValueOnce([]);
+      mockRegistry.seedBoardTicket.mockClear();
+
+      await invokeHandler('tickets:list', '/proj');
+
+      expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('ticket-board:set-column', () => {
+    it('rejects when column is invalid', async () => {
+      mockRegistry.setBoardTicketColumn.mockClear();
+      await expect(
+        invokeHandler('ticket-board:set-column', 'T-1', '/proj', 'invalid')
+      ).rejects.toThrow('Invalid kanban column');
+      expect(mockRegistry.setBoardTicketColumn).not.toHaveBeenCalled();
+    });
+
+    it('rejects when ticketId is empty', async () => {
+      await expect(
+        invokeHandler('ticket-board:set-column', '', '/proj', 'backlog')
+      ).rejects.toThrow('ticketId is required');
+    });
+
+    it('calls setBoardTicketColumn for a valid request', async () => {
+      mockRegistry.setBoardTicketColumn.mockClear();
+      await invokeHandler('ticket-board:set-column', 'T-1', '/proj', 'spec_ready');
+      expect(mockRegistry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', '/proj', 'spec_ready');
+    });
+  });
+
+  // =========================================================================
   // Handler Registration Completeness
   // =========================================================================
   describe('handler registration', () => {
@@ -1360,6 +1433,8 @@ describe('IPC Handlers', () => {
       'tickets:cancelRefinement',
       'tickets:listRefinements',
       'tickets:create',
+      'tickets:list',
+      'ticket-board:set-column',
       'pr:draftBody',
       'pr:create',
       'projectTicketConfig:get',

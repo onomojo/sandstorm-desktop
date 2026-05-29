@@ -93,6 +93,8 @@ import { createTicketWithConfig } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
+import { listTickets } from './control-plane/ticket-lister';
+import { KANBAN_COLUMNS } from '../shared/kanban';
 
 /**
  * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
@@ -1236,6 +1238,41 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       return createTicketWithConfig({ title, body, config, cwd: projectDir });
     },
   );
+
+  // --- Ticket board (kanban column persistence, #369) ---
+
+  const VALID_KANBAN_COLUMNS: readonly string[] = KANBAN_COLUMNS;
+
+  ipcMain.handle('tickets:list', async (_event, projectDir: string) => {
+    const dirError = validateProjectDir(projectDir);
+    if (dirError) throw new Error(dirError.error);
+    const normalizedDir = path.resolve(projectDir);
+
+    // Fetch from provider; if the script is missing, fall through and return existing board rows.
+    try {
+      const tickets = await listTickets('', normalizedDir);
+      for (const ticket of tickets) {
+        registry.seedBoardTicket(ticket.id, normalizedDir, ticket.title);
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      const isKnownProviderError = msg.includes('ENOENT') || msg.includes('not found') ||
+        msg.includes('script') || msg.includes('exit code') || msg.includes('No ticket provider');
+      if (!isKnownProviderError) {
+        console.error('[tickets:list] Unexpected error fetching tickets from provider:', err);
+      }
+    }
+
+    return registry.listBoardTickets(normalizedDir);
+  });
+
+  ipcMain.handle('ticket-board:set-column', async (_event, ticketId: string, projectDir: string, column: string) => {
+    if (!ticketId?.trim()) throw new Error('ticketId is required');
+    const dirError = validateProjectDir(projectDir);
+    if (dirError) throw new Error(dirError.error);
+    if (!VALID_KANBAN_COLUMNS.includes(column)) throw new Error(`Invalid kanban column: "${column}"`);
+    registry.setBoardTicketColumn(ticketId, path.resolve(projectDir), column);
+  });
 
   // --- PR creation (deterministic UI for make-PR workflow, #310) ---
 

@@ -1,24 +1,21 @@
 import React, { useEffect } from 'react';
 import { useAppStore, ThresholdLevel } from './store';
-import { Dashboard } from './components/Dashboard';
 import { StackDetail } from './components/StackDetail';
 import { NewStackDialog } from './components/NewStackDialog';
 import { RefineTicketDialog } from './components/RefineTicketDialog';
-import { RefinementIndicator } from './components/RefinementIndicator';
 import { CreateTicketDialog } from './components/CreateTicketDialog';
 import { StartTicketDialog } from './components/StartTicketDialog';
 import { CreatePRDialog } from './components/CreatePRDialog';
-import { ProjectTabs } from './components/ProjectTabs';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
-import { AccountUsageBar } from './components/AccountUsageBar';
 import { SessionWarningModal } from './components/SessionWarningModal';
 import { SessionTokenLimitModal } from './components/SessionTokenLimitModal';
-import trayIcon from './tray-icon.png';
-import buildVersion from './build-version.txt?raw';
+import { ModelSettingsModal } from './components/ModelSettings';
+import { LeftRail } from './components/LeftRail';
+import { KanbanBoard } from './components/KanbanBoard';
 
 /** Polling interval when Docker is connected (ms) */
 const STACK_POLL_INTERVAL = 3000;
-/** Polling interval when Docker is disconnected (ms) — slow down to avoid hammering */
+/** Polling interval when Docker is disconnected (ms) */
 const STACK_POLL_INTERVAL_DISCONNECTED = 10_000;
 /** Metrics polling interval (ms) */
 const METRICS_POLL_INTERVAL = 15_000;
@@ -34,6 +31,7 @@ export default function App() {
     showStartTicketDialog,
     showCreatePRDialog,
     showOpenProjectDialog,
+    showModelSettings,
     dockerConnected,
     refreshStacks,
     refreshProjects,
@@ -53,14 +51,12 @@ export default function App() {
 
   // Check Docker status on mount and listen for connection events
   useEffect(() => {
-    // Initial status check
     window.sandstorm.docker.status().then(({ connected }) => {
       setDockerConnected(connected);
     }).catch(() => {});
 
     const unsubConnected = window.sandstorm.on('docker:connected', () => {
       setDockerConnected(true);
-      // Immediately refresh on reconnect
       refreshStacks();
       refreshMetrics();
     });
@@ -98,7 +94,6 @@ export default function App() {
 
   // Refinement sessions: restore persisted sessions and listen for updates
   useEffect(() => {
-    // Load any sessions that survived a previous app session.
     window.sandstorm.tickets.listRefinements().then((sessions) => {
       sessions.forEach(upsertRefinementSession);
     }).catch(() => {});
@@ -119,12 +114,12 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Session monitor: listen for threshold/halt/reset IPC events from main process
+  // Session monitor
   useEffect(() => {
     refreshSessionState();
 
     const unsubThreshold = window.sandstorm.on('session:threshold', (data: unknown) => {
-      const { level, usage } = data as { level: ThresholdLevel; usage: unknown };
+      const { level } = data as { level: ThresholdLevel; usage: unknown };
       useAppStore.setState({ sessionWarningLevel: level });
       if (level === 'critical' || level === 'limit' || level === 'over_limit') {
         useAppStore.setState({ showSessionWarningModal: true });
@@ -147,7 +142,6 @@ export default function App() {
       refreshSessionState();
     });
 
-    // Proactive cron health push from main process at app launch
     const unsubCronHealth = window.sandstorm.on('scheduler:cronHealth', (data: unknown) => {
       const { running } = data as { running: boolean };
       useAppStore.setState({ cronHealthy: running });
@@ -168,12 +162,10 @@ export default function App() {
     refreshStackHistory();
     refreshMetrics();
 
-    // Adaptive polling: slower when Docker is disconnected
     const pollInterval = dockerConnected
       ? STACK_POLL_INTERVAL
       : STACK_POLL_INTERVAL_DISCONNECTED;
     const interval = setInterval(refreshStacks, pollInterval);
-    // Only poll metrics when Docker is connected
     const metricsInterval = dockerConnected
       ? setInterval(refreshMetrics, METRICS_POLL_INTERVAL)
       : null;
@@ -207,29 +199,9 @@ export default function App() {
 
   return (
     <div className="h-screen flex flex-col bg-sandstorm-bg text-sandstorm-text">
-      {/* Title bar — centered on macOS to avoid traffic lights, left-aligned elsewhere */}
-      <div className={`titlebar-drag h-10 bg-sandstorm-surface border-b border-sandstorm-border flex items-center px-4 shrink-0 relative ${navigator.platform.includes('Mac') ? 'justify-center' : ''}`}>
-        <div className="titlebar-no-drag flex items-center gap-2.5">
-          <img src={trayIcon} alt="Sandstorm" className="w-6 h-6" />
-          <span className="text-xs font-semibold text-sandstorm-muted tracking-wide uppercase">
-            Sandstorm
-          </span>
-          <span className="text-[10px] text-sandstorm-muted/50 font-mono" title={`Build: ${buildVersion.trim()}`}>
-            {buildVersion.trim()}
-          </span>
-        </div>
-        <div className="titlebar-no-drag absolute right-4 flex items-center gap-2">
-          <RefinementIndicator />
-          <AccountUsageBar />
-        </div>
-      </div>
-
-      {/* Project tabs */}
-      <ProjectTabs />
-
       {/* Docker disconnected banner */}
       {!dockerConnected && (
-        <div className="bg-yellow-500/10 border-b border-yellow-500/20 px-4 py-2.5 text-sm text-yellow-400 flex items-center gap-2 shrink-0 animate-fade-in">
+        <div className="bg-yellow-500/10 border-b border-yellow-500/20 px-4 py-2 text-sm text-yellow-400 flex items-center gap-2 shrink-0 animate-fade-in">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0">
             <path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
           </svg>
@@ -239,7 +211,7 @@ export default function App() {
 
       {/* Error banner */}
       {error && (
-        <div className="bg-red-500/10 border-b border-red-500/20 px-4 py-2.5 text-sm text-red-400 flex items-center gap-2 shrink-0 animate-fade-in">
+        <div className="bg-red-500/10 border-b border-red-500/20 px-4 py-2 text-sm text-red-400 flex items-center gap-2 shrink-0 animate-fade-in">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0">
             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2"/>
             <path d="M12 8v4m0 4h.01" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
@@ -248,21 +220,26 @@ export default function App() {
         </div>
       )}
 
-      {/* Main content */}
-      <div className="flex-1 overflow-hidden">
-        {selectedStackId ? (
-          <StackDetail
-            stackId={selectedStackId}
-            onBack={() => selectStack(null)}
-          />
-        ) : (
-          <Dashboard />
-        )}
+      {/* Main layout: left rail + content */}
+      <div className="flex-1 flex overflow-hidden">
+        <LeftRail />
+
+        {/* Main content */}
+        <div className="flex-1 flex flex-col overflow-hidden">
+          {selectedStackId ? (
+            <StackDetail
+              stackId={selectedStackId}
+              onBack={() => selectStack(null)}
+            />
+          ) : (
+            <KanbanBoard />
+          )}
+        </div>
       </div>
 
-      {/* Session warning banner (non-blocking, at 80% threshold) */}
+      {/* Session warning banner (non-blocking) */}
       {sessionWarningLevel === 'warning' && sessionMonitorState?.usage && (
-        <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-2.5 text-sm text-amber-400 flex items-center gap-2 shrink-0 animate-fade-in" data-testid="session-warning-banner">
+        <div className="bg-amber-500/10 border-t border-amber-500/20 px-4 py-2 text-sm text-amber-400 flex items-center gap-2 shrink-0 animate-fade-in" data-testid="session-warning-banner">
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" className="shrink-0">
             <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
             <line x1="12" y1="9" x2="12" y2="13" stroke="currentColor" strokeWidth="2" strokeLinecap="round"/>
@@ -279,8 +256,9 @@ export default function App() {
       {showStartTicketDialog && <StartTicketDialog />}
       {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} />}
       {showOpenProjectDialog && <OpenProjectDialog />}
+      {showModelSettings && <ModelSettingsModal />}
 
-      {/* Session warning modal (blocking, at 95% and 100% thresholds) */}
+      {/* Session warning modal (blocking) */}
       {showSessionWarningModal && sessionWarningLevel && sessionWarningLevel !== 'warning' && sessionWarningLevel !== 'normal' && (
         <SessionWarningModal
           level={sessionWarningLevel}
@@ -289,7 +267,6 @@ export default function App() {
         />
       )}
 
-      {/* Token-limit-not-refreshed modal — shown when user clicks Resume too early */}
       <SessionTokenLimitModal />
     </div>
   );
