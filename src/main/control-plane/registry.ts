@@ -514,6 +514,25 @@ export class Registry {
       `);
       this.setSchemaVersion(15);
     }
+
+    if (currentVersion < 16) {
+      // Kanban board state — tracks each ticket's column in the app-owned pipeline.
+      // Rows seed lazily when tickets are fetched from the provider; column transitions
+      // are driven by explicit user actions on the board (no reconciliation with provider state).
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS ticket_board (
+          ticket_id   TEXT NOT NULL,
+          project_dir TEXT NOT NULL,
+          column      TEXT NOT NULL DEFAULT 'backlog',
+          title       TEXT NOT NULL DEFAULT '',
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          PRIMARY KEY (ticket_id, project_dir)
+        );
+      `);
+      this.setSchemaVersion(16);
+    }
+
   }
 
   // --- Projects ---
@@ -1117,6 +1136,37 @@ export class Registry {
   removeProjectTicketConfig(projectDir: string): void {
     const key = `project:${path.resolve(projectDir)}`;
     this.db.prepare('DELETE FROM project_ticket_config WHERE key = ?').run(key);
+  }
+
+  // --- Ticket Board ---
+
+  /** Lazily inserts a ticket at 'backlog' if it doesn't exist; leaves column untouched if it does. */
+  seedBoardTicket(ticketId: string, projectDir: string, title: string): void {
+    const normalizedDir = path.resolve(projectDir);
+    this.db.prepare(
+      `INSERT INTO ticket_board (ticket_id, project_dir, column, title)
+       VALUES (?, ?, 'backlog', ?)
+       ON CONFLICT(ticket_id, project_dir) DO UPDATE SET title = excluded.title`
+    ).run(ticketId, normalizedDir, title);
+  }
+
+  /** Moves a ticket to a new column. Inserts at the target column if the row doesn't exist. */
+  setBoardTicketColumn(ticketId: string, projectDir: string, column: string): void {
+    const normalizedDir = path.resolve(projectDir);
+    this.db.prepare(
+      `INSERT INTO ticket_board (ticket_id, project_dir, column, title)
+       VALUES (?, ?, ?, '')
+       ON CONFLICT(ticket_id, project_dir) DO UPDATE SET column = excluded.column, updated_at = datetime('now')`
+    ).run(ticketId, normalizedDir, column);
+  }
+
+  /** Returns all ticket_board rows for a project, ordered by created_at asc. */
+  listBoardTickets(projectDir: string): { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[] {
+    const normalizedDir = path.resolve(projectDir);
+    return this.db.prepare(
+      `SELECT ticket_id, project_dir, column, title, created_at, updated_at
+       FROM ticket_board WHERE project_dir = ? ORDER BY created_at ASC`
+    ).all(normalizedDir) as { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[];
   }
 
   /**

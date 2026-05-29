@@ -13,13 +13,13 @@
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     overflow: hidden;
-    background-color: #0d1017;
-    color: #e6e9f0;
+    background-color: #15131b;
+    color: #e8e4f0;
   }
 
   ::selection {
-    background-color: rgba(99, 102, 241, 0.3);
-    color: #e6e9f0;
+    background-color: rgba(212, 168, 84, 0.2);
+    color: #e8e4f0;
   }
 }
 
@@ -34,12 +34,12 @@
 }
 
 ::-webkit-scrollbar-thumb {
-  background: rgba(37, 42, 55, 0.8);
+  background: #2a2536;
   border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #3a3f50;
+  background: #342f42;
 }
 
 ::-webkit-scrollbar-corner {

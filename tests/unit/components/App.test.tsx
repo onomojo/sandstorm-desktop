@@ -9,8 +9,11 @@ import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
 
 // Mock child components to isolate App logic
-vi.mock('../../../src/renderer/components/Dashboard', () => ({
-  Dashboard: () => <div data-testid="dashboard" />,
+vi.mock('../../../src/renderer/components/KanbanBoard', () => ({
+  KanbanBoard: () => <div data-testid="kanban-board" />,
+}));
+vi.mock('../../../src/renderer/components/LeftRail', () => ({
+  LeftRail: () => <div data-testid="left-rail" />,
 }));
 vi.mock('../../../src/renderer/components/StackDetail', () => ({
   StackDetail: ({ onBack }: { onBack: () => void }) => (
@@ -22,13 +25,13 @@ vi.mock('../../../src/renderer/components/StackDetail', () => ({
 vi.mock('../../../src/renderer/components/NewStackDialog', () => ({
   NewStackDialog: () => <div data-testid="new-stack-dialog" />,
 }));
-vi.mock('../../../src/renderer/components/ProjectTabs', () => ({
-  ProjectTabs: () => <div data-testid="project-tabs" />,
-}));
 vi.mock('../../../src/renderer/components/OpenProjectDialog', () => ({
   OpenProjectDialog: () => <div data-testid="open-project-dialog" />,
 }));
 vi.mock('../../../src/renderer/tray-icon.png', () => ({ default: 'tray-icon.png' }));
+vi.mock('../../../src/renderer/components/ModelSettings', () => ({
+  ModelSettingsModal: () => <div data-testid="model-settings-modal" />,
+}));
 
 describe('App', () => {
   let api: ReturnType<typeof mockSandstormApi>;
@@ -49,10 +52,10 @@ describe('App', () => {
     });
   });
 
-  it('renders the app shell with project tabs and dashboard', () => {
+  it('renders the app shell with left rail and kanban board', () => {
     render(<App />);
-    expect(screen.getByTestId('project-tabs')).toBeDefined();
-    expect(screen.getByTestId('dashboard')).toBeDefined();
+    expect(screen.getByTestId('left-rail')).toBeDefined();
+    expect(screen.getByTestId('kanban-board')).toBeDefined();
   });
 
   it('calls docker.status on mount using the shared mock', async () => {
@@ -92,7 +95,7 @@ describe('App', () => {
     useAppStore.setState({ selectedStackId: 'stack-1' });
     render(<App />);
     expect(screen.getByTestId('stack-detail')).toBeDefined();
-    expect(screen.queryByTestId('dashboard')).toBeNull();
+    expect(screen.queryByTestId('kanban-board')).toBeNull();
   });
 
   it('renders NewStackDialog when showNewStackDialog is true', () => {
@@ -111,5 +114,11 @@ describe('App', () => {
     render(<App />);
     expect(api.on).toHaveBeenCalledWith('docker:connected', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('docker:disconnected', expect.any(Function));
+  });
+
+  it('renders ModelSettingsModal when showModelSettings is true', () => {
+    useAppStore.setState({ showModelSettings: true });
+    render(<App />);
+    expect(screen.getByTestId('model-settings-modal')).toBeDefined();
   });
 });
