@@ -27,6 +27,13 @@ export interface CreatedTicket {
   ticketId: string;
 }
 
+/** A ticket as surfaced for the backlog board: stable id, display title, author identity. */
+export interface TicketListEntry {
+  id: string;
+  title: string;
+  author: string;
+}
+
 // ---------------------------------------------------------------------------
 // GitHub: built-in ticket operations via gh CLI
 // ---------------------------------------------------------------------------
@@ -72,6 +79,43 @@ export async function githubUpdateTicket(ticketId: string, body: string, cwd: st
     const msg = err.stderr?.trim() || err.message;
     throw new Error(`gh issue edit failed: ${msg}`);
   });
+}
+
+/**
+ * List the authenticated user's open issues for the backlog board.
+ * Optionally filter by label. Excludes PRs (gh issue list does so by default).
+ * Returns [] on any failure so the board degrades gracefully to existing rows.
+ */
+export async function githubListTickets(cwd: string, label?: string): Promise<TicketListEntry[]> {
+  try {
+    const args = [
+      'issue', 'list',
+      '--author', '@me',
+      '--state', 'open',
+      '--json', 'number,title,author',
+      '--limit', '100',
+    ];
+    if (label && label.trim()) {
+      args.push('--label', label.trim());
+    }
+    const { stdout } = await execFileAsync('gh', args, {
+      cwd,
+      timeout: 30000,
+      maxBuffer: 2 * 1024 * 1024,
+    });
+    const issues = JSON.parse(stdout) as {
+      number: number;
+      title: string;
+      author: { login: string } | null;
+    }[];
+    return issues.map((issue) => ({
+      id: String(issue.number),
+      title: issue.title,
+      author: issue.author?.login ?? '',
+    }));
+  } catch {
+    return [];
+  }
 }
 
 export async function githubCreateTicket(title: string, body: string, cwd: string): Promise<CreatedTicket> {
@@ -200,6 +244,42 @@ export async function jiraFetchTicket(
   }
 }
 
+/**
+ * List the reporting user's not-done issues for the backlog board.
+ * Optionally filter by label. Returns [] on any failure (graceful degradation).
+ */
+export async function jiraListTickets(
+  config: ProjectTicketConfig,
+  label?: string,
+): Promise<TicketListEntry[]> {
+  if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
+    return [];
+  }
+  try {
+    let jql = 'reporter = currentUser() AND statusCategory != Done';
+    if (label && label.trim()) {
+      jql += ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
+    }
+    const url =
+      `${config.jira_url.replace(/\/$/, '')}/rest/api/2/search` +
+      `?jql=${encodeURIComponent(jql)}&fields=summary,reporter&maxResults=100`;
+    const raw = await jiraRequest({ url, method: 'GET', auth: jiraAuth(config) });
+    const result = JSON.parse(raw) as {
+      issues: {
+        key: string;
+        fields: { summary: string; reporter: { accountId?: string; displayName?: string } | null };
+      }[];
+    };
+    return (result.issues ?? []).map((issue) => ({
+      id: issue.key,
+      title: issue.fields.summary,
+      author: issue.fields.reporter?.accountId ?? issue.fields.reporter?.displayName ?? '',
+    }));
+  } catch {
+    return [];
+  }
+}
+
 export async function jiraUpdateTicket(
   ticketId: string,
   body: string,
@@ -262,6 +342,17 @@ export async function fetchTicketWithConfig(
     return githubFetchTicket(ticketId, cwd);
   }
   return jiraFetchTicket(ticketId, config);
+}
+
+export async function listTicketsWithConfig(
+  config: ProjectTicketConfig,
+  cwd: string,
+  label?: string,
+): Promise<TicketListEntry[]> {
+  if (config.provider === 'github') {
+    return githubListTickets(cwd, label);
+  }
+  return jiraListTickets(config, label);
 }
 
 export async function updateTicketWithConfig(

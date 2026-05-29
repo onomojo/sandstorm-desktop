@@ -93,7 +93,7 @@ import { createTicketWithConfig } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
-import { listTickets } from './control-plane/ticket-lister';
+import { listTicketsWithConfig } from './control-plane/ticket-lister';
 import { KANBAN_COLUMNS } from '../shared/kanban';
 
 /**
@@ -1248,18 +1248,17 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     if (dirError) throw new Error(dirError.error);
     const normalizedDir = path.resolve(projectDir);
 
-    // Fetch from provider; if the script is missing, fall through and return existing board rows.
-    try {
-      const tickets = await listTickets('', normalizedDir);
-      for (const ticket of tickets) {
-        registry.seedBoardTicket(ticket.id, normalizedDir, ticket.title);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const isKnownProviderError = msg.includes('ENOENT') || msg.includes('not found') ||
-        msg.includes('script') || msg.includes('exit code') || msg.includes('No ticket provider');
-      if (!isKnownProviderError) {
-        console.error('[tickets:list] Unexpected error fetching tickets from provider:', err);
+    // Fetch from the project's configured ticket provider (built-in, no per-project
+    // script). When no provider is configured, skip and return existing board rows.
+    const config = registry.getProjectTicketConfig(normalizedDir);
+    if (config) {
+      try {
+        const tickets = await listTicketsWithConfig(config, normalizedDir);
+        for (const ticket of tickets) {
+          registry.seedBoardTicket(ticket.id, normalizedDir, ticket.title);
+        }
+      } catch (err) {
+        console.error('[tickets:list] Failed to fetch tickets from provider:', err);
       }
     }
 
