@@ -37,7 +37,7 @@ import {
   addLabel as realAddLabel,
   removeLabel as realRemoveLabel,
 } from '../control-plane/ticket-labels';
-import type { SpecGateResult } from '../control-plane/ticket-spec';
+import type { SpecGateResult, RefineQuestion } from '../control-plane/ticket-spec';
 
 /** Marker that identifies comments posted by this bot. */
 export const BOT_COMMENT_MARKER = '<!-- sandstorm:bot-question -->';
@@ -84,7 +84,16 @@ export function getUserAnswersAfterBot(
   return answers.map((c) => c.body).join('\n\n');
 }
 
-export function formatQuestionComment(questions: string[], gateSummary: string): string {
+export function formatQuestionComment(questions: RefineQuestion[], gateSummary: string): string {
+  const questionLines: string[] = [];
+  for (let i = 0; i < questions.length; i++) {
+    const q = questions[i];
+    questionLines.push(`${i + 1}. ${q.question}`);
+    for (let j = 0; j < q.options.length; j++) {
+      const letter = String.fromCharCode(65 + j); // A, B, C, ...
+      questionLines.push(`   - ${letter}) ${q.options[j].label}`);
+    }
+  }
   const lines = [
     BOT_COMMENT_MARKER,
     '',
@@ -92,7 +101,7 @@ export function formatQuestionComment(questions: string[], gateSummary: string):
     '',
     "I've reviewed this ticket and have a few questions before it can move to `spec-ready`:",
     '',
-    ...questions.map((q, i) => `${i + 1}. ${q}`),
+    ...questionLines,
   ];
   if (gateSummary) {
     lines.push('', `_Sandstorm spec gate: ${gateSummary}_`);

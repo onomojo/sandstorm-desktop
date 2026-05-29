@@ -313,8 +313,22 @@ Respond in EXACTLY this format (no other text before or after):
 ...
 
 ### Questions Requiring User Answers (if any)
-1. <specific question from unresolvable assumptions or ambiguities>
-...`;
+
+Every question MUST be phrased as an actionable multiple-choice question — never a statement. Provide 2 or more options when reasonable choices exist.
+
+\`\`\`json
+[
+  {
+    "id": "q1",
+    "question": "<specific actionable question>",
+    "options": [
+      { "id": "a", "label": "<option A>" },
+      { "id": "b", "label": "<option B>" }
+    ]
+  }
+]
+\`\`\`
+`;
 }
 
 async function handleSpecCheck(
@@ -381,9 +395,22 @@ Respond in EXACTLY this format:
 ...
 
 ### Questions to Resolve Gaps
-1. <specific question>
-2. <specific question>
-...`;
+
+Every question MUST be phrased as an actionable multiple-choice question — never a statement. Provide 2 or more options when reasonable choices exist.
+
+\`\`\`json
+[
+  {
+    "id": "q1",
+    "question": "<specific actionable question>",
+    "options": [
+      { "id": "a", "label": "<option A>" },
+      { "id": "b", "label": "<option B>" }
+    ]
+  }
+]
+\`\`\`
+`;
 }
 
 function buildSpecRefineAnswerPrompt(gate: string, ticketBody: string, userAnswers: string): string {
@@ -433,8 +460,22 @@ Respond in EXACTLY this format:
 ...
 
 ### Questions to Resolve Remaining Gaps (if any)
-1. <specific question>
-...`;
+
+Every question MUST be phrased as an actionable multiple-choice question — never a statement. Provide 2 or more options when reasonable choices exist.
+
+\`\`\`json
+[
+  {
+    "id": "q1",
+    "question": "<specific actionable question>",
+    "options": [
+      { "id": "a", "label": "<option A>" },
+      { "id": "b", "label": "<option B>" }
+    ]
+  }
+]
+\`\`\`
+`;
 }
 
 async function applySpecRefineResult(
