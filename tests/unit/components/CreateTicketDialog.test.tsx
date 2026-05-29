@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -69,6 +69,23 @@ describe('CreateTicketDialog', () => {
     // #317 — the just-filed ticket id is handed off so the Refine dialog
     // doesn't ask for it again.
     expect(useAppStore.getState().refineTicketPrefill).toBe('77');
+  });
+
+  it('calls refreshBoardTickets with the project directory after successful create', async () => {
+    const user = userEvent.setup();
+    api.tickets.create.mockResolvedValue({
+      url: 'https://github.com/o/r/issues/77', ticketId: '77',
+    });
+    const refreshBoardTickets = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ refreshBoardTickets });
+
+    render(<CreateTicketDialog />);
+    await user.type(screen.getByTestId('create-ticket-title'), 'My Title');
+    await user.type(screen.getByTestId('create-ticket-body'), 'My Body');
+    fireEvent.click(screen.getByTestId('create-ticket-submit'));
+
+    await waitFor(() => screen.getByTestId('create-ticket-success'));
+    expect(refreshBoardTickets).toHaveBeenCalledWith('/proj');
   });
 
   it('surfaces an error from tickets.create', async () => {

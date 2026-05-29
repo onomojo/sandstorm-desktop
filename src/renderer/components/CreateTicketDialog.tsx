@@ -4,7 +4,7 @@ import { useAppStore } from '../store';
 type Phase = 'input' | 'creating' | 'created';
 
 export function CreateTicketDialog() {
-  const { setShowCreateTicketDialog, openRefineTicketDialogWith, activeProject } = useAppStore();
+  const { setShowCreateTicketDialog, openRefineTicketDialogWith, activeProject, refreshBoardTickets } = useAppStore();
   const project = activeProject();
 
   const [title, setTitle] = useState('');
@@ -30,6 +30,7 @@ export function CreateTicketDialog() {
       const result = await window.sandstorm.tickets.create(project.directory, title.trim(), body.trim());
       setCreated({ url: result.url, ticketId: result.ticketId });
       setPhase('created');
+      void refreshBoardTickets(project.directory);
     } catch (err) {
       setPhase('input');
       setError(err instanceof Error ? err.message : String(err));

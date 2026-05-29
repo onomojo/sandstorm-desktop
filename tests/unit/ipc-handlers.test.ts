@@ -22,6 +22,7 @@ const {
   mockFetchAccountUsage,
   mockRemoveProjectFromCrontab,
   mockListTicketsWithConfig,
+  mockCreateTicketWithConfig,
   mockSessionMonitor,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
@@ -104,6 +105,7 @@ const {
   const mockFetchAccountUsage = vi.fn();
   const mockRemoveProjectFromCrontab = vi.fn();
   const mockListTicketsWithConfig = vi.fn().mockResolvedValue([]);
+  const mockCreateTicketWithConfig = vi.fn().mockResolvedValue({ url: 'https://github.com/o/r/issues/1', ticketId: '1' });
 
   const mockSessionMonitor = {
     getState: vi.fn(),
@@ -126,6 +128,7 @@ const {
     mockFetchAccountUsage,
     mockRemoveProjectFromCrontab,
     mockListTicketsWithConfig,
+    mockCreateTicketWithConfig,
     mockSessionMonitor,
   };
 });
@@ -199,6 +202,10 @@ vi.mock('../../src/main/scheduler/scheduler-manager', () => ({
 
 vi.mock('../../src/main/control-plane/ticket-lister', () => ({
   listTicketsWithConfig: (...args: unknown[]) => mockListTicketsWithConfig(...args),
+}));
+
+vi.mock('../../src/main/control-plane/ticket-config', () => ({
+  createTicketWithConfig: (...args: unknown[]) => mockCreateTicketWithConfig(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -1331,6 +1338,62 @@ describe('IPC Handlers', () => {
 
       await invokeHandler('tickets:list', '/proj');
 
+      expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('tickets:create', () => {
+    beforeEach(() => {
+      mockRegistry.getProjectTicketConfig.mockReturnValue({ provider: 'github' });
+      mockCreateTicketWithConfig.mockResolvedValue({ url: 'https://github.com/o/r/issues/99', ticketId: '99' });
+      mockRegistry.seedBoardTicket.mockClear();
+    });
+
+    it('throws when no provider is configured', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce(null);
+      await expect(
+        invokeHandler('tickets:create', '/proj', 'My Title', 'My Body')
+      ).rejects.toThrow('No ticket provider configured');
+      expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
+    });
+
+    it('seeds the board with the new ticket after creation', async () => {
+      await invokeHandler('tickets:create', '/proj', 'My Title', 'My Body');
+      expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('99', '/proj', 'My Title');
+    });
+
+    it('ticket seeded by create appears in board even when tickets:list provider fetch fails', async () => {
+      // tickets:create succeeds and seeds the board
+      await invokeHandler('tickets:create', '/proj', 'My Title', 'My Body');
+      expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('99', '/proj', 'My Title');
+
+      // When tickets:list is subsequently called with a failing provider, the
+      // seeded ticket must still appear — tickets:list degrades to the local DB.
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
+      mockListTicketsWithConfig.mockRejectedValueOnce(new Error('provider unavailable'));
+      mockRegistry.listBoardTickets.mockReturnValueOnce([
+        { ticket_id: '99', project_dir: '/proj', column: 'backlog', title: 'My Title', updated_at: '' },
+      ]);
+
+      const result = await invokeHandler('tickets:list', '/proj');
+
+      expect(result).toHaveLength(1);
+      expect((result as Array<{ ticket_id: string; column: string }>)[0]).toMatchObject({
+        ticket_id: '99',
+        column: 'backlog',
+      });
+    });
+
+    it('returns the created ticket result', async () => {
+      const result = await invokeHandler('tickets:create', '/proj', 'My Title', 'My Body');
+      expect(result).toEqual({ url: 'https://github.com/o/r/issues/99', ticketId: '99' });
+    });
+
+    it('does not seed the board when createTicketWithConfig throws', async () => {
+      mockCreateTicketWithConfig.mockRejectedValueOnce(new Error('gh auth required'));
+      await expect(
+        invokeHandler('tickets:create', '/proj', 'My Title', 'My Body')
+      ).rejects.toThrow('gh auth required');
       expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
     });
   });

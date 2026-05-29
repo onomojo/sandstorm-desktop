@@ -1235,7 +1235,9 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       if (!config) {
         throw new Error('No ticket provider configured for this project. Configure GitHub or Jira in Project Settings.');
       }
-      return createTicketWithConfig({ title, body, config, cwd: projectDir });
+      const result = await createTicketWithConfig({ title, body, config, cwd: projectDir });
+      registry.seedBoardTicket(result.ticketId, path.resolve(projectDir), title);
+      return result;
     },
   );
 
