@@ -40,6 +40,7 @@ export function RefineTicketDialog() {
     setCurrentRefinementSessionId,
     removeRefinementSession,
     upsertRefinementSession,
+    moveTicketColumn,
   } = useAppStore();
   const project = activeProject();
 
@@ -154,6 +155,10 @@ export function RefineTicketDialog() {
         task: fetched.body,
         gateApproved: true,
       });
+      // Advance the kanban column to in_stack now that the stack exists.
+      // Parallel to the card-based path (openNewStackDialogForTicket); without this,
+      // tickets started from the Refine dialog stayed in spec_ready / backlog (#388).
+      await moveTicketColumn(session.ticketId, projectDir, 'in_stack');
       await refreshStacks();
       // Clean up session after stack created
       removeRefinementSession(session.id);
@@ -163,7 +168,7 @@ export function RefineTicketDialog() {
       setLocalPhase('input');
       setLocalError(err instanceof Error ? err.message : String(err));
     }
-  }, [session, stackName, projectDir, refreshStacks, removeRefinementSession, setShowRefineTicketDialog]);
+  }, [session, stackName, projectDir, refreshStacks, removeRefinementSession, setShowRefineTicketDialog, moveTicketColumn]);
 
   const handleRetry = useCallback(async () => {
     if (!session || !projectDir) return;

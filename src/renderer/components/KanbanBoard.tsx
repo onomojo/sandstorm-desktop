@@ -20,6 +20,8 @@ export function KanbanBoard() {
     boardTickets,
     boardTicketsLoading,
     boardTicketsError,
+    moveTicketColumnError,
+    clearMoveTicketColumnError,
     stacks,
     activeProject,
     refreshBoardTickets,
@@ -81,6 +83,16 @@ export function KanbanBoard() {
               )}
               {boardTicketsError && !boardTicketsLoading && (
                 <span className="text-xs text-red-400" data-testid="board-tickets-error">Failed to load tickets</span>
+              )}
+              {moveTicketColumnError && (
+                <button
+                  onClick={clearMoveTicketColumnError}
+                  className="text-xs text-red-400 hover:text-red-300 underline decoration-dotted"
+                  data-testid="move-ticket-column-error"
+                  title={moveTicketColumnError}
+                >
+                  Failed to update ticket column — click to dismiss
+                </button>
               )}
             </>
           )}
