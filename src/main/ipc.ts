@@ -90,6 +90,18 @@ import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools'
 import { listTicketsWithConfig } from './control-plane/ticket-lister';
 import { KANBAN_COLUMNS } from '../shared/kanban';
 
+// Set __sandstorm at module-load time so app.evaluate() works immediately
+// after electron.launch() resolves — which happens during createWindow(),
+// before registerIpcHandlers() is called.  The getter defers reading
+// `registry` until first access so circular-import init order doesn't matter.
+if (process.env.PLAYWRIGHT_TEST) {
+  Object.defineProperty(globalThis, '__sandstorm', {
+    get: () => ({ registry, ipcMain }),
+    configurable: true,
+    enumerable: true,
+  });
+}
+
 /**
  * Copy bundled sandstorm skill files into a project's .claude/skills/ directory.
  * Skips if skills are already present and up to date.
@@ -1231,9 +1243,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     const config = registry.getProjectTicketConfig(normalizedDir);
     if (config) {
       try {
-        const tickets = await listTicketsWithConfig(config, normalizedDir);
-        for (const ticket of tickets) {
-          registry.seedBoardTicket(ticket.id, normalizedDir, ticket.title);
+        const result = await listTicketsWithConfig(config, normalizedDir);
+        if (result.ok) {
+          for (const ticket of result.tickets) {
+            registry.seedBoardTicket(ticket.id, normalizedDir, ticket.title);
+          }
+          const openIds = result.tickets.map(t => t.id);
+          const deletedCount = registry.deleteClosedEarlyColumnTickets(normalizedDir, openIds);
+          if (deletedCount > 0) {
+            console.log(`[tickets:list] Removed ${deletedCount} closed early-column ticket(s) from board for project: ${normalizedDir}`);
+          }
         }
       } catch (err) {
         console.error('[tickets:list] Failed to fetch tickets from provider:', err);

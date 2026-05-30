@@ -151,6 +151,89 @@ describe('tickets:create seeding behavior', () => {
   });
 });
 
+// --- deleteClosedEarlyColumnTickets ---
+
+describe('deleteClosedEarlyColumnTickets', () => {
+  it('removes backlog tickets absent from the open-id set', () => {
+    registry.seedBoardTicket('open-1', '/proj', 'Open ticket');
+    registry.seedBoardTicket('closed-1', '/proj', 'Closed ticket');
+    const deleted = registry.deleteClosedEarlyColumnTickets('/proj', ['open-1']);
+    const rows = registry.listBoardTickets('/proj');
+    expect(deleted).toBe(1);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ticket_id).toBe('open-1');
+  });
+
+  it('removes refining and spec_ready tickets absent from the open-id set', () => {
+    registry.seedBoardTicket('r-1', '/proj', 'Refining');
+    registry.setBoardTicketColumn('r-1', '/proj', 'refining');
+    registry.seedBoardTicket('s-1', '/proj', 'Spec ready');
+    registry.setBoardTicketColumn('s-1', '/proj', 'spec_ready');
+    const deleted = registry.deleteClosedEarlyColumnTickets('/proj', []);
+    expect(deleted).toBe(2);
+    expect(registry.listBoardTickets('/proj')).toHaveLength(0);
+  });
+
+  it('leaves in_stack, pr_open, and merged tickets regardless of open-id set', () => {
+    registry.setBoardTicketColumn('in-1', '/proj', 'in_stack');
+    registry.setBoardTicketColumn('pr-1', '/proj', 'pr_open');
+    registry.setBoardTicketColumn('m-1', '/proj', 'merged');
+    const deleted = registry.deleteClosedEarlyColumnTickets('/proj', []);
+    expect(deleted).toBe(0);
+    const rows = registry.listBoardTickets('/proj');
+    expect(rows).toHaveLength(3);
+  });
+
+  it('empty open-id set deletes all early-column rows for the project', () => {
+    registry.seedBoardTicket('a', '/proj', 'A');
+    registry.seedBoardTicket('b', '/proj', 'B');
+    registry.setBoardTicketColumn('b', '/proj', 'refining');
+    const deleted = registry.deleteClosedEarlyColumnTickets('/proj', []);
+    expect(deleted).toBe(2);
+    expect(registry.listBoardTickets('/proj')).toHaveLength(0);
+  });
+
+  it('is scoped to the given project_dir — does not affect other projects', () => {
+    registry.seedBoardTicket('x', '/alpha', 'Alpha ticket');
+    registry.seedBoardTicket('y', '/beta', 'Beta ticket');
+    const deleted = registry.deleteClosedEarlyColumnTickets('/alpha', []);
+    expect(deleted).toBe(1);
+    expect(registry.listBoardTickets('/alpha')).toHaveLength(0);
+    expect(registry.listBoardTickets('/beta')).toHaveLength(1);
+  });
+
+  it('returns 0 when there are no early-column tickets to remove', () => {
+    registry.seedBoardTicket('keep-1', '/proj', 'Keep');
+    const deleted = registry.deleteClosedEarlyColumnTickets('/proj', ['keep-1']);
+    expect(deleted).toBe(0);
+    expect(registry.listBoardTickets('/proj')).toHaveLength(1);
+  });
+
+  it('returns the correct count matching the number of rows removed', () => {
+    registry.seedBoardTicket('t1', '/proj', 'T1');
+    registry.seedBoardTicket('t2', '/proj', 'T2');
+    registry.seedBoardTicket('t3', '/proj', 'T3');
+    // Only t1 is still open
+    const deleted = registry.deleteClosedEarlyColumnTickets('/proj', ['t1']);
+    expect(deleted).toBe(2);
+    const rows = registry.listBoardTickets('/proj');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ticket_id).toBe('t1');
+  });
+
+  it('a re-seeded ticket after deletion goes back to backlog', () => {
+    registry.seedBoardTicket('reopen-1', '/proj', 'Reopened ticket');
+    // Ticket is closed (not in open set) → deleted
+    registry.deleteClosedEarlyColumnTickets('/proj', []);
+    expect(registry.listBoardTickets('/proj')).toHaveLength(0);
+    // Ticket is reopened → re-seed puts it in backlog
+    registry.seedBoardTicket('reopen-1', '/proj', 'Reopened ticket');
+    const rows = registry.listBoardTickets('/proj');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].column).toBe('backlog');
+  });
+});
+
 // --- Store-level tests ---
 
 import { useAppStore } from '../../src/renderer/store';

@@ -34,6 +34,9 @@ export interface TicketListEntry {
   author: string;
 }
 
+/** Discriminated result for ticket list fetches — lets callers distinguish success from failure. */
+export type TicketListResult = { ok: true; tickets: TicketListEntry[] } | { ok: false };
+
 // ---------------------------------------------------------------------------
 // GitHub: built-in ticket operations via gh CLI
 // ---------------------------------------------------------------------------
@@ -84,9 +87,9 @@ export async function githubUpdateTicket(ticketId: string, body: string, cwd: st
 /**
  * List the authenticated user's open issues for the backlog board.
  * Optionally filter by label. Excludes PRs (gh issue list does so by default).
- * Returns [] on any failure so the board degrades gracefully to existing rows.
+ * Returns { ok: false } on any failure so callers can distinguish empty-success from error.
  */
-export async function githubListTickets(cwd: string, label?: string): Promise<TicketListEntry[]> {
+export async function githubListTickets(cwd: string, label?: string): Promise<TicketListResult> {
   try {
     const args = [
       'issue', 'list',
@@ -108,13 +111,16 @@ export async function githubListTickets(cwd: string, label?: string): Promise<Ti
       title: string;
       author: { login: string } | null;
     }[];
-    return issues.map((issue) => ({
-      id: String(issue.number),
-      title: issue.title,
-      author: issue.author?.login ?? '',
-    }));
+    return {
+      ok: true,
+      tickets: issues.map((issue) => ({
+        id: String(issue.number),
+        title: issue.title,
+        author: issue.author?.login ?? '',
+      })),
+    };
   } catch {
-    return [];
+    return { ok: false };
   }
 }
 
@@ -246,14 +252,14 @@ export async function jiraFetchTicket(
 
 /**
  * List the reporting user's not-done issues for the backlog board.
- * Optionally filter by label. Returns [] on any failure (graceful degradation).
+ * Optionally filter by label. Returns { ok: false } on any failure or missing credentials.
  */
 export async function jiraListTickets(
   config: ProjectTicketConfig,
   label?: string,
-): Promise<TicketListEntry[]> {
+): Promise<TicketListResult> {
   if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
-    return [];
+    return { ok: false };
   }
   try {
     let jql = 'reporter = currentUser() AND statusCategory != Done';
@@ -270,13 +276,16 @@ export async function jiraListTickets(
         fields: { summary: string; reporter: { accountId?: string; displayName?: string } | null };
       }[];
     };
-    return (result.issues ?? []).map((issue) => ({
-      id: issue.key,
-      title: issue.fields.summary,
-      author: issue.fields.reporter?.accountId ?? issue.fields.reporter?.displayName ?? '',
-    }));
+    return {
+      ok: true,
+      tickets: (result.issues ?? []).map((issue) => ({
+        id: issue.key,
+        title: issue.fields.summary,
+        author: issue.fields.reporter?.accountId ?? issue.fields.reporter?.displayName ?? '',
+      })),
+    };
   } catch {
-    return [];
+    return { ok: false };
   }
 }
 
@@ -348,7 +357,7 @@ export async function listTicketsWithConfig(
   config: ProjectTicketConfig,
   cwd: string,
   label?: string,
-): Promise<TicketListEntry[]> {
+): Promise<TicketListResult> {
   if (config.provider === 'github') {
     return githubListTickets(cwd, label);
   }

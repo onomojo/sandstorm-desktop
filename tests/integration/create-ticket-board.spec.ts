@@ -23,33 +23,41 @@ let testProjectId: number;
 test.beforeAll(async () => {
   fs.mkdirSync(TEST_PROJECT_DIR, { recursive: true });
 
-  app = await electron.launch({ args: ['dist/main/index.cjs', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] });
+  app = await electron.launch({ args: ['dist/main/index.cjs', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { PLAYWRIGHT_TEST: '1', ...process.env } });
 
   // Set up test project and install the tickets:create stub in the main process.
   // All registry calls use the live registry instance (not raw SQL).
+  //
+  // Note: app.evaluate() runs in the raw V8 global context where require() is
+  // not available. registry and ipcMain are accessed via globalThis.__sandstorm,
+  // which registerIpcHandlers() assigns on startup.
   testProjectId = await app.evaluate(async () => {
-    const { ipcMain } = require('electron');
-    const pathMod = require('path');
+    const { registry, ipcMain } = (globalThis as any).__sandstorm;
 
     const projectDir = '/tmp/e2e-create-ticket-board';
-    const normalizedDir = pathMod.resolve(projectDir);
+    const normalizedDir = projectDir;
 
-    // Get the live registry instance exported from dist/main/index.js
-    const { registry } = require.main.exports;
-
-    // Register the project and configure its ticket provider
+    // Register the project and configure its ticket provider.
+    // Remove any stale row from a prior run (UNIQUE on directory) before inserting fresh.
+    const stale = registry.listProjects().find((p: { directory: string }) => p.directory === normalizedDir);
+    if (stale) registry.removeProject(stale.id);
     const project = registry.addProject(normalizedDir, 'E2E Test Project');
     registry.setProjectTicketConfig(normalizedDir, { provider: 'github' });
 
-    // Replace the IPC handler with a stub that skips the real provider call
-    // but still calls registry.seedBoardTicket() — exactly as the real handler does.
-    // The tickets:list handler (called by refreshBoardTickets after success) already
-    // degrades gracefully when the provider is unreachable, so no stub is needed there.
+    // Replace the IPC handlers with stubs that skip real provider calls.
+    // tickets:create seeds the board row directly.
+    // tickets:list is also stubbed here because the real handler may error in
+    // the test environment (gh not installed, etc.); the stub returns current
+    // board rows so the UI reflects the seeded ticket without a live provider.
     ipcMain.removeHandler('tickets:create');
-    ipcMain.handle('tickets:create', async (_event, dir, title) => {
+    ipcMain.handle('tickets:create', async (_event: unknown, dir: string, title: string) => {
       const ticketId = 'E2E-42';
-      registry.seedBoardTicket(ticketId, pathMod.resolve(dir), title);
+      registry.seedBoardTicket(ticketId, dir, title);
       return { ticketId, url: 'https://github.com/e2e-test/repo/issues/42' };
+    });
+    ipcMain.removeHandler('tickets:list');
+    ipcMain.handle('tickets:list', async (_event: unknown, projectDir: string) => {
+      return registry.listBoardTickets(projectDir);
     });
 
     return project.id;
@@ -64,6 +72,15 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  // Clean up DB state so re-runs don't fail with a UNIQUE constraint on the project directory.
+  try {
+    await app?.evaluate(async () => {
+      const { registry } = (globalThis as any).__sandstorm;
+      const dir = '/tmp/e2e-create-ticket-board';
+      const existing = registry.listProjects().find((p: { directory: string }) => p.directory === dir);
+      if (existing) registry.removeProject(existing.id);
+    });
+  } catch { /* best effort */ }
   await app?.close();
   try { fs.rmSync(TEST_PROJECT_DIR, { recursive: true, force: true }); } catch {}
 });
@@ -137,10 +154,9 @@ test('tickets:create IPC handler seeds board and card appears in Backlog column 
 
 test('ticket seeded in backlog does not change column on re-seed (UPSERT preserves column)', async () => {
   const result = await app.evaluate(async () => {
-    const pathMod = require('path');
-    const { registry } = require.main.exports;
+    const { registry } = (globalThis as any).__sandstorm;
 
-    const projectDir = pathMod.resolve('/tmp/integration-test-proj-2');
+    const projectDir = '/tmp/integration-test-proj-2';
     const ticketId = 'INTTEST-2';
 
     // Seed at backlog

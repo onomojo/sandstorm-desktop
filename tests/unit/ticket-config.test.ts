@@ -326,10 +326,13 @@ describe('githubListTickets', () => {
 
     const result = await githubListTickets('/proj');
 
-    expect(result).toEqual([
-      { id: '42', title: 'Fix the bug', author: 'alice' },
-      { id: '7', title: 'Add feature', author: 'bob' },
-    ]);
+    expect(result).toEqual({
+      ok: true,
+      tickets: [
+        { id: '42', title: 'Fix the bug', author: 'alice' },
+        { id: '7', title: 'Add feature', author: 'bob' },
+      ],
+    });
   });
 
   it('invokes gh with @me open-issue args and no label filter by default', async () => {
@@ -354,28 +357,28 @@ describe('githubListTickets', () => {
   it('tolerates a missing author login', async () => {
     mockExecFileSuccess(JSON.stringify([{ number: 1, title: 'Orphan', author: null }]));
     const result = await githubListTickets('/proj');
-    expect(result).toEqual([{ id: '1', title: 'Orphan', author: '' }]);
+    expect(result).toEqual({ ok: true, tickets: [{ id: '1', title: 'Orphan', author: '' }] });
   });
 
-  it('returns [] when gh fails (graceful degradation)', async () => {
+  it('returns ok:false when gh fails (graceful degradation)', async () => {
     mockExecFileError('gh not authenticated');
     const result = await githubListTickets('/proj');
-    expect(result).toEqual([]);
+    expect(result).toEqual({ ok: false });
   });
 
-  it('returns [] on unparseable output', async () => {
+  it('returns ok:false on unparseable output', async () => {
     mockExecFileSuccess('not json');
     const result = await githubListTickets('/proj');
-    expect(result).toEqual([]);
+    expect(result).toEqual({ ok: false });
   });
 });
 
 describe('jiraListTickets', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns [] when credentials are missing', async () => {
+  it('returns ok:false when credentials are missing', async () => {
     const cfg: ProjectTicketConfig = { provider: 'jira' };
-    expect(await jiraListTickets(cfg)).toEqual([]);
+    expect(await jiraListTickets(cfg)).toEqual({ ok: false });
   });
 
   it('maps Jira search results into TicketListEntry[]', async () => {
@@ -388,15 +391,18 @@ describe('jiraListTickets', () => {
 
     const result = await jiraListTickets(JIRA_CONFIG);
 
-    expect(result).toEqual([
-      { id: 'ACME-42', title: 'Fix Jira bug', author: 'acc-1' },
-      { id: 'ACME-7', title: 'Add Jira feature', author: 'Bob' },
-    ]);
+    expect(result).toEqual({
+      ok: true,
+      tickets: [
+        { id: 'ACME-42', title: 'Fix Jira bug', author: 'acc-1' },
+        { id: 'ACME-7', title: 'Add Jira feature', author: 'Bob' },
+      ],
+    });
   });
 
-  it('returns [] on HTTP error', async () => {
+  it('returns ok:false on HTTP error', async () => {
     mockJiraRequest('Unauthorized', 401);
-    expect(await jiraListTickets(JIRA_CONFIG)).toEqual([]);
+    expect(await jiraListTickets(JIRA_CONFIG)).toEqual({ ok: false });
   });
 });
 
@@ -406,14 +412,14 @@ describe('listTicketsWithConfig', () => {
   it('routes to github for GitHub config', async () => {
     mockExecFileSuccess(JSON.stringify([{ number: 1, title: 'T', author: { login: 'u' } }]));
     const result = await listTicketsWithConfig(GITHUB_CONFIG, '/proj');
-    expect(result).toEqual([{ id: '1', title: 'T', author: 'u' }]);
+    expect(result).toEqual({ ok: true, tickets: [{ id: '1', title: 'T', author: 'u' }] });
     expect(mockExecFile).toHaveBeenCalled();
   });
 
   it('routes to jira for Jira config', async () => {
     mockJiraRequest(JSON.stringify({ issues: [{ key: 'ACME-1', fields: { summary: 'J', reporter: { accountId: 'a' } } }] }));
     const result = await listTicketsWithConfig(JIRA_CONFIG, '/proj');
-    expect(result).toEqual([{ id: 'ACME-1', title: 'J', author: 'a' }]);
+    expect(result).toEqual({ ok: true, tickets: [{ id: 'ACME-1', title: 'J', author: 'a' }] });
     expect(mockExecFile).not.toHaveBeenCalled();
   });
 });
