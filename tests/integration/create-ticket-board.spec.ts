@@ -25,6 +25,17 @@ test.beforeAll(async () => {
 
   app = await electron.launch({ args: ['dist/main/index.cjs', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { PLAYWRIGHT_TEST: '1', ...process.env } });
 
+  // The renderer's mount fires refreshProjects() which calls projects:list — wait
+  // for the main window's IPC handlers to be installed before reaching into the
+  // main process. registerIpcHandlers() runs synchronously after createWindow()
+  // in the app's whenReady().then() chain, so once we can see the left-rail in
+  // the renderer (it issues IPC calls), the handlers exist.
+  {
+    const win = await app.firstWindow();
+    await win.waitForLoadState('domcontentloaded');
+    await expect(win.locator('[data-testid="left-rail"]')).toBeVisible({ timeout: 15000 });
+  }
+
   // Set up test project and install the tickets:create stub in the main process.
   // All registry calls use the live registry instance (not raw SQL).
   //
@@ -106,8 +117,11 @@ test('Create Ticket dialog opens and has required testids', async () => {
   await expect(window.locator('[data-testid="create-ticket-body"]')).toBeVisible();
   await expect(window.locator('[data-testid="create-ticket-submit"]')).toBeVisible();
 
-  // Close dialog
-  await window.keyboard.press('Escape');
+  // Close the dialog by clicking the backdrop (CreateTicketDialog only closes
+  // on backdrop-click or the explicit X button — it does not handle Escape).
+  // Wait for it to fully detach so the next test's clicks aren't intercepted.
+  await window.locator('[data-testid="create-ticket-dialog"]').click({ position: { x: 5, y: 5 } });
+  await expect(window.locator('[data-testid="create-ticket-dialog"]')).toBeHidden({ timeout: 5000 });
 });
 
 test('tickets:create IPC handler seeds board and card appears in Backlog column without refresh', async () => {
@@ -138,8 +152,9 @@ test('tickets:create IPC handler seeds board and card appears in Backlog column 
   // Success state in the dialog confirms the IPC round-trip completed
   await expect(window.locator('[data-testid="create-ticket-success"]')).toBeVisible({ timeout: 10000 });
 
-  // Close the dialog
-  await window.keyboard.press('Escape');
+  // Close the dialog via backdrop click (Escape is not handled by this dialog)
+  await window.locator('[data-testid="create-ticket-dialog"]').click({ position: { x: 5, y: 5 } });
+  await expect(window.locator('[data-testid="create-ticket-dialog"]')).toBeHidden({ timeout: 5000 });
 
   // The Backlog column must now contain the new card — no project switch or
   // manual refresh required.
@@ -169,7 +184,7 @@ test('ticket seeded in backlog does not change column on re-seed (UPSERT preserv
     registry.seedBoardTicket(ticketId, projectDir, 'Updated title');
 
     const rows = registry.listBoardTickets(projectDir);
-    return rows.filter((r: { ticket_id: string }) => r.ticket_id === ticketId);
+    return rows.filter((r) => r.ticket_id === ticketId);
   });
 
   const row = (result as Array<{ ticket_id: string; column: string; title: string }>)[0];

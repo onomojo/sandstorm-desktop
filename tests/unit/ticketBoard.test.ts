@@ -588,3 +588,144 @@ describe('store: setShowRefineTicketDialog revert-on-cancel', () => {
     expect(entry?.column).toBe('backlog');
   });
 });
+
+// --- store: resolveRefinementTargets (#393) ---
+
+function makeStack(overrides: Partial<{ id: string; ticket: string; project_dir: string }> = {}) {
+  return {
+    id: overrides.id ?? 'stack-1',
+    project: 'proj',
+    project_dir: overrides.project_dir ?? PROJECT_DIR,
+    ticket: overrides.ticket ?? '42',
+    branch: null,
+    description: null,
+    status: 'running',
+    error: null,
+    pr_url: null,
+    pr_number: null,
+    runtime: 'docker' as const,
+    total_input_tokens: 0,
+    total_output_tokens: 0,
+    total_execution_input_tokens: 0,
+    total_execution_output_tokens: 0,
+    total_review_input_tokens: 0,
+    total_review_output_tokens: 0,
+    rate_limit_reset_at: null,
+    created_at: '',
+    updated_at: '',
+    current_model: null,
+    services: [],
+  };
+}
+
+describe('store: resolveRefinementTargets (#393)', () => {
+  beforeEach(() => {
+    setupSandstormMock();
+    useAppStore.setState({
+      boardTickets: [
+        { ticket_id: '42', project_dir: PROJECT_DIR, column: 'backlog', title: 'Test', updated_at: '' },
+      ],
+      stacks: [],
+    });
+  });
+
+  it('returns silent with backlog previousColumn when 0 stacks match', () => {
+    const result = useAppStore.getState().resolveRefinementTargets('42', PROJECT_DIR);
+    expect(result).toEqual({ kind: 'silent', previousColumn: 'backlog' });
+  });
+
+  it('returns confirm with stackId when exactly 1 stack matches (ticket + project_dir)', () => {
+    useAppStore.setState({ stacks: [makeStack()] });
+    const result = useAppStore.getState().resolveRefinementTargets('42', PROJECT_DIR);
+    expect(result).toEqual({ kind: 'confirm', stackId: 'stack-1', previousColumn: 'backlog' });
+  });
+
+  it('returns error when >1 stacks match same ticket+project', () => {
+    useAppStore.setState({
+      stacks: [
+        makeStack({ id: 'a' }),
+        makeStack({ id: 'b' }),
+      ],
+    });
+    const result = useAppStore.getState().resolveRefinementTargets('42', PROJECT_DIR);
+    expect(result.kind).toBe('error');
+  });
+
+  it('does not match a stack in a different project_dir', () => {
+    useAppStore.setState({ stacks: [makeStack({ project_dir: '/other-dir' })] });
+    const result = useAppStore.getState().resolveRefinementTargets('42', PROJECT_DIR);
+    expect(result).toEqual({ kind: 'silent', previousColumn: 'backlog' });
+  });
+
+  it('does not match a stack for a different ticket', () => {
+    useAppStore.setState({ stacks: [makeStack({ ticket: '99' })] });
+    const result = useAppStore.getState().resolveRefinementTargets('42', PROJECT_DIR);
+    expect(result).toEqual({ kind: 'silent', previousColumn: 'backlog' });
+  });
+
+  it('returns silent (no teardown modal) when ticket is already in refining', () => {
+    useAppStore.setState({
+      boardTickets: [
+        { ticket_id: '42', project_dir: PROJECT_DIR, column: 'refining', title: 'T', updated_at: '' },
+      ],
+      stacks: [makeStack()], // live stack present, but idempotent move skips teardown prompt
+    });
+    const result = useAppStore.getState().resolveRefinementTargets('42', PROJECT_DIR);
+    expect(result).toEqual({ kind: 'silent', previousColumn: 'refining' });
+  });
+
+  it('defaults previousColumn to backlog when ticket not in boardTickets', () => {
+    useAppStore.setState({ boardTickets: [], stacks: [] });
+    const result = useAppStore.getState().resolveRefinementTargets('99', PROJECT_DIR);
+    expect(result).toEqual({ kind: 'silent', previousColumn: 'backlog' });
+  });
+
+  it('carries the correct previousColumn from board (e.g. spec_ready)', () => {
+    useAppStore.setState({
+      boardTickets: [
+        { ticket_id: '42', project_dir: PROJECT_DIR, column: 'spec_ready', title: 'T', updated_at: '' },
+      ],
+      stacks: [],
+    });
+    const result = useAppStore.getState().resolveRefinementTargets('42', PROJECT_DIR);
+    expect(result).toEqual({ kind: 'silent', previousColumn: 'spec_ready' });
+  });
+});
+
+describe('store: commitRefinementContext (#393)', () => {
+  beforeEach(() => {
+    setupSandstormMock();
+    useAppStore.setState({
+      boardTickets: [
+        { ticket_id: '42', project_dir: PROJECT_DIR, column: 'backlog', title: 'Test', updated_at: '' },
+      ],
+      refinementSessions: [],
+      _refineDialogContext: null,
+    });
+  });
+
+  it('stashes _refineDialogContext with correct fields', async () => {
+    useAppStore.getState().commitRefinementContext('42', PROJECT_DIR, 'backlog');
+    const ctx = useAppStore.getState()._refineDialogContext;
+    expect(ctx).toEqual({ ticketId: '42', projectDir: PROJECT_DIR, previousColumn: 'backlog' });
+  });
+
+  it('moves ticket to refining via moveTicketColumn', async () => {
+    useAppStore.getState().commitRefinementContext('42', PROJECT_DIR, 'backlog');
+    await new Promise(r => setTimeout(r, 0));
+    expect((window.sandstorm as any).ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'refining');
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('refining');
+  });
+
+  it('reverts column when dialog closed after commitRefinementContext with no session', async () => {
+    useAppStore.getState().commitRefinementContext('42', PROJECT_DIR, 'backlog');
+    await new Promise(r => setTimeout(r, 0));
+    expect(useAppStore.getState().boardTickets.find(t => t.ticket_id === '42')?.column).toBe('refining');
+
+    useAppStore.getState().setShowRefineTicketDialog(false);
+    await new Promise(r => setTimeout(r, 0));
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('backlog');
+  });
+});

@@ -71,6 +71,25 @@ describe('CreateTicketDialog', () => {
     expect(useAppStore.getState().refineTicketPrefill).toBe('77');
   });
 
+  it('"Refine Now" sets refineTicketPrefill so RefineTicketDialog can auto-run gate and move to refining (#393)', async () => {
+    const user = userEvent.setup();
+    api.tickets.create.mockResolvedValue({
+      url: 'https://github.com/o/r/issues/77', ticketId: '77',
+    });
+    render(<CreateTicketDialog />);
+    await user.type(screen.getByTestId('create-ticket-title'), 't');
+    await user.type(screen.getByTestId('create-ticket-body'), 'b');
+    fireEvent.click(screen.getByTestId('create-ticket-submit'));
+    await waitFor(() => screen.getByTestId('create-ticket-refine-now'));
+
+    fireEvent.click(screen.getByTestId('create-ticket-refine-now'));
+
+    // The prefill is set — when RefineTicketDialog mounts it will consume it,
+    // call resolveRefinementTargets, commitRefinementContext, and specCheckAsync.
+    // Here we just assert the prefill handoff is correct.
+    expect(useAppStore.getState().refineTicketPrefill).toBe('77');
+  });
+
   it('calls refreshBoardTickets with the project directory after successful create', async () => {
     const user = userEvent.setup();
     api.tickets.create.mockResolvedValue({
