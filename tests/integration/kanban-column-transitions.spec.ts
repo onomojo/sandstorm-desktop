@@ -165,7 +165,7 @@ test.describe('Kanban column transitions (#388)', () => {
         _newStackDialogContext: ctx ? { ...ctx, stackCreated: true } : ctx,
         stacks: [{
           id: stackId, project: 'kanban-388-test', project_dir: dir, ticket: id,
-          branch: null, description: null, status: 'running', error: null,
+          branch: null, description: null, status: 'completed', error: null,
           pr_url: null, pr_number: null, runtime: 'docker',
           total_input_tokens: 0, total_output_tokens: 0,
           total_execution_input_tokens: 0, total_execution_output_tokens: 0,

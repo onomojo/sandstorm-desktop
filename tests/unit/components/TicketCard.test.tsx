@@ -76,14 +76,14 @@ describe('TicketCard', () => {
     expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'in_stack');
   });
 
-  it('in_stack: shows Create PR button', () => {
-    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'running', pr_url: null, pr_number: null } as any;
+  it('in_stack: shows Create PR button for eligible status (completed)', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
     render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
     expect(screen.getByTestId('ticket-card-create-pr-42')).toBeDefined();
   });
 
-  it('in_stack: clicking Create PR with a stack opens PR dialog and moves column to pr_open', async () => {
-    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'running', pr_url: null, pr_number: null } as any;
+  it('in_stack: clicking Create PR with an eligible stack opens PR dialog and moves column to pr_open', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
     render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
     fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
     await waitFor(() => {
@@ -92,10 +92,35 @@ describe('TicketCard', () => {
     expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'pr_open');
   });
 
-  it('in_stack: Create PR disabled when no matching stack', () => {
+  it('in_stack: Create PR button absent when no matching stack', () => {
     render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
-    const btn = screen.getByTestId('ticket-card-create-pr-42');
-    expect(btn.hasAttribute('disabled')).toBe(true);
+    expect(screen.queryByTestId('ticket-card-create-pr-42')).toBeNull();
+  });
+
+  // All 14 StackStatus values — PR button visibility map
+  const ELIGIBLE_STATUSES = ['completed', 'failed', 'pushed', 'needs_human', 'verify_blocked_environmental'];
+  const INELIGIBLE_STATUSES = ['building', 'rebuilding', 'up', 'running', 'idle', 'stopped', 'pr_created', 'rate_limited', 'session_paused'];
+
+  ELIGIBLE_STATUSES.forEach((status) => {
+    it(`in_stack: Create PR button is present for status="${status}"`, () => {
+      const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status, pr_url: null, pr_number: null } as any;
+      render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+      expect(screen.queryByTestId('ticket-card-create-pr-42')).not.toBeNull();
+    });
+  });
+
+  INELIGIBLE_STATUSES.forEach((status) => {
+    it(`in_stack: Create PR button is absent for status="${status}"`, () => {
+      const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status, pr_url: null, pr_number: null } as any;
+      render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+      expect(screen.queryByTestId('ticket-card-create-pr-42')).toBeNull();
+    });
+  });
+
+  it('in_stack: Create PR button is absent when pr_url is set on an eligible status', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: 'https://github.com/o/r/pull/1', pr_number: 1 } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-create-pr-42')).toBeNull();
   });
 
   it('pr_open: shows Merge button', () => {
