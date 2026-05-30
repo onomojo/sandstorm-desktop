@@ -668,6 +668,362 @@ describe('RefineTicketDialog', () => {
     });
   });
 
+  describe('refining column wiring (#393)', () => {
+    beforeEach(() => {
+      useAppStore.setState({
+        boardTickets: [
+          { ticket_id: '310', project_dir: '/proj', column: 'backlog', title: 'T', updated_at: '' },
+        ],
+        stacks: [],
+      });
+    });
+
+    it('Run Gate moves ticket to refining silently when no live stack', async () => {
+      const user = userEvent.setup();
+      render(<RefineTicketDialog />);
+      await user.type(screen.getByTestId('refine-ticket-id'), '310');
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => {
+        expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('310', '/proj', 'refining');
+      });
+      await waitFor(() => {
+        expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('310', '/proj');
+      });
+    });
+
+    it('Run Gate stores _refineDialogContext for revert-on-cancel', async () => {
+      const user = userEvent.setup();
+      render(<RefineTicketDialog />);
+      await user.type(screen.getByTestId('refine-ticket-id'), '310');
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => {
+        const ctx = useAppStore.getState()._refineDialogContext;
+        expect(ctx).not.toBeNull();
+        expect(ctx?.ticketId).toBe('310');
+        expect(ctx?.projectDir).toBe('/proj');
+        expect(ctx?.previousColumn).toBe('backlog');
+      });
+    });
+
+    it('closing dialog after Run Gate with no session reverts column to previousColumn', async () => {
+      const user = userEvent.setup();
+      render(<RefineTicketDialog />);
+      await user.type(screen.getByTestId('refine-ticket-id'), '310');
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      // Wait for context to be stashed
+      await waitFor(() => {
+        expect(useAppStore.getState()._refineDialogContext).not.toBeNull();
+      });
+
+      // Close dialog (no session exists — gate returned sessionId but no session in store yet)
+      useAppStore.setState({ refinementSessions: [] });
+      fireEvent.click(screen.getByLabelText('Close'));
+
+      await waitFor(() => {
+        expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('310', '/proj', 'backlog');
+      });
+    });
+
+    it('shows teardown confirmation modal when live stack exists', async () => {
+      useAppStore.setState({
+        stacks: [{
+          id: 'stack-42', project: 'proj', project_dir: '/proj', ticket: '310',
+          branch: null, description: null, status: 'running', error: null,
+          pr_url: null, pr_number: null, runtime: 'docker' as const,
+          total_input_tokens: 0, total_output_tokens: 0,
+          total_execution_input_tokens: 0, total_execution_output_tokens: 0,
+          total_review_input_tokens: 0, total_review_output_tokens: 0,
+          rate_limit_reset_at: null, created_at: '', updated_at: '',
+          current_model: null, services: [],
+        }],
+      });
+      const user = userEvent.setup();
+      render(<RefineTicketDialog />);
+      await user.type(screen.getByTestId('refine-ticket-id'), '310');
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('refine-teardown-confirm-dialog')).toBeDefined();
+      });
+      // Gate must NOT have been started yet
+      expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
+    });
+
+    it('confirming teardown modal calls stacks.teardown and starts gate', async () => {
+      useAppStore.setState({
+        stacks: [{
+          id: 'stack-42', project: 'proj', project_dir: '/proj', ticket: '310',
+          branch: null, description: null, status: 'running', error: null,
+          pr_url: null, pr_number: null, runtime: 'docker' as const,
+          total_input_tokens: 0, total_output_tokens: 0,
+          total_execution_input_tokens: 0, total_execution_output_tokens: 0,
+          total_review_input_tokens: 0, total_review_output_tokens: 0,
+          rate_limit_reset_at: null, created_at: '', updated_at: '',
+          current_model: null, services: [],
+        }],
+      });
+      const user = userEvent.setup();
+      render(<RefineTicketDialog />);
+      await user.type(screen.getByTestId('refine-ticket-id'), '310');
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => screen.getByTestId('refine-teardown-confirm-dialog'));
+
+      fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+      await waitFor(() => {
+        expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('310', '/proj', 'refining');
+      });
+      await waitFor(() => {
+        expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('310', '/proj');
+      });
+      await waitFor(() => {
+        expect(api.stacks.teardown).toHaveBeenCalledWith('stack-42');
+      });
+    });
+
+    it('cancelling teardown modal aborts — no move, no gate, no teardown', async () => {
+      useAppStore.setState({
+        stacks: [{
+          id: 'stack-42', project: 'proj', project_dir: '/proj', ticket: '310',
+          branch: null, description: null, status: 'running', error: null,
+          pr_url: null, pr_number: null, runtime: 'docker' as const,
+          total_input_tokens: 0, total_output_tokens: 0,
+          total_execution_input_tokens: 0, total_execution_output_tokens: 0,
+          total_review_input_tokens: 0, total_review_output_tokens: 0,
+          rate_limit_reset_at: null, created_at: '', updated_at: '',
+          current_model: null, services: [],
+        }],
+      });
+      const user = userEvent.setup();
+      render(<RefineTicketDialog />);
+      await user.type(screen.getByTestId('refine-ticket-id'), '310');
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => screen.getByTestId('refine-teardown-confirm-dialog'));
+
+      fireEvent.click(screen.getByTestId('confirm-dialog-cancel'));
+
+      await waitFor(() => {
+        expect(screen.queryByTestId('refine-teardown-confirm-dialog')).toBeNull();
+      });
+      expect(api.ticketBoard.setColumn).not.toHaveBeenCalled();
+      expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
+      expect(api.stacks.teardown).not.toHaveBeenCalled();
+    });
+
+    it('shows error when multiple stacks match ticket+project', async () => {
+      const stackBase = {
+        branch: null, description: null, status: 'running', error: null,
+        pr_url: null, pr_number: null, runtime: 'docker' as const,
+        total_input_tokens: 0, total_output_tokens: 0,
+        total_execution_input_tokens: 0, total_execution_output_tokens: 0,
+        total_review_input_tokens: 0, total_review_output_tokens: 0,
+        rate_limit_reset_at: null, created_at: '', updated_at: '',
+        current_model: null, services: [],
+      };
+      useAppStore.setState({
+        stacks: [
+          { ...stackBase, id: 'stack-a', project: 'proj', project_dir: '/proj', ticket: '310' },
+          { ...stackBase, id: 'stack-b', project: 'proj', project_dir: '/proj', ticket: '310' },
+        ],
+      });
+      const user = userEvent.setup();
+      render(<RefineTicketDialog />);
+      await user.type(screen.getByTestId('refine-ticket-id'), '310');
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => {
+        expect(screen.getByTestId('refine-error').textContent).toMatch(/Multiple stacks/);
+      });
+      expect(api.stacks.teardown).not.toHaveBeenCalled();
+    });
+
+    it('does not trigger teardown modal for stack in different project', async () => {
+      useAppStore.setState({
+        stacks: [{
+          id: 'stack-other', project: 'other', project_dir: '/other', ticket: '310',
+          branch: null, description: null, status: 'running', error: null,
+          pr_url: null, pr_number: null, runtime: 'docker' as const,
+          total_input_tokens: 0, total_output_tokens: 0,
+          total_execution_input_tokens: 0, total_execution_output_tokens: 0,
+          total_review_input_tokens: 0, total_review_output_tokens: 0,
+          rate_limit_reset_at: null, created_at: '', updated_at: '',
+          current_model: null, services: [],
+        }],
+      });
+      const user = userEvent.setup();
+      render(<RefineTicketDialog />);
+      await user.type(screen.getByTestId('refine-ticket-id'), '310');
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => {
+        expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('310', '/proj');
+      });
+      expect(screen.queryByTestId('refine-teardown-confirm-dialog')).toBeNull();
+      expect(api.stacks.teardown).not.toHaveBeenCalled();
+    });
+
+    it('idempotent: already in refining — moves column but shows no teardown modal', async () => {
+      useAppStore.setState({
+        boardTickets: [
+          { ticket_id: '310', project_dir: '/proj', column: 'refining', title: 'T', updated_at: '' },
+        ],
+        stacks: [{
+          id: 'stack-42', project: 'proj', project_dir: '/proj', ticket: '310',
+          branch: null, description: null, status: 'running', error: null,
+          pr_url: null, pr_number: null, runtime: 'docker' as const,
+          total_input_tokens: 0, total_output_tokens: 0,
+          total_execution_input_tokens: 0, total_execution_output_tokens: 0,
+          total_review_input_tokens: 0, total_review_output_tokens: 0,
+          rate_limit_reset_at: null, created_at: '', updated_at: '',
+          current_model: null, services: [],
+        }],
+      });
+      const user = userEvent.setup();
+      render(<RefineTicketDialog />);
+      await user.type(screen.getByTestId('refine-ticket-id'), '310');
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => {
+        expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('310', '/proj');
+      });
+      expect(screen.queryByTestId('refine-teardown-confirm-dialog')).toBeNull();
+      expect(api.stacks.teardown).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('prefill hand-off with refining column (#393)', () => {
+    beforeEach(() => {
+      useAppStore.setState({
+        boardTickets: [
+          { ticket_id: '77', project_dir: '/proj', column: 'backlog', title: 'T', updated_at: '' },
+        ],
+        stacks: [],
+      });
+    });
+
+    it('auto-runs gate and moves to refining when opened with a prefill (no live stack)', async () => {
+      useAppStore.setState({ refineTicketPrefill: '77' });
+      render(<RefineTicketDialog />);
+
+      await waitFor(() => {
+        expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('77', '/proj', 'refining');
+      });
+      await waitFor(() => {
+        expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('77', '/proj');
+      });
+    });
+
+    it('shows teardown modal when prefill ticket has a live stack', async () => {
+      useAppStore.setState({
+        refineTicketPrefill: '77',
+        stacks: [{
+          id: 'stack-77', project: 'proj', project_dir: '/proj', ticket: '77',
+          branch: null, description: null, status: 'running', error: null,
+          pr_url: null, pr_number: null, runtime: 'docker' as const,
+          total_input_tokens: 0, total_output_tokens: 0,
+          total_execution_input_tokens: 0, total_execution_output_tokens: 0,
+          total_review_input_tokens: 0, total_review_output_tokens: 0,
+          rate_limit_reset_at: null, created_at: '', updated_at: '',
+          current_model: null, services: [],
+        }],
+      });
+      render(<RefineTicketDialog />);
+
+      await waitFor(() => {
+        expect(screen.getByTestId('refine-teardown-confirm-dialog')).toBeDefined();
+      });
+      expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
+    });
+
+    it('confirming teardown from prefill path starts gate and tears down stack', async () => {
+      useAppStore.setState({
+        refineTicketPrefill: '77',
+        stacks: [{
+          id: 'stack-77', project: 'proj', project_dir: '/proj', ticket: '77',
+          branch: null, description: null, status: 'running', error: null,
+          pr_url: null, pr_number: null, runtime: 'docker' as const,
+          total_input_tokens: 0, total_output_tokens: 0,
+          total_execution_input_tokens: 0, total_execution_output_tokens: 0,
+          total_review_input_tokens: 0, total_review_output_tokens: 0,
+          rate_limit_reset_at: null, created_at: '', updated_at: '',
+          current_model: null, services: [],
+        }],
+      });
+      render(<RefineTicketDialog />);
+
+      await waitFor(() => screen.getByTestId('refine-teardown-confirm-dialog'));
+      fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+
+      await waitFor(() => {
+        expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('77', '/proj', 'refining');
+      });
+      await waitFor(() => {
+        expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('77', '/proj');
+      });
+      await waitFor(() => {
+        expect(api.stacks.teardown).toHaveBeenCalledWith('stack-77');
+      });
+    });
+  });
+
+  describe('openRefineDialogFromCard preserves previousColumn through prefill (#393)', () => {
+    // The card-click path moves the ticket to 'refining' BEFORE the dialog mounts.
+    // The dialog's prefill effect then re-resolves and would see 'refining' as the
+    // current column — without the fix in commitRefinementContext, that would
+    // overwrite _refineDialogContext.previousColumn with 'refining' and a
+    // subsequent close-without-session would revert to 'refining' instead of
+    // the real previous column ('backlog'). This test guards against that.
+    it('closes-without-session reverts the ticket to the original column (not refining)', async () => {
+      useAppStore.setState({
+        boardTickets: [
+          { ticket_id: '42', project_dir: '/proj', column: 'backlog', title: 'T', updated_at: '' },
+        ],
+        stacks: [],
+        showRefineTicketDialog: false,
+        refineTicketPrefill: null,
+        currentRefinementSessionId: null,
+        _refineDialogContext: null,
+      });
+
+      // Simulate the kanban card click — opens dialog AND stashes the real previousColumn.
+      useAppStore.getState().openRefineDialogFromCard('42', '/proj', 'backlog');
+
+      // Sanity: dialog open, prefill primed, context recorded with 'backlog'.
+      expect(useAppStore.getState().showRefineTicketDialog).toBe(true);
+      expect(useAppStore.getState().refineTicketPrefill).toBe('42');
+      expect(useAppStore.getState()._refineDialogContext?.previousColumn).toBe('backlog');
+
+      render(<RefineTicketDialog />);
+
+      // The prefill effect should have run specCheckAsync, but more importantly
+      // the stashed context must still point at 'backlog' — NOT have been
+      // overwritten by the dialog's own commitRefinementContext('…','refining').
+      await waitFor(() => {
+        expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('42', '/proj');
+      });
+      expect(useAppStore.getState()._refineDialogContext?.previousColumn).toBe('backlog');
+
+      // No session was registered (mock specCheckAsync only returns sessionId, no upsert).
+      expect(useAppStore.getState().refinementSessions).toHaveLength(0);
+
+      // User dismisses the dialog without a session — must revert to 'backlog'.
+      fireEvent.click(screen.getByLabelText('Close'));
+
+      await waitFor(() => {
+        expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', '/proj', 'backlog');
+      });
+      await waitFor(() => {
+        const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+        expect(entry?.column).toBe('backlog');
+      });
+    });
+  });
+
   describe('upsertRefinementSession clears streamingOutput on completion', () => {
     it('clears streamingOutput when status transitions to ready', () => {
       useAppStore.setState({

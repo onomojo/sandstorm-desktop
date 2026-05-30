@@ -343,6 +343,11 @@ export interface ProjectTicketConfig {
 export { KANBAN_COLUMNS };
 export type { KanbanColumn };
 
+export type RefinementResolution =
+  | { kind: 'silent'; previousColumn: KanbanColumn }
+  | { kind: 'confirm'; stackId: string; previousColumn: KanbanColumn }
+  | { kind: 'error'; message: string };
+
 /** Returns tickets for the given project directory, or all tickets if no directory is provided. */
 export function selectProjectTickets(boardTickets: TicketBoardEntry[], projectDir: string | undefined): TicketBoardEntry[] {
   return projectDir ? boardTickets.filter((t) => t.project_dir === projectDir) : boardTickets;
@@ -484,6 +489,15 @@ interface AppState {
   lastTicketFetchAt: number | null;
   refreshBoardTickets: (projectDir: string) => Promise<void>;
   moveTicketColumn: (ticketId: string, projectDir: string, column: KanbanColumn) => Promise<void>;
+  /**
+   * Resolve how to handle starting refinement for a ticket:
+   * - 'silent': move to refining with no modal (0 live stacks, or already in refining)
+   * - 'confirm': show teardown confirmation modal first (exactly 1 live stack)
+   * - 'error': surface an error (>1 live stacks)
+   */
+  resolveRefinementTargets: (ticketId: string, projectDir: string) => RefinementResolution;
+  /** Move ticket to 'refining' and stash _refineDialogContext for revert-on-cancel. */
+  commitRefinementContext: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
   /** Opens the refine dialog from a kanban card and moves the ticket to 'refining' optimistically. Reverts on cancel. */
   openRefineDialogFromCard: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
   /** Opens the new stack dialog for a ticket and moves it to 'in_stack' optimistically. Reverts on cancel. */
@@ -1033,6 +1047,42 @@ export const useAppStore = create<AppState>((set, get) => ({
       const message = err instanceof Error ? err.message : String(err);
       set({ moveTicketColumnError: `Failed to move ticket #${ticketId} to ${column}: ${message}` });
     }
+  },
+
+  resolveRefinementTargets: (ticketId, projectDir) => {
+    const { stacks, boardTickets } = get();
+    const currentColumn: KanbanColumn = boardTickets.find(t => t.ticket_id === ticketId)?.column ?? 'backlog';
+
+    // Idempotency: if ticket is already in refining, no teardown prompt needed.
+    if (currentColumn === 'refining') {
+      return { kind: 'silent', previousColumn: 'refining' };
+    }
+
+    const targets = stacks.filter(s => s.ticket === ticketId && s.project_dir === projectDir);
+    if (targets.length > 1) {
+      return {
+        kind: 'error',
+        message: `Multiple stacks found for ticket #${ticketId} in this project — cannot determine which to tear down`,
+      };
+    }
+    if (targets.length === 1) {
+      return { kind: 'confirm', stackId: targets[0].id, previousColumn: currentColumn };
+    }
+    return { kind: 'silent', previousColumn: currentColumn };
+  },
+
+  commitRefinementContext: (ticketId, projectDir, previousColumn) => {
+    const existing = get()._refineDialogContext;
+    // Don't clobber a context already set by openRefineDialogFromCard for
+    // the same ticket — that path moves the ticket to 'refining' BEFORE
+    // the dialog mounts, so when the dialog's prefill effect resolves the
+    // ticket again it sees previousColumn='refining' and would otherwise
+    // overwrite the real previous column captured at click time, breaking
+    // revert-on-cancel (#393).
+    if (!(existing && existing.ticketId === ticketId && existing.projectDir === projectDir)) {
+      set({ _refineDialogContext: { ticketId, projectDir, previousColumn } });
+    }
+    void get().moveTicketColumn(ticketId, projectDir, 'refining');
   },
 
   openRefineDialogFromCard: (ticketId, projectDir, previousColumn) => {

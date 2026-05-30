@@ -143,6 +143,18 @@ describe('Dashboard', () => {
     expect(useAppStore.getState().showNewStackDialog).toBe(true);
   });
 
+  it('opens refine ticket dialog when toolbar "Refine Ticket" button is clicked (#393)', () => {
+    useAppStore.setState({
+      projects: [{ id: 1, name: 'proj', directory: '/proj', added_at: '' }],
+      activeProjectId: 1,
+      showRefineTicketDialog: false,
+    });
+    api.projects.checkInit.mockResolvedValue({ state: 'full' });
+    render(<Dashboard />);
+    fireEvent.click(screen.getByTestId('refine-ticket-btn'));
+    expect(useAppStore.getState().showRefineTicketDialog).toBe(true);
+  });
+
   it('shows Active and History tabs', () => {
     render(<Dashboard />);
     expect(screen.getByTestId('tab-active')).toBeDefined();
