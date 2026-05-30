@@ -2,4 +2,4 @@
 // Listing is a built-in provider operation (keyed off the project's ticket config),
 // mirroring fetch/create/update — no per-project shell script required.
 export { listTicketsWithConfig } from './ticket-config';
-export type { TicketListEntry } from './ticket-config';
+export type { TicketListEntry, TicketListResult } from './ticket-config';
