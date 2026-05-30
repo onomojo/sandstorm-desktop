@@ -5,7 +5,6 @@ interface MigrationModalProps {
   missingVerifyScript: boolean;
   missingServiceLabels: boolean;
   missingSpecQualityGate?: boolean;
-  missingReviewPrompt?: boolean;
   legacyPortMappings?: boolean;
   ticketProviderUnconfigured?: boolean;
   onComplete: () => void;
@@ -17,7 +16,6 @@ export function MigrationModal({
   missingVerifyScript,
   missingServiceLabels,
   missingSpecQualityGate,
-  missingReviewPrompt,
   legacyPortMappings,
   ticketProviderUnconfigured,
   onComplete,
@@ -26,7 +24,6 @@ export function MigrationModal({
   const [verifyScript, setVerifyScript] = useState('');
   const [serviceDescriptions, setServiceDescriptions] = useState<Record<string, string>>({});
   const [specQualityGate, setSpecQualityGate] = useState('');
-  const [reviewPrompt, setReviewPrompt] = useState('');
   const [ticketProvider, setTicketProvider] = useState<'github' | 'jira'>('github');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -37,21 +34,17 @@ export function MigrationModal({
     const loadGate = missingSpecQualityGate
       ? window.sandstorm.specGate.getDefault()
       : Promise.resolve('');
-    const loadReviewPrompt = missingReviewPrompt
-      ? window.sandstorm.reviewPrompt.getDefault()
-      : Promise.resolve('');
 
-    Promise.all([loadVerify, loadGate, loadReviewPrompt]).then(([verifyResult, gateContent, reviewPromptContent]) => {
+    Promise.all([loadVerify, loadGate]).then(([verifyResult, gateContent]) => {
       setVerifyScript(verifyResult.verifyScript);
       setServiceDescriptions(verifyResult.serviceDescriptions);
       setSpecQualityGate(gateContent);
-      setReviewPrompt(reviewPromptContent);
       setLoading(false);
     }).catch((err) => {
       setError(String(err));
       setLoading(false);
     });
-  }, [projectDir, missingSpecQualityGate, missingReviewPrompt]);
+  }, [projectDir, missingSpecQualityGate]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -68,9 +61,6 @@ export function MigrationModal({
       }
       if (missingSpecQualityGate && specQualityGate) {
         await window.sandstorm.specGate.save(projectDir, specQualityGate);
-      }
-      if (missingReviewPrompt && reviewPrompt) {
-        await window.sandstorm.reviewPrompt.save(projectDir, reviewPrompt);
       }
       if (legacyPortMappings) {
         const portResult = await window.sandstorm.ports.cleanupLegacy(projectDir);
@@ -98,7 +88,6 @@ export function MigrationModal({
     missingVerifyScript && 'a verify script',
     missingServiceLabels && 'service descriptions',
     missingSpecQualityGate && 'a spec quality gate',
-    missingReviewPrompt && 'a review prompt',
     legacyPortMappings && 'legacy port mapping cleanup',
     ticketProviderUnconfigured && 'a ticket provider',
   ].filter(Boolean) as string[];
@@ -234,26 +223,6 @@ export function MigrationModal({
                       Configure Jira credentials in Project Settings → Ticketing after setup.
                     </p>
                   )}
-                </div>
-              )}
-
-              {/* Review prompt editor */}
-              {missingReviewPrompt && (
-                <div>
-                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-1.5">
-                    Review Prompt (.sandstorm/review-prompt.md)
-                  </label>
-                  <p className="text-[11px] text-sandstorm-muted mb-2">
-                    Instructions for the review agent that evaluates code changes.
-                  </p>
-                  <textarea
-                    value={reviewPrompt}
-                    onChange={(e) => setReviewPrompt(e.target.value)}
-                    rows={12}
-                    className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 text-xs font-mono text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent resize-y"
-                    spellCheck={false}
-                    data-testid="review-prompt-editor"
-                  />
                 </div>
               )}
 

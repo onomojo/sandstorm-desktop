@@ -59,13 +59,7 @@ import {
   ensureSpecQualityGate,
   getDefaultSpecQualityGate,
 } from './spec-quality-gate';
-import {
-  getReviewPrompt,
-  saveReviewPrompt,
-  getDefaultReviewPrompt,
-  ensureReviewPrompt,
-  isReviewPromptMissing,
-} from './review-prompt';
+import { getDefaultReviewPrompt } from './review-prompt';
 import {
   defaultSpecGateDeps,
   fetchTicketForRenderer,
@@ -458,7 +452,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       }
 
       const missingSpecQualityGate = isSpecQualityGateMissing(directory);
-      const missingReviewPrompt = isReviewPromptMissing(directory);
       const legacyPortMappings = hasLegacyPortMappings(directory);
       const ticketProviderUnconfigured = registry.getProjectTicketConfig(directory) === null;
 
@@ -467,13 +460,11 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           !hasVerifyScript ||
           !hasServiceLabels ||
           missingSpecQualityGate ||
-          missingReviewPrompt ||
           legacyPortMappings ||
           ticketProviderUnconfigured,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
         missingSpecQualityGate,
-        missingReviewPrompt,
         networksMigrated,
         legacyPortMappings,
         ticketProviderUnconfigured,
@@ -837,23 +828,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Review Prompt ---
 
-  ipcMain.handle('reviewPrompt:get', async (_event, projectDir: string) => {
-    return getReviewPrompt(projectDir);
-  });
-
-  ipcMain.handle(
-    'reviewPrompt:save',
-    async (_event, projectDir: string, content: string) => {
-      saveReviewPrompt(projectDir, content);
-    }
-  );
-
   ipcMain.handle('reviewPrompt:getDefault', async () => {
     return getDefaultReviewPrompt();
-  });
-
-  ipcMain.handle('reviewPrompt:ensure', async (_event, projectDir: string) => {
-    return ensureReviewPrompt(projectDir);
   });
 
   // --- Stale Workspace Detection & Cleanup ---

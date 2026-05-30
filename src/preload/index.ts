@@ -33,7 +33,6 @@ export interface SandstormAPI {
       missingVerifyScript?: boolean;
       missingServiceLabels?: boolean;
       missingSpecQualityGate?: boolean;
-      missingReviewPrompt?: boolean;
       networksMigrated?: boolean;
       legacyPortMappings?: boolean;
       ticketProviderUnconfigured?: boolean;
@@ -136,10 +135,7 @@ export interface SandstormAPI {
     ensure: (projectDir: string) => Promise<boolean>;
   };
   reviewPrompt: {
-    get: (projectDir: string) => Promise<string>;
-    save: (projectDir: string, content: string) => Promise<void>;
     getDefault: () => Promise<string>;
-    ensure: (projectDir: string) => Promise<boolean>;
   };
   modelSettings: {
     getGlobal: () => Promise<{ inner_model: string; outer_model: string }>;
@@ -325,11 +321,7 @@ const api: SandstormAPI = {
     ensure: (projectDir) => ipcRenderer.invoke('specGate:ensure', projectDir),
   },
   reviewPrompt: {
-    get: (projectDir) => ipcRenderer.invoke('reviewPrompt:get', projectDir),
-    save: (projectDir, content) =>
-      ipcRenderer.invoke('reviewPrompt:save', projectDir, content),
     getDefault: () => ipcRenderer.invoke('reviewPrompt:getDefault'),
-    ensure: (projectDir) => ipcRenderer.invoke('reviewPrompt:ensure', projectDir),
   },
   modelSettings: {
     getGlobal: () => ipcRenderer.invoke('modelSettings:getGlobal'),

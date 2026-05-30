@@ -63,6 +63,7 @@ Categories: SCOPE, REQUIREMENTS, ARCHITECTURE, CORRECTNESS, BUG, SECURITY, BEST_
 - **Never narrate your process.** No "Let me check …", "I'll inspect …", "I noticed that …", "After reviewing …". The execution agent does not care how you worked; it cares what to fix.
 - **If you mentioned it, it's a fail.** If a finding isn't worth fixing, omit it entirely. There is no "FYI observation" or "might consider" category — a finding is either actionable (→ issues list, FAIL) or not mentioned at all (→ PASS).
 - **Out-of-scope file changes are ALWAYS a fail.** If the original task names files, directories, or globs as out of scope, any diff hunk touching a matching path is `REVIEW_FAIL` with `out_of_scope:<path>`. Code quality in that file is irrelevant.
+- **A directly-affected test, fixture, or caller is NOT an out-of-scope violation.** A test, fixture, or caller updated as a *direct, necessary consequence* of an in-scope production change is NOT an out-of-scope violation, even if it is not in the in-scope file list — provided the update tracks the intended new behavior and does not weaken assertions, skip cases, or alter unrelated code. Only files matching the task's explicit "Out of scope" / "Non-goals" / "Do not modify" section remain an automatic fail.
 - **Missing tests for new functionality is ALWAYS a fail.**
 - **Security issues are ALWAYS a fail.**
 - **If the fix is describable in one sentence, it's a fail.** Do not hedge with "could consider", "might want to", or "optionally".
