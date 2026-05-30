@@ -72,6 +72,8 @@ Every iteration prompt after the first re-injects the original task verbatim. On
 - **Do not modify tests to make them pass.** Fix production code instead.
 - **Do not loosen assertions, skip test cases, or weaken error checks.**
 
+The in-scope files list the *primary* targets. You are authorized — and expected — to update directly-affected tests, fixtures, and callers when your change *necessarily* breaks them. You may update such a test so it exercises the new intended behavior, but you must NOT weaken, skip, or loosen assertions to make a test pass, and you must NOT change product behavior, public APIs, or unrelated subsystems — those still require STOP_AND_ASK.
+
 ### STOP_AND_ASK — deadlock break
 
 If you determine that verify cannot pass **without** making out-of-scope changes (e.g., a pre-existing broken test unrelated to your ticket keeps failing), do NOT silently drift. Instead, output exactly:

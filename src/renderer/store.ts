@@ -584,7 +584,6 @@ declare global {
           missingVerifyScript?: boolean;
           missingServiceLabels?: boolean;
           missingSpecQualityGate?: boolean;
-          missingReviewPrompt?: boolean;
           legacyPortMappings?: boolean;
           ticketProviderUnconfigured?: boolean;
         }>;
@@ -681,10 +680,7 @@ declare global {
         ensure: (projectDir: string) => Promise<boolean>;
       };
       reviewPrompt: {
-        get: (projectDir: string) => Promise<string>;
-        save: (projectDir: string, content: string) => Promise<void>;
         getDefault: () => Promise<string>;
-        ensure: (projectDir: string) => Promise<boolean>;
       };
       modelSettings: {
         getGlobal: () => Promise<ModelSettings>;

@@ -398,7 +398,6 @@ export function Dashboard() {
     missingVerifyScript: boolean;
     missingServiceLabels: boolean;
     missingSpecQualityGate: boolean;
-    missingReviewPrompt: boolean;
     legacyPortMappings: boolean;
     ticketProviderUnconfigured: boolean;
   } | null>(null);
@@ -455,7 +454,6 @@ export function Dashboard() {
               missingVerifyScript: migration.missingVerifyScript ?? false,
               missingServiceLabels: migration.missingServiceLabels ?? false,
               missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
-              missingReviewPrompt: migration.missingReviewPrompt ?? false,
               legacyPortMappings: migration.legacyPortMappings ?? false,
               ticketProviderUnconfigured: migration.ticketProviderUnconfigured ?? false,
             } : null);
@@ -890,7 +888,6 @@ export function Dashboard() {
           missingVerifyScript={migrationState.missingVerifyScript}
           missingServiceLabels={migrationState.missingServiceLabels}
           missingSpecQualityGate={migrationState.missingSpecQualityGate}
-          missingReviewPrompt={migrationState.missingReviewPrompt}
           legacyPortMappings={migrationState.legacyPortMappings}
           ticketProviderUnconfigured={migrationState.ticketProviderUnconfigured}
           onComplete={() => {
@@ -916,7 +913,6 @@ export function Dashboard() {
                   missingVerifyScript: migration.missingVerifyScript ?? false,
                   missingServiceLabels: migration.missingServiceLabels ?? false,
                   missingSpecQualityGate: migration.missingSpecQualityGate ?? false,
-                  missingReviewPrompt: migration.missingReviewPrompt ?? false,
                   legacyPortMappings: migration.legacyPortMappings ?? false,
                   ticketProviderUnconfigured: migration.ticketProviderUnconfigured ?? false,
                 });

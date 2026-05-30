@@ -1,14 +1,7 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import os from 'os';
-import {
-  getDefaultReviewPrompt,
-  getReviewPrompt,
-  saveReviewPrompt,
-  isReviewPromptMissing,
-  ensureReviewPrompt,
-} from '../../src/main/review-prompt';
+import { getDefaultReviewPrompt } from '../../src/main/review-prompt';
 
 describe('getDefaultReviewPrompt', () => {
   it('returns non-empty default content', () => {
@@ -114,163 +107,6 @@ describe('getDefaultReviewPrompt', () => {
   });
 });
 
-describe('getReviewPrompt', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-prompt-'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('returns empty string when file does not exist', () => {
-    expect(getReviewPrompt(tmpDir)).toBe('');
-  });
-
-  it('returns file content when file exists', () => {
-    const sandstormDir = path.join(tmpDir, '.sandstorm');
-    fs.mkdirSync(sandstormDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(sandstormDir, 'review-prompt.md'),
-      '# Custom Review\n\nCustom criteria here.\n',
-    );
-    const result = getReviewPrompt(tmpDir);
-    expect(result).toBe('# Custom Review\n\nCustom criteria here.\n');
-  });
-});
-
-describe('saveReviewPrompt', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-prompt-'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('creates the file in .sandstorm/', () => {
-    fs.mkdirSync(path.join(tmpDir, '.sandstorm'), { recursive: true });
-    saveReviewPrompt(tmpDir, '# My Prompt\n');
-    const content = fs.readFileSync(
-      path.join(tmpDir, '.sandstorm', 'review-prompt.md'),
-      'utf-8',
-    );
-    expect(content).toBe('# My Prompt\n');
-  });
-
-  it('creates .sandstorm directory if it does not exist', () => {
-    saveReviewPrompt(tmpDir, '# My Prompt\n');
-    expect(
-      fs.existsSync(path.join(tmpDir, '.sandstorm', 'review-prompt.md')),
-    ).toBe(true);
-  });
-
-  it('overwrites existing content', () => {
-    const sandstormDir = path.join(tmpDir, '.sandstorm');
-    fs.mkdirSync(sandstormDir, { recursive: true });
-    fs.writeFileSync(
-      path.join(sandstormDir, 'review-prompt.md'),
-      '# Old\n',
-    );
-    saveReviewPrompt(tmpDir, '# New\n');
-    const content = fs.readFileSync(
-      path.join(sandstormDir, 'review-prompt.md'),
-      'utf-8',
-    );
-    expect(content).toBe('# New\n');
-  });
-});
-
-describe('isReviewPromptMissing', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-prompt-'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('returns false when project is not initialized', () => {
-    expect(isReviewPromptMissing(tmpDir)).toBe(false);
-  });
-
-  it('returns true when initialized but review prompt file missing', () => {
-    const sandstormDir = path.join(tmpDir, '.sandstorm');
-    fs.mkdirSync(sandstormDir, { recursive: true });
-    fs.writeFileSync(path.join(sandstormDir, 'config'), 'PROJECT_NAME=test\n');
-    expect(isReviewPromptMissing(tmpDir)).toBe(true);
-  });
-
-  it('returns false when initialized and review prompt file exists', () => {
-    const sandstormDir = path.join(tmpDir, '.sandstorm');
-    fs.mkdirSync(sandstormDir, { recursive: true });
-    fs.writeFileSync(path.join(sandstormDir, 'config'), 'PROJECT_NAME=test\n');
-    fs.writeFileSync(
-      path.join(sandstormDir, 'review-prompt.md'),
-      '# Review\n',
-    );
-    expect(isReviewPromptMissing(tmpDir)).toBe(false);
-  });
-});
-
-describe('ensureReviewPrompt', () => {
-  let tmpDir: string;
-
-  beforeEach(() => {
-    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'review-prompt-'));
-  });
-
-  afterEach(() => {
-    fs.rmSync(tmpDir, { recursive: true, force: true });
-  });
-
-  it('creates default review prompt file when missing in initialized project', () => {
-    const sandstormDir = path.join(tmpDir, '.sandstorm');
-    fs.mkdirSync(sandstormDir, { recursive: true });
-    fs.writeFileSync(path.join(sandstormDir, 'config'), 'PROJECT_NAME=test\n');
-
-    const created = ensureReviewPrompt(tmpDir);
-    expect(created).toBe(true);
-
-    const content = fs.readFileSync(
-      path.join(sandstormDir, 'review-prompt.md'),
-      'utf-8',
-    );
-    expect(content).toContain('# Code Review');
-    expect(content).toContain('REVIEW_PASS');
-  });
-
-  it('returns false when review prompt file already exists', () => {
-    const sandstormDir = path.join(tmpDir, '.sandstorm');
-    fs.mkdirSync(sandstormDir, { recursive: true });
-    fs.writeFileSync(path.join(sandstormDir, 'config'), 'PROJECT_NAME=test\n');
-    fs.writeFileSync(
-      path.join(sandstormDir, 'review-prompt.md'),
-      '# Custom\n',
-    );
-
-    const created = ensureReviewPrompt(tmpDir);
-    expect(created).toBe(false);
-
-    // Verify it didn't overwrite custom content
-    const content = fs.readFileSync(
-      path.join(sandstormDir, 'review-prompt.md'),
-      'utf-8',
-    );
-    expect(content).toBe('# Custom\n');
-  });
-
-  it('returns false when project is not initialized', () => {
-    const created = ensureReviewPrompt(tmpDir);
-    expect(created).toBe(false);
-  });
-});
 
 describe('review-prompt.md source file (#291/#292 strict-contract)', () => {
   const reviewPromptPath = path.resolve(__dirname, '../../sandstorm-cli/docker/review-prompt.md');
@@ -314,40 +150,40 @@ describe('review-prompt.md source file (#291/#292 strict-contract)', () => {
   });
 });
 
-describe('init.sh generates review-prompt.md', () => {
-  const initPath = path.resolve(__dirname, '../../sandstorm-cli/lib/init.sh');
-
-  it('generates .sandstorm/review-prompt.md during init', () => {
-    const init = fs.readFileSync(initPath, 'utf-8');
-    expect(init).toContain('review-prompt.md');
-    expect(init).toContain('Created .sandstorm/review-prompt.md');
+describe('review-prompt.md directly-affected-test carve-out (#397)', () => {
+  it('getDefaultReviewPrompt includes the directly-affected-test carve-out', () => {
+    const content = getDefaultReviewPrompt();
+    expect(content).toContain('directly-affected test, fixture, or caller is NOT an out-of-scope violation');
+    expect(content).toContain('direct, necessary consequence');
   });
 
-  it('embeds the strict-contract review prompt content (#291/#292)', () => {
-    const init = fs.readFileSync(initPath, 'utf-8');
-    expect(init).toMatch(/machine-read, not for humans/i);
-    expect(init).toMatch(/Never praise/i);
-    // Negative: no legacy content
-    expect(init).not.toContain('Explicitly stated as acceptable');
-    expect(init).not.toContain("If you're unsure whether something is an issue, lean toward REVIEW_PASS and mention it as a note");
+  it('review-prompt.md source includes the directly-affected-test carve-out', () => {
+    const content = fs.readFileSync(
+      path.resolve(__dirname, '../../sandstorm-cli/docker/review-prompt.md'),
+      'utf-8',
+    );
+    expect(content).toContain('directly-affected test, fixture, or caller is NOT an out-of-scope violation');
+    expect(content).toContain('direct, necessary consequence');
   });
 });
 
-describe('task-runner.sh per-project review prompt', () => {
+describe('SANDSTORM_INNER.md directly-affected-test carve-out (#397)', () => {
+  it('grants authority to fix directly-broken tests/callers', () => {
+    const content = fs.readFileSync(
+      path.resolve(__dirname, '../../sandstorm-cli/docker/SANDSTORM_INNER.md'),
+      'utf-8',
+    );
+    expect(content).toContain('authorized — and expected — to update directly-affected tests');
+    expect(content).toContain('update directly-affected tests, fixtures, and callers when your change');
+  });
+});
+
+describe('task-runner.sh uses built-in default review prompt', () => {
   const taskRunnerPath = path.resolve(__dirname, '../../sandstorm-cli/docker/task-runner.sh');
   const taskRunner = fs.readFileSync(taskRunnerPath, 'utf-8');
 
-  it('checks for per-project review prompt at /app/.sandstorm/review-prompt.md', () => {
-    expect(taskRunner).toContain('/app/.sandstorm/review-prompt.md');
-  });
-
-  it('uses per-project review prompt when it exists and is non-empty', () => {
-    expect(taskRunner).toContain('Using per-project review prompt');
-  });
-
-  it('warns and falls back when per-project review prompt is empty', () => {
-    expect(taskRunner).toContain('exists but is empty');
-    expect(taskRunner).toContain('falling back to built-in default');
+  it('does not check for per-project review prompt', () => {
+    expect(taskRunner).not.toContain('/app/.sandstorm/review-prompt.md');
   });
 
   it('falls back to /usr/bin/review-prompt.md as default', () => {

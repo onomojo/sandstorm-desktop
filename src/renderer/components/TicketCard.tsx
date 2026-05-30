@@ -1,5 +1,6 @@
 import React from 'react';
 import { useAppStore, KanbanColumn, TicketBoardEntry, Stack } from '../store';
+import { makePrEligible } from '../utils/duration';
 
 interface TicketCardProps {
   ticket: TicketBoardEntry;
@@ -125,14 +126,15 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               <span className="text-xs text-sandstorm-muted">{stack.status}</span>
             </div>
           )}
-          <button
-            onClick={handleCreatePR}
-            disabled={!stack}
-            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-instack/10 text-sandstorm-state-instack border border-sandstorm-state-instack/30 hover:bg-sandstorm-state-instack/20 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-            data-testid={`ticket-card-create-pr-${ticket.ticket_id}`}
-          >
-            Create PR
-          </button>
+          {stack && makePrEligible(stack) && (
+            <button
+              onClick={handleCreatePR}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-instack/10 text-sandstorm-state-instack border border-sandstorm-state-instack/30 hover:bg-sandstorm-state-instack/20 transition-colors font-medium"
+              data-testid={`ticket-card-create-pr-${ticket.ticket_id}`}
+            >
+              Create PR
+            </button>
+          )}
         </div>
       )}
 

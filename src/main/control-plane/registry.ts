@@ -2,6 +2,7 @@ import Database from 'better-sqlite3';
 import { app } from 'electron';
 import path from 'path';
 import fs from 'fs';
+import { KANBAN_COLUMNS } from '../../shared/kanban';
 
 export interface Stack {
   id: string;
@@ -1167,6 +1168,32 @@ export class Registry {
       `SELECT ticket_id, project_dir, column, title, created_at, updated_at
        FROM ticket_board WHERE project_dir = ? ORDER BY created_at ASC`
     ).all(normalizedDir) as { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[];
+  }
+
+  /**
+   * Hard-deletes board tickets in early columns (backlog, refining, spec_ready) whose ticket_id
+   * is not in openTicketIds. Called after a successful provider sync to remove closed tickets.
+   * Tickets in started columns (in_stack, pr_open, merged) are never touched.
+   * Returns the number of rows deleted so the caller can log it.
+   */
+  deleteClosedEarlyColumnTickets(projectDir: string, openTicketIds: string[]): number {
+    const normalizedDir = path.resolve(projectDir);
+    // Derive early columns from the canonical KANBAN_COLUMNS constant (first 3 entries).
+    const earlyColumns = KANBAN_COLUMNS.filter(c =>
+      (['backlog', 'refining', 'spec_ready'] as readonly string[]).includes(c)
+    );
+    const earlyColSql = earlyColumns.map(c => `'${c}'`).join(',');
+
+    if (openTicketIds.length === 0) {
+      return this.db.prepare(
+        `DELETE FROM ticket_board WHERE project_dir = ? AND column IN (${earlyColSql})`
+      ).run(normalizedDir).changes;
+    }
+
+    const idPlaceholders = openTicketIds.map(() => '?').join(',');
+    return this.db.prepare(
+      `DELETE FROM ticket_board WHERE project_dir = ? AND column IN (${earlyColSql}) AND ticket_id NOT IN (${idPlaceholders})`
+    ).run(normalizedDir, ...openTicketIds).changes;
   }
 
   /**

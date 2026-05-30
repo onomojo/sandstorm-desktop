@@ -38,6 +38,7 @@ const {
     seedBoardTicket: vi.fn(),
     listBoardTickets: vi.fn().mockReturnValue([]),
     setBoardTicketColumn: vi.fn(),
+    deleteClosedEarlyColumnTickets: vi.fn().mockReturnValue(0),
   };
 
   const mockStackManager = {
@@ -104,7 +105,7 @@ const {
   const mockSpawn = vi.fn();
   const mockFetchAccountUsage = vi.fn();
   const mockRemoveProjectFromCrontab = vi.fn();
-  const mockListTicketsWithConfig = vi.fn().mockResolvedValue([]);
+  const mockListTicketsWithConfig = vi.fn().mockResolvedValue({ ok: false });
   const mockCreateTicketWithConfig = vi.fn().mockResolvedValue({ url: 'https://github.com/o/r/issues/1', ticketId: '1' });
 
   const mockSessionMonitor = {
@@ -1319,9 +1320,10 @@ describe('IPC Handlers', () => {
         { id: 'T-1', title: 'First ticket', author: 'alice' },
         { id: 'T-2', title: 'Second ticket', author: 'bob' },
       ];
-      mockListTicketsWithConfig.mockResolvedValueOnce(providerTickets);
+      mockListTicketsWithConfig.mockResolvedValueOnce({ ok: true, tickets: providerTickets });
       mockRegistry.listBoardTickets.mockReturnValue([]);
       mockRegistry.seedBoardTicket.mockClear();
+      mockRegistry.deleteClosedEarlyColumnTickets.mockClear();
 
       await invokeHandler('tickets:list', '/proj');
 
@@ -1329,16 +1331,52 @@ describe('IPC Handlers', () => {
       expect(mockRegistry.seedBoardTicket).toHaveBeenCalledTimes(2);
       expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('T-1', '/proj', 'First ticket');
       expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('T-2', '/proj', 'Second ticket');
+      expect(mockRegistry.deleteClosedEarlyColumnTickets).toHaveBeenCalledWith('/proj', ['T-1', 'T-2']);
     });
 
-    it('does not call seedBoardTicket when provider returns no tickets', async () => {
+    it('calls deleteClosedEarlyColumnTickets with empty array on ok:true empty fetch', async () => {
       mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
-      mockListTicketsWithConfig.mockResolvedValueOnce([]);
+      mockListTicketsWithConfig.mockResolvedValueOnce({ ok: true, tickets: [] });
       mockRegistry.seedBoardTicket.mockClear();
+      mockRegistry.deleteClosedEarlyColumnTickets.mockClear();
 
       await invokeHandler('tickets:list', '/proj');
 
       expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
+      expect(mockRegistry.deleteClosedEarlyColumnTickets).toHaveBeenCalledWith('/proj', []);
+    });
+
+    it('does not call seedBoardTicket or deleteClosedEarlyColumnTickets when fetch returns ok:false', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
+      mockListTicketsWithConfig.mockResolvedValueOnce({ ok: false });
+      mockRegistry.seedBoardTicket.mockClear();
+      mockRegistry.deleteClosedEarlyColumnTickets.mockClear();
+
+      await invokeHandler('tickets:list', '/proj');
+
+      expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
+      expect(mockRegistry.deleteClosedEarlyColumnTickets).not.toHaveBeenCalled();
+    });
+
+    it('logs deleted count when deleteClosedEarlyColumnTickets removes rows', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
+        mockListTicketsWithConfig.mockResolvedValueOnce({
+          ok: true,
+          tickets: [{ id: 'T-1', title: 'Open ticket', author: 'alice' }],
+        });
+        mockRegistry.deleteClosedEarlyColumnTickets.mockReturnValue(2);
+        mockRegistry.listBoardTickets.mockReturnValue([]);
+
+        await invokeHandler('tickets:list', '/proj');
+
+        expect(consoleSpy).toHaveBeenCalledWith(
+          expect.stringContaining('[tickets:list] Removed 2 closed early-column ticket(s)'),
+        );
+      } finally {
+        consoleSpy.mockRestore();
+      }
     });
   });
 
@@ -1481,10 +1519,7 @@ describe('IPC Handlers', () => {
       'specGate:save',
       'specGate:getDefault',
       'specGate:ensure',
-      'reviewPrompt:get',
-      'reviewPrompt:save',
       'reviewPrompt:getDefault',
-      'reviewPrompt:ensure',
       'modelSettings:getGlobal',
       'modelSettings:setGlobal',
       'modelSettings:getProject',

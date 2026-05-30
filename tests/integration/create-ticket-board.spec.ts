@@ -23,7 +23,7 @@ let testProjectId: number;
 test.beforeAll(async () => {
   fs.mkdirSync(TEST_PROJECT_DIR, { recursive: true });
 
-  app = await electron.launch({ args: ['dist/main/index.cjs', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'] });
+  app = await electron.launch({ args: ['dist/main/index.cjs', '--no-sandbox', '--disable-gpu', '--disable-dev-shm-usage'], env: { PLAYWRIGHT_TEST: '1', ...process.env } });
 
   // The renderer's mount fires refreshProjects() which calls projects:list — wait
   // for the main window's IPC handlers to be installed before reaching into the
@@ -39,49 +39,40 @@ test.beforeAll(async () => {
   // Set up test project and install the tickets:create stub in the main process.
   // All registry calls use the live registry instance (not raw SQL).
   //
-  // app.evaluate() serializes the function and executes it in the main process's
-  // global eval context, where neither `require` nor `process.mainModule` is
-  // available (Node 20+ removed mainModule). We get `ipcMain` from Playwright's
-  // first-arg (the Electron namespace), and reach the main module's exported
-  // `registry` instance via the Module._cache lookup against the entry script's
-  // absolute path.
-  const normalizedProjectDir = path.resolve(TEST_PROJECT_DIR);
-  const mainModulePath = path.resolve('dist/main/index.cjs');
-  testProjectId = await app.evaluate(async ({ ipcMain }, { normalizedDir, mainPath }) => {
-    type Reg = {
-      addProject(dir: string, name: string): { id: number };
-      setProjectTicketConfig(dir: string, cfg: { provider: string }): void;
-      listProjects(): Array<{ id: number; directory: string }>;
-      seedBoardTicket(ticketId: string, dir: string, title: string): void;
-    };
-    const Module = (process as { getBuiltinModule(name: string): unknown }).getBuiltinModule('module') as {
-      _cache: Record<string, { exports: { registry: Reg } }>;
-    };
-    const entry = Module._cache[mainPath];
-    if (!entry) {
-      throw new Error(`Main module not found in Module._cache for ${mainPath}`);
-    }
-    const reg = entry.exports.registry;
+  // Note: app.evaluate() runs in the raw V8 global context where require() is
+  // not available. registry and ipcMain are accessed via globalThis.__sandstorm,
+  // which registerIpcHandlers() assigns on startup.
+  testProjectId = await app.evaluate(async () => {
+    const { registry, ipcMain } = (globalThis as any).__sandstorm;
 
-    // Idempotent project setup: Electron's userData persists across worker
-    // restarts, so a prior beforeAll run may have already inserted the row.
-    const existing = reg.listProjects().find((p) => p.directory === normalizedDir);
-    const project = existing ?? reg.addProject(normalizedDir, 'E2E Test Project');
-    reg.setProjectTicketConfig(normalizedDir, { provider: 'github' });
+    const projectDir = '/tmp/e2e-create-ticket-board';
+    const normalizedDir = projectDir;
 
-    // Replace the IPC handler with a stub that skips the real provider call
-    // but still calls registry.seedBoardTicket() — exactly as the real handler does.
-    // The tickets:list handler (called by refreshBoardTickets after success) already
-    // degrades gracefully when the provider is unreachable, so no stub is needed there.
+    // Register the project and configure its ticket provider.
+    // Remove any stale row from a prior run (UNIQUE on directory) before inserting fresh.
+    const stale = registry.listProjects().find((p: { directory: string }) => p.directory === normalizedDir);
+    if (stale) registry.removeProject(stale.id);
+    const project = registry.addProject(normalizedDir, 'E2E Test Project');
+    registry.setProjectTicketConfig(normalizedDir, { provider: 'github' });
+
+    // Replace the IPC handlers with stubs that skip real provider calls.
+    // tickets:create seeds the board row directly.
+    // tickets:list is also stubbed here because the real handler may error in
+    // the test environment (gh not installed, etc.); the stub returns current
+    // board rows so the UI reflects the seeded ticket without a live provider.
     ipcMain.removeHandler('tickets:create');
     ipcMain.handle('tickets:create', async (_event: unknown, dir: string, title: string) => {
       const ticketId = 'E2E-42';
-      reg.seedBoardTicket(ticketId, dir, title);
+      registry.seedBoardTicket(ticketId, dir, title);
       return { ticketId, url: 'https://github.com/e2e-test/repo/issues/42' };
+    });
+    ipcMain.removeHandler('tickets:list');
+    ipcMain.handle('tickets:list', async (_event: unknown, projectDir: string) => {
+      return registry.listBoardTickets(projectDir);
     });
 
     return project.id;
-  }, { normalizedDir: normalizedProjectDir, mainPath: mainModulePath });
+  });
 
   // Reload the renderer — its useEffect calls refreshProjects() on mount which
   // picks up the new project via the projects:list IPC handler.
@@ -92,6 +83,15 @@ test.beforeAll(async () => {
 });
 
 test.afterAll(async () => {
+  // Clean up DB state so re-runs don't fail with a UNIQUE constraint on the project directory.
+  try {
+    await app?.evaluate(async () => {
+      const { registry } = (globalThis as any).__sandstorm;
+      const dir = '/tmp/e2e-create-ticket-board';
+      const existing = registry.listProjects().find((p: { directory: string }) => p.directory === dir);
+      if (existing) registry.removeProject(existing.id);
+    });
+  } catch { /* best effort */ }
   await app?.close();
   try { fs.rmSync(TEST_PROJECT_DIR, { recursive: true, force: true }); } catch {}
 });
@@ -168,20 +168,11 @@ test('tickets:create IPC handler seeds board and card appears in Backlog column 
 });
 
 test('ticket seeded in backlog does not change column on re-seed (UPSERT preserves column)', async () => {
-  const projectDir = path.resolve('/tmp/integration-test-proj-2');
-  const ticketId = 'INTTEST-2';
-  const mainModulePath = path.resolve('dist/main/index.cjs');
+  const result = await app.evaluate(async () => {
+    const { registry } = (globalThis as any).__sandstorm;
 
-  const result = await app.evaluate(async (_electron, { projectDir, ticketId, mainPath }) => {
-    type MainExports = { registry: {
-      seedBoardTicket(ticketId: string, dir: string, title: string): void;
-      setBoardTicketColumn(ticketId: string, dir: string, column: string): void;
-      listBoardTickets(dir: string): Array<{ ticket_id: string; column: string; title: string }>;
-    } };
-    const Module = (process as { getBuiltinModule(name: string): unknown }).getBuiltinModule('module') as {
-      _cache: Record<string, { exports: MainExports }>;
-    };
-    const { registry } = Module._cache[mainPath].exports;
+    const projectDir = '/tmp/integration-test-proj-2';
+    const ticketId = 'INTTEST-2';
 
     // Seed at backlog
     registry.seedBoardTicket(ticketId, projectDir, 'Original title');
@@ -194,7 +185,7 @@ test('ticket seeded in backlog does not change column on re-seed (UPSERT preserv
 
     const rows = registry.listBoardTickets(projectDir);
     return rows.filter((r) => r.ticket_id === ticketId);
-  }, { projectDir, ticketId, mainPath: mainModulePath });
+  });
 
   const row = (result as Array<{ ticket_id: string; column: string; title: string }>)[0];
   expect(row.column).toBe('spec_ready');
