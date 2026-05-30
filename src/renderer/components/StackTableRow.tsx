@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
-import { getStackDuration, isTerminalStatus, DURATION_UPDATE_INTERVAL } from '../utils/duration';
+import { getStackDuration, isTerminalStatus, makePrEligible, DURATION_UPDATE_INTERVAL } from '../utils/duration';
 import { StackRowPopover } from './StackRowPopover';
 
 const STATUS_COLORS: Record<string, string> = {
@@ -34,10 +34,6 @@ const STATUS_LABELS: Record<string, string> = {
 };
 
 const POPOVER_OPEN_DELAY_MS = 150;
-
-function makePrEligible(stack: Stack): boolean {
-  return (stack.status === 'completed' || stack.status === 'pushed') && !stack.pr_url;
-}
 
 export function StackTableRow({
   stack,

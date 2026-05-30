@@ -209,6 +209,30 @@ describe('StackTableRow primary-action chip (#315)', () => {
     expect(screen.queryByTestId('row-make-pr-qux')).toBeNull();
   });
 
+  it('shows Make PR chip when status is failed and pr_url is null', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'fail1', status: 'failed', pr_url: null }));
+    expect(screen.getByTestId('row-make-pr-fail1')).toBeDefined();
+  });
+
+  it('shows Make PR chip when status is needs_human and pr_url is null', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'nh1', status: 'needs_human', pr_url: null }));
+    expect(screen.getByTestId('row-make-pr-nh1')).toBeDefined();
+  });
+
+  it('shows Make PR chip when status is verify_blocked_environmental and pr_url is null', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'vbe1', status: 'verify_blocked_environmental', pr_url: null }));
+    expect(screen.getByTestId('row-make-pr-vbe1')).toBeDefined();
+  });
+
+  it('hides Make PR chip for failed when pr_url already exists', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'fail2', status: 'failed', pr_url: 'https://github.com/o/r/pull/5', pr_number: 5 }));
+    expect(screen.queryByTestId('row-make-pr-fail2')).toBeNull();
+  });
+
   it('clicking Make PR opens the CreatePRDialog for that stack', () => {
     vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
     renderRow(makeStack({ id: 'foo', status: 'completed', pr_url: null }));

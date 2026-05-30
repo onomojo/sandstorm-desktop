@@ -57,3 +57,15 @@ export function getStackDuration(
 
 /** Duration update interval in milliseconds (5 seconds). */
 export const DURATION_UPDATE_INTERVAL = 5000;
+
+const PR_ELIGIBLE_STATUSES = new Set([
+  'completed',
+  'failed',
+  'pushed',
+  'needs_human',
+  'verify_blocked_environmental',
+]);
+
+export function makePrEligible(stack: { status: string; pr_url: string | null | undefined }): boolean {
+  return PR_ELIGIBLE_STATUSES.has(stack.status) && !stack.pr_url;
+}
