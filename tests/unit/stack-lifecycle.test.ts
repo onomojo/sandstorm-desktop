@@ -664,6 +664,73 @@ describe('Stack Lifecycle Integration', () => {
     });
   });
 
+  describe('resumeStackWithContinuation — manual bypass of isHalted()', () => {
+    it('throws SESSION_HALTED when isHalted() returns true and manual is false', async () => {
+      registry.createStack(makeStack('halted-auto', 'session_paused'));
+      await expect(
+        manager.resumeStackWithContinuation('halted-auto', () => true, false)
+      ).rejects.toThrow(expect.objectContaining({
+        code: ErrorCode.SESSION_HALTED,
+      }));
+    });
+
+    it('does NOT throw SESSION_HALTED when manual is true, even if isHalted() returns true', async () => {
+      registry.createStack(makeStack('halted-manual', 'session_paused'));
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: 'ok', stderr: '', exitCode: 0 });
+
+      // Should not throw even though isHalted() returns true
+      const result = await manager.resumeStackWithContinuation('halted-manual', () => true, true);
+      // No running task → idle (Case C)
+      expect(result.outcome).toBe('idle');
+    });
+
+    it('defaults manual to false, preserving existing SESSION_HALTED behaviour', async () => {
+      registry.createStack(makeStack('halted-default', 'session_paused'));
+      await expect(
+        manager.resumeStackWithContinuation('halted-default', () => true)
+      ).rejects.toThrow(expect.objectContaining({
+        code: ErrorCode.SESSION_HALTED,
+      }));
+    });
+
+    it('reverts to session_paused on container failure during manual resume', async () => {
+      registry.createStack(makeStack('revert-on-fail', 'session_paused'));
+      vi.spyOn(manager, 'ensureStackContainersRunning' as any).mockRejectedValueOnce(
+        new Error('Container start failed')
+      );
+
+      await expect(
+        manager.resumeStackWithContinuation('revert-on-fail', () => false, true)
+      ).rejects.toThrow('Container start failed');
+
+      // Stack must revert to session_paused so the Resume button reappears
+      expect(registry.getStack('revert-on-fail')!.status).toBe('session_paused');
+    });
+
+    it('reverts to session_paused when dispatchContinuation fails (Case A)', async () => {
+      registry.createStack(makeStack('revert-on-dispatch-fail', 'session_paused'));
+      vi.spyOn(manager, 'ensureStackContainersRunning' as any).mockResolvedValue(undefined);
+
+      // Seed a running task with a session_id directly via registry (bypasses container lookup)
+      const task = registry.createTask('revert-on-dispatch-fail', 'Token-limited task');
+      registry.setTaskSessionId(task.id, 'test-session-abc');
+      // Put the stack back to session_paused (as token-limit detection would)
+      registry.updateStackStatus('revert-on-dispatch-fail', 'session_paused');
+
+      // Mock dispatchContinuation to throw
+      vi.spyOn(manager, 'dispatchContinuation' as any).mockRejectedValueOnce(
+        new Error('Dispatch failed — still token limited')
+      );
+
+      await expect(
+        manager.resumeStackWithContinuation('revert-on-dispatch-fail', () => false, true)
+      ).rejects.toThrow('Dispatch failed — still token limited');
+
+      // Stack must revert to session_paused, not stay in building
+      expect(registry.getStack('revert-on-dispatch-fail')!.status).toBe('session_paused');
+    });
+  });
+
   describe('update callbacks fire at correct times', () => {
     it('callback fires for all state transitions in lifecycle', async () => {
       const updateCallback = vi.fn();

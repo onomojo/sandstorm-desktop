@@ -981,6 +981,107 @@ describe('TaskWatcher', () => {
     watcher.unwatchAll();
   });
 
+  // --- token_limited status handling ---
+
+  it('sets stack to session_paused when status is token_limited (preserves running task)', async () => {
+    const sessionId = 'sess-token-limit-123';
+    const rawJsonOutput = `{"type":"result","usage":{"input_tokens":1000,"output_tokens":500},"session_id":"${sessionId}"}`;
+
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        const cmdStr = cmd.join(' ');
+        if (cmdStr.includes('/tmp/claude-task.status')) {
+          const callCount = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls.length;
+          return { exitCode: 0, stdout: callCount <= 2 ? 'running' : 'token_limited', stderr: '' };
+        }
+        if (cmdStr.includes('/tmp/claude-raw.log')) {
+          return { exitCode: 0, stdout: rawJsonOutput, stderr: '' };
+        }
+        if (cmdStr.includes('/tmp/claude-tokens-execution') || cmdStr.includes('/tmp/claude-tokens-review')) {
+          return { exitCode: 0, stdout: '', stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+    const task = registry.createTask('watch-stack', 'token limit task');
+
+    const statusChangePromise = new Promise<void>((resolve) => {
+      watcher.setOnStatusChange(resolve);
+    });
+
+    watcher.watch('watch-stack', 'container-123');
+    await statusChangePromise;
+    watcher.unwatchAll();
+
+    // Give readTaskTokens time to complete
+    await new Promise((r) => setTimeout(r, 200));
+
+    // Stack must be session_paused (not failed/needs_human)
+    const stack = registry.getStack('watch-stack');
+    expect(stack?.status).toBe('session_paused');
+
+    // Task must still be running (NOT completed) so resumeStackWithContinuation enters Case A
+    const runningTask = registry.getRunningTask('watch-stack');
+    expect(runningTask).not.toBeNull();
+    expect(runningTask?.id).toBe(task.id);
+
+    // session_id must be captured so Case A resume works
+    await new Promise((r) => setTimeout(r, 100));
+    const tasks = registry.getTasksForStack('watch-stack');
+    const storedTask = tasks.find((t) => t.id === task.id);
+    expect(storedTask?.session_id).toBe(sessionId);
+  });
+
+  it('does NOT emit task:completed or task:failed for token_limited status', async () => {
+    const runtime = createSequencedRuntime(['running', 'token_limited'], '1');
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'token limit no event task');
+
+    let completedEmitted = false;
+    let failedEmitted = false;
+    watcher.on('task:completed', () => { completedEmitted = true; });
+    watcher.on('task:failed', () => { failedEmitted = true; });
+
+    const statusChanged = new Promise<void>((resolve) => {
+      watcher.setOnStatusChange(resolve);
+    });
+
+    watcher.watch('watch-stack', 'container-123');
+    await statusChanged;
+
+    await new Promise((r) => setTimeout(r, 200));
+
+    expect(completedEmitted).toBe(false);
+    expect(failedEmitted).toBe(false);
+
+    watcher.unwatchAll();
+  });
+
+  it('calls onStatusChange when token_limited is detected', async () => {
+    const runtime = createSequencedRuntime(['running', 'token_limited'], '1');
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'token limit callback task');
+
+    const statusChangeFn = vi.fn();
+    watcher.setOnStatusChange(statusChangeFn);
+
+    watcher.watch('watch-stack', 'container-123');
+    await new Promise((r) => setTimeout(r, 500));
+
+    expect(statusChangeFn).toHaveBeenCalled();
+    watcher.unwatchAll();
+  });
+
   it('does not read stderr for error detection', async () => {
     const runtime = createSequencedRuntime(['running', 'completed'], '0');
     const origExec = (runtime.exec as ReturnType<typeof vi.fn>).getMockImplementation()!;

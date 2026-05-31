@@ -581,15 +581,19 @@ export class StackManager {
    */
   async resumeStackWithContinuation(
     stackId: string,
-    isHalted: () => boolean = () => false
+    isHalted: () => boolean = () => false,
+    manual: boolean = false
   ): Promise<{
     outcome: 'resuming_with_session' | 'resumed_fresh' | 'idle';
   }> {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    // Pre-flight: block resume if session token limit hasn't refreshed yet
-    if (isHalted()) {
+    // Pre-flight: block resume if session token limit hasn't refreshed yet.
+    // Manual resumes (user clicking Resume) bypass this — if the session is
+    // still limited the inner agent will hit it again, and the per-stack
+    // token-limit detector will re-classify the stack back to session_paused.
+    if (!manual && isHalted()) {
       throw new SandstormError(ErrorCode.SESSION_HALTED, 'Session token limit has not refreshed yet');
     }
 
@@ -621,14 +625,26 @@ export class StackManager {
 
     if (runningTask.session_id) {
       // Case A: resume with existing Claude session
-      await this.dispatchContinuation(stack, stackId, runningTask);
+      try {
+        await this.dispatchContinuation(stack, stackId, runningTask);
+      } catch (err) {
+        this.registry.updateStackStatus(stackId, 'session_paused');
+        this.notifyUpdate();
+        throw err;
+      }
       return { outcome: 'resuming_with_session' };
     } else {
       // Case B: session not yet logged — interrupt and redispatch fresh
       this.registry.interruptTask(runningTask.id);
-      await this.dispatchTask(stackId, runningTask.prompt, runningTask.model ?? undefined, {
-        skipTicketFetch: true,
-      });
+      try {
+        await this.dispatchTask(stackId, runningTask.prompt, runningTask.model ?? undefined, {
+          skipTicketFetch: true,
+        });
+      } catch (err) {
+        this.registry.updateStackStatus(stackId, 'session_paused');
+        this.notifyUpdate();
+        throw err;
+      }
       return { outcome: 'resumed_fresh' };
     }
   }

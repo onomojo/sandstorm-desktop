@@ -931,7 +931,7 @@ describe('IPC Handlers', () => {
       const result = await invokeHandler('session:resumeStackWithContinuation', 'stack-1');
 
       expect(result).toEqual({ halted: true, resetAt: '2026-05-04T15:00:00Z' });
-      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function));
+      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function), false);
     });
 
     it('returns halted=true with null resetAt when usage is absent', async () => {
@@ -943,7 +943,7 @@ describe('IPC Handlers', () => {
       const result = await invokeHandler('session:resumeStackWithContinuation', 'stack-1');
 
       expect(result).toEqual({ halted: true, resetAt: null });
-      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function));
+      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function), false);
     });
 
     it('calls resumeStackWithContinuation with isHalted callback when monitor is not halted', async () => {
@@ -952,8 +952,18 @@ describe('IPC Handlers', () => {
 
       const result = await invokeHandler('session:resumeStackWithContinuation', 'stack-1');
 
-      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function));
+      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function), false);
       expect(result).toEqual({ halted: false, status: 'running' });
+    });
+
+    it('passes manual=true to resumeStackWithContinuation when manual flag is provided', async () => {
+      mockSessionMonitor.getState.mockReturnValue({ halted: true });
+      mockStackManager.resumeStackWithContinuation.mockResolvedValue({ outcome: 'resuming_with_session' });
+
+      const result = await invokeHandler('session:resumeStackWithContinuation', 'stack-1', true);
+
+      expect(mockStackManager.resumeStackWithContinuation).toHaveBeenCalledWith('stack-1', expect.any(Function), true);
+      expect(result).toEqual({ halted: false, outcome: 'resuming_with_session' });
     });
   });
 

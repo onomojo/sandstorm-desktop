@@ -217,13 +217,13 @@ describe('StackCard', () => {
     expect(screen.queryByTestId('card-resume-running')).toBeNull();
   });
 
-  it('calls resumeStackWithContinuation when Resume button is clicked', () => {
+  it('calls resumeStackWithContinuation with manual=true when Resume button is clicked', () => {
     const resumeFn = vi.fn().mockResolvedValue({ halted: false, outcome: 'resuming_with_session' });
     useAppStore.setState({ resumeStackWithContinuation: resumeFn } as any);
 
     render(<StackCard stack={makeStack({ id: 'paused2', status: 'session_paused' })} />);
     fireEvent.click(screen.getByTestId('card-resume-paused2'));
 
-    expect(resumeFn).toHaveBeenCalledWith('paused2');
+    expect(resumeFn).toHaveBeenCalledWith('paused2', true);
   });
 });
