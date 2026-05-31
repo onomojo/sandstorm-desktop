@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import { KANBAN_COLUMNS } from './types/kanban';
 import type { KanbanColumn } from './types/kanban';
+import { suggestStackName } from './lib/stack-name';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -493,6 +494,12 @@ interface AppState {
   _refineDialogContext: { ticketId: string; projectDir: string; previousColumn: KanbanColumn } | null;
   _newStackDialogContext: { ticketId: string; projectDir: string; previousColumn: KanbanColumn; stackCreated: boolean } | null;
   _prDialogContext: { stackId: string; ticketId: string; projectDir: string; previousColumn: KanbanColumn; prCreated: boolean } | null;
+  /** Per-ticket create error message, keyed by `${ticketId}|${projectDir}`. Set on fetch/create failure; cleared on retry success or column change away from in_stack. */
+  stackCreateErrors: Record<string, string>;
+  /** Per-ticket in-flight flag, keyed by `${ticketId}|${projectDir}`. Guards against double-clicks. */
+  stackCreateInFlight: Record<string, boolean>;
+  /** One-click stack creation from a spec_ready card — no dialog. */
+  startStackForTicket: (ticketId: string, projectDir: string) => Promise<void>;
 
   // Schedules (per-project)
   schedules: ScheduleEntry[];
@@ -988,6 +995,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   _refineDialogContext: null,
   _newStackDialogContext: null,
   _prDialogContext: null,
+  stackCreateErrors: {},
+  stackCreateInFlight: {},
 
   clearMoveTicketColumnError: () => set({ moveTicketColumnError: null }),
 
@@ -1004,6 +1013,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   moveTicketColumn: async (ticketId: string, projectDir: string, column: KanbanColumn) => {
     const previousColumn = get().boardTickets.find(t => t.ticket_id === ticketId)?.column;
+    // Clear per-ticket create error when moving the ticket away from in_stack.
+    if (previousColumn === 'in_stack' && column !== 'in_stack') {
+      const key = `${ticketId}|${projectDir}`;
+      set((state) => {
+        const { [key]: _, ...rest } = state.stackCreateErrors;
+        return { stackCreateErrors: rest };
+      });
+    }
     // Optimistic update — match only on ticket_id; boardTickets are already project-scoped.
     set((state) => ({
       boardTickets: state.boardTickets.map((t) =>
@@ -1052,6 +1069,53 @@ export const useAppStore = create<AppState>((set, get) => ({
       _prDialogContext: { stackId, ticketId, projectDir, previousColumn, prCreated: false },
     });
     void get().moveTicketColumn(ticketId, projectDir, 'pr_open');
+  },
+
+  startStackForTicket: async (ticketId: string, projectDir: string) => {
+    const key = `${ticketId}|${projectDir}`;
+    if (get().stackCreateInFlight[key]) return;
+
+    const name = suggestStackName(ticketId);
+    if (!name) return;
+
+    set((state) => {
+      const { [key]: _, ...restErrors } = state.stackCreateErrors;
+      return {
+        stackCreateInFlight: { ...state.stackCreateInFlight, [key]: true },
+        stackCreateErrors: restErrors,
+      };
+    });
+
+    // Optimistic column move — synchronous set inside fires immediately
+    void get().moveTicketColumn(ticketId, projectDir, 'in_stack');
+
+    try {
+      const fetched = await window.sandstorm.tickets.fetch(ticketId, projectDir);
+      await window.sandstorm.stacks.create({
+        name,
+        projectDir,
+        ticket: ticketId,
+        branch: `feat/${ticketId}-${name}`,
+        description:
+          fetched.body
+            .split('\n')
+            .find((l) => l.trim())
+            ?.replace(/^#\s*/, '')
+            .slice(0, 120) ?? null,
+        runtime: 'docker',
+        task: fetched.body,
+        gateApproved: true,
+      });
+      await get().refreshStacks();
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set((state) => ({ stackCreateErrors: { ...state.stackCreateErrors, [key]: message } }));
+    } finally {
+      set((state) => {
+        const { [key]: _, ...rest } = state.stackCreateInFlight;
+        return { stackCreateInFlight: rest };
+      });
+    }
   },
 
   // Schedules

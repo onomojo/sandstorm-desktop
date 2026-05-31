@@ -1,9 +1,9 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent, waitFor } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { TicketCard } from '../../../src/renderer/components/TicketCard';
 import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
@@ -67,13 +67,102 @@ describe('TicketCard', () => {
     expect(screen.getByTestId('ticket-card-start-stack-42')).toBeDefined();
   });
 
-  it('spec_ready: clicking Start stack opens new stack dialog and moves column to in_stack', async () => {
+  it('spec_ready: clicking Start stack calls stacks.create with verified defaults and moves to in_stack', async () => {
+    useAppStore.setState({ boardTickets: [makeTicket('spec_ready') as any] });
     render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
     fireEvent.click(screen.getByTestId('ticket-card-start-stack-42'));
+
+    // Card moves optimistically to in_stack before fetch+create resolve
     await waitFor(() => {
-      expect(useAppStore.getState().showNewStackDialog).toBe(true);
+      const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+      expect(entry?.column).toBe('in_stack');
     });
+
+    // stacks.create called with verified defaults
+    await waitFor(() => {
+      expect(api.stacks.create).toHaveBeenCalledWith({
+        name: 'ticket-42',
+        projectDir: PROJECT_DIR,
+        ticket: '42',
+        branch: 'feat/42-ticket-42',
+        description: 'Issue: test',
+        runtime: 'docker',
+        task: '# Issue: test\n\nbody',
+        gateApproved: true,
+      });
+    });
+
+    // Dialog must NOT be opened
+    expect(useAppStore.getState().showNewStackDialog).toBe(false);
     expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'in_stack');
+  });
+
+  it('spec_ready: clicking Start stack does not open NewStackDialog', async () => {
+    render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-start-stack-42'));
+    // Give the action a chance to run
+    await act(async () => {});
+    expect(useAppStore.getState().showNewStackDialog).toBe(false);
+  });
+
+  it('spec_ready: on tickets.fetch failure, card stays in in_stack and shows error indicator', async () => {
+    api.tickets.fetch.mockRejectedValueOnce(new Error('network error'));
+    useAppStore.setState({ boardTickets: [makeTicket('spec_ready') as any] });
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+
+    await act(async () => {
+      await useAppStore.getState().startStackForTicket('42', PROJECT_DIR);
+    });
+
+    // Card stays in in_stack
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('in_stack');
+
+    // Re-render as in_stack card to see the error
+    const { container } = render(<TicketCard ticket={{ ...makeTicket('in_stack'), ticket_id: '42' } as any} stacks={[]} />);
+    expect(container.querySelector('[data-testid="ticket-card-create-error-42"]')).not.toBeNull();
+  });
+
+  it('spec_ready: on stacks.create failure, card stays in in_stack and shows error indicator', async () => {
+    api.stacks.create.mockRejectedValueOnce(new Error('docker unavailable'));
+    useAppStore.setState({ boardTickets: [makeTicket('spec_ready') as any] });
+
+    await act(async () => {
+      await useAppStore.getState().startStackForTicket('42', PROJECT_DIR);
+    });
+
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('in_stack');
+
+    const { container } = render(<TicketCard ticket={{ ...makeTicket('in_stack'), ticket_id: '42' } as any} stacks={[]} />);
+    const errorEl = container.querySelector('[data-testid="ticket-card-create-error-42"]');
+    expect(errorEl).not.toBeNull();
+    expect(errorEl?.textContent).toContain('docker unavailable');
+  });
+
+  it('spec_ready: double-click does not call stacks.create twice', async () => {
+    useAppStore.setState({ boardTickets: [makeTicket('spec_ready') as any] });
+
+    // Delay fetch so the in-flight flag is still set on the second call
+    let resolveFetch!: (v: { body: string; url: string }) => void;
+    const fetchPromise = new Promise<{ body: string; url: string }>((r) => { resolveFetch = r; });
+    api.tickets.fetch.mockReturnValueOnce(fetchPromise);
+
+    render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-start-stack-42');
+
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+
+    // Resolve the fetch so the action settles
+    await act(async () => {
+      resolveFetch({ body: '# Issue\nbody', url: null as unknown as string });
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(useAppStore.getState().stackCreateInFlight['42|/proj']).toBeFalsy());
+
+    expect(api.stacks.create).toHaveBeenCalledTimes(1);
   });
 
   it('in_stack: shows Create PR button for eligible status (completed)', () => {

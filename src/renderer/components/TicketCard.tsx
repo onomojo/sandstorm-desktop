@@ -1,6 +1,7 @@
 import React from 'react';
 import { useAppStore, KanbanColumn, TicketBoardEntry, Stack } from '../store';
 import { makePrEligible } from '../utils/duration';
+import { suggestStackName } from '../lib/stack-name';
 
 interface TicketCardProps {
   ticket: TicketBoardEntry;
@@ -15,21 +16,28 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const {
     moveTicketColumn,
     openRefineDialogFromCard,
-    openNewStackDialogForTicket,
     openCreatePRDialogForTicket,
     openRefinementSession,
     openRefineTicketDialogWith,
     refinementSessions,
+    startStackForTicket,
+    stackCreateErrors,
+    stackCreateInFlight,
   } = useAppStore();
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
+  const stackKey = `${ticket.ticket_id}|${ticket.project_dir}`;
+  const stackCreateError = stackCreateErrors[stackKey];
+  const stackInFlight = stackCreateInFlight[stackKey] ?? false;
 
   const handleRefine = () => {
     openRefineDialogFromCard(ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn);
   };
 
   const handleStartStack = () => {
-    openNewStackDialogForTicket(ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn);
+    const name = suggestStackName(ticket.ticket_id);
+    if (!name) return;
+    void startStackForTicket(ticket.ticket_id, ticket.project_dir);
   };
 
   const handleCreatePR = () => {
@@ -105,7 +113,8 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
       {ticket.column === 'spec_ready' && (
         <button
           onClick={handleStartStack}
-          className="mt-1 w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-ready/10 text-sandstorm-state-ready border border-sandstorm-state-ready/30 hover:bg-sandstorm-state-ready/20 transition-colors font-medium"
+          disabled={stackInFlight}
+          className="mt-1 w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-ready/10 text-sandstorm-state-ready border border-sandstorm-state-ready/30 hover:bg-sandstorm-state-ready/20 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
           data-testid={`ticket-card-start-stack-${ticket.ticket_id}`}
         >
           Start stack
@@ -114,6 +123,14 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
       {ticket.column === 'in_stack' && (
         <div className="flex flex-col gap-2">
+          {stackCreateError && (
+            <div
+              className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2 py-1.5 break-words"
+              data-testid={`ticket-card-create-error-${ticket.ticket_id}`}
+            >
+              {stackCreateError}
+            </div>
+          )}
           {stack && (
             <div className="flex items-center gap-1.5">
               <span

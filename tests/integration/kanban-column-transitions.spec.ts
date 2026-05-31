@@ -148,21 +148,22 @@ test.describe('Kanban column transitions (#388)', () => {
     }, { id: TICKET_ID, dir: PROJECT_DIR });
     await assertColumn(mainWindow, 'spec_ready', TICKET_ID);
 
-    // --- 3. spec_ready → in_stack (real click on Start stack card button) ---
+    // --- 3. spec_ready → in_stack (one-click, no dialog) ---
+    // The new behavior creates the stack directly without opening NewStackDialog.
+    // The column move is optimistic so the card lands in in_stack immediately.
+    // In the integration test environment tickets.fetch will fail (no ticket
+    // provider configured); per spec the card stays in in_stack on failure.
     await mainWindow.click(`[data-testid="ticket-card-start-stack-${TICKET_ID}"]`);
     await assertColumn(mainWindow, 'in_stack', TICKET_ID);
-    // Mark the dialog as having "created a stack" and inject a stack row so
-    // dialog dismissal doesn't trigger the revert, and so Create PR enables.
+
+    // Inject a fake stack so Create PR enables for the next step.
     await mainWindow.evaluate(({ id, dir, stackId }) => {
       const store = (window as unknown as {
         __useAppStore: {
-          getState: () => { _newStackDialogContext: Record<string, unknown> | null };
           setState: (s: Record<string, unknown>) => void;
         };
       }).__useAppStore;
-      const ctx = store.getState()._newStackDialogContext;
       store.setState({
-        _newStackDialogContext: ctx ? { ...ctx, stackCreated: true } : ctx,
         stacks: [{
           id: stackId, project: 'kanban-388-test', project_dir: dir, ticket: id,
           branch: null, description: null, status: 'completed', error: null,
@@ -175,11 +176,6 @@ test.describe('Kanban column transitions (#388)', () => {
         }],
       });
     }, { id: TICKET_ID, dir: PROJECT_DIR, stackId: STACK_ID });
-    const newStackInput = mainWindow.locator('[data-testid="stack-name"]');
-    if (await newStackInput.isVisible().catch(() => false)) {
-      await mainWindow.locator('text=Cancel').first().click();
-      await newStackInput.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {});
-    }
     await assertColumn(mainWindow, 'in_stack', TICKET_ID);
 
     // --- 4. in_stack → pr_open (real click on Create PR card button) --------
@@ -255,6 +251,8 @@ test.describe('Kanban column transitions (#388)', () => {
         _newStackDialogContext: null,
         _prDialogContext: null,
         moveTicketColumnError: null,
+        stackCreateErrors: {},
+        stackCreateInFlight: {},
       });
     });
   });
