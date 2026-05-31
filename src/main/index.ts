@@ -139,6 +139,9 @@ async function initializeApp(): Promise<void> {
   );
   stackManager.setPortProxy(portProxy);
 
+  // Backfill: advance any tickets stuck in in_stack whose linked stack is already pr_created.
+  registry.reconcilePrCreatedTickets();
+
   // Set up Docker connection manager for health monitoring
   if (dockerRuntime instanceof DockerRuntime) {
     dockerConnectionManager = (dockerRuntime as DockerRuntime).getConnectionManager();

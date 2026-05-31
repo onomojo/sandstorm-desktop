@@ -935,6 +935,11 @@ export class StackManager {
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
 
     this.registry.setPullRequest(stackId, prUrl, prNumber);
+
+    if (stack.ticket) {
+      this.registry.advanceTicketToPrOpenIfInStack(stack.ticket, stack.project_dir);
+    }
+
     this.notifyUpdate();
   }
 

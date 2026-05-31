@@ -1161,6 +1161,31 @@ export class Registry {
     ).run(ticketId, normalizedDir, column);
   }
 
+  /**
+   * Forward-only guard: advances a linked ticket from in_stack → pr_open.
+   * No-op if the ticket does not exist or is not currently in in_stack.
+   */
+  advanceTicketToPrOpenIfInStack(ticketId: string, projectDir: string): void {
+    const tickets = this.listBoardTickets(projectDir);
+    const ticket = tickets.find(t => t.ticket_id === ticketId);
+    if (ticket?.column === 'in_stack') {
+      this.setBoardTicketColumn(ticketId, projectDir, 'pr_open');
+    }
+  }
+
+  /**
+   * Backfill: for every stack with status='pr_created' and a non-null ticket,
+   * advance the linked ticket from in_stack → pr_open (forward-only, idempotent).
+   */
+  reconcilePrCreatedTickets(): void {
+    const stacks = this.db.prepare(
+      "SELECT ticket, project_dir FROM stacks WHERE status = 'pr_created' AND ticket IS NOT NULL"
+    ).all() as { ticket: string; project_dir: string }[];
+    for (const stack of stacks) {
+      this.advanceTicketToPrOpenIfInStack(stack.ticket, stack.project_dir);
+    }
+  }
+
   /** Returns all ticket_board rows for a project, ordered by created_at asc. */
   listBoardTickets(projectDir: string): { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[] {
     const normalizedDir = path.resolve(projectDir);

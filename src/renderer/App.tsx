@@ -92,6 +92,17 @@ export default function App() {
     };
   }, []);
 
+  // Close create-ticket dialog on Escape
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== 'Escape') return;
+      const state = useAppStore.getState();
+      if (state.showCreateTicketDialog) state.setShowCreateTicketDialog(false);
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
   // Refinement sessions: restore persisted sessions and listen for updates
   useEffect(() => {
     window.sandstorm.tickets.listRefinements().then((sessions) => {
@@ -185,6 +196,11 @@ export default function App() {
     const unsubStacksUpdated = window.sandstorm.on('stacks:updated', () => {
       refreshStacks();
       refreshStackHistory();
+      const state = useAppStore.getState();
+      const project = state.activeProject();
+      if (project) {
+        void state.refreshBoardTickets(project.directory);
+      }
     });
 
     return () => {
