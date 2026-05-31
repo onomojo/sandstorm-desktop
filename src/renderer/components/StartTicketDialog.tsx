@@ -1,10 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useAppStore } from '../store';
-
-function suggestStackName(ticketId: string): string {
-  const id = ticketId.replace(/^#/, '').replace(/[^a-zA-Z0-9-]/g, '-').toLowerCase();
-  return id ? `ticket-${id}` : '';
-}
+import { suggestStackName } from '../lib/stack-name';
 
 export function StartTicketDialog() {
   const { setShowStartTicketDialog, refreshStacks, activeProject } = useAppStore();
