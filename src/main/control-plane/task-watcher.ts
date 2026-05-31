@@ -565,6 +565,30 @@ export class TaskWatcher extends EventEmitter {
         return;
       }
 
+      if (status === 'token_limited') {
+        // Stale-poll guard (same as terminal statuses)
+        if (!this.seenRunning.get(stackId)) {
+          const staleCount = (this.stalePollCounts.get(stackId) ?? 0) + 1;
+          this.stalePollCounts.set(stackId, staleCount);
+          if (staleCount < MAX_STALE_POLLS) {
+            this.schedulePoll(stackId, containerId, this.pollInterval);
+            return;
+          }
+        }
+
+        // Capture session_id and tokens before transitioning so the Resume
+        // button can enter Case A (--resume <session_id>).
+        await this.readTaskTokens(task.id, stackId, containerId).catch(() => {});
+
+        // Transition to session_paused WITHOUT completing the task — the
+        // running task and its session_id remain intact so resumeStackWithContinuation
+        // enters Case A rather than Case C.
+        this.registry.updateStackStatus(stackId, 'session_paused');
+        this.onStatusChange?.();
+        this.unwatch(stackId);
+        return;
+      }
+
       if (status === 'completed' || status === 'failed' || status === 'needs_human' || status === 'verify_blocked_environmental') {
         // Ignore stale completion from a prior task — we must see "running"
         // at least once before treating completion as valid.

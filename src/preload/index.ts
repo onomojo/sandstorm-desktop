@@ -173,7 +173,7 @@ export interface SandstormAPI {
     haltAll: () => Promise<string[]>;
     resumeAll: () => Promise<string[]>;
     resumeStack: (stackId: string) => Promise<void>;
-    resumeStackWithContinuation: (stackId: string) => Promise<{
+    resumeStackWithContinuation: (stackId: string, manual?: boolean) => Promise<{
       halted: boolean;
       resetAt?: string | null;
       outcome?: 'resuming_with_session' | 'resumed_fresh' | 'idle';
@@ -343,8 +343,8 @@ const api: SandstormAPI = {
     haltAll: () => ipcRenderer.invoke('session:haltAll'),
     resumeAll: () => ipcRenderer.invoke('session:resumeAll'),
     resumeStack: (stackId) => ipcRenderer.invoke('session:resumeStack', stackId),
-    resumeStackWithContinuation: (stackId) =>
-      ipcRenderer.invoke('session:resumeStackWithContinuation', stackId),
+    resumeStackWithContinuation: (stackId, manual) =>
+      ipcRenderer.invoke('session:resumeStackWithContinuation', stackId, manual),
     forcePoll: () => ipcRenderer.invoke('session:forcePoll'),
     reportActivity: () => { ipcRenderer.send('session:activity'); },
   },

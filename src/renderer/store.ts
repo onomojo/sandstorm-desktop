@@ -477,7 +477,7 @@ interface AppState {
   sessionAcknowledgeCritical: () => Promise<void>;
   sessionHaltAll: () => Promise<string[]>;
   sessionResumeAll: () => Promise<string[]>;
-  resumeStackWithContinuation: (stackId: string) => Promise<void>;
+  resumeStackWithContinuation: (stackId: string, manual?: boolean) => Promise<void>;
 
   // Kanban board
   boardTickets: TicketBoardEntry[];
@@ -709,7 +709,7 @@ declare global {
         haltAll: () => Promise<string[]>;
         resumeAll: () => Promise<string[]>;
         resumeStack: (stackId: string) => Promise<void>;
-        resumeStackWithContinuation: (stackId: string) => Promise<{
+        resumeStackWithContinuation: (stackId: string, manual?: boolean) => Promise<{
           halted: boolean;
           resetAt?: string | null;
           outcome?: 'resuming_with_session' | 'resumed_fresh' | 'idle';
@@ -991,8 +991,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     return resumed;
   },
 
-  resumeStackWithContinuation: async (stackId: string) => {
-    const result = await window.sandstorm.session.resumeStackWithContinuation(stackId);
+  resumeStackWithContinuation: async (stackId: string, manual?: boolean) => {
+    const result = await window.sandstorm.session.resumeStackWithContinuation(stackId, manual);
     if (result.halted) {
       get().setSessionTokenLimitModal({ resetAt: result.resetAt ?? null });
       return;

@@ -323,7 +323,7 @@ describe('StackTableRow session_paused Resume button', () => {
     expect(screen.getByText('Halted')).toBeDefined();
   });
 
-  it('calls resumeStackWithContinuation when Resume is clicked', () => {
+  it('calls resumeStackWithContinuation with manual=true when Resume is clicked', () => {
     vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
     const resumeFn = vi.fn().mockResolvedValue(undefined);
     useAppStore.setState({ resumeStackWithContinuation: resumeFn } as any);
@@ -331,7 +331,7 @@ describe('StackTableRow session_paused Resume button', () => {
     renderRow(makeStack({ id: 'paused2', status: 'session_paused' }));
     fireEvent.click(screen.getByTestId('row-resume-paused2'));
 
-    expect(resumeFn).toHaveBeenCalledWith('paused2');
+    expect(resumeFn).toHaveBeenCalledWith('paused2', true);
   });
 });
 

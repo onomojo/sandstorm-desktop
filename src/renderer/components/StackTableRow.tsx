@@ -121,7 +121,7 @@ export function StackTableRow({
   const handleResume = async (e: React.MouseEvent) => {
     e.stopPropagation();
     try {
-      await resumeStackWithContinuation(stack.id);
+      await resumeStackWithContinuation(stack.id, true);
     } catch (err) {
       alert(`Failed to resume: ${err}`);
     }

@@ -931,11 +931,12 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     stackManager.sessionResumeStack(stackId);
   });
 
-  ipcMain.handle('session:resumeStackWithContinuation', async (_event, stackId: string) => {
+  ipcMain.handle('session:resumeStackWithContinuation', async (_event, stackId: string, manual: boolean = false) => {
     try {
       const result = await stackManager.resumeStackWithContinuation(
         stackId,
-        () => sessionMonitor.getState().halted
+        () => sessionMonitor.getState().halted,
+        manual
       );
       return { halted: false, ...result };
     } catch (err) {

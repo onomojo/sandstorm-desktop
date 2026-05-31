@@ -47,6 +47,20 @@ check_for_stop_and_ask() {
   return 1
 }
 
+# Check if a run_claude invocation was terminated by a session token limit.
+# Scans the given log file (default: /tmp/claude-raw.log) for the case-insensitive
+# substring "You've hit your session limit". Structured for future expansion:
+# add additional confirmed limit patterns to the grep list below.
+# Returns 0 if token limit detected, 1 otherwise.
+check_for_token_limit() {
+  local log_file="${1:-/tmp/claude-raw.log}"
+  if grep -qi "You've hit your session limit" "$log_file" 2>/dev/null; then
+    log_loop "Session token limit detected"
+    return 0
+  fi
+  return 1
+}
+
 # Run the claude CLI with streaming output.
 # Args: $1 = prompt file path, $2 = raw log path, $3 = task log path, $4 = phase (execution|review|verify), $5 = iteration (1-based), $6... = extra claude args
 run_claude() {
@@ -482,6 +496,21 @@ while true; do
     tail -50 /tmp/claude-task.log 2>/dev/null > /tmp/claude-execution-summary.txt
 
     if [ $EXIT_CODE -ne 0 ]; then
+      if check_for_token_limit /tmp/claude-raw.log; then
+        log_loop "Session token limit reached during initial execution — marking token_limited"
+        rm -f /tmp/claude-task-prompt.txt
+        echo 1 > /tmp/claude-task.exit
+        echo "token_limited" > /tmp/claude-task.status
+        rm -f /tmp/claude-task.pid
+        echo ""
+        echo "=========================================="
+        echo "  Task finished — SESSION TOKEN LIMIT"
+        echo "=========================================="
+        echo ""
+        echo "ready" > /tmp/claude-ready
+        echo "Waiting for tasks..."
+        continue
+      fi
       log_loop "Initial execution failed (exit $EXIT_CODE), skipping review loop"
       rm -f /tmp/claude-task-prompt.txt
       echo $EXIT_CODE > /tmp/claude-task.exit
@@ -552,6 +581,7 @@ while true; do
     TASK_DONE=0
     TASK_FAILED=0
     TASK_NEEDS_HUMAN=0
+    TASK_TOKEN_LIMITED=0
     TOTAL_REVIEW_ITERATIONS=0
     TOTAL_VERIFY_RETRIES=0
     VERIFY_BLOCKED_ENVIRONMENTAL=0
@@ -593,6 +623,14 @@ while true; do
           # Save numbered review verdict (copy full review output)
           cp /tmp/claude-review-output.txt "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt" 2>/dev/null || echo "REVIEW_FAIL" > "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt"
           log_loop "Review iteration $INNER_ITERATION/$MAX_INNER_ITERATIONS: FAIL"
+
+          # Token limit takes priority — check the review agent's raw log before normal handling
+          if check_for_token_limit /tmp/claude-review-raw.log; then
+            TASK_TOKEN_LIMITED=1
+            TASK_FAILED=1
+            break
+          fi
+
           CONSECUTIVE_REVIEW_FAILS=$((CONSECUTIVE_REVIEW_FAILS + 1))
 
           if [ $INNER_ITERATION -ge $MAX_INNER_ITERATIONS ]; then
@@ -609,6 +647,11 @@ while true; do
           if [ $CONSECUTIVE_REVIEW_FAILS -ge 2 ] && [ $META_REVIEW_FIRED_REVIEW -eq 0 ]; then
             META_REVIEW_FIRED_REVIEW=1
             if ! run_meta_review "review" "$TOTAL_REVIEW_ITERATIONS"; then
+              if check_for_token_limit /tmp/claude-meta-review-raw.log; then
+                TASK_TOKEN_LIMITED=1
+                TASK_FAILED=1
+                break
+              fi
               log_loop "Meta-review found no viable path — halting for human intervention"
               TASK_NEEDS_HUMAN=1
               TASK_FAILED=1
@@ -656,6 +699,13 @@ while true; do
           fix_exit=$?
           echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           rm -f "$local_fix_prompt"
+
+          # Token limit takes priority over STOP_AND_ASK and general failures
+          if [ $fix_exit -ne 0 ] && check_for_token_limit /tmp/claude-raw.log; then
+            TASK_TOKEN_LIMITED=1
+            TASK_FAILED=1
+            break
+          fi
 
           if check_for_stop_and_ask /tmp/claude-task.log; then
             log_loop "STOP_AND_ASK detected after review feedback — halting, needs human intervention"
@@ -792,6 +842,13 @@ while true; do
         echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
         rm -f "$local_verify_fix"
 
+        # Token limit takes priority over STOP_AND_ASK and general failures
+        if [ $verify_fix_exit -ne 0 ] && check_for_token_limit /tmp/claude-raw.log; then
+          TASK_TOKEN_LIMITED=1
+          TASK_FAILED=1
+          break
+        fi
+
         if check_for_stop_and_ask /tmp/claude-task.log; then
           log_loop "STOP_AND_ASK detected after verify failure — halting, needs human intervention"
           TASK_NEEDS_HUMAN=1
@@ -827,6 +884,10 @@ while true; do
       echo 0 > /tmp/claude-task.exit
       echo "completed" > /tmp/claude-task.status
       EXIT_CODE=0
+    elif [ $TASK_TOKEN_LIMITED -eq 1 ]; then
+      echo 1 > /tmp/claude-task.exit
+      echo "token_limited" > /tmp/claude-task.status
+      EXIT_CODE=1
     elif [ $TASK_NEEDS_HUMAN -eq 1 ]; then
       echo 1 > /tmp/claude-task.exit
       echo "needs_human" > /tmp/claude-task.status
@@ -846,6 +907,10 @@ while true; do
     echo "=========================================="
     echo "  Task finished (exit: $EXIT_CODE)"
     if [ $TASK_DONE -eq 1 ]; then
+      echo "  Review iterations: $TOTAL_REVIEW_ITERATIONS"
+      echo "  Verify retries: $TOTAL_VERIFY_RETRIES"
+    elif [ $TASK_TOKEN_LIMITED -eq 1 ]; then
+      echo "  STATUS: SESSION TOKEN LIMIT — stack marked session_paused, Resume to continue"
       echo "  Review iterations: $TOTAL_REVIEW_ITERATIONS"
       echo "  Verify retries: $TOTAL_VERIFY_RETRIES"
     elif [ $TASK_NEEDS_HUMAN -eq 1 ]; then
