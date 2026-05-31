@@ -259,3 +259,167 @@ test.describe('Kanban column transitions (#388)', () => {
     });
   });
 });
+
+/**
+ * Regression tests for #403 — ticket must move to pr_open when the stack
+ * reaches pr_created via the agent/IPC path (not only via the UI optimistic move).
+ *
+ * The stacks:updated event must also trigger refreshBoardTickets so the renderer
+ * sees the column change without requiring a manual remount.
+ */
+const TICKET_403 = `kanban403-${Date.now()}`;
+const PROJECT_403 = `/tmp/kanban403-${Date.now()}`;
+const STACK_403 = `stack-403-${Date.now()}`;
+
+test.describe('Kanban column sync via setPullRequest (#403)', () => {
+  test('ticket moves from in_stack to pr_open when stack transitions to pr_created via IPC (not UI)', async ({ mainWindow }) => {
+    await mainWindow.waitForSelector('[data-testid="kanban-board"]', { timeout: 15000 });
+    await mainWindow.waitForFunction(
+      () => Boolean((window as unknown as { __useAppStore?: unknown }).__useAppStore),
+      { timeout: 15000 },
+    );
+
+    // Set the active project so the board renders for this project dir.
+    await mainWindow.evaluate(({ dir, name }) => {
+      const store = (window as unknown as {
+        __useAppStore: { setState: (s: Record<string, unknown>) => void };
+      }).__useAppStore;
+      store.setState({
+        projects: [{ id: 9403, name, directory: dir, added_at: '' }],
+        activeProjectId: 9403,
+        refinementSessions: [],
+        stacks: [],
+        moveTicketColumnError: null,
+      });
+    }, { dir: PROJECT_403, name: 'kanban-403-test' });
+
+    // Seed the ticket at in_stack via real IPC.
+    await mainWindow.evaluate(({ id, dir }) => {
+      return (window as unknown as {
+        sandstorm: { ticketBoard: { setColumn: (i: string, d: string, c: string) => Promise<void> } };
+      }).sandstorm.ticketBoard.setColumn(id, dir, 'in_stack');
+    }, { id: TICKET_403, dir: PROJECT_403 });
+
+    // Refresh the board so the renderer reflects the seeded row.
+    await mainWindow.evaluate((dir) => {
+      const store = (window as unknown as {
+        __useAppStore: { getState: () => { refreshBoardTickets: (d: string) => Promise<void> } };
+      }).__useAppStore;
+      return store.getState().refreshBoardTickets(dir);
+    }, PROJECT_403);
+
+    await assertColumn(mainWindow, 'in_stack', TICKET_403);
+
+    // Create a real stack record linked to this ticket. forceBypass skips the spec
+    // gate (ticket is already in in_stack, past spec_ready). createStack inserts the
+    // DB row synchronously before the IPC resolves; the Docker build runs in the
+    // background and fails gracefully since Docker is unavailable in the test env.
+    await mainWindow.evaluate(({ stackId, ticketId, dir }) => {
+      return (window as unknown as {
+        sandstorm: { stacks: { create: (opts: Record<string, unknown>) => Promise<unknown> } };
+      }).sandstorm.stacks.create({ name: stackId, projectDir: dir, ticket: ticketId, runtime: 'docker', forceBypass: true });
+    }, { stackId: STACK_403, ticketId: TICKET_403, dir: PROJECT_403 });
+
+    // Call stacks:setPr via IPC — the agent/CLI path, not the UI optimistic move.
+    // stackManager.setPullRequest() calls advanceTicketToPrOpenIfInStack() and
+    // notifyUpdate(), which broadcasts stacks:updated to the renderer. The App.tsx
+    // stacks:updated listener calls refreshBoardTickets(), advancing the card
+    // reactively without any manual refresh call.
+    await mainWindow.evaluate(({ stackId }) => {
+      return (window as unknown as {
+        sandstorm: { stacks: { setPr: (id: string, url: string, num: number) => Promise<void> } };
+      }).sandstorm.stacks.setPr(stackId, 'https://github.com/o/r/pull/403', 403);
+    }, { stackId: STACK_403 });
+
+    await assertColumn(mainWindow, 'pr_open', TICKET_403);
+    await assertNotInColumn(mainWindow, 'in_stack', TICKET_403);
+  });
+
+  test('ticket stays in merged when stack reaches pr_created (forward-only rule)', async ({ mainWindow }) => {
+    await mainWindow.waitForSelector('[data-testid="kanban-board"]', { timeout: 15000 });
+    await mainWindow.waitForFunction(
+      () => Boolean((window as unknown as { __useAppStore?: unknown }).__useAppStore),
+      { timeout: 15000 },
+    );
+
+    const MERGED_TICKET = `kanban403-merged-${Date.now()}`;
+
+    await mainWindow.evaluate(({ dir, name }) => {
+      const store = (window as unknown as {
+        __useAppStore: { setState: (s: Record<string, unknown>) => void };
+      }).__useAppStore;
+      store.setState({
+        projects: [{ id: 9404, name, directory: dir, added_at: '' }],
+        activeProjectId: 9404,
+        refinementSessions: [],
+        stacks: [],
+        moveTicketColumnError: null,
+      });
+    }, { dir: PROJECT_403, name: 'kanban-403-merged-test' });
+
+    // Seed the ticket at merged (the forward-only rule must not pull it back).
+    await mainWindow.evaluate(({ id, dir }) => {
+      return (window as unknown as {
+        sandstorm: { ticketBoard: { setColumn: (i: string, d: string, c: string) => Promise<void> } };
+      }).sandstorm.ticketBoard.setColumn(id, dir, 'merged');
+    }, { id: MERGED_TICKET, dir: PROJECT_403 });
+
+    // Refresh the board.
+    await mainWindow.evaluate((dir) => {
+      const store = (window as unknown as {
+        __useAppStore: { getState: () => { refreshBoardTickets: (d: string) => Promise<void> } };
+      }).__useAppStore;
+      return store.getState().refreshBoardTickets(dir);
+    }, PROJECT_403);
+
+    await assertColumn(mainWindow, 'merged', MERGED_TICKET);
+
+    const STACK_403_MERGED = `stack-403-merged-${Date.now()}`;
+
+    // Create a real stack record linked to the merged ticket. forceBypass skips
+    // the spec gate; the DB row is inserted synchronously before IPC resolves.
+    await mainWindow.evaluate(({ stackId, ticketId, dir }) => {
+      return (window as unknown as {
+        sandstorm: { stacks: { create: (opts: Record<string, unknown>) => Promise<unknown> } };
+      }).sandstorm.stacks.create({ name: stackId, projectDir: dir, ticket: ticketId, runtime: 'docker', forceBypass: true });
+    }, { stackId: STACK_403_MERGED, ticketId: MERGED_TICKET, dir: PROJECT_403 });
+
+    // Call stacks:setPr — the forward-only guard in advanceTicketToPrOpenIfInStack
+    // must be a no-op when the ticket is already in merged. notifyUpdate() fires
+    // stacks:updated which triggers refreshBoardTickets() via the App.tsx listener.
+    await mainWindow.evaluate(({ stackId }) => {
+      return (window as unknown as {
+        sandstorm: { stacks: { setPr: (id: string, url: string, num: number) => Promise<void> } };
+      }).sandstorm.stacks.setPr(stackId, 'https://github.com/o/r/pull/404', 404);
+    }, { stackId: STACK_403_MERGED });
+
+    // Wait for refreshStacks (called in the same stacks:updated listener as
+    // refreshBoardTickets) to populate the store with the updated stack pr_url.
+    // This confirms the listener fired and the board has been refreshed from DB.
+    await mainWindow.waitForFunction(({ stackId }) => {
+      const store = (window as unknown as {
+        __useAppStore: { getState: () => { stacks: Array<{ id: string; pr_url: string | null }> } };
+      }).__useAppStore;
+      return store.getState().stacks.some(
+        (s: { id: string; pr_url: string | null }) => s.id === stackId && s.pr_url !== null,
+      );
+    }, { stackId: STACK_403_MERGED });
+
+    await assertColumn(mainWindow, 'merged', MERGED_TICKET);
+    await assertNotInColumn(mainWindow, 'pr_open', MERGED_TICKET);
+
+    // Cleanup
+    await mainWindow.evaluate(() => {
+      const store = (window as unknown as {
+        __useAppStore: { setState: (s: Record<string, unknown>) => void };
+      }).__useAppStore;
+      store.setState({
+        projects: [],
+        activeProjectId: null,
+        stacks: [],
+        boardTickets: [],
+        moveTicketColumnError: null,
+      });
+    });
+  });
+});

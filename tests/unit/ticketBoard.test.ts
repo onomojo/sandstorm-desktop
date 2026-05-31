@@ -151,6 +151,80 @@ describe('tickets:create seeding behavior', () => {
   });
 });
 
+// --- advanceTicketToPrOpenIfInStack ---
+
+describe('registry.advanceTicketToPrOpenIfInStack', () => {
+  it('moves a ticket from in_stack to pr_open', () => {
+    registry.setBoardTicketColumn('t1', '/proj', 'in_stack');
+    registry.advanceTicketToPrOpenIfInStack('t1', '/proj');
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('pr_open');
+  });
+
+  it('leaves a merged ticket at merged (forward-only)', () => {
+    registry.setBoardTicketColumn('t1', '/proj', 'merged');
+    registry.advanceTicketToPrOpenIfInStack('t1', '/proj');
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('merged');
+  });
+
+  it('leaves a pr_open ticket at pr_open', () => {
+    registry.setBoardTicketColumn('t1', '/proj', 'pr_open');
+    registry.advanceTicketToPrOpenIfInStack('t1', '/proj');
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('pr_open');
+  });
+
+  it('is a no-op when the ticket does not exist in the board', () => {
+    registry.advanceTicketToPrOpenIfInStack('nonexistent', '/proj');
+    expect(registry.listBoardTickets('/proj')).toHaveLength(0);
+  });
+});
+
+// --- reconcilePrCreatedTickets (backfill) ---
+
+describe('registry.reconcilePrCreatedTickets', () => {
+  it('advances an in_stack ticket to pr_open when linked stack is pr_created', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'pr_created', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'in_stack');
+    registry.reconcilePrCreatedTickets();
+    const rows = registry.listBoardTickets('/proj');
+    expect(rows[0].column).toBe('pr_open');
+  });
+
+  it('leaves a merged ticket at merged (forward-only)', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'pr_created', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'merged');
+    registry.reconcilePrCreatedTickets();
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('merged');
+  });
+
+  it('leaves a pr_open ticket at pr_open', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'pr_created', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'pr_open');
+    registry.reconcilePrCreatedTickets();
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('pr_open');
+  });
+
+  it('skips stacks with no linked ticket', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: null, branch: null, description: null, status: 'pr_created', runtime: 'docker' });
+    registry.reconcilePrCreatedTickets();
+    expect(registry.listBoardTickets('/proj')).toHaveLength(0);
+  });
+
+  it('skips stacks not in pr_created status', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'in_stack' as any, runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'in_stack');
+    registry.reconcilePrCreatedTickets();
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('in_stack');
+  });
+
+  it('is idempotent — calling twice does not break anything', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'pr_created', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'in_stack');
+    registry.reconcilePrCreatedTickets();
+    registry.reconcilePrCreatedTickets();
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('pr_open');
+  });
+});
+
 // --- deleteClosedEarlyColumnTickets ---
 
 describe('deleteClosedEarlyColumnTickets', () => {

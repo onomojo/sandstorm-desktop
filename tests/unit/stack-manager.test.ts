@@ -2351,3 +2351,69 @@ describe('tailBytes', () => {
     expect(LOGS_TOTAL_MAX_BYTES).toBe(32768);
   });
 });
+
+describe('StackManager.setPullRequest → board sync', () => {
+  let registry: Registry;
+  let manager: StackManager;
+  let dbPath: string;
+
+  beforeEach(async () => {
+    dbPath = makeTempDb();
+    registry = await Registry.create(dbPath);
+    const runtime = createMockRuntime();
+    const portAllocator = new PortAllocator(registry, [40000, 40099]);
+    const taskWatcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 100 });
+    manager = new StackManager(registry, portAllocator, taskWatcher, runtime, runtime, '/fake/cli');
+  });
+
+  afterEach(() => {
+    registry.close();
+    cleanupDb(dbPath);
+  });
+
+  it('advances a linked ticket from in_stack to pr_open', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'pushed', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'in_stack');
+
+    manager.setPullRequest('s1', 'https://github.com/o/r/pull/1', 1);
+
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('pr_open');
+  });
+
+  it('leaves a merged ticket at merged (forward-only rule)', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'pushed', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'merged');
+
+    manager.setPullRequest('s1', 'https://github.com/o/r/pull/1', 1);
+
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('merged');
+  });
+
+  it('leaves a pr_open ticket at pr_open', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'pushed', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'pr_open');
+
+    manager.setPullRequest('s1', 'https://github.com/o/r/pull/1', 1);
+
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('pr_open');
+  });
+
+  it('makes no board change when the stack has no linked ticket', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: null, branch: null, description: null, status: 'pushed', runtime: 'docker' });
+
+    manager.setPullRequest('s1', 'https://github.com/o/r/pull/1', 1);
+
+    expect(registry.listBoardTickets('/proj')).toHaveLength(0);
+  });
+
+  it('also persists the pr_url and pr_number on the stack', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: null, branch: null, description: null, status: 'pushed', runtime: 'docker' });
+
+    manager.setPullRequest('s1', 'https://github.com/o/r/pull/42', 42);
+
+    const stack = registry.getStack('s1')!;
+    expect(stack.pr_url).toBe('https://github.com/o/r/pull/42');
+    expect(stack.pr_number).toBe(42);
+    expect(stack.status).toBe('pr_created');
+  });
+});
