@@ -604,7 +604,6 @@ declare global {
           needsMigration: boolean;
           missingVerifyScript?: boolean;
           missingServiceLabels?: boolean;
-          missingSpecQualityGate?: boolean;
           legacyPortMappings?: boolean;
           ticketProviderUnconfigured?: boolean;
         }>;
@@ -693,12 +692,6 @@ declare global {
         deleteSkill: (projectDir: string, name: string) => Promise<void>;
         getSettings: (projectDir: string) => Promise<string>;
         saveSettings: (projectDir: string, content: string) => Promise<void>;
-      };
-      specGate: {
-        get: (projectDir: string) => Promise<string>;
-        save: (projectDir: string, content: string) => Promise<void>;
-        getDefault: () => Promise<string>;
-        ensure: (projectDir: string) => Promise<boolean>;
       };
       reviewPrompt: {
         getDefault: () => Promise<string>;

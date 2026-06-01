@@ -4,7 +4,6 @@ interface MigrationModalProps {
   projectDir: string;
   missingVerifyScript: boolean;
   missingServiceLabels: boolean;
-  missingSpecQualityGate?: boolean;
   legacyPortMappings?: boolean;
   ticketProviderUnconfigured?: boolean;
   onComplete: () => void;
@@ -15,7 +14,6 @@ export function MigrationModal({
   projectDir,
   missingVerifyScript,
   missingServiceLabels,
-  missingSpecQualityGate,
   legacyPortMappings,
   ticketProviderUnconfigured,
   onComplete,
@@ -23,28 +21,21 @@ export function MigrationModal({
 }: MigrationModalProps) {
   const [verifyScript, setVerifyScript] = useState('');
   const [serviceDescriptions, setServiceDescriptions] = useState<Record<string, string>>({});
-  const [specQualityGate, setSpecQualityGate] = useState('');
   const [ticketProvider, setTicketProvider] = useState<'github' | 'jira'>('github');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const loadVerify = window.sandstorm.projects.autoDetectVerify(projectDir);
-    const loadGate = missingSpecQualityGate
-      ? window.sandstorm.specGate.getDefault()
-      : Promise.resolve('');
-
-    Promise.all([loadVerify, loadGate]).then(([verifyResult, gateContent]) => {
+    window.sandstorm.projects.autoDetectVerify(projectDir).then((verifyResult) => {
       setVerifyScript(verifyResult.verifyScript);
       setServiceDescriptions(verifyResult.serviceDescriptions);
-      setSpecQualityGate(gateContent);
       setLoading(false);
     }).catch((err) => {
       setError(String(err));
       setLoading(false);
     });
-  }, [projectDir, missingSpecQualityGate]);
+  }, [projectDir]);
 
   const handleSave = async () => {
     setSaving(true);
@@ -58,9 +49,6 @@ export function MigrationModal({
       if (!result.success) {
         setError(result.error || 'Failed to save migration');
         return;
-      }
-      if (missingSpecQualityGate && specQualityGate) {
-        await window.sandstorm.specGate.save(projectDir, specQualityGate);
       }
       if (legacyPortMappings) {
         const portResult = await window.sandstorm.ports.cleanupLegacy(projectDir);
@@ -87,7 +75,6 @@ export function MigrationModal({
   const needsItems = [
     missingVerifyScript && 'a verify script',
     missingServiceLabels && 'service descriptions',
-    missingSpecQualityGate && 'a spec quality gate',
     legacyPortMappings && 'legacy port mapping cleanup',
     ticketProviderUnconfigured && 'a ticket provider',
   ].filter(Boolean) as string[];
@@ -157,26 +144,6 @@ export function MigrationModal({
                       </div>
                     ))}
                   </div>
-                </div>
-              )}
-
-              {/* Spec quality gate editor */}
-              {missingSpecQualityGate && (
-                <div>
-                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-1.5">
-                    Spec Quality Gate (.sandstorm/spec-quality-gate.md)
-                  </label>
-                  <p className="text-[11px] text-sandstorm-muted mb-2">
-                    Defines what a "ready" ticket looks like before agent dispatch.
-                  </p>
-                  <textarea
-                    value={specQualityGate}
-                    onChange={(e) => setSpecQualityGate(e.target.value)}
-                    rows={12}
-                    className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 text-xs font-mono text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent resize-y"
-                    spellCheck={false}
-                    data-testid="spec-quality-gate-editor"
-                  />
                 </div>
               )}
 

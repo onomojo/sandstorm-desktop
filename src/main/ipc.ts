@@ -52,13 +52,6 @@ import {
   hasLegacyPortMappings,
   cleanupLegacyPorts,
 } from './compose-generator';
-import {
-  getSpecQualityGate,
-  saveSpecQualityGate,
-  isSpecQualityGateMissing,
-  ensureSpecQualityGate,
-  getDefaultSpecQualityGate,
-} from './spec-quality-gate';
 import { getDefaultReviewPrompt } from './review-prompt';
 import {
   defaultSpecGateDeps,
@@ -415,9 +408,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         fs.writeFileSync(verifyPath, verifyLines.join('\n') + '\n', { mode: 0o755 });
       }
 
-      // Generate spec quality gate with default criteria
-      saveSpecQualityGate(directory, getDefaultSpecQualityGate());
-
       return { success: true, skippedFiles: skippedFiles.length > 0 ? skippedFiles : undefined };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -466,7 +456,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         try { fs.unlinkSync(path.join(scriptsDir, scriptName)); } catch { /* missing = no-op */ }
       }
 
-      const missingSpecQualityGate = isSpecQualityGateMissing(directory);
       const legacyPortMappings = hasLegacyPortMappings(directory);
       const ticketProviderUnconfigured = registry.getProjectTicketConfig(directory) === null;
 
@@ -474,12 +463,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         needsMigration:
           !hasVerifyScript ||
           !hasServiceLabels ||
-          missingSpecQualityGate ||
           legacyPortMappings ||
           ticketProviderUnconfigured,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
-        missingSpecQualityGate,
         networksMigrated,
         legacyPortMappings,
         ticketProviderUnconfigured,
@@ -546,9 +533,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         if (!fs.existsSync(verifyPath)) {
           fs.writeFileSync(verifyPath, verifyScript, { mode: 0o755 });
         }
-
-        // Ensure spec quality gate exists
-        ensureSpecQualityGate(directory);
 
         // Update compose file with service labels if needed
         const composePath = path.join(sandstormDir, 'docker-compose.yml');
@@ -819,27 +803,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       saveCustomSettings(projectDir, content);
     }
   );
-
-  // --- Spec Quality Gate ---
-
-  ipcMain.handle('specGate:get', async (_event, projectDir: string) => {
-    return getSpecQualityGate(projectDir);
-  });
-
-  ipcMain.handle(
-    'specGate:save',
-    async (_event, projectDir: string, content: string) => {
-      saveSpecQualityGate(projectDir, content);
-    }
-  );
-
-  ipcMain.handle('specGate:getDefault', async () => {
-    return getDefaultSpecQualityGate();
-  });
-
-  ipcMain.handle('specGate:ensure', async (_event, projectDir: string) => {
-    return ensureSpecQualityGate(projectDir);
-  });
 
   // --- Review Prompt ---
 
