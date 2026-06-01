@@ -1231,6 +1231,81 @@ describe('RefineTicketDialog', () => {
     });
   });
 
+  describe('answer persistence (#429)', () => {
+    it('calls postAnswers with combined answers before specRefineAsync when submitting', async () => {
+      const user = userEvent.setup();
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'ready', phase: 'check', startedAt: Date.now(),
+          result: {
+            passed: false,
+            questions: SINGLE_OPT_QUESTION,
+            gateSummary: 'Gate=FAIL, questions=1',
+            ticketUrl: null, cached: false,
+          },
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+
+      const callOrder: string[] = [];
+      api.tickets.postAnswers = vi.fn().mockImplementation(async () => {
+        callOrder.push('postAnswers');
+      });
+      api.tickets.specRefineAsync = vi.fn().mockImplementation(async () => {
+        callOrder.push('specRefineAsync');
+      });
+
+      render(<RefineTicketDialog />);
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      fireEvent.click(screen.getByTestId('refine-submit-answers'));
+
+      await waitFor(() => {
+        expect(api.tickets.postAnswers).toHaveBeenCalled();
+        expect(api.tickets.specRefineAsync).toHaveBeenCalled();
+      });
+
+      // Verify postAnswers received ticketId, projectDir, and the combined answers body
+      const postCall = (api.tickets.postAnswers as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(postCall[0]).toBe('310');
+      expect(postCall[1]).toBe('/proj');
+      expect(postCall[2]).toContain('Q1: What is X?');
+      expect(postCall[2]).toContain('Selected: Option A');
+
+      // Verify postAnswers was called before specRefineAsync
+      expect(callOrder[0]).toBe('postAnswers');
+      expect(callOrder[1]).toBe('specRefineAsync');
+    });
+
+    it('still calls specRefineAsync even if postAnswers fails', async () => {
+      const user = userEvent.setup();
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'ready', phase: 'check', startedAt: Date.now(),
+          result: {
+            passed: false,
+            questions: SINGLE_OPT_QUESTION,
+            gateSummary: 'Gate=FAIL, questions=1',
+            ticketUrl: null, cached: false,
+          },
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+
+      api.tickets.postAnswers = vi.fn().mockRejectedValue(new Error('network error'));
+      api.tickets.specRefineAsync = vi.fn().mockResolvedValue(undefined);
+
+      render(<RefineTicketDialog />);
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      fireEvent.click(screen.getByTestId('refine-submit-answers'));
+
+      await waitFor(() => {
+        expect(api.tickets.specRefineAsync).toHaveBeenCalled();
+      });
+    });
+  });
+
   describe('upsertRefinementSession clears streamingOutput on completion', () => {
     it('clears streamingOutput when status transitions to ready', () => {
       useAppStore.setState({

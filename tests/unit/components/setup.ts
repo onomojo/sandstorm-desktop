@@ -162,6 +162,8 @@ export function mockSandstormApi() {
       }),
       specCheckAsync: vi.fn().mockResolvedValue({ sessionId: 'test-session-id' }),
       specRefineAsync: vi.fn().mockResolvedValue(undefined),
+      retryRefinementAsync: vi.fn().mockResolvedValue({ sessionId: 'retry-session-id' }),
+      postAnswers: vi.fn().mockResolvedValue(undefined),
       cancelRefinement: vi.fn().mockResolvedValue(undefined),
       listRefinements: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue({

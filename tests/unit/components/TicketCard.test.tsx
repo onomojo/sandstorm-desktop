@@ -225,7 +225,7 @@ describe('TicketCard', () => {
     });
 
     await waitFor(() => {
-      expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('42', PROJECT_DIR);
+      expect(api.tickets.retryRefinementAsync).toHaveBeenCalledWith('sess-err-bg', '42', PROJECT_DIR);
       expect(useAppStore.getState().showRefineTicketDialog).toBe(false);
     });
   });
@@ -552,6 +552,82 @@ describe('TicketCard', () => {
     expect(useAppStore.getState().currentRefinementSessionId).toBe('sess-answer');
     // No new gate run
     expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
+  });
+
+  it('refining: inert state (ready + not-passed + no questions + no error) — shows Retry button', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-inert',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'ready',
+        phase: 'check',
+        result: {
+          passed: false,
+          questions: [],
+          gateSummary: '',
+          ticketUrl: null,
+          cached: false,
+        },
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-retry-42')).toBeDefined();
+    expect(screen.queryByTestId('ticket-card-answer-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-start-refine-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-error-badge-42')).toBeNull();
+  });
+
+  it('refining: inert state — clicking Retry invokes retryRefinementForTicket', async () => {
+    const retrySpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-inert-click',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'ready',
+        phase: 'refine',
+        result: {
+          passed: false,
+          questions: [],
+          gateSummary: '',
+          ticketUrl: null,
+          cached: false,
+        },
+        startedAt: 0,
+      }],
+      retryRefinementForTicket: retrySpy,
+    } as any);
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-retry-42'));
+    await waitFor(() => expect(retrySpy).toHaveBeenCalledWith('42', PROJECT_DIR));
+  });
+
+  it('refining: inert state regression — blank card before fix would have no actionable element', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-regression',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'ready',
+        phase: 'check',
+        result: {
+          passed: false,
+          questions: [],
+          gateSummary: 'Gate=FAIL',
+          ticketUrl: null,
+          cached: false,
+        },
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    // After fix: Retry button is present
+    expect(screen.getByTestId('ticket-card-retry-42')).toBeDefined();
+    // No other actionable buttons
+    expect(screen.queryByTestId('ticket-card-answer-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-start-refine-42')).toBeNull();
   });
 
   it('refining: shows questions awaiting count when session has questions', () => {

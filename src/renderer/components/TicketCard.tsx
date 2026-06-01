@@ -144,6 +144,16 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               Retry
             </button>
           )}
+          {/* Inert state: ready + not-passed + no questions + no error — offer to retry */}
+          {!showErrorState && refinementSession?.status === 'ready' && !refinementSession?.result?.passed && questionsAwaiting === 0 && !refinementSession?.result?.error && (
+            <button
+              onClick={() => void retryRefinementForTicket(ticket.ticket_id, ticket.project_dir)}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors font-medium"
+              data-testid={`ticket-card-retry-${ticket.ticket_id}`}
+            >
+              Retry
+            </button>
+          )}
           {/* Ready with questions and no error: answer questions */}
           {!showErrorState && refinementSession?.status === 'ready' && questionsAwaiting > 0 && (
             <button

@@ -204,6 +204,16 @@ export function RefineTicketDialog() {
     setLocalError(null);
     // Update session optimistically to 'running' while we wait
     upsertRefinementSession({ ...session, status: 'running', phase: 'refine' });
+    // Persist answers to comments (best-effort) so phase-aware Retry can resume.
+    if (combined.trim()) {
+      await window.sandstorm.tickets.postAnswers(
+        session.ticketId,
+        projectDir,
+        combined,
+      ).catch(() => {
+        // non-fatal: Retry falls back to check if no answer comments found
+      });
+    }
     await window.sandstorm.tickets.specRefineAsync(
       session.id,
       session.ticketId,

@@ -745,6 +745,8 @@ declare global {
         specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<SpecGateResult>;
         specCheckAsync: (ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
         specRefineAsync: (sessionId: string, ticketId: string, projectDir: string, userAnswers: string) => Promise<void>;
+        retryRefinementAsync: (sessionId: string, ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
+        postAnswers: (ticketId: string, projectDir: string, answersBody: string) => Promise<void>;
         cancelRefinement: (sessionId: string) => Promise<void>;
         listRefinements: () => Promise<RefinementSession[]>;
         create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
@@ -1381,8 +1383,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     const session = get().refinementSessions.find(
       (s) => s.ticketId === ticketId && s.projectDir === projectDir,
     );
+    // Remove old session from store — retryRefinementAsync cancels it in main.
     if (session) {
-      await window.sandstorm.tickets.cancelRefinement(session.id).catch(() => {});
       get().removeRefinementSession(session.id);
     }
     // Clear any previous start error and mark in-flight during latency window
@@ -1394,7 +1396,11 @@ export const useAppStore = create<AppState>((set, get) => ({
       };
     });
     try {
-      await window.sandstorm.tickets.specCheckAsync(ticketId, projectDir);
+      await window.sandstorm.tickets.retryRefinementAsync(
+        session?.id ?? '',
+        ticketId,
+        projectDir,
+      );
       set((state) => {
         const { [key]: _, ...rest } = state.refineInFlight;
         return { refineInFlight: rest };
