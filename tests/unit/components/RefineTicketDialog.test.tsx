@@ -1024,6 +1024,174 @@ describe('RefineTicketDialog', () => {
     });
   });
 
+  describe('recommended option badge and preselection (#421)', () => {
+    const RECOMMENDED_QUESTIONS: RefineQuestion[] = [
+      {
+        id: 'q1',
+        question: 'What is X?',
+        options: [
+          { id: 'a', label: 'Option A', recommended: true },
+          { id: 'b', label: 'Option B' },
+        ],
+      },
+      {
+        id: 'q2',
+        question: 'What is Y?',
+        options: [
+          { id: 'a', label: 'Yes' },
+          { id: 'b', label: 'No' },
+        ],
+      },
+    ];
+
+    const MULTI_RECOMMENDED_QUESTION: RefineQuestion[] = [
+      {
+        id: 'q1',
+        question: 'Pick one?',
+        options: [
+          { id: 'a', label: 'Option A', recommended: true },
+          { id: 'b', label: 'Option B', recommended: true },
+        ],
+      },
+    ];
+
+    function setupFailState(questions: RefineQuestion[]) {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'ready', phase: 'check', startedAt: Date.now(),
+          result: {
+            passed: false,
+            questions,
+            gateSummary: `Gate=FAIL, questions=${questions.length}`,
+            ticketUrl: null, cached: false,
+          },
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+    }
+
+    it('renders Recommended badge next to the flagged option only', () => {
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+      expect(screen.getByTestId('refine-option-recommended-0-a')).toBeDefined();
+      expect(screen.queryByTestId('refine-option-recommended-0-b')).toBeNull();
+      expect(screen.queryByTestId('refine-option-recommended-1-a')).toBeNull();
+      expect(screen.queryByTestId('refine-option-recommended-1-b')).toBeNull();
+    });
+
+    it('preselects the recommended option on first render', () => {
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+      const radioA = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      const radioB = screen.getByTestId('refine-option-0-b') as HTMLInputElement;
+      expect(radioA.checked).toBe(true);
+      expect(radioB.checked).toBe(false);
+    });
+
+    it('no preselection when no option is recommended', () => {
+      setupFailState(MULTI_OPT_QUESTIONS);
+      render(<RefineTicketDialog />);
+      const radios = screen.getAllByRole('radio') as HTMLInputElement[];
+      expect(radios.every((r) => !r.checked)).toBe(true);
+    });
+
+    it('submit stays disabled when some questions lack a recommendation (unanswered)', () => {
+      // RECOMMENDED_QUESTIONS: q1 has recommended option (preselected), q2 has none (null)
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+      const submit = screen.getByTestId('refine-submit-answers');
+      // q2 is unanswered — submit must be disabled despite q1 being preselected
+      expect(submit.hasAttribute('disabled')).toBe(true);
+    });
+
+    it('submit is enabled when all questions have a recommendation preselected', async () => {
+      const allRecommended: RefineQuestion[] = [
+        {
+          id: 'q1', question: 'Q1?',
+          options: [
+            { id: 'a', label: 'A', recommended: true },
+            { id: 'b', label: 'B' },
+          ],
+        },
+        {
+          id: 'q2', question: 'Q2?',
+          options: [
+            { id: 'a', label: 'Yes' },
+            { id: 'b', label: 'No', recommended: true },
+          ],
+        },
+      ];
+      setupFailState(allRecommended);
+      render(<RefineTicketDialog />);
+      const submit = screen.getByTestId('refine-submit-answers');
+      expect(submit.hasAttribute('disabled')).toBe(false);
+    });
+
+    it('escape hatch: clicking the already-selected recommended option deselects it', async () => {
+      const user = userEvent.setup();
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+
+      const radioA = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      expect(radioA.checked).toBe(true);
+
+      // Click the already-selected radio — should toggle back to null
+      await user.click(radioA);
+      expect(radioA.checked).toBe(false);
+    });
+
+    it('escape hatch: submit is disabled after deselecting the only recommended answer with no text', async () => {
+      const user = userEvent.setup();
+      const oneQuestion: RefineQuestion[] = [
+        {
+          id: 'q1', question: 'Q?',
+          options: [
+            { id: 'a', label: 'A', recommended: true },
+            { id: 'b', label: 'B' },
+          ],
+        },
+      ];
+      setupFailState(oneQuestion);
+      render(<RefineTicketDialog />);
+
+      const submit = screen.getByTestId('refine-submit-answers');
+      expect(submit.hasAttribute('disabled')).toBe(false);
+
+      // Deselect the recommended option
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      expect(submit.hasAttribute('disabled')).toBe(true);
+    });
+
+    it('clicking a different option after deselect selects that option', async () => {
+      const user = userEvent.setup();
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+
+      const radioA = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      const radioB = screen.getByTestId('refine-option-0-b') as HTMLInputElement;
+      expect(radioA.checked).toBe(true);
+
+      // Click B directly — should select B and deselect A
+      await user.click(radioB);
+      expect(radioB.checked).toBe(true);
+      expect(radioA.checked).toBe(false);
+    });
+
+    it('when multiple options are recommended, only the first gets badge and preselection', () => {
+      setupFailState(MULTI_RECOMMENDED_QUESTION);
+      render(<RefineTicketDialog />);
+
+      expect(screen.getByTestId('refine-option-recommended-0-a')).toBeDefined();
+      expect(screen.queryByTestId('refine-option-recommended-0-b')).toBeNull();
+
+      const radioA = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      const radioB = screen.getByTestId('refine-option-0-b') as HTMLInputElement;
+      expect(radioA.checked).toBe(true);
+      expect(radioB.checked).toBe(false);
+    });
+  });
+
   describe('upsertRefinementSession clears streamingOutput on completion', () => {
     it('clears streamingOutput when status transitions to ready', () => {
       useAppStore.setState({

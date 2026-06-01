@@ -761,6 +761,7 @@ declare global {
 export interface RefineQuestionOption {
   id: string;
   label: string;
+  recommended?: boolean;
 }
 
 export interface RefineQuestion {

@@ -60,6 +60,83 @@ const FAIL_REPORT_JSON = `## Spec Quality Gate: FAIL
 | Specificity | FAIL |
 `;
 
+const FAIL_REPORT_JSON_RECOMMENDED = `## Spec Quality Gate: FAIL
+
+### Questions
+
+\`\`\`json
+[
+  {
+    "id": "q1",
+    "question": "What does fast mean?",
+    "options": [
+      { "id": "a", "label": "Under 100ms", "recommended": true },
+      { "id": "b", "label": "Under 1s" }
+    ]
+  },
+  {
+    "id": "q2",
+    "question": "Cache strategy?",
+    "options": [
+      { "id": "a", "label": "Full body" },
+      { "id": "b", "label": "Hash only", "recommended": true }
+    ]
+  }
+]
+\`\`\`
+
+### Results
+| Criterion | Result |
+|-----------|--------|
+| Specificity | FAIL |
+`;
+
+const FAIL_REPORT_JSON_MALFORMED_RECOMMENDED = `## Spec Quality Gate: FAIL
+
+### Questions
+
+\`\`\`json
+[
+  {
+    "id": "q1",
+    "question": "Cache strategy?",
+    "options": [
+      { "id": "a", "label": "Full body", "recommended": "true" },
+      { "id": "b", "label": "Hash only", "recommended": 1 }
+    ]
+  }
+]
+\`\`\`
+
+### Results
+| Criterion | Result |
+|-----------|--------|
+| Specificity | FAIL |
+`;
+
+const FAIL_REPORT_JSON_MULTI_RECOMMENDED = `## Spec Quality Gate: FAIL
+
+### Questions
+
+\`\`\`json
+[
+  {
+    "id": "q1",
+    "question": "Pick one?",
+    "options": [
+      { "id": "a", "label": "Option A", "recommended": true },
+      { "id": "b", "label": "Option B", "recommended": true }
+    ]
+  }
+]
+\`\`\`
+
+### Results
+| Criterion | Result |
+|-----------|--------|
+| Specificity | FAIL |
+`;
+
 const GITHUB_CONFIG: ProjectTicketConfig = { provider: 'github' };
 
 function makeDeps(overrides: Partial<SpecGateDeps> = {}): SpecGateDeps {
@@ -157,6 +234,37 @@ describe('extractQuestions', () => {
     const questions = extractQuestions(r);
     expect(questions).toHaveLength(1);
     expect(questions[0].options).toEqual([]);
+  });
+
+  it('preserves recommended:true flag on options', () => {
+    const questions = extractQuestions(FAIL_REPORT_JSON_RECOMMENDED);
+    expect(questions[0].options[0]).toEqual({ id: 'a', label: 'Under 100ms', recommended: true });
+    expect(questions[0].options[1]).toEqual({ id: 'b', label: 'Under 1s' });
+    expect(questions[1].options[0]).toEqual({ id: 'a', label: 'Full body' });
+    expect(questions[1].options[1]).toEqual({ id: 'b', label: 'Hash only', recommended: true });
+  });
+
+  it('ignores non-boolean recommended values (string, number)', () => {
+    const questions = extractQuestions(FAIL_REPORT_JSON_MALFORMED_RECOMMENDED);
+    expect(questions[0].options[0]).toEqual({ id: 'a', label: 'Full body' });
+    expect(questions[0].options[1]).toEqual({ id: 'b', label: 'Hash only' });
+    expect(questions[0].options[0].recommended).toBeUndefined();
+    expect(questions[0].options[1].recommended).toBeUndefined();
+  });
+
+  it('preserves all recommended flags when multiple options are flagged (UI applies first-only rule)', () => {
+    const questions = extractQuestions(FAIL_REPORT_JSON_MULTI_RECOMMENDED);
+    expect(questions[0].options[0].recommended).toBe(true);
+    expect(questions[0].options[1].recommended).toBe(true);
+  });
+
+  it('options without recommended field have no recommended property', () => {
+    const questions = extractQuestions(FAIL_REPORT_JSON);
+    for (const q of questions) {
+      for (const opt of q.options) {
+        expect(opt.recommended).toBeUndefined();
+      }
+    }
   });
 });
 
