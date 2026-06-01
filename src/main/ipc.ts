@@ -89,6 +89,8 @@ import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
 import { listTicketsWithConfig } from './control-plane/ticket-lister';
+import { listTicketComments, postComment } from './control-plane/ticket-comments';
+import { getLatestUserAnswers, ANSWER_COMMENT_MARKER } from './scheduler/refine-to-comments';
 import { KANBAN_COLUMNS } from '../shared/kanban';
 
 // Set __sandstorm at module-load time so app.evaluate() works immediately
@@ -1217,6 +1219,52 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   ipcMain.handle('tickets:listRefinements', () => {
     return Array.from(activeRefinements.values()).map((e) => e.session);
   });
+
+  ipcMain.handle(
+    'tickets:retryRefinementAsync',
+    async (_event, sessionId: string, ticketId: string, projectDir: string) => {
+      // Read the existing session to determine phase before cancelling it.
+      const existingEntry = sessionId ? activeRefinements.get(sessionId) : undefined;
+      const existingSession = existingEntry?.session;
+
+      // Cancel the existing session internally (without sending a cancelled event
+      // to the renderer, since we are immediately replacing it).
+      if (existingEntry) {
+        existingEntry.cancel?.();
+        activeRefinements.delete(sessionId);
+        deleteRefinement(sessionId);
+      }
+
+      // Determine whether to resume from refine phase or restart from check.
+      let phase: 'check' | 'refine' = 'check';
+      let userAnswers: string | undefined;
+
+      if (existingSession?.phase === 'refine') {
+        try {
+          const comments = await listTicketComments(ticketId, projectDir);
+          const answers = getLatestUserAnswers(comments);
+          if (answers) {
+            phase = 'refine';
+            userAnswers = answers;
+          }
+        } catch {
+          // fall through to check
+        }
+      }
+
+      const newSessionId = startRefinementAsync(ticketId, projectDir, null, phase, userAnswers);
+      return { sessionId: newSessionId };
+    },
+  );
+
+  ipcMain.handle(
+    'tickets:postAnswers',
+    async (_event, ticketId: string, projectDir: string, answersBody: string) => {
+      if (!answersBody.trim()) return;
+      const body = `${ANSWER_COMMENT_MARKER}\n\n${answersBody}`;
+      await postComment(ticketId, projectDir, body);
+    },
+  );
 
   ipcMain.handle(
     'tickets:create',

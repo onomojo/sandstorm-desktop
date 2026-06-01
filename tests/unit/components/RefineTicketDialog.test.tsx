@@ -491,6 +491,63 @@ describe('RefineTicketDialog', () => {
       render(<RefineTicketDialog />);
       expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
     });
+
+    it('opening via Answer path (existing session, no prefill) does not call specCheckAsync', async () => {
+      useAppStore.setState({
+        refineTicketPrefill: null,
+        currentRefinementSessionId: 'sess-answer',
+        refinementSessions: [{
+          id: 'sess-answer',
+          ticketId: '42',
+          projectDir: '/proj',
+          status: 'ready' as const,
+          phase: 'check' as const,
+          result: {
+            passed: false,
+            questions: [{ id: 'q1', question: 'Q?', options: [] }],
+            gateSummary: '',
+            ticketUrl: null,
+            cached: false,
+          },
+          startedAt: 0,
+        }],
+      });
+
+      render(<RefineTicketDialog />);
+
+      await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+
+      expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
+    });
+
+    it('re-refinement Run-Gate path still calls specCheckAsync', async () => {
+      useAppStore.setState({
+        refineTicketPrefill: null,
+        currentRefinementSessionId: 'sess-ready',
+        refinementSessions: [{
+          id: 'sess-ready',
+          ticketId: '310',
+          projectDir: '/proj',
+          status: 'ready' as const,
+          phase: 'check' as const,
+          result: {
+            passed: false,
+            questions: [],
+            gateSummary: 'Gate=FAIL, questions=0',
+            ticketUrl: null,
+            cached: false,
+          },
+          startedAt: 0,
+        }],
+      });
+
+      render(<RefineTicketDialog />);
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => {
+        expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('310', '/proj');
+      });
+    });
   });
 
   describe('elapsed timer (#370)', () => {
@@ -971,14 +1028,12 @@ describe('RefineTicketDialog', () => {
     });
   });
 
-  describe('openRefineDialogFromCard preserves previousColumn through prefill (#393)', () => {
-    // The card-click path moves the ticket to 'refining' BEFORE the dialog mounts.
-    // The dialog's prefill effect then re-resolves and would see 'refining' as the
-    // current column — without the fix in commitRefinementContext, that would
-    // overwrite _refineDialogContext.previousColumn with 'refining' and a
-    // subsequent close-without-session would revert to 'refining' instead of
-    // the real previous column ('backlog'). This test guards against that.
-    it('closes-without-session reverts the ticket to the original column (not refining)', async () => {
+  describe('openRefineDialogFromCard background flow (#424)', () => {
+    // With the background refine flow, clicking Refine on a backlog card:
+    // - moves the ticket to 'refining' optimistically
+    // - starts the gate via specCheckAsync WITHOUT opening the dialog
+    // - dialog is only opened when the user clicks "Answer" on the refining card
+    it('starts gate in background without opening dialog, stashes _refineDialogContext', async () => {
       useAppStore.setState({
         boardTickets: [
           { ticket_id: '42', project_dir: '/proj', column: 'backlog', title: 'T', updated_at: '' },
@@ -988,38 +1043,265 @@ describe('RefineTicketDialog', () => {
         refineTicketPrefill: null,
         currentRefinementSessionId: null,
         _refineDialogContext: null,
+        refineInFlight: {},
+        refineStartErrors: {},
       });
 
-      // Simulate the kanban card click — opens dialog AND stashes the real previousColumn.
       useAppStore.getState().openRefineDialogFromCard('42', '/proj', 'backlog');
 
-      // Sanity: dialog open, prefill primed, context recorded with 'backlog'.
-      expect(useAppStore.getState().showRefineTicketDialog).toBe(true);
-      expect(useAppStore.getState().refineTicketPrefill).toBe('42');
+      // Dialog is NOT opened — backgrounding path suppresses modal
+      expect(useAppStore.getState().showRefineTicketDialog).toBe(false);
+      expect(useAppStore.getState().refineTicketPrefill).toBeNull();
+
+      // Context is stashed with the real previous column for potential Answer flow
       expect(useAppStore.getState()._refineDialogContext?.previousColumn).toBe('backlog');
 
-      render(<RefineTicketDialog />);
-
-      // The prefill effect should have run specCheckAsync, but more importantly
-      // the stashed context must still point at 'backlog' — NOT have been
-      // overwritten by the dialog's own commitRefinementContext('…','refining').
+      // Gate was started via specCheckAsync
       await waitFor(() => {
         expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('42', '/proj');
       });
-      expect(useAppStore.getState()._refineDialogContext?.previousColumn).toBe('backlog');
+    });
+  });
 
-      // No session was registered (mock specCheckAsync only returns sessionId, no upsert).
-      expect(useAppStore.getState().refinementSessions).toHaveLength(0);
+  describe('recommended option badge and preselection (#421)', () => {
+    const RECOMMENDED_QUESTIONS: RefineQuestion[] = [
+      {
+        id: 'q1',
+        question: 'What is X?',
+        options: [
+          { id: 'a', label: 'Option A', recommended: true },
+          { id: 'b', label: 'Option B' },
+        ],
+      },
+      {
+        id: 'q2',
+        question: 'What is Y?',
+        options: [
+          { id: 'a', label: 'Yes' },
+          { id: 'b', label: 'No' },
+        ],
+      },
+    ];
 
-      // User dismisses the dialog without a session — must revert to 'backlog'.
-      fireEvent.click(screen.getByLabelText('Close'));
+    const MULTI_RECOMMENDED_QUESTION: RefineQuestion[] = [
+      {
+        id: 'q1',
+        question: 'Pick one?',
+        options: [
+          { id: 'a', label: 'Option A', recommended: true },
+          { id: 'b', label: 'Option B', recommended: true },
+        ],
+      },
+    ];
 
-      await waitFor(() => {
-        expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', '/proj', 'backlog');
+    function setupFailState(questions: RefineQuestion[]) {
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'ready', phase: 'check', startedAt: Date.now(),
+          result: {
+            passed: false,
+            questions,
+            gateSummary: `Gate=FAIL, questions=${questions.length}`,
+            ticketUrl: null, cached: false,
+          },
+        }],
+        currentRefinementSessionId: 'session-1',
       });
+    }
+
+    it('renders Recommended badge next to the flagged option only', () => {
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+      expect(screen.getByTestId('refine-option-recommended-0-a')).toBeDefined();
+      expect(screen.queryByTestId('refine-option-recommended-0-b')).toBeNull();
+      expect(screen.queryByTestId('refine-option-recommended-1-a')).toBeNull();
+      expect(screen.queryByTestId('refine-option-recommended-1-b')).toBeNull();
+    });
+
+    it('preselects the recommended option on first render', () => {
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+      const radioA = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      const radioB = screen.getByTestId('refine-option-0-b') as HTMLInputElement;
+      expect(radioA.checked).toBe(true);
+      expect(radioB.checked).toBe(false);
+    });
+
+    it('no preselection when no option is recommended', () => {
+      setupFailState(MULTI_OPT_QUESTIONS);
+      render(<RefineTicketDialog />);
+      const radios = screen.getAllByRole('radio') as HTMLInputElement[];
+      expect(radios.every((r) => !r.checked)).toBe(true);
+    });
+
+    it('submit stays disabled when some questions lack a recommendation (unanswered)', () => {
+      // RECOMMENDED_QUESTIONS: q1 has recommended option (preselected), q2 has none (null)
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+      const submit = screen.getByTestId('refine-submit-answers');
+      // q2 is unanswered — submit must be disabled despite q1 being preselected
+      expect(submit.hasAttribute('disabled')).toBe(true);
+    });
+
+    it('submit is enabled when all questions have a recommendation preselected', async () => {
+      const allRecommended: RefineQuestion[] = [
+        {
+          id: 'q1', question: 'Q1?',
+          options: [
+            { id: 'a', label: 'A', recommended: true },
+            { id: 'b', label: 'B' },
+          ],
+        },
+        {
+          id: 'q2', question: 'Q2?',
+          options: [
+            { id: 'a', label: 'Yes' },
+            { id: 'b', label: 'No', recommended: true },
+          ],
+        },
+      ];
+      setupFailState(allRecommended);
+      render(<RefineTicketDialog />);
+      const submit = screen.getByTestId('refine-submit-answers');
+      expect(submit.hasAttribute('disabled')).toBe(false);
+    });
+
+    it('escape hatch: clicking the already-selected recommended option deselects it', async () => {
+      const user = userEvent.setup();
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+
+      const radioA = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      expect(radioA.checked).toBe(true);
+
+      // Click the already-selected radio — should toggle back to null
+      await user.click(radioA);
+      expect(radioA.checked).toBe(false);
+    });
+
+    it('escape hatch: submit is disabled after deselecting the only recommended answer with no text', async () => {
+      const user = userEvent.setup();
+      const oneQuestion: RefineQuestion[] = [
+        {
+          id: 'q1', question: 'Q?',
+          options: [
+            { id: 'a', label: 'A', recommended: true },
+            { id: 'b', label: 'B' },
+          ],
+        },
+      ];
+      setupFailState(oneQuestion);
+      render(<RefineTicketDialog />);
+
+      const submit = screen.getByTestId('refine-submit-answers');
+      expect(submit.hasAttribute('disabled')).toBe(false);
+
+      // Deselect the recommended option
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      expect(submit.hasAttribute('disabled')).toBe(true);
+    });
+
+    it('clicking a different option after deselect selects that option', async () => {
+      const user = userEvent.setup();
+      setupFailState(RECOMMENDED_QUESTIONS);
+      render(<RefineTicketDialog />);
+
+      const radioA = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      const radioB = screen.getByTestId('refine-option-0-b') as HTMLInputElement;
+      expect(radioA.checked).toBe(true);
+
+      // Click B directly — should select B and deselect A
+      await user.click(radioB);
+      expect(radioB.checked).toBe(true);
+      expect(radioA.checked).toBe(false);
+    });
+
+    it('when multiple options are recommended, only the first gets badge and preselection', () => {
+      setupFailState(MULTI_RECOMMENDED_QUESTION);
+      render(<RefineTicketDialog />);
+
+      expect(screen.getByTestId('refine-option-recommended-0-a')).toBeDefined();
+      expect(screen.queryByTestId('refine-option-recommended-0-b')).toBeNull();
+
+      const radioA = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      const radioB = screen.getByTestId('refine-option-0-b') as HTMLInputElement;
+      expect(radioA.checked).toBe(true);
+      expect(radioB.checked).toBe(false);
+    });
+  });
+
+  describe('answer persistence (#429)', () => {
+    it('calls postAnswers with combined answers before specRefineAsync when submitting', async () => {
+      const user = userEvent.setup();
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'ready', phase: 'check', startedAt: Date.now(),
+          result: {
+            passed: false,
+            questions: SINGLE_OPT_QUESTION,
+            gateSummary: 'Gate=FAIL, questions=1',
+            ticketUrl: null, cached: false,
+          },
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+
+      const callOrder: string[] = [];
+      api.tickets.postAnswers = vi.fn().mockImplementation(async () => {
+        callOrder.push('postAnswers');
+      });
+      api.tickets.specRefineAsync = vi.fn().mockImplementation(async () => {
+        callOrder.push('specRefineAsync');
+      });
+
+      render(<RefineTicketDialog />);
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      fireEvent.click(screen.getByTestId('refine-submit-answers'));
+
       await waitFor(() => {
-        const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-        expect(entry?.column).toBe('backlog');
+        expect(api.tickets.postAnswers).toHaveBeenCalled();
+        expect(api.tickets.specRefineAsync).toHaveBeenCalled();
+      });
+
+      // Verify postAnswers received ticketId, projectDir, and the combined answers body
+      const postCall = (api.tickets.postAnswers as ReturnType<typeof vi.fn>).mock.calls[0];
+      expect(postCall[0]).toBe('310');
+      expect(postCall[1]).toBe('/proj');
+      expect(postCall[2]).toContain('Q1: What is X?');
+      expect(postCall[2]).toContain('Selected: Option A');
+
+      // Verify postAnswers was called before specRefineAsync
+      expect(callOrder[0]).toBe('postAnswers');
+      expect(callOrder[1]).toBe('specRefineAsync');
+    });
+
+    it('still calls specRefineAsync even if postAnswers fails', async () => {
+      const user = userEvent.setup();
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'ready', phase: 'check', startedAt: Date.now(),
+          result: {
+            passed: false,
+            questions: SINGLE_OPT_QUESTION,
+            gateSummary: 'Gate=FAIL, questions=1',
+            ticketUrl: null, cached: false,
+          },
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+
+      api.tickets.postAnswers = vi.fn().mockRejectedValue(new Error('network error'));
+      api.tickets.specRefineAsync = vi.fn().mockResolvedValue(undefined);
+
+      render(<RefineTicketDialog />);
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      fireEvent.click(screen.getByTestId('refine-submit-answers'));
+
+      await waitFor(() => {
+        expect(api.tickets.specRefineAsync).toHaveBeenCalled();
       });
     });
   });

@@ -79,7 +79,9 @@ export function StaleWorkspaces() {
     }
   }, [selected, staleWorkspaces, cleanupStaleWorkspaces]);
 
-  if (dismissed || (staleWorkspaces.length === 0 && !staleWorkspacesLoading)) {
+  // Only show the modal after loading completes and there are stale workspaces.
+  // During loading, staleWorkspaces is still [], so no flash.
+  if (dismissed || staleWorkspaces.length === 0) {
     return null;
   }
 
@@ -89,85 +91,89 @@ export function StaleWorkspaces() {
     .reduce((sum, w) => sum + w.sizeBytes, 0);
 
   return (
-    <div className="mx-4 mt-3 bg-amber-500/5 border border-amber-500/20 rounded-xl overflow-hidden" data-testid="stale-workspaces">
-      {/* Header */}
-      <div className="flex items-center justify-between px-4 py-2.5 border-b border-amber-500/10">
-        <div className="flex items-center gap-2">
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-amber-400">
-            <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-            <line x1="12" y1="9" x2="12" y2="13" />
-            <line x1="12" y1="17" x2="12.01" y2="17" />
-          </svg>
-          <span className="text-xs font-semibold text-amber-400">
-            {staleWorkspaces.length} Stale Workspace{staleWorkspaces.length === 1 ? '' : 's'}
-          </span>
-          {totalSize > 0 && (
-            <span className="text-[11px] text-sandstorm-muted">
-              ({formatBytes(totalSize)} total)
-            </span>
-          )}
-        </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={() => refreshStaleWorkspaces()}
-            disabled={staleWorkspacesLoading}
-            className="text-[11px] text-sandstorm-muted hover:text-sandstorm-text-secondary transition-colors disabled:opacity-50"
-            data-testid="stale-refresh-btn"
-            title="Check again"
-          >
-            {staleWorkspacesLoading ? 'Scanning...' : 'Refresh'}
-          </button>
-          <button
-            onClick={() => setDismissed(true)}
-            className="text-sandstorm-muted hover:text-sandstorm-text-secondary transition-colors p-0.5"
-            title="Dismiss"
-            data-testid="stale-dismiss-btn"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
-              <path d="M18 6L6 18M6 6l12 12" />
-            </svg>
-          </button>
-        </div>
-      </div>
-
-      {/* Results banner */}
-      {results && (
-        <div className="px-4 py-2 border-b border-amber-500/10 bg-sandstorm-surface/50">
-          <div className="flex items-center gap-2 text-xs">
-            {results.every((r) => r.success) ? (
-              <span className="text-emerald-400">
-                Successfully cleaned up {results.length} workspace{results.length === 1 ? '' : 's'}.
-              </span>
-            ) : (
-              <span className="text-red-400">
-                {results.filter((r) => r.success).length} succeeded, {results.filter((r) => !r.success).length} failed.
-              </span>
-            )}
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60" data-testid="stale-workspaces-modal">
+      <div className="bg-sandstorm-surface border border-amber-500/30 rounded-xl shadow-2xl w-[540px] max-h-[80vh] flex flex-col overflow-hidden" data-testid="stale-workspaces">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b border-amber-500/20">
+          <div className="flex items-center gap-3">
+            <div className="w-9 h-9 rounded-full bg-amber-500/15 flex items-center justify-center shrink-0">
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="text-amber-400">
+                <path d="M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+                <line x1="12" y1="9" x2="12" y2="13" />
+                <line x1="12" y1="17" x2="12.01" y2="17" />
+              </svg>
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-amber-400">
+                {staleWorkspaces.length} Stale Workspace{staleWorkspaces.length === 1 ? '' : 's'}
+              </h2>
+              {totalSize > 0 && (
+                <p className="text-[11px] text-sandstorm-muted">
+                  {formatBytes(totalSize)} total
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
             <button
-              onClick={() => setResults(null)}
-              className="text-sandstorm-muted hover:text-sandstorm-text-secondary"
+              onClick={() => refreshStaleWorkspaces()}
+              disabled={staleWorkspacesLoading}
+              className="text-[11px] text-sandstorm-muted hover:text-sandstorm-text-secondary transition-colors disabled:opacity-50"
+              data-testid="stale-refresh-btn"
+              title="Check again"
             >
-              Dismiss
+              {staleWorkspacesLoading ? 'Scanning...' : 'Refresh'}
+            </button>
+            <button
+              onClick={() => setDismissed(true)}
+              className="text-sandstorm-muted hover:text-sandstorm-text-secondary transition-colors p-0.5"
+              title="Dismiss"
+              data-testid="stale-dismiss-btn"
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round">
+                <path d="M18 6L6 18M6 6l12 12" />
+              </svg>
             </button>
           </div>
         </div>
-      )}
 
-      {/* Workspace list */}
-      <div className="max-h-48 overflow-y-auto">
-        {staleWorkspaces.map((workspace) => (
-          <StaleWorkspaceRow
-            key={workspace.workspacePath}
-            workspace={workspace}
-            selected={selected.has(workspace.workspacePath)}
-            onToggle={() => toggleSelect(workspace.workspacePath)}
-          />
-        ))}
-      </div>
+        {/* Results banner */}
+        {results && (
+          <div className="px-5 py-2.5 border-b border-amber-500/10 bg-sandstorm-surface/50">
+            <div className="flex items-center gap-2 text-xs">
+              {results.every((r) => r.success) ? (
+                <span className="text-emerald-400">
+                  Successfully cleaned up {results.length} workspace{results.length === 1 ? '' : 's'}.
+                </span>
+              ) : (
+                <span className="text-red-400">
+                  {results.filter((r) => r.success).length} succeeded, {results.filter((r) => !r.success).length} failed.
+                </span>
+              )}
+              <button
+                onClick={() => setResults(null)}
+                className="text-sandstorm-muted hover:text-sandstorm-text-secondary"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+        )}
 
-      {/* Actions footer */}
-      {staleWorkspaces.length > 0 && (
-        <div className="flex items-center justify-between px-4 py-2 border-t border-amber-500/10 bg-sandstorm-surface/30">
+        {/* Workspace list */}
+        <div className="overflow-y-auto flex-1">
+          {staleWorkspaces.map((workspace) => (
+            <StaleWorkspaceRow
+              key={workspace.workspacePath}
+              workspace={workspace}
+              selected={selected.has(workspace.workspacePath)}
+              onToggle={() => toggleSelect(workspace.workspacePath)}
+            />
+          ))}
+        </div>
+
+        {/* Actions footer */}
+        <div className="flex items-center justify-between px-5 py-3 border-t border-amber-500/20 bg-sandstorm-surface/30">
           <label className="flex items-center gap-2 cursor-pointer text-xs text-sandstorm-muted">
             <input
               type="checkbox"
@@ -194,7 +200,7 @@ export function StaleWorkspaces() {
             </button>
           </div>
         </div>
-      )}
+      </div>
     </div>
   );
 }
@@ -210,7 +216,7 @@ function StaleWorkspaceRow({
 }) {
   return (
     <div
-      className={`flex items-center gap-3 px-4 py-2 hover:bg-sandstorm-surface-hover/50 transition-colors cursor-pointer ${
+      className={`flex items-center gap-3 px-5 py-2.5 hover:bg-sandstorm-surface-hover/50 transition-colors cursor-pointer ${
         selected ? 'bg-sandstorm-surface/40' : ''
       }`}
       onClick={onToggle}

@@ -5,7 +5,9 @@ import {
   isBotComment,
   getLastBotComment,
   getUserAnswersAfterBot,
+  getLatestUserAnswers,
   BOT_COMMENT_MARKER,
+  ANSWER_COMMENT_MARKER,
   type RefineToCommentsDeps,
 } from '../../../../src/main/scheduler/refine-to-comments';
 import type { TicketEntry, TicketComment } from '../../../../src/main/control-plane/ticket-comments';
@@ -115,6 +117,70 @@ describe('getUserAnswersAfterBot', () => {
   it('includes all user comments when no bot comment exists (first pass)', () => {
     const userComment: TicketComment = { author: 'devuser', body: 'Initial clarification', createdAt: '2026-05-01T10:00:00Z' };
     expect(getUserAnswersAfterBot([userComment], 'devuser', null)).toBe('Initial clarification');
+  });
+});
+
+describe('ANSWER_COMMENT_MARKER', () => {
+  it('is a distinct value from BOT_COMMENT_MARKER', () => {
+    expect(ANSWER_COMMENT_MARKER).not.toBe(BOT_COMMENT_MARKER);
+    expect(ANSWER_COMMENT_MARKER).toContain('user-answers');
+  });
+});
+
+describe('getLatestUserAnswers', () => {
+  it('returns empty string when no answer comments exist', () => {
+    const comments: TicketComment[] = [
+      { author: 'devuser', body: 'A regular comment', createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    expect(getLatestUserAnswers(comments)).toBe('');
+  });
+
+  it('returns answer text from a marked comment (marker stripped)', () => {
+    const comments: TicketComment[] = [
+      { author: 'devuser', body: `${ANSWER_COMMENT_MARKER}\n\nQ1: What is X?\nSelected: A`, createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    expect(getLatestUserAnswers(comments)).toBe('Q1: What is X?\nSelected: A');
+  });
+
+  it('returns the most recent marked comment when multiple exist', () => {
+    const comments: TicketComment[] = [
+      { author: 'devuser', body: `${ANSWER_COMMENT_MARKER}\n\nFirst answers`, createdAt: '2026-05-01T10:00:00Z' },
+      { author: 'devuser', body: `${ANSWER_COMMENT_MARKER}\n\nSecond answers`, createdAt: '2026-05-02T10:00:00Z' },
+    ];
+    expect(getLatestUserAnswers(comments)).toBe('Second answers');
+  });
+
+  it('filters by sinceTimestamp — excludes comments before the threshold', () => {
+    const comments: TicketComment[] = [
+      { author: 'devuser', body: `${ANSWER_COMMENT_MARKER}\n\nOld answers`, createdAt: '2026-05-01T10:00:00Z' },
+      { author: 'devuser', body: `${ANSWER_COMMENT_MARKER}\n\nNew answers`, createdAt: '2026-05-03T10:00:00Z' },
+    ];
+    expect(getLatestUserAnswers(comments, '2026-05-02T00:00:00Z')).toBe('New answers');
+  });
+
+  it('returns empty string when all marked comments precede sinceTimestamp', () => {
+    const comments: TicketComment[] = [
+      { author: 'devuser', body: `${ANSWER_COMMENT_MARKER}\n\nOld answers`, createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    expect(getLatestUserAnswers(comments, '2026-05-02T00:00:00Z')).toBe('');
+  });
+
+  it('works without bot comment (interactive dialog case — no BOT_COMMENT_MARKER present)', () => {
+    const comments: TicketComment[] = [
+      { author: 'devuser', body: `${ANSWER_COMMENT_MARKER}\n\nQ1: Yes\nQ2: No`, createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    expect(getLatestUserAnswers(comments)).toBe('Q1: Yes\nQ2: No');
+  });
+
+  it('ignores non-marked comments even if they look like answers', () => {
+    const comments: TicketComment[] = [
+      { author: 'devuser', body: 'Q1: Yes\nQ2: No', createdAt: '2026-05-01T10:00:00Z' },
+    ];
+    expect(getLatestUserAnswers(comments)).toBe('');
+  });
+
+  it('returns empty string for empty comments array', () => {
+    expect(getLatestUserAnswers([])).toBe('');
   });
 });
 

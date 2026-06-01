@@ -245,6 +245,7 @@ export class DockerRuntime implements ContainerRuntime {
       AttachStderr: true,
       WorkingDir: opts?.workdir,
       Env: opts?.env,
+      User: opts?.user,
     });
 
     const stream = await exec.start({ hijack: true, stdin: false });

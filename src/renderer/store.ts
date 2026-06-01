@@ -499,7 +499,7 @@ interface AppState {
   resolveRefinementTargets: (ticketId: string, projectDir: string) => RefinementResolution;
   /** Move ticket to 'refining' and stash _refineDialogContext for revert-on-cancel. */
   commitRefinementContext: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
-  /** Opens the refine dialog from a kanban card and moves the ticket to 'refining' optimistically. Reverts on cancel. */
+  /** Starts the spec gate in the background (no modal) for an initial Refine click from a backlog card. Moves ticket to 'refining'. */
   openRefineDialogFromCard: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
   /** Opens the new stack dialog for a ticket and moves it to 'in_stack' optimistically. Reverts on cancel. */
   openNewStackDialogForTicket: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
@@ -512,6 +512,10 @@ interface AppState {
   stackCreateErrors: Record<string, string>;
   /** Per-ticket in-flight flag, keyed by `${ticketId}|${projectDir}`. Guards against double-clicks. */
   stackCreateInFlight: Record<string, boolean>;
+  /** Per-ticket in-flight flag for background refine gate start, keyed by `${ticketId}|${projectDir}`. Guards against double-clicks during latency window. */
+  refineInFlight: Record<string, boolean>;
+  /** Per-ticket error message when the background refine gate fails to start, keyed by `${ticketId}|${projectDir}`. */
+  refineStartErrors: Record<string, string>;
   /** One-click stack creation from a spec_ready card — no dialog. */
   startStackForTicket: (ticketId: string, projectDir: string) => Promise<void>;
   /** Per-stack in-flight flag for background PR creation, keyed by stackId. */
@@ -553,13 +557,15 @@ interface AppState {
   /** Open the refine dialog showing a specific existing session. */
   openRefinementSession: (sessionId: string) => void;
   /** Add or update a refinement session (called on refinement:update events). */
-  upsertRefinementSession: (session: RefinementSession) => void;
+  upsertRefinementSession: (session: RefinementSession, opts?: { replay?: boolean }) => void;
   /** Append a streaming text chunk to a running session's output. */
   appendRefinementStreamChunk: (sessionId: string, delta: string) => void;
   /** Remove a refinement session (after cancel or dismiss). */
   removeRefinementSession: (sessionId: string) => void;
   /** Set which session id is shown in the refine dialog. */
   setCurrentRefinementSessionId: (id: string | null) => void;
+  /** Cancel the current session for a ticket and start a fresh spec-gate run. Opens the dialog to the new session. */
+  retryRefinementForTicket: (ticketId: string, projectDir: string) => Promise<void>;
   setShowCreateTicketDialog: (show: boolean) => void;
   setShowStartTicketDialog: (show: boolean) => void;
   setShowCreatePRDialog: (state: { stackId: string; initialError?: string } | null) => void;
@@ -743,6 +749,8 @@ declare global {
         specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<SpecGateResult>;
         specCheckAsync: (ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
         specRefineAsync: (sessionId: string, ticketId: string, projectDir: string, userAnswers: string) => Promise<void>;
+        retryRefinementAsync: (sessionId: string, ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
+        postAnswers: (ticketId: string, projectDir: string, answersBody: string) => Promise<void>;
         cancelRefinement: (sessionId: string) => Promise<void>;
         listRefinements: () => Promise<RefinementSession[]>;
         create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
@@ -768,6 +776,7 @@ declare global {
 export interface RefineQuestionOption {
   id: string;
   label: string;
+  recommended?: boolean;
 }
 
 export interface RefineQuestion {
@@ -1021,6 +1030,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   stackCreateErrors: {},
   stackCreateInFlight: {},
   prCreateInFlight: {},
+  refineInFlight: {},
+  refineStartErrors: {},
 
   clearMoveTicketColumnError: () => set({ moveTicketColumnError: null }),
 
@@ -1109,13 +1120,42 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   openRefineDialogFromCard: (ticketId, projectDir, previousColumn) => {
-    set({
-      showRefineTicketDialog: true,
-      refineTicketPrefill: ticketId,
-      currentRefinementSessionId: null,
-      _refineDialogContext: { ticketId, projectDir, previousColumn },
+    const key = `${ticketId}|${projectDir}`;
+    // Guard: prevent duplicate gate start during async latency window
+    if (get().refineInFlight[key]) return;
+    // Guard: don't start a second gate if a session already exists
+    const existingSession = get().refinementSessions.find(
+      (s) => s.ticketId === ticketId && s.projectDir === projectDir
+    );
+    if (existingSession) return;
+
+    set((state) => {
+      const { [key]: _, ...restErrors } = state.refineStartErrors;
+      return {
+        refineInFlight: { ...state.refineInFlight, [key]: true },
+        refineStartErrors: restErrors,
+        _refineDialogContext: { ticketId, projectDir, previousColumn },
+      };
     });
     void get().moveTicketColumn(ticketId, projectDir, 'refining');
+
+    window.sandstorm.tickets.specCheckAsync(ticketId, projectDir)
+      .then(() => {
+        set((state) => {
+          const { [key]: _, ...rest } = state.refineInFlight;
+          return { refineInFlight: rest };
+        });
+      })
+      .catch((err: unknown) => {
+        const message = err instanceof Error ? err.message : String(err);
+        set((state) => {
+          const { [key]: _, ...rest } = state.refineInFlight;
+          return {
+            refineInFlight: rest,
+            refineStartErrors: { ...state.refineStartErrors, [key]: message },
+          };
+        });
+      });
   },
 
   openNewStackDialogForTicket: (ticketId, projectDir, previousColumn) => {
@@ -1319,7 +1359,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     showRefineTicketDialog: true,
     currentRefinementSessionId: sessionId,
   }),
-  upsertRefinementSession: (session) => {
+  upsertRefinementSession: (session, opts) => {
     let firedSpecReady = false;
     set((state) => {
       if ((session as { status?: string }).status === 'cancelled') {
@@ -1336,11 +1376,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       // fire moveTicketColumn(ticketId, projectDir, 'spec_ready'). If the previous stored
       // session already satisfied the condition, this is a re-emit and we must not re-fire
       // (would otherwise demote a ticket the user has already advanced to in_stack).
+      // During hydration replay (opts.replay === true), never fire the column move — the ticket
+      // may already be in a later column (in_stack, pr_open, merged) and replaying a passed
+      // session must not demote it back to spec_ready.
       const wasPassed = idx >= 0
         && state.refinementSessions[idx].status === 'ready'
         && state.refinementSessions[idx].result?.passed === true;
       const isPassed = normalized.status === 'ready' && normalized.result?.passed === true;
-      firedSpecReady = isPassed && !wasPassed;
+      firedSpecReady = isPassed && !wasPassed && !opts?.replay;
 
       if (idx >= 0) {
         const next = [...state.refinementSessions];
@@ -1370,6 +1413,44 @@ export const useAppStore = create<AppState>((set, get) => ({
       : state.currentRefinementSessionId,
   })),
   setCurrentRefinementSessionId: (id) => set({ currentRefinementSessionId: id }),
+  retryRefinementForTicket: async (ticketId, projectDir) => {
+    const key = `${ticketId}|${projectDir}`;
+    const session = get().refinementSessions.find(
+      (s) => s.ticketId === ticketId && s.projectDir === projectDir,
+    );
+    // Remove old session from store — retryRefinementAsync cancels it in main.
+    if (session) {
+      get().removeRefinementSession(session.id);
+    }
+    // Clear any previous start error and mark in-flight during latency window
+    set((state) => {
+      const { [key]: _, ...restErrors } = state.refineStartErrors;
+      return {
+        refineStartErrors: restErrors,
+        refineInFlight: { ...state.refineInFlight, [key]: true },
+      };
+    });
+    try {
+      await window.sandstorm.tickets.retryRefinementAsync(
+        session?.id ?? '',
+        ticketId,
+        projectDir,
+      );
+      set((state) => {
+        const { [key]: _, ...rest } = state.refineInFlight;
+        return { refineInFlight: rest };
+      });
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set((state) => {
+        const { [key]: _, ...rest } = state.refineInFlight;
+        return {
+          refineInFlight: rest,
+          refineStartErrors: { ...state.refineStartErrors, [key]: message },
+        };
+      });
+    }
+  },
   setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
   setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
   setShowCreatePRDialog: (state) => {

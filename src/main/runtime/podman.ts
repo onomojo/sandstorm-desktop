@@ -110,6 +110,7 @@ export class PodmanRuntime implements ContainerRuntime {
   ): Promise<ExecResult> {
     const args = ['exec'];
     if (opts?.workdir) args.push('-w', opts.workdir);
+    if (opts?.user) args.push('-u', opts.user);
     if (opts?.env) {
       for (const e of opts.env) args.push('-e', e);
     }

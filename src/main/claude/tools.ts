@@ -322,12 +322,14 @@ Every question MUST be phrased as an actionable multiple-choice question — nev
     "id": "q1",
     "question": "<specific actionable question>",
     "options": [
-      { "id": "a", "label": "<option A>" },
+      { "id": "a", "label": "<option A>", "recommended": true },
       { "id": "b", "label": "<option B>" }
     ]
   }
 ]
 \`\`\`
+
+Mark at most one option per question with \`"recommended": true\` when you have a clear recommendation. Omit the field (or omit all recommendations) when there is no obvious best choice.
 `;
 }
 
@@ -404,12 +406,14 @@ Every question MUST be phrased as an actionable multiple-choice question — nev
     "id": "q1",
     "question": "<specific actionable question>",
     "options": [
-      { "id": "a", "label": "<option A>" },
+      { "id": "a", "label": "<option A>", "recommended": true },
       { "id": "b", "label": "<option B>" }
     ]
   }
 ]
 \`\`\`
+
+Mark at most one option per question with \`"recommended": true\` when you have a clear recommendation. Omit the field (or omit all recommendations) when there is no obvious best choice.
 `;
 }
 
@@ -469,12 +473,14 @@ Every question MUST be phrased as an actionable multiple-choice question — nev
     "id": "q1",
     "question": "<specific actionable question>",
     "options": [
-      { "id": "a", "label": "<option A>" },
+      { "id": "a", "label": "<option A>", "recommended": true },
       { "id": "b", "label": "<option B>" }
     ]
   }
 ]
 \`\`\`
+
+Mark at most one option per question with \`"recommended": true\` when you have a clear recommendation. Omit the field (or omit all recommendations) when there is no obvious best choice.
 `;
 }
 

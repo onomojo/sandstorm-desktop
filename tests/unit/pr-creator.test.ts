@@ -10,6 +10,7 @@ import {
   draftPullRequest,
   nextBranchName,
   createPullRequest,
+  sanitizeCommitMessage,
   MAX_PR_ATTEMPTS,
   PR_BODY_MAX_BYTES,
   PR_TITLE_MAX_CHARS,
@@ -345,6 +346,62 @@ describe('createPullRequest — host-side gh pr create', () => {
     // but we read it before the cleanup completes? Actually the file is deleted
     // in the finally block, so it's already gone. Instead, verify via the mock call.
     expect(createPROnHost).toHaveBeenCalledWith('t', expect.stringContaining('pr-body-'), 'feat/bar', 'main');
+  });
+
+  it('sanitizes the title before passing it to runGitPush', async () => {
+    const runGitPush = vi.fn<[string], Promise<void>>().mockResolvedValue(undefined);
+    await createPullRequest(
+      {
+        stackId: 's',
+        title: 'handle "not found" as non-fatal during ticket merge',
+        body: 'body',
+        initialBranch: 'feat/foo',
+      },
+      makeDeps({ runGitPush }),
+    );
+    expect(runGitPush).toHaveBeenCalledTimes(1);
+    const commitMsg = runGitPush.mock.calls[0][0];
+    expect(commitMsg).not.toContain('"');
+  });
+});
+
+describe('sanitizeCommitMessage', () => {
+  it('removes double quotes', () => {
+    expect(sanitizeCommitMessage('handle "not found" error')).toBe('handle not found error');
+  });
+
+  it('removes backticks', () => {
+    expect(sanitizeCommitMessage('run `npm install`')).toBe('run npm install');
+  });
+
+  it('removes dollar signs', () => {
+    expect(sanitizeCommitMessage('fix $HOME path handling')).toBe('fix HOME path handling');
+  });
+
+  it('removes backslashes', () => {
+    expect(sanitizeCommitMessage('handle C:\\Users path')).toBe('handle C:Users path');
+  });
+
+  it('replaces newlines with spaces', () => {
+    expect(sanitizeCommitMessage('line one\nline two')).toBe('line one line two');
+  });
+
+  it('leaves normal titles unchanged', () => {
+    const normal = 'fix: handle non-fatal error during ticket merge';
+    expect(sanitizeCommitMessage(normal)).toBe(normal);
+  });
+
+  it('returns a safe fallback for an all-special-char input', () => {
+    const result = sanitizeCommitMessage('"`$\\');
+    expect(result).toBeTruthy();
+    expect(result).not.toMatch(/["`$\\]/);
+  });
+
+  it('regression: reported title with double quotes sanitizes without shell-special chars', () => {
+    const title = 'handle "not found" as non-fatal during ticket merge';
+    const sanitized = sanitizeCommitMessage(title);
+    expect(sanitized).not.toContain('"');
+    expect(sanitized).toMatch(/\S/);
   });
 });
 
