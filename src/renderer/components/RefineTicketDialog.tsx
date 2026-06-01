@@ -337,7 +337,7 @@ export function RefineTicketDialog() {
           <div className="px-6 py-5 space-y-4">
             {!project && (
               <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5">
-                Select a project tab first — the spec gate runs against the project's `.sandstorm/spec-quality-gate.md`.
+                Select a project tab first — the spec gate needs a project to fetch the ticket from.
               </div>
             )}
 

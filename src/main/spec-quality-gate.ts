@@ -1,11 +1,14 @@
-import fs from 'fs';
-import path from 'path';
-
-const QUALITY_GATE_FILE = 'spec-quality-gate.md';
+/**
+ * Built-in spec quality gate criteria — the single source of truth for what
+ * "ready" means before a ticket enters the execution pipeline.
+ *
+ * No per-project file is read or required. A missing or legacy
+ * `.sandstorm/spec-quality-gate.md` on disk is simply ignored.
+ */
 
 /**
- * Returns the default content for .sandstorm/spec-quality-gate.md.
- * This defines what a "ready" ticket looks like before dispatch.
+ * Returns the canonical built-in spec quality gate criteria.
+ * Sourced exclusively from this function — no file I/O.
  */
 export function getDefaultSpecQualityGate(): string {
   return `# Spec Quality Gate
@@ -14,8 +17,20 @@ Criteria for determining whether a ticket is ready for agent dispatch.
 Each criterion is **pass/fail**. If any fails, the specific gap must be
 resolved before the ticket enters the execution pipeline.
 
-Customize this file to match your project's needs. This is the single
-source of truth for what "ready" means in this project.
+## Verification Policy
+
+Automated testing is **mandatory and assumed** in this project (see CLAUDE.md "Mandatory tests").
+The evaluator MUST NOT ask "what verification level is required", "does this need a test",
+or "how should this be verified" — tests are always required. Specify the concrete checks:
+
+- Vitest unit/component tests for every new/changed behavior
+- A regression test for every bug fix (one that would have caught the bug)
+- \`npm run typecheck\` — TypeScript must compile clean
+- \`npm run build\` / \`npm run package\` — build must succeed
+- All of the above run by \`.sandstorm/verify.sh\`
+
+e2e / Playwright / visual browser verification is **not required** (not yet available
+in the stack container). Do NOT fail the gate because e2e tests are absent.
 
 ---
 
@@ -47,7 +62,10 @@ Are there decision points where the agent would have to guess?
 
 ### Testability
 Is it clear how to verify the work is correct?
-- Define what "done" looks like in concrete, testable terms.
+- Define what "done" looks like in concrete, automated, testable terms.
+- Automated tests are mandatory — specify which: unit tests, regression tests, typecheck, build.
+- Do NOT ask the user about verification level; specify the required tests yourself.
+- Tests live in \`tests/\` mirroring the source structure; run via \`npm test\`.
 
 ### Files/Areas Affected
 Are the impacted areas of the codebase identified?
@@ -60,26 +78,12 @@ List every assumption the agent would make if it started now.
 - If an assumption requires human input (business logic, domain knowledge, product direction, edge case decisions) — it MUST be surfaced as an explicit question that blocks the gate.
 - The gate MUST NOT pass with unresolved assumptions. Every assumption must become either a verified fact or an answered question.
 
-### End-to-End Data Flow Verification
-When a feature spans multiple system boundaries (API → DB → frontend, CLI → config → runtime, etc.):
-- Testability MUST include at least one item that traces data through the entire pipeline without mocks.
-- Every integration boundary the data crosses must be explicitly identified.
-- A verification step must prove data arrives at the final destination under realistic conditions.
-- Flag any ticket where the testability section consists entirely of mocked tests for features that span multiple layers.
-
 ### Dependency Contracts
 When the ticket references another ticket, module, or external system's output:
 - The data contract must be explicit — what format, what interface, when available.
 - Read/write timing must be compatible — if the source writes at end-of-process and the consumer reads mid-process, that's a conflict.
 - How contract compatibility is verified must be specified.
 - If the data source doesn't exist yet, the ticket must include creating it or explicitly depend on a ticket that does.
-
-### Automated Visual Verification (UI Tickets)
-When the ticket describes visual changes (components, panels, layouts, modals, pages):
-- An automated visual verification step against the real running application is required — not mocked component renders.
-- Visual verification must exercise the same code path the user sees (real IPC, real backend, real data flow).
-- If the project provides headless browser infrastructure, the verification step must use it.
-- Skip this criterion if the ticket has no UI/visual changes.
 
 ### All Verification Must Be Automatable
 Every verification item must be executable autonomously with no human involvement:
@@ -111,45 +115,4 @@ Verification limit: static reading only. If answering requires executing code or
 
 Hallucination guard: every claimed verification MUST include a \`file:line\` citation. A verification without a citation is not a verification.
 `;
-}
-
-/**
- * Read the quality gate file for a project.
- * Returns empty string if file doesn't exist.
- */
-export function getSpecQualityGate(projectDir: string): string {
-  const filePath = path.join(projectDir, '.sandstorm', QUALITY_GATE_FILE);
-  console.log(`[sandstorm] getSpecQualityGate: checking "${filePath}"`);
-  if (!fs.existsSync(filePath)) return '';
-  return fs.readFileSync(filePath, 'utf-8');
-}
-
-/**
- * Save the quality gate file for a project.
- */
-export function saveSpecQualityGate(projectDir: string, content: string): void {
-  const sandstormDir = path.join(projectDir, '.sandstorm');
-  if (!fs.existsSync(sandstormDir)) {
-    fs.mkdirSync(sandstormDir, { recursive: true });
-  }
-  fs.writeFileSync(path.join(sandstormDir, QUALITY_GATE_FILE), content, 'utf-8');
-}
-
-/**
- * Check if an initialized project is missing the quality gate file.
- */
-export function isSpecQualityGateMissing(projectDir: string): boolean {
-  const sandstormDir = path.join(projectDir, '.sandstorm');
-  if (!fs.existsSync(path.join(sandstormDir, 'config'))) return false;
-  return !fs.existsSync(path.join(sandstormDir, QUALITY_GATE_FILE));
-}
-
-/**
- * Auto-create the quality gate file if missing.
- * Returns true if the file was created.
- */
-export function ensureSpecQualityGate(projectDir: string): boolean {
-  if (!isSpecQualityGateMissing(projectDir)) return false;
-  saveSpecQualityGate(projectDir, getDefaultSpecQualityGate());
-  return true;
 }

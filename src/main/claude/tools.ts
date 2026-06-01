@@ -7,11 +7,10 @@
  * advertisement layer went away.
  */
 
-import path from 'path';
 import { stackManager, agentBackend, registry } from '../index';
 import { fetchTicketWithConfig, updateTicketWithConfig } from '../control-plane/ticket-config';
 import type { ProjectTicketConfig } from '../control-plane/registry';
-import { getSpecQualityGate } from '../spec-quality-gate';
+import { getDefaultSpecQualityGate } from '../spec-quality-gate';
 import {
   createSchedule,
   listSchedules,
@@ -245,19 +244,10 @@ async function resolveSpecContext(
     };
   }
 
-  const gatePath = path.join(projectDir, '.sandstorm', 'spec-quality-gate.md');
-  const gate = getSpecQualityGate(projectDir);
-  if (!gate) {
-    return {
-      ok: false,
-      result: { error: `No quality gate configured at ${gatePath}. Run sandstorm init or create .sandstorm/spec-quality-gate.md.` },
-    };
-  }
-
-  return { ok: true, ctx: { ticketBody, gate } };
+  return { ok: true, ctx: { ticketBody, gate: getDefaultSpecQualityGate() } };
 }
 
-function buildSpecCheckPrompt(gate: string, ticketBody: string): string {
+export function buildSpecCheckPrompt(gate: string, ticketBody: string): string {
   return `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict — if you'd have to guess, it's a FAIL.
 
 ## Quality Gate Criteria
@@ -277,18 +267,12 @@ For each assumption, classify it:
 - **Self-resolvable**: Can be validated by reading code, checking APIs, schemas, or running commands. For these, state what you would check and whether the assumption appears correct or incorrect based on the information available.
 - **Requires human input**: Business logic context, domain knowledge, behavioral expectations, product direction, edge case decisions — things the codebase can't answer. For these, formulate a specific question that must be answered before the spec is complete.
 
-### Phase 2: Enhanced Evaluation
-For each criterion, determine PASS or FAIL. Apply these additional checks:
+### Phase 2: Evaluation
+For each criterion, determine PASS or FAIL.
 
 **Assumptions — Zero Unresolved**: FAIL if any assumptions remain unresolved (neither verified as fact nor answered by user). Listing assumptions is NOT sufficient — they must be resolved.
 
-**End-to-End Data Flow Verification**: If the feature spans multiple system boundaries, FAIL if testability consists entirely of mocked/unit tests with no end-to-end verification item. Identify every integration boundary the data crosses.
-
 **Dependency Contracts**: If the ticket references other tickets, modules, or external systems, FAIL if the data contract is not explicit (format, interface, timing). FAIL if read/write timing is incompatible (e.g., source writes at end-of-process but consumer reads mid-process).
-
-**Automated Visual Verification**: If the ticket describes UI/visual changes, FAIL if there is no automated visual verification step against the real running application. Mocked component renders don't count.
-
-**All Verification Automatable**: FAIL if ANY verification item requires manual human intervention ("manually verify", "visually confirm", "deploy and check") or includes optional checkboxes that can be skipped.
 
 ### Phase 3: Report
 
@@ -351,7 +335,7 @@ async function handleSpecCheck(
   };
 }
 
-function buildSpecRefineInitialPrompt(gate: string, ticketBody: string): string {
+export function buildSpecRefineInitialPrompt(gate: string, ticketBody: string): string {
   return `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict.
 
 ## Quality Gate Criteria
@@ -369,13 +353,10 @@ Identify every assumption (explicit and implicit). For each:
 - **Self-resolvable** (can check code/APIs/schemas): State what you'd verify and whether it appears correct or incorrect.
 - **Requires human input** (business logic, domain knowledge, product direction): Formulate a specific blocking question.
 
-### Phase 2: Enhanced Evaluation
+### Phase 2: Evaluation
 Apply ALL criteria from the quality gate, including:
 - **Zero Unresolved Assumptions**: FAIL if any assumptions remain unverified/unanswered.
-- **End-to-End Data Flow**: FAIL if multi-boundary features have only mocked tests.
 - **Dependency Contracts**: FAIL if cross-ticket/module dependencies lack explicit contracts (format, timing, verification).
-- **Automated Visual Verification**: FAIL if UI tickets lack automated visual verification against the real app.
-- **All Verification Automatable**: FAIL if any verification requires manual human steps.
 
 ### Phase 3: Report
 For each criterion that FAILS, ask a specific, answerable question that would resolve the gap. Don't ask vague questions — ask exactly what you need to know. Group related gaps into a single question when possible.
@@ -417,7 +398,7 @@ Mark at most one option per question with \`"recommended": true\` when you have 
 `;
 }
 
-function buildSpecRefineAnswerPrompt(gate: string, ticketBody: string, userAnswers: string): string {
+export function buildSpecRefineAnswerPrompt(gate: string, ticketBody: string, userAnswers: string): string {
   return `You are a spec quality gate evaluator performing a refinement step.
 
 ## Quality Gate Criteria
@@ -437,10 +418,7 @@ ${userAnswers}
 1. Incorporate the user's answers into the ticket body. Preserve existing content — add clarifications inline or in new sections, don't delete anything. Replace resolved assumptions with verified facts (e.g., "Verified: function X returns Y (see src/path/file.ts:42)").
 2. Re-evaluate the updated ticket against ALL quality gate criteria, including:
    - **Zero Unresolved Assumptions**: Any remaining assumptions must be resolved. Listing them is not enough.
-   - **End-to-End Data Flow**: Multi-boundary features need e2e verification, not just mocked tests.
    - **Dependency Contracts**: Cross-ticket/module references need explicit contracts (format, timing, verification).
-   - **Automated Visual Verification**: UI tickets need automated visual checks against the real app.
-   - **All Verification Automatable**: No manual steps allowed.
 3. If it still FAILs, ask new specific questions for the remaining gaps.
 
 Respond in EXACTLY this format:

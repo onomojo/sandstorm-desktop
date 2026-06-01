@@ -8,6 +8,9 @@ user_invocable: true
 
 Enter the interactive refinement loop for a ticket. Runs the quality gate, presents gaps, asks clarifying questions, updates the ticket, and re-checks until the gate passes.
 
+The quality gate criteria are built into Sandstorm Desktop — no per-project
+`.sandstorm/spec-quality-gate.md` file is required or read.
+
 ## Instructions
 
 ### Step 1: Fetch and check
@@ -16,14 +19,12 @@ Enter the interactive refinement loop for a ticket. Runs the quality gate, prese
    .sandstorm/scripts/fetch-ticket.sh <ticket-id>
    ```
    If the script doesn't exist, inform the user: "No fetch-ticket script configured. Run `sandstorm init` to set up a ticket provider, or create `.sandstorm/scripts/fetch-ticket.sh` manually."
-2. Read `.sandstorm/spec-quality-gate.md` for the quality gate criteria
-3. **Resolve assumptions first**: Identify all assumptions (explicit and implicit). Self-resolvable ones — validate by reading code/APIs/schemas. Replace confirmed assumptions with verified facts. Flag incorrect ones. Unresolvable ones — formulate specific blocking questions.
-4. Evaluate each criterion using the enhanced checks:
+2. **Resolve assumptions first**: Identify all assumptions (explicit and implicit). Self-resolvable ones — validate by reading code/APIs/schemas. Replace confirmed assumptions with verified facts. Flag incorrect ones. Unresolvable ones — formulate specific blocking questions.
+3. Evaluate each criterion using the built-in checks:
    - **Zero Unresolved Assumptions**: Listing is not enough — they must be verified or answered.
-   - **End-to-End Data Flow**: Multi-boundary features need e2e verification, not just mocked tests.
    - **Dependency Contracts**: Cross-ticket/module references need explicit contracts (format, timing, verification).
-   - **Automated Visual Verification**: UI tickets need automated visual checks against the real app.
    - **All Verification Automatable**: No manual steps, no skippable checkboxes.
+   - **Testability**: Automated tests are mandatory. Specify Vitest unit/component tests, regression tests, typecheck, build. Do NOT require e2e/Playwright tests (not available in the stack container). Do NOT ask the user what verification is needed.
 
 ### Step 2: If PASS
 - Show the results table and confirmed assumption resolutions

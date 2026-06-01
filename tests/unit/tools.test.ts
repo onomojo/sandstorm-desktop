@@ -50,12 +50,11 @@ vi.mock('../../src/main/control-plane/ticket-config', () => ({
 }));
 
 vi.mock('../../src/main/spec-quality-gate', () => ({
-  getSpecQualityGate: vi.fn().mockReturnValue(''),
+  getDefaultSpecQualityGate: vi.fn().mockReturnValue('### Problem Statement\nIs the why clear?'),
 }));
 
 import { stackManager, agentBackend, registry } from '../../src/main/index';
 import { fetchTicketWithConfig, updateTicketWithConfig } from '../../src/main/control-plane/ticket-config';
-import { getSpecQualityGate } from '../../src/main/spec-quality-gate';
 import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from '../../src/main/scheduler';
 import { syncAllProjectsCrontab } from '../../src/main/scheduler/scheduler-manager';
 
@@ -175,21 +174,8 @@ describe('MCP tools', () => {
       expect(result.reason).toContain('returned no output');
     });
 
-    it('returns error when quality gate is not configured', async () => {
-      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Test\nSome body');
-      vi.mocked(getSpecQualityGate).mockReturnValue('');
-      const result = await handleToolCall('spec_check', {
-        ticketId: '42',
-        projectDir: '/proj',
-      });
-      expect(result).toEqual(
-        expect.objectContaining({ error: expect.stringContaining('No quality gate') })
-      );
-    });
-
     it('spawns ephemeral agent and returns passed=true when report says PASS', async () => {
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Fix bug\nDetailed description');
-      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: PASS\n\n### Results\n| Criterion | Result |\n|---|---|\n| Problem Statement | PASS |'
       );
@@ -210,7 +196,6 @@ describe('MCP tools', () => {
 
     it('returns passed=false when report says FAIL', async () => {
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Vague task');
-      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: FAIL\n\n### Gaps\n- [ ] Missing problem statement'
       );
@@ -225,7 +210,6 @@ describe('MCP tools', () => {
 
     it('spec_check prompt includes assumption resolution phase', async () => {
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Test\nBody');
-      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: PASS\n\n### Assumption Resolution\n| # | Assumption | Type | Resolution |\n|---|---|---|---|'
       );
@@ -240,10 +224,7 @@ describe('MCP tools', () => {
       expect(prompt).toContain('Self-resolvable');
       expect(prompt).toContain('Requires human input');
       expect(prompt).toContain('Zero Unresolved');
-      expect(prompt).toContain('End-to-End Data Flow');
       expect(prompt).toContain('Dependency Contracts');
-      expect(prompt).toContain('Automated Visual Verification');
-      expect(prompt).toContain('All Verification Automatable');
       expect(prompt).toContain('Questions Requiring User Answers');
     });
   });
@@ -395,16 +376,6 @@ describe('MCP tools', () => {
       expect(result.reason).toContain('Project Settings');
     });
 
-    it('spec_check no-quality-gate error includes absolute path', async () => {
-      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Ticket body');
-      vi.mocked(getSpecQualityGate).mockReturnValue('');
-      const result = await handleToolCall('spec_check', {
-        ticketId: '42',
-        projectDir: '/home/user/my-project',
-      }) as { error: string };
-      expect(result.error).toContain('/home/user/my-project/.sandstorm/spec-quality-gate.md');
-    });
-
     it('spec_refine unconfigured provider error is actionable', async () => {
       mockGetProviderConfig.mockReturnValue(null);
       const result = await handleToolCall('spec_refine', {
@@ -414,15 +385,6 @@ describe('MCP tools', () => {
       expect(result.reason).toContain('No ticket provider configured');
     });
 
-    it('spec_refine no-quality-gate error includes absolute path', async () => {
-      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Ticket body');
-      vi.mocked(getSpecQualityGate).mockReturnValue('');
-      const result = await handleToolCall('spec_refine', {
-        ticketId: '42',
-        projectDir: '/home/user/my-project',
-      }) as { error: string };
-      expect(result.error).toContain('/home/user/my-project/.sandstorm/spec-quality-gate.md');
-    });
   });
 
   describe('handleToolCall — schedule tools', () => {
@@ -570,7 +532,6 @@ describe('MCP tools', () => {
 
     it('returns initial gaps when called without userAnswers', async () => {
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Incomplete spec');
-      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: FAIL\n\n### Questions to Resolve Gaps\n1. What problem does this solve?'
       );
@@ -586,7 +547,6 @@ describe('MCP tools', () => {
 
     it('incorporates user answers and re-evaluates when called with userAnswers', async () => {
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Incomplete spec');
-      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nIs the why clear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Updated Ticket Body\n\n# Issue: Better spec\nThe problem is X.\n\n## Spec Quality Gate: PASS\n\n### Results\n| Criterion | Result |\n|---|---|\n| Problem Statement | PASS |'
       );
@@ -609,7 +569,6 @@ describe('MCP tools', () => {
     describe('ticket write-back', () => {
       beforeEach(() => {
         vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: stale');
-        vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement');
       });
 
       it('calls updateTicketWithConfig with the refined body when refinement produces one', async () => {
@@ -698,7 +657,6 @@ describe('MCP tools', () => {
 
     it('spec_refine initial prompt includes assumption resolution and enhanced checks', async () => {
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Test\nBody');
-      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: FAIL\n\n### Questions to Resolve Gaps\n1. What is X?'
       );
@@ -713,10 +671,7 @@ describe('MCP tools', () => {
       expect(prompt).toContain('Self-resolvable');
       expect(prompt).toContain('Requires human input');
       expect(prompt).toContain('Zero Unresolved Assumptions');
-      expect(prompt).toContain('End-to-End Data Flow');
       expect(prompt).toContain('Dependency Contracts');
-      expect(prompt).toContain('Automated Visual Verification');
-      expect(prompt).toContain('All Verification Automatable');
     });
 
     describe('ticket body cache (#370)', () => {
@@ -726,7 +681,6 @@ describe('MCP tools', () => {
 
       it('reuses the cached body for repeated calls within the TTL window', async () => {
         vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: cached body');
-        vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
         vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
           '## Spec Quality Gate: PASS\n\n### Results\n| C | Result |\n|---|---|\n| X | PASS |',
         );
@@ -739,7 +693,6 @@ describe('MCP tools', () => {
 
       it('refetches when the cache key differs (project or ticket)', async () => {
         vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body');
-        vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
         vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
           '## Spec Quality Gate: PASS\n\n### Results\n| C | Result |\n|---|---|\n| X | PASS |',
         );
@@ -756,7 +709,6 @@ describe('MCP tools', () => {
         try {
           vi.setSystemTime(new Date('2026-05-28T12:00:00Z'));
           vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body');
-          vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
           vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
             '## Spec Quality Gate: PASS\n\n### Results\n| C | Result |\n|---|---|\n| X | PASS |',
           );
@@ -777,7 +729,6 @@ describe('MCP tools', () => {
 
     it('spec_refine refinement prompt includes enhanced evaluation criteria', async () => {
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Test\nBody');
-      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Updated Ticket Body\n\n# Issue: Updated\n\n## Spec Quality Gate: PASS\n\n### Results\n| Criterion | Result |\n|---|---|\n| Problem Statement | PASS |'
       );
@@ -790,10 +741,7 @@ describe('MCP tools', () => {
 
       const prompt = vi.mocked(agentBackend.runEphemeralAgent).mock.calls[0][0];
       expect(prompt).toContain('Zero Unresolved Assumptions');
-      expect(prompt).toContain('End-to-End Data Flow');
       expect(prompt).toContain('Dependency Contracts');
-      expect(prompt).toContain('Automated Visual Verification');
-      expect(prompt).toContain('All Verification Automatable');
       expect(prompt).toContain('Replace resolved assumptions with verified facts');
     });
   });
@@ -829,7 +777,6 @@ describe('MCP tools', () => {
       _disposeAllRefineSessionsForTests();
       _clearTicketBodyCacheForTests();
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body');
-      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
       fakeHandle = makeFakeHandle();
       vi.mocked(agentBackend.spawnEphemeralSession).mockReturnValue(fakeHandle);
     });
@@ -951,7 +898,6 @@ describe('MCP tools', () => {
     beforeEach(() => {
       _clearTicketBodyCacheForTests();
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body');
-      vi.mocked(getSpecQualityGate).mockReturnValue('### Problem Statement\nClear?');
       // The mock cancel function rejects the promise, mirroring real spawnEphemeralAgent behavior.
       let rejectEp!: (err: Error) => void;
       const ep = new Promise<string>((_, reject) => { rejectEp = reject; });
