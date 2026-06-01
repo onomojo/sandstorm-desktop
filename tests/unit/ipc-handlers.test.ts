@@ -1745,6 +1745,8 @@ describe('IPC Handlers', () => {
       'tickets:cancelRefinement',
       'tickets:listRefinements',
       'tickets:create',
+      'tickets:fetchRaw',
+      'tickets:update',
       'tickets:list',
       'ticket-board:set-column',
       'pr:draftBody',

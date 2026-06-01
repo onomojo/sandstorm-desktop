@@ -84,7 +84,7 @@ import {
   createPullRequest,
 } from './control-plane/pr-creator';
 import { showNotification } from './tray';
-import { createTicketWithConfig } from './control-plane/ticket-config';
+import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
@@ -1276,6 +1276,28 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       const result = await createTicketWithConfig({ title, body, config, cwd: projectDir });
       registry.seedBoardTicket(result.ticketId, path.resolve(projectDir), title);
       return result;
+    },
+  );
+
+  ipcMain.handle(
+    'tickets:fetchRaw',
+    async (_event, ticketId: string, projectDir: string) => {
+      const config = registry.getProjectTicketConfig(projectDir);
+      if (!config) {
+        throw new Error('No ticket provider configured for this project. Configure GitHub or Jira in Project Settings.');
+      }
+      return fetchRawBodyWithConfig(ticketId, config, projectDir);
+    },
+  );
+
+  ipcMain.handle(
+    'tickets:update',
+    async (_event, projectDir: string, ticketId: string, body: string) => {
+      const config = registry.getProjectTicketConfig(projectDir);
+      if (!config) {
+        throw new Error('No ticket provider configured for this project. Configure GitHub or Jira in Project Settings.');
+      }
+      await updateTicketWithConfig(ticketId, body, config, projectDir);
     },
   );
 

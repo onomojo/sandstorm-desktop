@@ -56,6 +56,33 @@ describe('TicketCard', () => {
     expect(screen.getByTestId('ticket-card-refine-42')).toBeDefined();
   });
 
+  it('backlog: shows Edit button', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-edit-42')).toBeDefined();
+  });
+
+  it('backlog: clicking Edit opens EditTicketDialog via store', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-edit-42'));
+    expect(useAppStore.getState().showEditTicketDialog).toBe(true);
+    expect(useAppStore.getState().editTicketTarget).toEqual({ ticketId: '42', projectDir: PROJECT_DIR });
+  });
+
+  it('refining: Edit button NOT shown', () => {
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-edit-42')).toBeNull();
+  });
+
+  it('spec_ready: Edit button NOT shown', () => {
+    render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-edit-42')).toBeNull();
+  });
+
+  it('in_stack: Edit button NOT shown', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-edit-42')).toBeNull();
+  });
+
   it('backlog: clicking Refine moves ticket to refining, starts gate in background, does not open dialog', async () => {
     useAppStore.setState({ boardTickets: [makeTicket('backlog') as any] });
     render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);

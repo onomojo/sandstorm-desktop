@@ -2,14 +2,17 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as child_process from 'child_process';
 import {
   githubFetchTicket,
+  githubFetchRawBody,
   githubUpdateTicket,
   githubCreateTicket,
   githubListTickets,
   jiraFetchTicket,
+  jiraFetchRawBody,
   jiraUpdateTicket,
   jiraCreateTicket,
   jiraListTickets,
   fetchTicketWithConfig,
+  fetchRawBodyWithConfig,
   updateTicketWithConfig,
   createTicketWithConfig,
   listTicketsWithConfig,
@@ -421,5 +424,114 @@ describe('listTicketsWithConfig', () => {
     const result = await listTicketsWithConfig(JIRA_CONFIG, '/proj');
     expect(result).toEqual({ ok: true, tickets: [{ id: 'ACME-1', title: 'J', author: 'a' }] });
     expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Raw body fetch
+// ---------------------------------------------------------------------------
+
+describe('githubFetchRawBody', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns the raw issue body without any wrapper', async () => {
+    mockExecFileSuccess(JSON.stringify({ body: 'Just the raw description.' }));
+    const result = await githubFetchRawBody('42', '/proj');
+    expect(result).toBe('Just the raw description.');
+    expect(result).not.toMatch(/^# Issue:/);
+    expect(result).not.toMatch(/^State:/m);
+  });
+
+  it('returns empty string when body is null', async () => {
+    mockExecFileSuccess(JSON.stringify({ body: null }));
+    const result = await githubFetchRawBody('42', '/proj');
+    expect(result).toBe('');
+  });
+
+  it('calls gh with --json body only', async () => {
+    mockExecFileSuccess(JSON.stringify({ body: 'body text' }));
+    await githubFetchRawBody('99', '/myproj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'view', '99', '--json', 'body'],
+      expect.objectContaining({ cwd: '/myproj' }),
+      expect.any(Function)
+    );
+  });
+
+  it('returns null on gh failure', async () => {
+    mockExecFileError('not found');
+    const result = await githubFetchRawBody('1', '/proj');
+    expect(result).toBeNull();
+  });
+});
+
+describe('jiraFetchRawBody', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns null when credentials are missing', async () => {
+    const cfg: ProjectTicketConfig = { provider: 'jira' };
+    expect(await jiraFetchRawBody('ACME-1', cfg)).toBeNull();
+  });
+
+  it('returns the raw description field without wrapper', async () => {
+    mockJiraRequest(JSON.stringify({ fields: { description: 'Raw Jira body text.' } }));
+    const result = await jiraFetchRawBody('ACME-42', JIRA_CONFIG);
+    expect(result).toBe('Raw Jira body text.');
+    expect(result).not.toMatch(/^# Issue:/);
+    expect(result).not.toMatch(/^State:/m);
+  });
+
+  it('returns empty string when description is null', async () => {
+    mockJiraRequest(JSON.stringify({ fields: { description: null } }));
+    const result = await jiraFetchRawBody('ACME-1', JIRA_CONFIG);
+    expect(result).toBe('');
+  });
+
+  it('returns null on HTTP error', async () => {
+    mockJiraRequest('Unauthorized', 401);
+    const result = await jiraFetchRawBody('ACME-1', JIRA_CONFIG);
+    expect(result).toBeNull();
+  });
+});
+
+describe('fetchRawBodyWithConfig', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes to github for GitHub config', async () => {
+    mockExecFileSuccess(JSON.stringify({ body: 'GitHub raw body' }));
+    const result = await fetchRawBodyWithConfig('42', GITHUB_CONFIG, '/proj');
+    expect(result).toBe('GitHub raw body');
+    expect(mockExecFile).toHaveBeenCalled();
+  });
+
+  it('routes to jira for Jira config', async () => {
+    mockJiraRequest(JSON.stringify({ fields: { description: 'Jira raw body' } }));
+    const result = await fetchRawBodyWithConfig('ACME-1', JIRA_CONFIG, '/proj');
+    expect(result).toBe('Jira raw body');
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateTicketWithConfig routing', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes GitHub → githubUpdateTicket', async () => {
+    mockExecFileSuccess('');
+    await updateTicketWithConfig('42', 'updated body', GITHUB_CONFIG, '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'edit', '42', '--body', 'updated body'],
+      expect.objectContaining({ cwd: '/proj' }),
+      expect.any(Function)
+    );
+  });
+
+  it('rejects empty ticketId', async () => {
+    await expect(updateTicketWithConfig('', 'body', GITHUB_CONFIG, '/proj')).rejects.toThrow('Ticket ID is required');
+  });
+
+  it('rejects empty body', async () => {
+    await expect(updateTicketWithConfig('42', '   ', GITHUB_CONFIG, '/proj')).rejects.toThrow('Ticket body cannot be empty');
   });
 });

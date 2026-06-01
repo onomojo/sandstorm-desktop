@@ -19,6 +19,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     createPRAutomatic,
     openRefinementSession,
     openRefineTicketDialogWith,
+    openEditTicketDialog,
     refinementSessions,
     retryRefinementForTicket,
     resumeStackWithContinuation,
@@ -40,6 +41,10 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
   const handleRefine = () => {
     openRefineDialogFromCard(ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn);
+  };
+
+  const handleEdit = () => {
+    openEditTicketDialog(ticket.ticket_id, ticket.project_dir);
   };
 
   const handleStartStack = () => {
@@ -99,13 +104,22 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
       {/* Column-specific content */}
       {ticket.column === 'backlog' && (
-        <button
-          onClick={handleRefine}
-          className="mt-1 w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors font-medium"
-          data-testid={`ticket-card-refine-${ticket.ticket_id}`}
-        >
-          Refine
-        </button>
+        <div className="flex flex-col gap-2 mt-1">
+          <button
+            onClick={handleEdit}
+            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-surface-hover text-sandstorm-muted border border-sandstorm-border hover:border-sandstorm-accent/30 hover:text-sandstorm-text transition-colors font-medium"
+            data-testid={`ticket-card-edit-${ticket.ticket_id}`}
+          >
+            Edit
+          </button>
+          <button
+            onClick={handleRefine}
+            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors font-medium"
+            data-testid={`ticket-card-refine-${ticket.ticket_id}`}
+          >
+            Refine
+          </button>
+        </div>
       )}
 
       {ticket.column === 'refining' && (

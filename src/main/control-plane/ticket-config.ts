@@ -73,6 +73,20 @@ export async function githubFetchTicket(ticketId: string, cwd: string): Promise<
   }
 }
 
+export async function githubFetchRawBody(ticketId: string, cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      ['issue', 'view', ticketId, '--json', 'body'],
+      { cwd, timeout: 30000, maxBuffer: 2 * 1024 * 1024 }
+    );
+    const issue = JSON.parse(stdout) as { body: string | null };
+    return issue.body ?? '';
+  } catch {
+    return null;
+  }
+}
+
 export async function githubUpdateTicket(ticketId: string, body: string, cwd: string): Promise<void> {
   await execFileAsync(
     'gh',
@@ -289,6 +303,23 @@ export async function jiraListTickets(
   }
 }
 
+export async function jiraFetchRawBody(
+  ticketId: string,
+  config: ProjectTicketConfig,
+): Promise<string | null> {
+  if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
+    return null;
+  }
+  try {
+    const url = `${config.jira_url.replace(/\/$/, '')}/rest/api/2/issue/${ticketId}?fields=description`;
+    const raw = await jiraRequest({ url, method: 'GET', auth: jiraAuth(config) });
+    const issue = JSON.parse(raw) as { fields: { description: string | null } };
+    return issue.fields.description ?? '';
+  } catch {
+    return null;
+  }
+}
+
 export async function jiraUpdateTicket(
   ticketId: string,
   body: string,
@@ -362,6 +393,17 @@ export async function listTicketsWithConfig(
     return githubListTickets(cwd, label);
   }
   return jiraListTickets(config, label);
+}
+
+export async function fetchRawBodyWithConfig(
+  ticketId: string,
+  config: ProjectTicketConfig,
+  cwd: string,
+): Promise<string | null> {
+  if (config.provider === 'github') {
+    return githubFetchRawBody(ticketId, cwd);
+  }
+  return jiraFetchRawBody(ticketId, config);
 }
 
 export async function updateTicketWithConfig(

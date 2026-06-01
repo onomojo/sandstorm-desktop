@@ -407,6 +407,8 @@ interface AppState {
   /** ID of the session currently shown in the refine dialog (null = new refinement). */
   currentRefinementSessionId: string | null;
   showCreateTicketDialog: boolean;
+  showEditTicketDialog: boolean;
+  editTicketTarget: { ticketId: string; projectDir: string } | null;
   showStartTicketDialog: boolean;
   showCreatePRDialog: { stackId: string; initialError?: string } | null;
   /**
@@ -571,6 +573,8 @@ interface AppState {
   /** Cancel the current session for a ticket and start a fresh spec-gate run. Opens the dialog to the new session. */
   retryRefinementForTicket: (ticketId: string, projectDir: string) => Promise<void>;
   setShowCreateTicketDialog: (show: boolean) => void;
+  setShowEditTicketDialog: (show: boolean) => void;
+  openEditTicketDialog: (ticketId: string, projectDir: string) => void;
   setShowStartTicketDialog: (show: boolean) => void;
   setShowCreatePRDialog: (state: { stackId: string; initialError?: string } | null) => void;
   setPrDraft: (stackId: string, draft: { title: string; body: string }) => void;
@@ -759,6 +763,8 @@ declare global {
         listRefinements: () => Promise<RefinementSession[]>;
         create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
         list: (projectDir: string) => Promise<TicketBoardEntry[]>;
+        fetchRaw: (ticketId: string, projectDir: string) => Promise<string | null>;
+        update: (projectDir: string, ticketId: string, body: string) => Promise<void>;
       };
       ticketBoard: {
         setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
@@ -862,6 +868,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   refinementSessions: [],
   currentRefinementSessionId: null,
   showCreateTicketDialog: false,
+  showEditTicketDialog: false,
+  editTicketTarget: null,
   showStartTicketDialog: false,
   showCreatePRDialog: null,
   prDraftCache: {},
@@ -1499,6 +1507,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
+  setShowEditTicketDialog: (show) => set({ showEditTicketDialog: show }),
+  openEditTicketDialog: (ticketId, projectDir) => set({ showEditTicketDialog: true, editTicketTarget: { ticketId, projectDir } }),
   setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
   setShowCreatePRDialog: (state) => {
     if (!state) {

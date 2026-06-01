@@ -209,6 +209,8 @@ export interface SandstormAPI {
     listRefinements: () => Promise<unknown[]>;
     create: (projectDir: string, title: string, body: string) => Promise<{ url: string; ticketId: string }>;
     list: (projectDir: string) => Promise<unknown[]>;
+    fetchRaw: (ticketId: string, projectDir: string) => Promise<string | null>;
+    update: (projectDir: string, ticketId: string, body: string) => Promise<void>;
   };
   ticketBoard: {
     setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
@@ -395,6 +397,10 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:create', projectDir, title, body),
     list: (projectDir) =>
       ipcRenderer.invoke('tickets:list', projectDir),
+    fetchRaw: (ticketId, projectDir) =>
+      ipcRenderer.invoke('tickets:fetchRaw', ticketId, projectDir),
+    update: (projectDir, ticketId, body) =>
+      ipcRenderer.invoke('tickets:update', projectDir, ticketId, body),
   },
   ticketBoard: {
     setColumn: (ticketId, projectDir, column) =>

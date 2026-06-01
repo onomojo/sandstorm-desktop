@@ -170,6 +170,8 @@ export function mockSandstormApi() {
         url: 'https://github.com/o/r/issues/42', ticketId: '42',
       }),
       list: vi.fn().mockResolvedValue([]),
+      fetchRaw: vi.fn().mockResolvedValue('Raw ticket body'),
+      update: vi.fn().mockResolvedValue(undefined),
     },
     ticketBoard: {
       setColumn: vi.fn().mockResolvedValue(undefined),
