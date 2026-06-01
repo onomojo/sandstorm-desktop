@@ -117,7 +117,7 @@ Sandstorm Desktop is a cross-platform control plane for managing isolated agent 
 
 ## Tech stack
 
-- Electron + electron-vite (builds to `out/`)
+- Electron + electron-vite (builds to `dist/`)
 - React 18 + Tailwind CSS + Zustand
 - better-sqlite3 (native module — must be rebuilt for Electron)
 - dockerode for Docker API
@@ -223,8 +223,8 @@ Violating this rule has caused loss of unpushed work. This is a hard rule.
 
 ## Key files
 
-- `package.json` — main entry is `out/main/index.js`
-- `electron-builder.yml` — files section includes `out/**/*`
+- `package.json` — main entry is `dist/main/index.cjs`
+- `electron-builder.yml` — files section includes `dist/**/*`
 - `electron-vite.config.ts` — build config
 - `src/main/` — Electron main process
 - `src/main/scheduler/` — cron-driven scheduled-action subsystem. Dispatch
