@@ -177,6 +177,7 @@ export function mockSandstormApi() {
     pr: {
       draftBody: vi.fn().mockResolvedValue({ title: 'Test PR', body: '## Summary\n- thing\n\n## Test plan\n- [ ] check' }),
       create: vi.fn().mockResolvedValue({ url: 'https://github.com/o/r/pull/1', number: 1 }),
+      merge: vi.fn().mockResolvedValue(undefined),
       createAuto: vi.fn().mockResolvedValue({ status: 'created', url: 'https://github.com/o/r/pull/1', number: 1 }),
     },
     on: vi.fn().mockReturnValue(() => {}),

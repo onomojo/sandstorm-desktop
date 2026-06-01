@@ -1373,6 +1373,27 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     },
   );
 
+  ipcMain.handle('pr:merge', async (_event, stackId: string, prNumber: number) => {
+    const stack = await stackManager.getStackWithServices(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    const workspace = workspacePathFor(stack.project_dir, stackId);
+    try {
+      await execFileAsync(
+        'gh',
+        ['pr', 'merge', String(prNumber), '--merge'],
+        { cwd: workspace, timeout: 60000, maxBuffer: 1024 * 1024 },
+      );
+    } catch (err) {
+      // An already-merged PR is the desired end state, not a failure: swallow it so the
+      // caller still proceeds to tear down the stack and advance the card. gh reports this
+      // on stderr (e.g. "GraphQL: Pull request is already merged"); the generic execFile
+      // error message may instead read "Command failed: …", so check both.
+      const detail = err as { stderr?: unknown; message?: unknown };
+      const text = `${String(detail?.stderr ?? '')} ${String(detail?.message ?? '')}`;
+      if (!/already merged/i.test(text)) throw err;
+    }
+  });
+
   ipcMain.handle('pr:createAuto', async (_event, stackId: string) => {
     const stack = await stackManager.getStackWithServices(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);

@@ -216,6 +216,7 @@ export interface SandstormAPI {
   pr: {
     draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
     create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
+    merge: (stackId: string, prNumber: number) => Promise<void>;
     createAuto: (stackId: string) => Promise<
       | { status: 'created'; url: string; number: number }
       | { status: 'draft_failed' }
@@ -403,6 +404,8 @@ const api: SandstormAPI = {
     draftBody: (stackId) => ipcRenderer.invoke('pr:draftBody', stackId),
     create: (stackId, title, body) =>
       ipcRenderer.invoke('pr:create', stackId, title, body),
+    merge: (stackId, prNumber) =>
+      ipcRenderer.invoke('pr:merge', stackId, prNumber),
     createAuto: (stackId) => ipcRenderer.invoke('pr:createAuto', stackId),
   },
   on: (channel, callback) => {

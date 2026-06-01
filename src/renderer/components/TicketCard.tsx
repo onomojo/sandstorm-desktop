@@ -25,6 +25,8 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     startStackForTicket,
     stackCreateErrors,
     stackCreateInFlight,
+    mergeTicket,
+    mergeInFlight,
     prCreateInFlight,
     refineInFlight,
     refineStartErrors,
@@ -34,6 +36,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const stackKey = `${ticket.ticket_id}|${ticket.project_dir}`;
   const stackCreateError = stackCreateErrors[stackKey];
   const stackInFlight = stackCreateInFlight[stackKey] ?? false;
+  const mergeInflight = mergeInFlight[stackKey] ?? false;
 
   const handleRefine = () => {
     openRefineDialogFromCard(ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn);
@@ -54,7 +57,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   };
 
   const handleMerge = () => {
-    moveTicketColumn(ticket.ticket_id, ticket.project_dir, 'merged');
+    void mergeTicket(ticket.ticket_id, ticket.project_dir);
   };
 
   const handleResume = () => {
@@ -249,10 +252,11 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           )}
           <button
             onClick={handleMerge}
-            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-propen/10 text-sandstorm-state-propen border border-sandstorm-state-propen/30 hover:bg-sandstorm-state-propen/20 transition-colors font-medium"
+            disabled={mergeInflight}
+            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-propen/10 text-sandstorm-state-propen border border-sandstorm-state-propen/30 hover:bg-sandstorm-state-propen/20 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
             data-testid={`ticket-card-merge-${ticket.ticket_id}`}
           >
-            Merge
+            {mergeInflight ? 'Merging…' : 'Merge'}
           </button>
         </div>
       )}
