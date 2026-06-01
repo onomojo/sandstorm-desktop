@@ -1324,4 +1324,15 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     },
   );
 
+  ipcMain.handle('pr:merge', async (_event, stackId: string, prNumber: number) => {
+    const stack = await stackManager.getStackWithServices(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    const workspace = workspacePathFor(stack.project_dir, stackId);
+    await execFileAsync(
+      'gh',
+      ['pr', 'merge', String(prNumber), '--merge'],
+      { cwd: workspace, timeout: 60000, maxBuffer: 1024 * 1024 },
+    );
+  });
+
 }

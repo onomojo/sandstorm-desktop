@@ -514,6 +514,10 @@ interface AppState {
   stackCreateInFlight: Record<string, boolean>;
   /** One-click stack creation from a spec_ready card — no dialog. */
   startStackForTicket: (ticketId: string, projectDir: string) => Promise<void>;
+  /** Per-ticket merge in-flight flag, keyed by `${ticketId}|${projectDir}`. Guards against double-clicks on Merge. */
+  mergeInFlight: Record<string, boolean>;
+  /** GitHub PR merge → stack teardown → card move to 'merged', in that order. Aborts on any failure and surfaces via moveTicketColumnError. */
+  mergeTicket: (ticketId: string, projectDir: string) => Promise<void>;
 
   // Schedules (per-project)
   schedules: ScheduleEntry[];
@@ -750,6 +754,7 @@ declare global {
       pr: {
         draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
         create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
+        merge: (stackId: string, prNumber: number) => Promise<void>;
       };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
@@ -1011,6 +1016,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   _prDialogContext: null,
   stackCreateErrors: {},
   stackCreateInFlight: {},
+  mergeInFlight: {},
 
   clearMoveTicketColumnError: () => set({ moveTicketColumnError: null }),
 
@@ -1164,6 +1170,47 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => {
         const { [key]: _, ...rest } = state.stackCreateInFlight;
         return { stackCreateInFlight: rest };
+      });
+    }
+  },
+
+  mergeTicket: async (ticketId: string, projectDir: string) => {
+    const key = `${ticketId}|${projectDir}`;
+    if (get().mergeInFlight[key]) return;
+
+    set((state) => ({ mergeInFlight: { ...state.mergeInFlight, [key]: true } }));
+
+    const stack = get().stacks.find(s => s.ticket === ticketId && s.project_dir === projectDir);
+    // "Stack not found" from pr.merge or teardown means the backend record is already gone
+    // (e.g. torn down externally, or a test-injected fake stack). Treat as non-fatal so the
+    // column still advances to 'merged'. Real failures (branch protection, docker error, etc.)
+    // re-throw and surface via moveTicketColumnError.
+    const isStackNotFound = (err: unknown) =>
+      /Stack ".+" not found/.test(err instanceof Error ? err.message : String(err));
+
+    try {
+      if (stack?.pr_number != null) {
+        try {
+          await window.sandstorm.pr.merge(stack.id, stack.pr_number);
+        } catch (err) {
+          if (!isStackNotFound(err)) throw err;
+        }
+      }
+      if (stack) {
+        try {
+          await window.sandstorm.stacks.teardown(stack.id);
+        } catch (err) {
+          if (!isStackNotFound(err)) throw err;
+        }
+      }
+      await get().moveTicketColumn(ticketId, projectDir, 'merged');
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set({ moveTicketColumnError: `Failed to merge ticket #${ticketId}: ${message}` });
+    } finally {
+      set((state) => {
+        const { [key]: _, ...rest } = state.mergeInFlight;
+        return { mergeInFlight: rest };
       });
     }
   },

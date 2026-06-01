@@ -214,6 +214,7 @@ vi.mock('../../src/main/control-plane/ticket-config', () => ({
 // ---------------------------------------------------------------------------
 import { registerIpcHandlers } from '../../src/main/ipc';
 import { dialog, BrowserWindow } from 'electron';
+import { execFile } from 'child_process';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1469,6 +1470,50 @@ describe('IPC Handlers', () => {
   });
 
   // =========================================================================
+  // PR Merge
+  // =========================================================================
+  describe('pr:merge', () => {
+    it('invokes gh pr merge with --merge and no --delete-branch, cwd set to stack workspace', async () => {
+      const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 99, status: 'pr_created', services: [] };
+      mockStackManager.getStackWithServices.mockResolvedValue(stack);
+      (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(null, '', '');
+        },
+      );
+
+      await invokeHandler('pr:merge', 'stack-1', 99);
+
+      expect(execFile).toHaveBeenCalledWith(
+        'gh',
+        ['pr', 'merge', '99', '--merge'],
+        expect.objectContaining({ cwd: '/proj/.sandstorm/workspaces/stack-1' }),
+        expect.any(Function),
+      );
+      const callArgs = (execFile as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1) as unknown[];
+      const ghArgs = callArgs[1] as string[];
+      expect(ghArgs).not.toContain('--delete-branch');
+    });
+
+    it('throws when stack is not found', async () => {
+      mockStackManager.getStackWithServices.mockResolvedValue(null);
+      await expect(invokeHandler('pr:merge', 'missing-stack', 1)).rejects.toThrow('Stack "missing-stack" not found');
+    });
+
+    it('propagates gh CLI error to caller', async () => {
+      const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 42, status: 'pr_created', services: [] };
+      mockStackManager.getStackWithServices.mockResolvedValue(stack);
+      (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(new Error('branch protection rule'), '', '');
+        },
+      );
+
+      await expect(invokeHandler('pr:merge', 'stack-1', 42)).rejects.toThrow('branch protection rule');
+    });
+  });
+
+  // =========================================================================
   // Handler Registration Completeness
   // =========================================================================
   describe('handler registration', () => {
@@ -1568,6 +1613,7 @@ describe('IPC Handlers', () => {
       'ticket-board:set-column',
       'pr:draftBody',
       'pr:create',
+      'pr:merge',
       'projectTicketConfig:get',
       'projectTicketConfig:set',
     ];
