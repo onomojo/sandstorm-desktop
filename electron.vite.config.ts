@@ -3,10 +3,22 @@ import react from '@vitejs/plugin-react';
 import tailwindcss from 'tailwindcss';
 import autoprefixer from 'autoprefixer';
 import { resolve } from 'path';
+import { execSync } from 'child_process';
+
+function getGitCommit(): string {
+  try {
+    return execSync('git rev-parse HEAD', { encoding: 'utf-8' }).trim();
+  } catch {
+    return 'unknown';
+  }
+}
 
 export default defineConfig({
   main: {
     plugins: [externalizeDepsPlugin()],
+    define: {
+      __GIT_COMMIT__: JSON.stringify(getGitCommit()),
+    },
     build: {
       outDir: 'dist/main',
       lib: {

@@ -225,7 +225,7 @@ Violating this rule has caused loss of unpushed work. This is a hard rule.
 
 - `package.json` — main entry is `dist/main/index.cjs`
 - `electron-builder.yml` — files section includes `dist/**/*`
-- `electron-vite.config.ts` — build config
+- `electron.vite.config.ts` — build config
 - `src/main/` — Electron main process
 - `src/main/scheduler/` — cron-driven scheduled-action subsystem. Dispatch
   handler is in `src/main/index.ts`; NEVER routes to outer-Claude chat.
