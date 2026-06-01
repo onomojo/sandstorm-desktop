@@ -10,6 +10,7 @@ import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { SessionWarningModal } from './components/SessionWarningModal';
 import { SessionTokenLimitModal } from './components/SessionTokenLimitModal';
 import { ModelSettingsModal } from './components/ModelSettings';
+import { StaleWorkspaces } from './components/StaleWorkspaces';
 import { LeftRail } from './components/LeftRail';
 import { KanbanBoard } from './components/KanbanBoard';
 
@@ -273,6 +274,9 @@ export default function App() {
       {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} />}
       {showOpenProjectDialog && <OpenProjectDialog />}
       {showModelSettings && <ModelSettingsModal />}
+
+      {/* Stale workspaces modal — shown on app start when stale workspaces exist */}
+      <StaleWorkspaces />
 
       {/* Session warning modal (blocking) */}
       {showSessionWarningModal && sessionWarningLevel && sessionWarningLevel !== 'warning' && sessionWarningLevel !== 'normal' && (
