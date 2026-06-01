@@ -1532,6 +1532,33 @@ describe('IPC Handlers', () => {
 
       await expect(invokeHandler('pr:merge', 'stack-1', 42)).rejects.toThrow('branch protection rule');
     });
+
+    it('treats an already-merged PR as success (does not throw) — error message form', async () => {
+      const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 99, status: 'pr_created', services: [] };
+      mockStackManager.getStackWithServices.mockResolvedValue(stack);
+      (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(new Error('Pull request #99 is already merged'), '', '');
+        },
+      );
+
+      await expect(invokeHandler('pr:merge', 'stack-1', 99)).resolves.toBeUndefined();
+    });
+
+    it('treats an already-merged PR as success when the detail is on stderr', async () => {
+      const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 99, status: 'pr_created', services: [] };
+      mockStackManager.getStackWithServices.mockResolvedValue(stack);
+      (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          const err = Object.assign(new Error('Command failed: gh pr merge 99 --merge'), {
+            stderr: 'GraphQL: Pull request is already merged (mergePullRequest)',
+          });
+          callback(err, '', err.stderr);
+        },
+      );
+
+      await expect(invokeHandler('pr:merge', 'stack-1', 99)).resolves.toBeUndefined();
+    });
   });
 
   // =========================================================================
