@@ -42,6 +42,9 @@ import type { SpecGateResult, RefineQuestion } from '../control-plane/ticket-spe
 /** Marker that identifies comments posted by this bot. */
 export const BOT_COMMENT_MARKER = '<!-- sandstorm:bot-question -->';
 
+/** Marker that identifies answer comments posted by the interactive dialog. */
+export const ANSWER_COMMENT_MARKER = '<!-- sandstorm:user-answers -->';
+
 export interface RefineToCommentsDeps {
   listTickets: (label: string, projectDir: string) => Promise<TicketEntry[]>;
   listComments: (ticketId: string, projectDir: string) => Promise<TicketComment[]>;
@@ -82,6 +85,24 @@ export function getUserAnswersAfterBot(
       (afterTimestamp === null || c.createdAt > afterTimestamp),
   );
   return answers.map((c) => c.body).join('\n\n');
+}
+
+/**
+ * Returns the combined answer text from the most-recent ANSWER_COMMENT_MARKER comment,
+ * optionally filtered to comments created at or after sinceTimestamp.
+ */
+export function getLatestUserAnswers(
+  comments: TicketComment[],
+  sinceTimestamp?: string,
+): string {
+  const candidates = comments.filter(
+    (c) =>
+      c.body.includes(ANSWER_COMMENT_MARKER) &&
+      (sinceTimestamp === undefined || c.createdAt >= sinceTimestamp),
+  );
+  if (candidates.length === 0) return '';
+  const latest = candidates[candidates.length - 1];
+  return latest.body.replace(ANSWER_COMMENT_MARKER, '').trim();
 }
 
 export function formatQuestionComment(questions: RefineQuestion[], gateSummary: string): string {
