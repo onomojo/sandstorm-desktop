@@ -84,21 +84,30 @@ export function buildDraftPrompt(opts: {
   commits: string;
   diffStat: string;
   taskOutputTail: string;
+  /** Contents of <workspace>/.github/pull_request_template.md, or null to use the built-in. */
+  projectTemplate?: string | null;
 }): string {
-  const ticketLine = opts.ticket
-    ? `Closes #${opts.ticket.replace(/^#/, '')}`
-    : '';
+  const ticketId = opts.ticket ? opts.ticket.replace(/^#/, '') : null;
+  const ticketLine = ticketId ? `Closes #${ticketId}` : '';
+  const titleSchema = ticketId
+    ? `"[${ticketId}] fix: <short description>"`
+    : `"<≤70 chars summary>"`;
+  const bodyStructure = opts.projectTemplate
+    ? `Follow this project's PR template exactly (fill every section; do not add or remove sections):
+
+${opts.projectTemplate}`
+    : `## Summary
+- 1–3 bullets describing the user's intent and how this change achieves it (no file-by-file narration — the diff shows that)
+
+## QA plan
+- [ ] steps a reviewer takes to manually validate (manual steps only — do NOT list automated checks; the CI suite runs those separately)`;
   return `You are drafting a GitHub pull request body for changes on the branch "${opts.branch}".
 
 Output STRICT JSON only — no prose, no code fences, no preamble. Schema:
-{"title": "<≤70 chars summary>", "body": "<markdown body>"}
+{"title": ${titleSchema}, "body": "<markdown body>"}
 
 Body structure:
-## Summary
-- 1–3 bullets describing what changed and WHY (not what files moved)
-
-## Test plan
-- [ ] checklist of how a reviewer should validate
+${bodyStructure}
 
 ${ticketLine ? ticketLine + '\n\n' : ''}Hard limits: title ≤ 70 chars, body ≤ ${PR_BODY_MAX_BYTES} bytes.
 Do NOT include "Generated with Claude Code" boilerplate. Do NOT include emojis.
@@ -171,6 +180,18 @@ export async function draftPullRequest(args: DraftPRArgs, deps: DraftDeps): Prom
     throw new Error(`Stack workspace not found at ${args.workspace}`);
   }
   const baseBranch = args.baseBranch || 'main';
+
+  // Probe for the project's own PR template at the standard GitHub location.
+  let projectTemplate: string | null = null;
+  const templatePath = path.join(args.workspace, '.github', 'pull_request_template.md');
+  try {
+    const raw = fs.readFileSync(templatePath, 'utf-8');
+    const trimmed = raw.trim();
+    if (trimmed) projectTemplate = trimmed;
+  } catch {
+    // file absent — fall back to built-in
+  }
+
   const [commits, diffStat, branch, tail] = await Promise.all([
     gitCommits(args.workspace, baseBranch),
     gitDiffStat(args.workspace, baseBranch),
@@ -184,6 +205,7 @@ export async function draftPullRequest(args: DraftPRArgs, deps: DraftDeps): Prom
     commits,
     diffStat,
     taskOutputTail: tail,
+    projectTemplate,
   });
   const raw = await deps.runEphemeral(prompt, args.workspace, PR_DRAFT_TIMEOUT_MS);
   return parseDraftResponse(raw);
