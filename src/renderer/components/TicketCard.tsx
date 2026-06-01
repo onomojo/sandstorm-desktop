@@ -16,13 +16,14 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const {
     moveTicketColumn,
     openRefineDialogFromCard,
-    openCreatePRDialogForTicket,
+    createPRAutomatic,
     openRefinementSession,
     openRefineTicketDialogWith,
     refinementSessions,
     startStackForTicket,
     stackCreateErrors,
     stackCreateInFlight,
+    prCreateInFlight,
   } = useAppStore();
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
@@ -40,9 +41,11 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     void startStackForTicket(ticket.ticket_id, ticket.project_dir);
   };
 
+  const prInFlight = stack ? (prCreateInFlight[stack.id] ?? false) : false;
+
   const handleCreatePR = () => {
-    if (stack) {
-      openCreatePRDialogForTicket(stack.id, ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn);
+    if (stack && !prInFlight) {
+      void createPRAutomatic(stack.id, ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn);
     }
   };
 
@@ -143,13 +146,23 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               <span className="text-xs text-sandstorm-muted">{stack.status}</span>
             </div>
           )}
-          {stack && makePrEligible(stack) && (
+          {stack && (makePrEligible(stack) || prInFlight) && (
             <button
               onClick={handleCreatePR}
-              className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-instack/10 text-sandstorm-state-instack border border-sandstorm-state-instack/30 hover:bg-sandstorm-state-instack/20 transition-colors font-medium"
+              disabled={prInFlight}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-instack/10 text-sandstorm-state-instack border border-sandstorm-state-instack/30 hover:bg-sandstorm-state-instack/20 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
               data-testid={`ticket-card-create-pr-${ticket.ticket_id}`}
             >
-              Create PR
+              {prInFlight ? (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="animate-spin flex-shrink-0">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="48" strokeDashoffset="32"/>
+                  </svg>
+                  Creating PR…
+                </>
+              ) : (
+                'Create PR'
+              )}
             </button>
           )}
         </div>

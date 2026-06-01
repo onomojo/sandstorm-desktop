@@ -171,14 +171,99 @@ describe('TicketCard', () => {
     expect(screen.getByTestId('ticket-card-create-pr-42')).toBeDefined();
   });
 
-  it('in_stack: clicking Create PR with an eligible stack opens PR dialog and moves column to pr_open', async () => {
+  it('in_stack: clicking Create PR calls pr.createAuto and does NOT open the dialog on success', async () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    api.pr.createAuto.mockResolvedValue({ status: 'created', url: 'https://github.com/o/r/pull/1', number: 1 });
+    useAppStore.setState({ boardTickets: [makeTicket('in_stack') as any] });
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
+    await waitFor(() => expect(api.pr.createAuto).toHaveBeenCalledWith('s1'));
+    expect(useAppStore.getState().showCreatePRDialog).toBeNull();
+  });
+
+  it('in_stack: clicking Create PR moves ticket to pr_open immediately (optimistic)', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    let resolveAuto!: (v: any) => void;
+    api.pr.createAuto.mockReturnValue(new Promise((r) => { resolveAuto = r; }));
+    useAppStore.setState({ boardTickets: [makeTicket('in_stack') as any] });
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
+    // Optimistic move happens synchronously before createAuto resolves
+    await waitFor(() => {
+      const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+      expect(entry?.column).toBe('pr_open');
+    });
+    expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'pr_open');
+    resolveAuto({ status: 'created', url: 'https://github.com/o/r/pull/1', number: 1 });
+    await waitFor(() => expect(useAppStore.getState().prCreateInFlight['s1']).toBeFalsy());
+  });
+
+  it('in_stack: shows Creating PR... spinner while prCreateInFlight is set', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    let resolveAuto!: (v: any) => void;
+    api.pr.createAuto.mockReturnValue(new Promise((r) => { resolveAuto = r; }));
     render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
     fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
     await waitFor(() => {
-      expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 's1' });
+      expect(screen.getByTestId('ticket-card-create-pr-42').textContent).toContain('Creating PR');
     });
-    expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'pr_open');
+    const btn = screen.getByTestId('ticket-card-create-pr-42');
+    expect(btn.hasAttribute('disabled')).toBe(true);
+    resolveAuto({ status: 'created', url: 'https://github.com/o/r/pull/1', number: 1 });
+    await waitFor(() => {
+      expect(screen.queryByText(/Creating PR/)).toBeNull();
+    });
+  });
+
+  it('in_stack: double-click does not call createAuto twice', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    let resolveAuto!: (v: any) => void;
+    api.pr.createAuto.mockReturnValue(new Promise((r) => { resolveAuto = r; }));
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    const btn = screen.getByTestId('ticket-card-create-pr-42');
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    resolveAuto({ status: 'created', url: 'https://github.com/o/r/pull/1', number: 1 });
+    await waitFor(() => expect(useAppStore.getState().prCreateInFlight['s1']).toBeFalsy());
+    expect(api.pr.createAuto).toHaveBeenCalledTimes(1);
+  });
+
+  it('in_stack: opens dialog with no cache when draft fails (Q3 fallback)', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    api.pr.createAuto.mockResolvedValue({ status: 'draft_failed' });
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
+    await waitFor(() => {
+      expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 's1', initialError: undefined });
+    });
+    expect(useAppStore.getState().prDraftCache['s1']).toBeUndefined();
+  });
+
+  it('in_stack: opens dialog pre-populated with draft and error when create fails (Q4 fallback)', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    api.pr.createAuto.mockResolvedValue({
+      status: 'create_failed',
+      draft: { title: 'pre-drafted', body: 'pre-body' },
+      error: 'gh pr create failed after 5 attempts',
+    });
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
+    await waitFor(() => {
+      expect(useAppStore.getState().showCreatePRDialog?.stackId).toBe('s1');
+      expect(useAppStore.getState().showCreatePRDialog?.initialError).toBe('gh pr create failed after 5 attempts');
+    });
+    expect(useAppStore.getState().prDraftCache['s1']).toEqual({ title: 'pre-drafted', body: 'pre-body' });
+  });
+
+  it('in_stack: spinner clears and dialog opens when createAuto rejects unexpectedly', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    api.pr.createAuto.mockRejectedValue(new Error('IPC crash'));
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
+    await waitFor(() => {
+      expect(useAppStore.getState().showCreatePRDialog?.stackId).toBe('s1');
+      expect(useAppStore.getState().prCreateInFlight['s1']).toBeFalsy();
+    });
   });
 
   it('in_stack: Create PR button absent when no matching stack', () => {

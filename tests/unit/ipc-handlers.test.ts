@@ -1568,6 +1568,7 @@ describe('IPC Handlers', () => {
       'ticket-board:set-column',
       'pr:draftBody',
       'pr:create',
+      'pr:createAuto',
       'projectTicketConfig:get',
       'projectTicketConfig:set',
     ];

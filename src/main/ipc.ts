@@ -83,6 +83,7 @@ import {
   workspacePathFor,
   createPullRequest,
 } from './control-plane/pr-creator';
+import { showNotification } from './tray';
 import { createTicketWithConfig } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
@@ -1323,5 +1324,59 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       );
     },
   );
+
+  ipcMain.handle('pr:createAuto', async (_event, stackId: string) => {
+    const stack = await stackManager.getStackWithServices(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+
+    const workspace = workspacePathFor(stack.project_dir, stackId);
+
+    let draft: { title: string; body: string };
+    try {
+      draft = await draftPullRequest(
+        { stackId, workspace, ticket: stack.ticket },
+        {
+          runEphemeral: (prompt, projectDir, timeoutMs) =>
+            agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs),
+          fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
+        },
+      );
+    } catch {
+      return { status: 'draft_failed' as const };
+    }
+
+    if (!fs.existsSync(workspace)) {
+      return { status: 'create_failed' as const, draft, error: 'Workspace directory not found' };
+    }
+
+    try {
+      const result = await createPullRequest(
+        { stackId, title: draft.title, body: draft.body },
+        {
+          workspace,
+          runGitPush: async (commitMsg) => { await stackManager.push(stackId, commitMsg); },
+          createPROnHost: async (prTitle, bodyFilePath, head, base) => {
+            const { stdout } = await execFileAsync(
+              'gh',
+              ['pr', 'create', '--title', prTitle, '--body-file', bodyFilePath, '--base', base, '--head', head],
+              { cwd: workspace, timeout: 60000, maxBuffer: 1024 * 1024 },
+            );
+            return stdout;
+          },
+          checkoutBranch: (branch) =>
+            stackManager.execInContainer(stackId, ['git', 'checkout', '-b', branch]),
+          setPullRequest: (url, num) => stackManager.setPullRequest(stackId, url, num),
+        },
+      );
+      showNotification('PR created', result.url);
+      return { status: 'created' as const, url: result.url, number: result.number };
+    } catch (err) {
+      return {
+        status: 'create_failed' as const,
+        draft,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+  });
 
 }
