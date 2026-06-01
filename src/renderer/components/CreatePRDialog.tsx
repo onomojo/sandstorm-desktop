@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useAppStore } from '../store';
 
-export function CreatePRDialog({ stackId }: { stackId: string }) {
+export function CreatePRDialog({ stackId, initialError }: { stackId: string; initialError?: string }) {
   const { setShowCreatePRDialog, refreshStacks, prDraftCache, setPrDraft, clearPrDraft } = useAppStore();
   const cached = prDraftCache[stackId];
 
@@ -9,7 +9,7 @@ export function CreatePRDialog({ stackId }: { stackId: string }) {
   const [body, setBody] = useState(cached?.body ?? '');
   const [drafting, setDrafting] = useState(!cached);
   const [creating, setCreating] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(initialError ?? null);
 
   // Don't re-draft on reopen — hydrate from the store-level cache instead.
   // Only call draftBody when nothing is cached for this stack yet (#320).

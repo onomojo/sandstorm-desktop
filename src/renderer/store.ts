@@ -408,7 +408,7 @@ interface AppState {
   currentRefinementSessionId: string | null;
   showCreateTicketDialog: boolean;
   showStartTicketDialog: boolean;
-  showCreatePRDialog: { stackId: string } | null;
+  showCreatePRDialog: { stackId: string; initialError?: string } | null;
   /**
    * Drafted PR title/body keyed by stackId — survives the dialog being
    * closed/reopened so the user doesn't pay for another ephemeral Claude
@@ -503,8 +503,8 @@ interface AppState {
   openRefineDialogFromCard: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
   /** Opens the new stack dialog for a ticket and moves it to 'in_stack' optimistically. Reverts on cancel. */
   openNewStackDialogForTicket: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
-  /** Opens the Create PR dialog for a ticket and moves it to 'pr_open' optimistically. Reverts on cancel. */
-  openCreatePRDialogForTicket: (stackId: string, ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
+  /** Opens the Create PR dialog as fallback (Q3/Q4). Does NOT move the ticket column optimistically. */
+  openCreatePRDialogForTicket: (stackId: string, ticketId: string, projectDir: string, previousColumn: KanbanColumn, initialError?: string) => void;
   _refineDialogContext: { ticketId: string; projectDir: string; previousColumn: KanbanColumn } | null;
   _newStackDialogContext: { ticketId: string; projectDir: string; previousColumn: KanbanColumn; stackCreated: boolean } | null;
   _prDialogContext: { stackId: string; ticketId: string; projectDir: string; previousColumn: KanbanColumn; prCreated: boolean } | null;
@@ -518,6 +518,10 @@ interface AppState {
   refineStartErrors: Record<string, string>;
   /** One-click stack creation from a spec_ready card — no dialog. */
   startStackForTicket: (ticketId: string, projectDir: string) => Promise<void>;
+  /** Per-stack in-flight flag for background PR creation, keyed by stackId. */
+  prCreateInFlight: Record<string, boolean>;
+  /** One-click PR creation: draft + create in background; opens fallback dialog on failure. */
+  createPRAutomatic: (stackId: string, ticketId: string, projectDir: string, previousColumn: KanbanColumn) => Promise<void>;
 
   // Schedules (per-project)
   schedules: ScheduleEntry[];
@@ -564,7 +568,7 @@ interface AppState {
   retryRefinementForTicket: (ticketId: string, projectDir: string) => Promise<void>;
   setShowCreateTicketDialog: (show: boolean) => void;
   setShowStartTicketDialog: (show: boolean) => void;
-  setShowCreatePRDialog: (state: { stackId: string } | null) => void;
+  setShowCreatePRDialog: (state: { stackId: string; initialError?: string } | null) => void;
   setPrDraft: (stackId: string, draft: { title: string; body: string }) => void;
   clearPrDraft: (stackId: string) => void;
   setLoading: (loading: boolean) => void;
@@ -758,6 +762,11 @@ declare global {
       pr: {
         draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
         create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
+        createAuto: (stackId: string) => Promise<
+          | { status: 'created'; url: string; number: number }
+          | { status: 'draft_failed' }
+          | { status: 'create_failed'; draft: { title: string; body: string }; error: string }
+        >;
       };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
@@ -1020,6 +1029,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   _prDialogContext: null,
   stackCreateErrors: {},
   stackCreateInFlight: {},
+  prCreateInFlight: {},
   refineInFlight: {},
   refineStartErrors: {},
 
@@ -1153,12 +1163,11 @@ export const useAppStore = create<AppState>((set, get) => ({
     void get().moveTicketColumn(ticketId, projectDir, 'in_stack');
   },
 
-  openCreatePRDialogForTicket: (stackId, ticketId, projectDir, previousColumn) => {
+  openCreatePRDialogForTicket: (stackId, ticketId, projectDir, previousColumn, initialError?: string) => {
     set({
-      showCreatePRDialog: { stackId },
+      showCreatePRDialog: { stackId, initialError },
       _prDialogContext: { stackId, ticketId, projectDir, previousColumn, prCreated: false },
     });
-    void get().moveTicketColumn(ticketId, projectDir, 'pr_open');
   },
 
   startStackForTicket: async (ticketId: string, projectDir: string) => {
@@ -1204,6 +1213,32 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => {
         const { [key]: _, ...rest } = state.stackCreateInFlight;
         return { stackCreateInFlight: rest };
+      });
+    }
+  },
+
+  createPRAutomatic: async (stackId, ticketId, projectDir, previousColumn) => {
+    if (get().prCreateInFlight[stackId]) return;
+    set((state) => ({ prCreateInFlight: { ...state.prCreateInFlight, [stackId]: true } }));
+    // Optimistic move: advance to pr_open immediately so the card moves without waiting
+    // for the IPC round-trip. If the call fails and the user cancels the fallback dialog,
+    // setShowCreatePRDialog reverts to previousColumn.
+    void get().moveTicketColumn(ticketId, projectDir, 'pr_open');
+    try {
+      const result = await window.sandstorm.pr.createAuto(stackId);
+      if (result.status === 'draft_failed') {
+        get().openCreatePRDialogForTicket(stackId, ticketId, projectDir, previousColumn);
+      } else if (result.status === 'create_failed') {
+        get().setPrDraft(stackId, result.draft);
+        get().openCreatePRDialogForTicket(stackId, ticketId, projectDir, previousColumn, result.error);
+      }
+      // On 'created': card is already at pr_open; stacks:updated refreshes the stack record
+    } catch {
+      get().openCreatePRDialogForTicket(stackId, ticketId, projectDir, previousColumn);
+    } finally {
+      set((state) => {
+        const { [stackId]: _, ...rest } = state.prCreateInFlight;
+        return { prCreateInFlight: rest };
       });
     }
   },
@@ -1424,7 +1459,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       if (ctx) {
         set({ _prDialogContext: null });
         if (!ctx.prCreated) {
-          void get().moveTicketColumn(ctx.ticketId, ctx.projectDir, ctx.previousColumn);
+          // Only revert if the ticket was actually moved (e.g. by the optimistic update in
+          // createPRAutomatic). When the dialog was opened without a prior column move the
+          // current column equals previousColumn, so this is a no-op and setColumn is not called.
+          const currentColumn = get().boardTickets.find(
+            (t) => t.ticket_id === ctx.ticketId && t.project_dir === ctx.projectDir,
+          )?.column;
+          if (currentColumn !== ctx.previousColumn) {
+            void get().moveTicketColumn(ctx.ticketId, ctx.projectDir, ctx.previousColumn);
+          }
         }
       }
     }

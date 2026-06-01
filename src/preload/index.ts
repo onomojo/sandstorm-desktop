@@ -216,6 +216,11 @@ export interface SandstormAPI {
   pr: {
     draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
     create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
+    createAuto: (stackId: string) => Promise<
+      | { status: 'created'; url: string; number: number }
+      | { status: 'draft_failed' }
+      | { status: 'create_failed'; draft: { title: string; body: string }; error: string }
+    >;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
@@ -398,6 +403,7 @@ const api: SandstormAPI = {
     draftBody: (stackId) => ipcRenderer.invoke('pr:draftBody', stackId),
     create: (stackId, title, body) =>
       ipcRenderer.invoke('pr:create', stackId, title, body),
+    createAuto: (stackId) => ipcRenderer.invoke('pr:createAuto', stackId),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

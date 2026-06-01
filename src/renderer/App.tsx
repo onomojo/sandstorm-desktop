@@ -271,7 +271,7 @@ export default function App() {
       {showRefineTicketDialog && <RefineTicketDialog />}
       {showCreateTicketDialog && <CreateTicketDialog />}
       {showStartTicketDialog && <StartTicketDialog />}
-      {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} />}
+      {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} initialError={showCreatePRDialog.initialError} />}
       {showOpenProjectDialog && <OpenProjectDialog />}
       {showModelSettings && <ModelSettingsModal />}
 

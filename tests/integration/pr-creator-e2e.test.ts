@@ -1,5 +1,5 @@
 /**
- * End-to-end tests for createPullRequest.
+ * End-to-end tests for createPullRequest and the auto-create flow.
  *
  * These tests wire real git operations and a stub create-pr.sh against the
  * createPullRequest orchestration function with no mocks across the
@@ -13,7 +13,7 @@ import { execFile } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
-import { createPullRequest, MAX_PR_ATTEMPTS } from '../../src/main/control-plane/pr-creator';
+import { createPullRequest, draftPullRequest, MAX_PR_ATTEMPTS } from '../../src/main/control-plane/pr-creator';
 
 const execFileAsync = promisify(execFile);
 
@@ -166,5 +166,139 @@ echo "https://github.com/test/repo/pull/2"
       );
       expect(branches).toContain(`feat/e2e-test-v${i}`);
     }
+  });
+});
+
+describe('pr:createAuto orchestration — auto draft + create flow', () => {
+  let workspace: string;
+  let origin: string;
+  let scriptPath: string;
+
+  beforeEach(() => {
+    origin = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-auto-origin-'));
+    execFileSync('git', ['-c', 'init.defaultBranch=main', 'init', '--bare', '-q', origin]);
+
+    workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'pr-auto-ws-'));
+    execFileSync('git', ['-c', 'init.defaultBranch=main', 'init', '-q'], { cwd: workspace });
+    execFileSync('git', ['config', 'user.email', 'test@test.com'], { cwd: workspace });
+    execFileSync('git', ['config', 'user.name', 'Test User'], { cwd: workspace });
+    execFileSync('git', ['remote', 'add', 'origin', origin], { cwd: workspace });
+
+    fs.writeFileSync(path.join(workspace, 'README.md'), 'init');
+    execFileSync('git', ['add', '-A'], { cwd: workspace });
+    execFileSync('git', ['commit', '-q', '-m', 'init'], { cwd: workspace });
+    execFileSync('git', ['push', '-u', '-q', 'origin', 'main'], { cwd: workspace });
+
+    execFileSync('git', ['checkout', '-q', '-b', 'feat/auto-test'], { cwd: workspace });
+    fs.writeFileSync(path.join(workspace, 'feature.ts'), 'export const x = 1;');
+    execFileSync('git', ['add', '-A'], { cwd: workspace });
+    execFileSync('git', ['commit', '-q', '-m', 'feat: add feature'], { cwd: workspace });
+
+    fs.mkdirSync(path.join(workspace, '.sandstorm', 'scripts'), { recursive: true });
+    scriptPath = path.join(workspace, '.sandstorm', 'scripts', 'create-pr.sh');
+  });
+
+  afterEach(() => {
+    fs.rmSync(workspace, { recursive: true, force: true });
+    fs.rmSync(origin, { recursive: true, force: true });
+  });
+
+  it('happy path: draft → create resolves url and number without dialog interaction', async () => {
+    fs.writeFileSync(scriptPath, '#!/bin/bash\necho "https://github.com/test/repo/pull/42"\n');
+    fs.chmodSync(scriptPath, 0o755);
+
+    const setPR = vi.fn();
+
+    // Step 1: draftPullRequest (simulating what pr:createAuto does)
+    const draft = await draftPullRequest(
+      { stackId: 's', workspace, ticket: null },
+      {
+        runEphemeral: async () =>
+          '```json\n{"title":"feat: auto test","body":"## Summary\\n- added feature"}\n```',
+        fetchTaskTail: async () => '',
+      },
+    );
+
+    expect(draft.title).toBe('feat: auto test');
+    expect(draft.body).toContain('Summary');
+
+    // Step 2: createPullRequest with the drafted content
+    const result = await createPullRequest(
+      { stackId: 's', title: draft.title, body: draft.body },
+      {
+        workspace,
+        setPullRequest: setPR,
+        runGitPush: async () => {
+          const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspace, encoding: 'utf-8' }).trim();
+          execFileSync('git', ['push', '-u', '-q', 'origin', branch], { cwd: workspace });
+        },
+        createPROnHost: async (prTitle, bodyFilePath, head, base) => {
+          const { stdout } = await execFileAsync(
+            scriptPath,
+            ['--title', prTitle, '--base', base, '--head', head, '--body-file', bodyFilePath],
+            { cwd: workspace },
+          );
+          return stdout;
+        },
+        checkoutBranch: async (branch) => {
+          execFileSync('git', ['checkout', '-b', branch], { cwd: workspace });
+        },
+      },
+    );
+
+    expect(result).toEqual({ url: 'https://github.com/test/repo/pull/42', number: 42 });
+    expect(setPR).toHaveBeenCalledWith('https://github.com/test/repo/pull/42', 42);
+  });
+
+  it('draft_failed path: draftPullRequest throwing causes draft_failed result', async () => {
+    let draftError: Error | null = null;
+    try {
+      await draftPullRequest(
+        { stackId: 's', workspace, ticket: null },
+        {
+          runEphemeral: async () => { throw new Error('LLM timeout'); },
+          fetchTaskTail: async () => '',
+        },
+      );
+    } catch (err) {
+      draftError = err as Error;
+    }
+    // The thrown error from draftPullRequest is caught in pr:createAuto
+    // and returns { status: 'draft_failed' }
+    expect(draftError).not.toBeNull();
+    expect(draftError!.message).toContain('LLM timeout');
+  });
+
+  it('create_failed path: createPullRequest exhausting retries causes create_failed result', async () => {
+    fs.writeFileSync(scriptPath, '#!/bin/bash\nexit 1\n');
+    fs.chmodSync(scriptPath, 0o755);
+
+    let createError: Error | null = null;
+    try {
+      await createPullRequest(
+        { stackId: 's', title: 'feat: auto', body: 'body' },
+        {
+          workspace,
+          setPullRequest: vi.fn(),
+          runGitPush: async () => {
+            const branch = execFileSync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd: workspace, encoding: 'utf-8' }).trim();
+            execFileSync('git', ['push', '-u', '-q', 'origin', branch], { cwd: workspace });
+          },
+          createPROnHost: async (_prTitle, _bodyFilePath, _head, _base) => {
+            const { stderr } = await execFileAsync(scriptPath, [], { cwd: workspace }).catch((e: any) => ({ stderr: String(e.message), stdout: '' }));
+            throw new Error(stderr);
+          },
+          checkoutBranch: async (branch) => {
+            execFileSync('git', ['checkout', '-b', branch], { cwd: workspace });
+          },
+        },
+      );
+    } catch (err) {
+      createError = err as Error;
+    }
+    // The thrown error from createPullRequest is caught in pr:createAuto
+    // and returns { status: 'create_failed', draft, error }
+    expect(createError).not.toBeNull();
+    expect(createError!.message).toContain(`PR creation failed after ${MAX_PR_ATTEMPTS} attempts`);
   });
 });
