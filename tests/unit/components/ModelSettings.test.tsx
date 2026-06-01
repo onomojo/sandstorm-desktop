@@ -186,5 +186,98 @@ describe('ModelSettingsModal', () => {
         expect(urlInput.value).toBe('https://existing.atlassian.net');
       });
     });
+
+    describe('Test Connection button (#435)', () => {
+      beforeEach(async () => {
+        render(<ModelSettingsModal />);
+        fireEvent.click(screen.getByTestId('model-settings-tab-ticketing'));
+        await waitFor(() => {
+          expect(screen.getByTestId('ticket-provider-jira')).toBeDefined();
+        });
+        fireEvent.click(screen.getByTestId('ticket-provider-jira'));
+        // Fill in creds so button is enabled
+        fireEvent.change(screen.getByTestId('jira-url'), { target: { value: 'https://acme.atlassian.net' } });
+        fireEvent.change(screen.getByTestId('jira-username'), { target: { value: 'user@acme.com' } });
+        fireEvent.change(screen.getByTestId('jira-api-token'), { target: { value: 'secret' } });
+      });
+
+      it('shows Test Connection button in the Jira section', () => {
+        expect(screen.getByTestId('jira-test-connection')).toBeDefined();
+      });
+
+      it('shows Testing… and disables button while in-flight', async () => {
+        let resolve: (val: unknown) => void;
+        const pending = new Promise((r) => { resolve = r; });
+        api.tickets.testJiraConnection.mockReturnValueOnce(pending);
+
+        fireEvent.click(screen.getByTestId('jira-test-connection'));
+
+        await waitFor(() => {
+          const btn = screen.getByTestId('jira-test-connection') as HTMLButtonElement;
+          expect(btn.textContent).toBe('Testing…');
+          expect(btn.disabled).toBe(true);
+        });
+
+        // Resolve to avoid dangling promise
+        resolve!({ auth: { ok: true, displayName: 'X' }, jql: { ok: true, count: 1 } });
+      });
+
+      it('button is disabled when required creds are empty', () => {
+        fireEvent.change(screen.getByTestId('jira-url'), { target: { value: '' } });
+        const btn = screen.getByTestId('jira-test-connection') as HTMLButtonElement;
+        expect(btn.disabled).toBe(true);
+      });
+
+      it('shows success-with-count state after successful connection', async () => {
+        api.tickets.testJiraConnection.mockResolvedValueOnce({
+          auth: { ok: true, displayName: 'Alice Smith' },
+          jql: { ok: true, count: 5 },
+        });
+        fireEvent.click(screen.getByTestId('jira-test-connection'));
+        await waitFor(() => {
+          expect(screen.getByTestId('jira-test-auth-ok')).toBeDefined();
+          expect(screen.getByTestId('jira-test-auth-ok').textContent).toContain('Alice Smith');
+        });
+        expect(screen.getByTestId('jira-test-jql-ok').textContent).toContain('5 tickets');
+      });
+
+      it('shows auth-fail state when auth fails', async () => {
+        api.tickets.testJiraConnection.mockResolvedValueOnce({
+          auth: { ok: false, status: 401, message: 'Unauthorized' },
+          jql: null,
+        });
+        fireEvent.click(screen.getByTestId('jira-test-connection'));
+        await waitFor(() => {
+          expect(screen.getByTestId('jira-test-auth-fail')).toBeDefined();
+          expect(screen.getByTestId('jira-test-auth-fail').textContent).toContain('401');
+        });
+        expect(screen.queryByTestId('jira-test-jql-ok')).toBeNull();
+        expect(screen.queryByTestId('jira-test-jql-fail')).toBeNull();
+      });
+
+      it('shows jql-empty hint when auth passes but JQL returns 0', async () => {
+        api.tickets.testJiraConnection.mockResolvedValueOnce({
+          auth: { ok: true, displayName: 'Bob' },
+          jql: { ok: true, count: 0 },
+        });
+        fireEvent.click(screen.getByTestId('jira-test-connection'));
+        await waitFor(() => {
+          expect(screen.getByTestId('jira-test-auth-ok')).toBeDefined();
+        });
+        expect(screen.getByTestId('jira-test-jql-ok').textContent).toContain('filter may be excluding everything');
+      });
+
+      it('auth and jql results are visually separate elements', async () => {
+        api.tickets.testJiraConnection.mockResolvedValueOnce({
+          auth: { ok: true, displayName: 'Carol' },
+          jql: { ok: false, status: 400, message: 'Bad JQL' },
+        });
+        fireEvent.click(screen.getByTestId('jira-test-connection'));
+        await waitFor(() => {
+          expect(screen.getByTestId('jira-test-auth-ok')).toBeDefined();
+          expect(screen.getByTestId('jira-test-jql-fail')).toBeDefined();
+        });
+      });
+    });
   });
 });

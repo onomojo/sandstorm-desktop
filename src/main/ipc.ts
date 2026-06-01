@@ -84,7 +84,8 @@ import {
   createPullRequest,
 } from './control-plane/pr-creator';
 import { showNotification } from './tray';
-import { createTicketWithConfig } from './control-plane/ticket-config';
+import { createTicketWithConfig, testJiraConnection } from './control-plane/ticket-config';
+import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
@@ -1290,6 +1291,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
     // Fetch from the project's configured ticket provider (built-in, no per-project
     // script). When no provider is configured, skip and return existing board rows.
+    let listError: TicketListError | null = null;
     const config = registry.getProjectTicketConfig(normalizedDir);
     if (config) {
       try {
@@ -1303,13 +1305,25 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           if (deletedCount > 0) {
             console.log(`[tickets:list] Removed ${deletedCount} closed early-column ticket(s) from board for project: ${normalizedDir}`);
           }
+        } else {
+          listError = result.error;
+          console.error('[tickets:list] Failed to fetch tickets from provider:', result.error);
         }
       } catch (err) {
         console.error('[tickets:list] Failed to fetch tickets from provider:', err);
       }
     }
 
-    return registry.listBoardTickets(normalizedDir);
+    return { tickets: registry.listBoardTickets(normalizedDir), error: listError };
+  });
+
+  ipcMain.handle('tickets:testJiraConnection', async (_event, params: {
+    jiraUrl: string;
+    jiraUsername: string;
+    jiraApiToken: string;
+    label?: string;
+  }) => {
+    return testJiraConnection(params);
   });
 
   ipcMain.handle('ticket-board:set-column', async (_event, ticketId: string, projectDir: string, column: string) => {

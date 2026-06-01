@@ -208,7 +208,16 @@ export interface SandstormAPI {
     cancelRefinement: (sessionId: string) => Promise<void>;
     listRefinements: () => Promise<unknown[]>;
     create: (projectDir: string, title: string, body: string) => Promise<{ url: string; ticketId: string }>;
-    list: (projectDir: string) => Promise<unknown[]>;
+    list: (projectDir: string) => Promise<{ tickets: unknown[]; error: unknown }>;
+    testJiraConnection: (params: {
+      jiraUrl: string;
+      jiraUsername: string;
+      jiraApiToken: string;
+      label?: string;
+    }) => Promise<{
+      auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
+      jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+    }>;
   };
   ticketBoard: {
     setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
@@ -392,8 +401,13 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:listRefinements'),
     create: (projectDir, title, body) =>
       ipcRenderer.invoke('tickets:create', projectDir, title, body),
-    list: (projectDir) =>
-      ipcRenderer.invoke('tickets:list', projectDir),
+    list: async (projectDir) => {
+      const raw = await ipcRenderer.invoke('tickets:list', projectDir);
+      if (Array.isArray(raw)) return { tickets: raw, error: null };
+      return raw;
+    },
+    testJiraConnection: (params) =>
+      ipcRenderer.invoke('tickets:testJiraConnection', params),
   },
   ticketBoard: {
     setColumn: (ticketId, projectDir, column) =>

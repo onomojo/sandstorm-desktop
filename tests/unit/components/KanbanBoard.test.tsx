@@ -3,14 +3,16 @@
  */
 import { describe, it, expect, beforeEach } from 'vitest';
 import React from 'react';
-import { render, screen } from '@testing-library/react';
+import { render, screen, waitFor } from '@testing-library/react';
 import { KanbanBoard } from '../../../src/renderer/components/KanbanBoard';
 import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
 
 describe('KanbanBoard', () => {
+  let api: ReturnType<typeof mockSandstormApi>;
+
   beforeEach(() => {
-    mockSandstormApi();
+    api = mockSandstormApi();
     useAppStore.setState({
       projects: [{ id: 1, name: 'proj', directory: '/proj', added_at: '' }],
       activeProjectId: 1,
@@ -110,5 +112,34 @@ describe('KanbanBoard', () => {
     useAppStore.setState({ moveTicketColumnError: null });
     render(<KanbanBoard />);
     expect(screen.queryByTestId('move-ticket-column-error')).toBeNull();
+  });
+
+  it('shows the boardTicketsError message (not hardcoded string) when error is set (#435)', async () => {
+    const errorMsg = 'JIRA credentials missing — configure them in Project Settings';
+    api.tickets.list.mockResolvedValue({ tickets: [], error: { reason: 'missing-creds' } });
+    render(<KanbanBoard />);
+    // Wait for refreshBoardTickets to complete and set the error
+    await waitFor(() => {
+      expect(screen.getByTestId('board-tickets-error')).toBeDefined();
+    });
+    expect(screen.getByTestId('board-tickets-error').textContent).toBe(errorMsg);
+  });
+
+  it('shows http-status error message in the banner when boardTicketsError is set', async () => {
+    api.tickets.list.mockResolvedValue({ tickets: [], error: { reason: 'http-status', status: 401, body: 'Unauthorized' } });
+    render(<KanbanBoard />);
+    await waitFor(() => {
+      expect(screen.getByTestId('board-tickets-error')).toBeDefined();
+    });
+    expect(screen.getByTestId('board-tickets-error').textContent).toContain('401');
+  });
+
+  it('does not show error banner when boardTicketsError is null (empty tickets is valid state)', async () => {
+    api.tickets.list.mockResolvedValue({ tickets: [], error: null });
+    render(<KanbanBoard />);
+    // Wait for the component to settle after mount fetch
+    await waitFor(() => {
+      expect(screen.queryByTestId('board-tickets-error')).toBeNull();
+    });
   });
 });
