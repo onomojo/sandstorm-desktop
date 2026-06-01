@@ -24,6 +24,8 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     startStackForTicket,
     stackCreateErrors,
     stackCreateInFlight,
+    refineInFlight,
+    refineStartErrors,
   } = useAppStore();
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
@@ -57,12 +59,15 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
   const questionsAwaiting = refinementSession?.result?.questions?.length ?? 0;
 
-  // Error state takes priority: errored, interrupted, or ready+result.error
-  const showErrorState = refinementSession !== undefined && (
+  const isRefineInFlight = refineInFlight[stackKey] ?? false;
+  const refineStartError = refineStartErrors[stackKey];
+
+  // Error state takes priority: errored, interrupted, ready+result.error, or gate start failure
+  const showErrorState = (refinementSession !== undefined && (
     refinementSession.status === 'errored' ||
     refinementSession.status === 'interrupted' ||
     (refinementSession.status === 'ready' && !!refinementSession.result?.error)
-  );
+  )) || !!refineStartError;
 
   return (
     <div
@@ -92,7 +97,8 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
       {ticket.column === 'refining' && (
         <div className="flex flex-col gap-2">
-          {refinementSession?.status === 'running' && (
+          {/* Progress bar: running session or background gate start in-flight */}
+          {(refinementSession?.status === 'running' || isRefineInFlight) && (
             <div className="h-1 bg-sandstorm-border rounded-full overflow-hidden">
               <div className="h-full bg-sandstorm-state-refining rounded-full animate-pulse w-1/2" />
             </div>
@@ -102,8 +108,17 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               {questionsAwaiting} question{questionsAwaiting !== 1 ? 's' : ''} awaiting
             </span>
           )}
-          {/* No session: offer to start refinement */}
-          {!refinementSession && (
+          {/* Error badge for clear visual indication of failure */}
+          {showErrorState && (
+            <span
+              className="text-xs text-red-400"
+              data-testid={`ticket-card-error-badge-${ticket.ticket_id}`}
+            >
+              Refinement failed
+            </span>
+          )}
+          {/* No session, not in-flight, no error: offer to start refinement */}
+          {!refinementSession && !isRefineInFlight && !showErrorState && (
             <button
               onClick={() => openRefineTicketDialogWith(ticket.ticket_id)}
               className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors font-medium"

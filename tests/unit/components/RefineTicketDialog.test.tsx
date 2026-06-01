@@ -491,6 +491,63 @@ describe('RefineTicketDialog', () => {
       render(<RefineTicketDialog />);
       expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
     });
+
+    it('opening via Answer path (existing session, no prefill) does not call specCheckAsync', async () => {
+      useAppStore.setState({
+        refineTicketPrefill: null,
+        currentRefinementSessionId: 'sess-answer',
+        refinementSessions: [{
+          id: 'sess-answer',
+          ticketId: '42',
+          projectDir: '/proj',
+          status: 'ready' as const,
+          phase: 'check' as const,
+          result: {
+            passed: false,
+            questions: [{ id: 'q1', question: 'Q?', options: [] }],
+            gateSummary: '',
+            ticketUrl: null,
+            cached: false,
+          },
+          startedAt: 0,
+        }],
+      });
+
+      render(<RefineTicketDialog />);
+
+      await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
+
+      expect(api.tickets.specCheckAsync).not.toHaveBeenCalled();
+    });
+
+    it('re-refinement Run-Gate path still calls specCheckAsync', async () => {
+      useAppStore.setState({
+        refineTicketPrefill: null,
+        currentRefinementSessionId: 'sess-ready',
+        refinementSessions: [{
+          id: 'sess-ready',
+          ticketId: '310',
+          projectDir: '/proj',
+          status: 'ready' as const,
+          phase: 'check' as const,
+          result: {
+            passed: false,
+            questions: [],
+            gateSummary: 'Gate=FAIL, questions=0',
+            ticketUrl: null,
+            cached: false,
+          },
+          startedAt: 0,
+        }],
+      });
+
+      render(<RefineTicketDialog />);
+      fireEvent.click(screen.getByTestId('refine-run-gate'));
+
+      await waitFor(() => {
+        expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('310', '/proj');
+      });
+    });
   });
 
   describe('elapsed timer (#370)', () => {
@@ -971,14 +1028,12 @@ describe('RefineTicketDialog', () => {
     });
   });
 
-  describe('openRefineDialogFromCard preserves previousColumn through prefill (#393)', () => {
-    // The card-click path moves the ticket to 'refining' BEFORE the dialog mounts.
-    // The dialog's prefill effect then re-resolves and would see 'refining' as the
-    // current column — without the fix in commitRefinementContext, that would
-    // overwrite _refineDialogContext.previousColumn with 'refining' and a
-    // subsequent close-without-session would revert to 'refining' instead of
-    // the real previous column ('backlog'). This test guards against that.
-    it('closes-without-session reverts the ticket to the original column (not refining)', async () => {
+  describe('openRefineDialogFromCard background flow (#424)', () => {
+    // With the background refine flow, clicking Refine on a backlog card:
+    // - moves the ticket to 'refining' optimistically
+    // - starts the gate via specCheckAsync WITHOUT opening the dialog
+    // - dialog is only opened when the user clicks "Answer" on the refining card
+    it('starts gate in background without opening dialog, stashes _refineDialogContext', async () => {
       useAppStore.setState({
         boardTickets: [
           { ticket_id: '42', project_dir: '/proj', column: 'backlog', title: 'T', updated_at: '' },
@@ -988,38 +1043,22 @@ describe('RefineTicketDialog', () => {
         refineTicketPrefill: null,
         currentRefinementSessionId: null,
         _refineDialogContext: null,
+        refineInFlight: {},
+        refineStartErrors: {},
       });
 
-      // Simulate the kanban card click — opens dialog AND stashes the real previousColumn.
       useAppStore.getState().openRefineDialogFromCard('42', '/proj', 'backlog');
 
-      // Sanity: dialog open, prefill primed, context recorded with 'backlog'.
-      expect(useAppStore.getState().showRefineTicketDialog).toBe(true);
-      expect(useAppStore.getState().refineTicketPrefill).toBe('42');
+      // Dialog is NOT opened — backgrounding path suppresses modal
+      expect(useAppStore.getState().showRefineTicketDialog).toBe(false);
+      expect(useAppStore.getState().refineTicketPrefill).toBeNull();
+
+      // Context is stashed with the real previous column for potential Answer flow
       expect(useAppStore.getState()._refineDialogContext?.previousColumn).toBe('backlog');
 
-      render(<RefineTicketDialog />);
-
-      // The prefill effect should have run specCheckAsync, but more importantly
-      // the stashed context must still point at 'backlog' — NOT have been
-      // overwritten by the dialog's own commitRefinementContext('…','refining').
+      // Gate was started via specCheckAsync
       await waitFor(() => {
         expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('42', '/proj');
-      });
-      expect(useAppStore.getState()._refineDialogContext?.previousColumn).toBe('backlog');
-
-      // No session was registered (mock specCheckAsync only returns sessionId, no upsert).
-      expect(useAppStore.getState().refinementSessions).toHaveLength(0);
-
-      // User dismisses the dialog without a session — must revert to 'backlog'.
-      fireEvent.click(screen.getByLabelText('Close'));
-
-      await waitFor(() => {
-        expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', '/proj', 'backlog');
-      });
-      await waitFor(() => {
-        const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-        expect(entry?.column).toBe('backlog');
       });
     });
   });

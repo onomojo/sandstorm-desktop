@@ -317,7 +317,10 @@ const PROJECT_DIR = '/store-test-proj';
 function setupSandstormMock(ticketsList: unknown[] = []) {
   Object.defineProperty(window, 'sandstorm', {
     value: {
-      tickets: { list: vi.fn().mockResolvedValue(ticketsList) },
+      tickets: {
+        list: vi.fn().mockResolvedValue(ticketsList),
+        specCheckAsync: vi.fn().mockResolvedValue({ sessionId: 'test-sess' }),
+      },
       ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
     },
     writable: true,
@@ -641,22 +644,40 @@ describe('store: setShowRefineTicketDialog revert-on-cancel', () => {
         { ticket_id: '42', project_dir: PROJECT_DIR, column: 'backlog', title: 'Test', updated_at: '' },
       ],
       refinementSessions: [],
+      refineInFlight: {},
+      refineStartErrors: {},
     });
   });
 
-  it('reverts ticket column when dialog closed with no matching refinement session', async () => {
-    // Move the ticket to refining via openRefineDialogFromCard
+  it('openRefineDialogFromCard starts gate in background, moves to refining, does not open dialog', async () => {
     useAppStore.getState().openRefineDialogFromCard('42', PROJECT_DIR, 'backlog');
 
-    // Wait for the optimistic column update
+    // Ticket moves to refining optimistically
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(useAppStore.getState().boardTickets.find(t => t.ticket_id === '42')?.column).toBe('refining');
 
-    // Close dialog — no refinement session exists, so column should revert
+    // Dialog is NOT opened — backgrounding path suppresses modal
+    expect(useAppStore.getState().showRefineTicketDialog).toBe(false);
+    expect(useAppStore.getState().refineTicketPrefill).toBeNull();
+
+    // Gate was started via specCheckAsync
     await new Promise(resolve => setTimeout(resolve, 0));
+    expect((window.sandstorm as any).tickets.specCheckAsync).toHaveBeenCalledWith('42', PROJECT_DIR);
+  });
+
+  it('setShowRefineTicketDialog(false) reverts column when opened manually and closed without session', async () => {
+    // Manually open the dialog (e.g. via "Start refinement" button on a refining card)
+    useAppStore.setState({
+      showRefineTicketDialog: true,
+      _refineDialogContext: { ticketId: '42', projectDir: PROJECT_DIR, previousColumn: 'backlog' },
+    });
+    useAppStore.getState().moveTicketColumn('42', PROJECT_DIR, 'refining');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Close dialog with no session — column reverts
     useAppStore.getState().setShowRefineTicketDialog(false);
 
-    // Wait for revert IPC
     await new Promise(resolve => setTimeout(resolve, 0));
     const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
     expect(entry?.column).toBe('backlog');
