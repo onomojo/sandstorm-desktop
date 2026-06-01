@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DockerRuntime, demuxDockerStream } from '../../src/main/runtime/docker';
+import Dockerode from 'dockerode';
 
 // Mock dockerode
 vi.mock('dockerode', () => {
@@ -139,6 +140,34 @@ describe('DockerRuntime', () => {
     const stopSpy = vi.spyOn(cm, 'destroy');
     runtime.destroy();
     expect(stopSpy).toHaveBeenCalled();
+  });
+
+  describe('exec — User field', () => {
+    it('passes User to dockerode exec config when opts.user is set', async () => {
+      const MockDockerode = vi.mocked(Dockerode);
+      // mock.results gives the value returned by each new Dockerode() call
+      const dockerInstance = MockDockerode.mock.results.at(-1)!.value;
+      const getContainerFn = dockerInstance.getContainer as ReturnType<typeof vi.fn>;
+
+      await runtime.exec('abc123', ['git', 'status'], { user: 'claude' });
+
+      const container = getContainerFn.mock.results.at(-1)!.value;
+      expect(container.exec).toHaveBeenCalledWith(
+        expect.objectContaining({ User: 'claude' })
+      );
+    });
+
+    it('omits User from dockerode exec config when opts.user is not set', async () => {
+      const MockDockerode = vi.mocked(Dockerode);
+      const dockerInstance = MockDockerode.mock.results.at(-1)!.value;
+      const getContainerFn = dockerInstance.getContainer as ReturnType<typeof vi.fn>;
+
+      await runtime.exec('abc123', ['ls']);
+
+      const container = getContainerFn.mock.results.at(-1)!.value;
+      const callArg = (container.exec as ReturnType<typeof vi.fn>).mock.calls.at(-1)![0];
+      expect(callArg.User).toBeUndefined();
+    });
   });
 });
 
