@@ -617,6 +617,30 @@ describe('StackManager', () => {
     });
   });
 
+  describe('execInContainer', () => {
+    it('invokes runtime.exec with workdir /app and user claude', async () => {
+      registry.createStack(makeStack());
+      await manager.execInContainer('test-stack', ['git', 'status']);
+      expect(runtime.exec).toHaveBeenCalledWith(
+        'claude-container-1',
+        ['git', 'status'],
+        { workdir: '/app', user: 'claude' },
+      );
+    });
+
+    it('throws when exec returns non-zero exit code', async () => {
+      registry.createStack(makeStack());
+      (runtime.exec as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+        exitCode: 128,
+        stdout: '',
+        stderr: 'fatal: detected dubious ownership in repository at \'/app\'',
+      });
+      await expect(
+        manager.execInContainer('test-stack', ['git', 'checkout', '-b', 'feat/foo'])
+      ).rejects.toThrow('exec in container failed');
+    });
+  });
+
   describe('dispatchTask with readiness', () => {
     it('waits for readiness before dispatching', async () => {
       registry.createStack(makeStack('ready-dispatch'));

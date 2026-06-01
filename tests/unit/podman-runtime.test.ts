@@ -100,4 +100,24 @@ describe('PodmanRuntime', () => {
       expect.any(Object)
     );
   });
+
+  it('includes -u flag when opts.user is set', async () => {
+    mockSpawn('');
+    await runtime.exec('container-id', ['git', 'checkout', '-b', 'feat/foo'], { user: 'claude' });
+    expect(spawn).toHaveBeenCalledWith(
+      'podman',
+      ['exec', '-u', 'claude', 'container-id', 'git', 'checkout', '-b', 'feat/foo'],
+      expect.any(Object)
+    );
+  });
+
+  it('omits -u flag when opts.user is not set', async () => {
+    mockSpawn('');
+    await runtime.exec('container-id', ['ls']);
+    expect(spawn).toHaveBeenCalledWith(
+      'podman',
+      ['exec', 'container-id', 'ls'],
+      expect.any(Object)
+    );
+  });
 });

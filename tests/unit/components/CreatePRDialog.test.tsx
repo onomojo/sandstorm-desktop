@@ -113,6 +113,17 @@ describe('CreatePRDialog', () => {
     expect(screen.getByText(/75\/70/)).toBeDefined();
   });
 
+  it('displays initialError immediately when provided (Q4 fallback)', async () => {
+    useAppStore.setState({
+      prDraftCache: { foo: { title: 'pre-drafted', body: 'pre-body' } },
+    });
+    render(<CreatePRDialog stackId="foo" initialError="gh pr create failed after 5 attempts" />);
+    expect(screen.getByTestId('pr-error').textContent).toMatch(/gh pr create failed after 5 attempts/);
+    // Pre-populated from cache
+    const titleInput = screen.getByTestId('pr-title') as HTMLInputElement;
+    expect(titleInput.value).toBe('pre-drafted');
+  });
+
   // #320 — reopening the dialog must not re-run the draft LLM call.
   describe('draft cache (#320)', () => {
     it('hydrates title/body from prDraftCache and skips the LLM call', async () => {

@@ -8,6 +8,7 @@ const execFileAsync = promisify(execFile);
 export interface RefineQuestionOption {
   id: string;
   label: string;
+  recommended?: boolean;
 }
 
 export interface RefineQuestion {
@@ -137,7 +138,8 @@ function tryParseJsonBlock(report: string): RefineQuestion[] | null {
           if (typeof opt === 'object' && opt !== null) {
             const o = opt as Record<string, unknown>;
             if (typeof o.id === 'string' && typeof o.label === 'string') {
-              options.push({ id: o.id, label: o.label });
+              const rec = o.recommended === true ? { recommended: true as const } : {};
+              options.push({ id: o.id, label: o.label, ...rec });
             }
           }
         }

@@ -589,6 +589,25 @@ export class TaskWatcher extends EventEmitter {
         return;
       }
 
+      if (status === 'unknown') {
+        // 'unknown' is written by inner Claude when the investigation task
+        // (dispatched by startup reconciliation branch 4) cannot determine state.
+        // Apply the same stale-poll guard as terminal statuses, then treat as needs_human.
+        if (!this.seenRunning.get(stackId)) {
+          const staleCount = (this.stalePollCounts.get(stackId) ?? 0) + 1;
+          this.stalePollCounts.set(stackId, staleCount);
+          if (staleCount < MAX_STALE_POLLS) {
+            this.schedulePoll(stackId, containerId, this.pollInterval);
+            return;
+          }
+        }
+        this.completeTaskAndNotify(
+          task, stackId, 'needs_human', 1, containerId,
+          'Investigation returned unknown state — needs human review'
+        );
+        return;
+      }
+
       if (status === 'completed' || status === 'failed' || status === 'needs_human' || status === 'verify_blocked_environmental') {
         // Ignore stale completion from a prior task — we must see "running"
         // at least once before treating completion as valid.

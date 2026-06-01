@@ -83,7 +83,10 @@ export function RefineTicketDialog() {
           ? { id: 'q', question: q as string, options: [] }
           : (!Array.isArray((q as RefineQuestion).options) ? { ...(q as RefineQuestion), options: [] } : q as RefineQuestion)
       );
-      setAnswers(normalized.map(() => ({ optionId: null, text: '' })));
+      setAnswers(normalized.map((q) => {
+        const firstRecommended = q.options.find((o) => o.recommended === true);
+        return { optionId: firstRecommended ? firstRecommended.id : null, text: '' };
+      }));
     }
   }, [gate]);
 
@@ -201,6 +204,16 @@ export function RefineTicketDialog() {
     setLocalError(null);
     // Update session optimistically to 'running' while we wait
     upsertRefinementSession({ ...session, status: 'running', phase: 'refine' });
+    // Persist answers to comments (best-effort) so phase-aware Retry can resume.
+    if (combined.trim()) {
+      await window.sandstorm.tickets.postAnswers(
+        session.ticketId,
+        projectDir,
+        combined,
+      ).catch(() => {
+        // non-fatal: Retry falls back to check if no answer comments found
+      });
+    }
     await window.sandstorm.tickets.specRefineAsync(
       session.id,
       session.ticketId,
@@ -458,24 +471,36 @@ export function RefineTicketDialog() {
                           </p>
                           {qItem.options.length > 0 && (
                             <div className="space-y-1 pl-3">
-                              {qItem.options.map((opt) => (
-                                <label key={opt.id} className="flex items-center gap-2 cursor-pointer">
-                                  <input
-                                    type="radio"
-                                    name={`refine-q-${i}`}
-                                    value={opt.id}
-                                    checked={ans.optionId === opt.id}
-                                    onChange={() => {
-                                      const next = [...answers];
-                                      next[i] = { ...ans, optionId: opt.id };
-                                      setAnswers(next);
-                                    }}
-                                    className="accent-sandstorm-accent"
-                                    data-testid={`refine-option-${i}-${opt.id}`}
-                                  />
-                                  <span className="text-xs text-sandstorm-text">{opt.label}</span>
-                                </label>
-                              ))}
+                              {qItem.options.map((opt, optIdx) => {
+                                const isFirstRecommended = opt.recommended === true && optIdx === qItem.options.findIndex((o) => o.recommended === true);
+                                return (
+                                  <label key={opt.id} className="flex items-center gap-2 cursor-pointer">
+                                    <input
+                                      type="radio"
+                                      name={`refine-q-${i}`}
+                                      value={opt.id}
+                                      checked={ans.optionId === opt.id}
+                                      onChange={() => {}}
+                                      onClick={() => {
+                                        const next = [...answers];
+                                        next[i] = { ...ans, optionId: ans.optionId === opt.id ? null : opt.id };
+                                        setAnswers(next);
+                                      }}
+                                      className="accent-sandstorm-accent"
+                                      data-testid={`refine-option-${i}-${opt.id}`}
+                                    />
+                                    <span className="text-xs text-sandstorm-text">{opt.label}</span>
+                                    {isFirstRecommended && (
+                                      <span
+                                        className="text-xs font-medium text-sandstorm-accent border border-sandstorm-accent/40 rounded px-1.5 py-0.5 leading-none"
+                                        data-testid={`refine-option-recommended-${i}-${opt.id}`}
+                                      >
+                                        Recommended
+                                      </span>
+                                    )}
+                                  </label>
+                                );
+                              })}
                             </div>
                           )}
                           <textarea

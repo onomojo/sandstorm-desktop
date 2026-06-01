@@ -13,11 +13,12 @@ import { describe, it, expect, beforeEach, vi, type Mock } from 'vitest';
 // Hoisted mocks — vi.mock factories are hoisted above all imports, so any
 // variables they reference must also be hoisted via vi.hoisted().
 // ---------------------------------------------------------------------------
-const { registeredHandlers, mockSpawnSpecCheck, mockSpawnSpecRefine } = vi.hoisted(() => {
+const { registeredHandlers, mockSpawnSpecCheck, mockSpawnSpecRefine, mockListTicketComments } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
   const mockSpawnSpecCheck = vi.fn();
   const mockSpawnSpecRefine = vi.fn();
-  return { registeredHandlers, mockSpawnSpecCheck, mockSpawnSpecRefine };
+  const mockListTicketComments = vi.fn().mockResolvedValue([]);
+  return { registeredHandlers, mockSpawnSpecCheck, mockSpawnSpecRefine, mockListTicketComments };
 });
 
 // ---------------------------------------------------------------------------
@@ -111,6 +112,11 @@ vi.mock('../../src/main/claude/tools', () => ({
   spawnSpecCheck: mockSpawnSpecCheck,
   spawnSpecRefine: mockSpawnSpecRefine,
   validateProjectDir: vi.fn().mockReturnValue(null),
+}));
+
+vi.mock('../../src/main/control-plane/ticket-comments', () => ({
+  listTicketComments: (...args: unknown[]) => mockListTicketComments(...args),
+  postComment: vi.fn().mockResolvedValue(undefined),
 }));
 
 vi.mock('../../src/main/custom-context', () => ({
@@ -309,6 +315,143 @@ describe('refinement streaming — IPC chain', () => {
     expect(mockMainWindow.webContents.send).toHaveBeenCalledWith(
       'refinement:update',
       expect.objectContaining({ status: 'running', ticketId: 'TICKET-1' }),
+    );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// retryRefinementAsync — phase-aware retry
+// ---------------------------------------------------------------------------
+describe('retryRefinementAsync — phase-aware retry', () => {
+  let mockMainWindow: { webContents: { send: Mock } };
+
+  beforeEach(() => {
+    for (const key of Object.keys(registeredHandlers)) {
+      delete registeredHandlers[key];
+    }
+    vi.clearAllMocks();
+    mockListTicketComments.mockResolvedValue([]);
+
+    mockMainWindow = { webContents: { send: vi.fn() } };
+    registerIpcHandlers(mockMainWindow as unknown as import('electron').BrowserWindow);
+  });
+
+  it('falls back to check phase when no session ID is provided', async () => {
+    mockSpawnSpecCheck.mockReturnValue({
+      promise: new Promise<Record<string, unknown>>(() => {}),
+      cancel: vi.fn(),
+    });
+
+    const result = (await invokeHandler(
+      'tickets:retryRefinementAsync',
+      '',
+      'TICKET-1',
+      '/tmp/proj',
+    )) as { sessionId: string };
+
+    expect(result).toHaveProperty('sessionId');
+    expect(mockSpawnSpecCheck).toHaveBeenCalledWith('TICKET-1', '/tmp/proj', expect.any(Function));
+    expect(mockSpawnSpecRefine).not.toHaveBeenCalled();
+  });
+
+  it('uses check phase when existing session has phase=check', async () => {
+    // First create a session in check phase
+    mockSpawnSpecCheck.mockReturnValue({
+      promise: new Promise<Record<string, unknown>>(() => {}),
+      cancel: vi.fn(),
+    });
+    const r1 = (await invokeHandler('tickets:specCheckAsync', 'TICKET-1', '/tmp/proj')) as { sessionId: string };
+
+    vi.clearAllMocks();
+    mockSpawnSpecCheck.mockReturnValue({
+      promise: new Promise<Record<string, unknown>>(() => {}),
+      cancel: vi.fn(),
+    });
+
+    await invokeHandler('tickets:retryRefinementAsync', r1.sessionId, 'TICKET-1', '/tmp/proj');
+
+    expect(mockSpawnSpecCheck).toHaveBeenCalledWith('TICKET-1', '/tmp/proj', expect.any(Function));
+    expect(mockSpawnSpecRefine).not.toHaveBeenCalled();
+  });
+
+  it('uses refine phase and passes answer comments when session has phase=refine and answers exist', async () => {
+    // Create a session in refine phase by calling specRefineAsync
+    mockSpawnSpecRefine.mockReturnValue({
+      promise: new Promise<Record<string, unknown>>(() => {}),
+      cancel: vi.fn(),
+    });
+    const fakeSessionId = 'refine-session-1';
+    // Manually invoke the specRefineAsync handler, which creates a 'refine' phase session
+    await invokeHandler('tickets:specRefineAsync', fakeSessionId, 'TICKET-2', '/tmp/proj2', 'some answers');
+
+    // Set up answer comments for retrieval
+    const ANSWER_MARKER = '<!-- sandstorm:user-answers -->';
+    mockListTicketComments.mockResolvedValue([
+      {
+        author: 'devuser',
+        body: `${ANSWER_MARKER}\n\nQ1: Answer A\nQ2: Answer B`,
+        createdAt: new Date(Date.now() - 60000).toISOString(),
+      },
+    ]);
+
+    vi.clearAllMocks();
+    mockSpawnSpecRefine.mockReturnValue({
+      promise: new Promise<Record<string, unknown>>(() => {}),
+      cancel: vi.fn(),
+    });
+
+    const result = (await invokeHandler(
+      'tickets:retryRefinementAsync',
+      fakeSessionId,
+      'TICKET-2',
+      '/tmp/proj2',
+    )) as { sessionId: string };
+
+    expect(result).toHaveProperty('sessionId');
+    expect(mockSpawnSpecRefine).toHaveBeenCalledWith(
+      'TICKET-2',
+      '/tmp/proj2',
+      'Q1: Answer A\nQ2: Answer B',
+      expect.any(Function),
+    );
+    expect(mockSpawnSpecCheck).not.toHaveBeenCalled();
+  });
+
+  it('falls back to check phase when session has phase=refine but no answer comments', async () => {
+    // Create a session in refine phase
+    mockSpawnSpecRefine.mockReturnValue({
+      promise: new Promise<Record<string, unknown>>(() => {}),
+      cancel: vi.fn(),
+    });
+    const fakeSessionId = 'refine-session-2';
+    await invokeHandler('tickets:specRefineAsync', fakeSessionId, 'TICKET-3', '/tmp/proj3', 'answers');
+
+    // No answer comments
+    mockListTicketComments.mockResolvedValue([]);
+
+    vi.clearAllMocks();
+    mockSpawnSpecCheck.mockReturnValue({
+      promise: new Promise<Record<string, unknown>>(() => {}),
+      cancel: vi.fn(),
+    });
+
+    await invokeHandler('tickets:retryRefinementAsync', fakeSessionId, 'TICKET-3', '/tmp/proj3');
+
+    expect(mockSpawnSpecCheck).toHaveBeenCalledWith('TICKET-3', '/tmp/proj3', expect.any(Function));
+    expect(mockSpawnSpecRefine).not.toHaveBeenCalled();
+  });
+
+  it('sends running update event for the new session', async () => {
+    mockSpawnSpecCheck.mockReturnValue({
+      promise: new Promise<Record<string, unknown>>(() => {}),
+      cancel: vi.fn(),
+    });
+
+    await invokeHandler('tickets:retryRefinementAsync', '', 'TICKET-4', '/tmp/proj4');
+
+    expect(mockMainWindow.webContents.send).toHaveBeenCalledWith(
+      'refinement:update',
+      expect.objectContaining({ status: 'running', ticketId: 'TICKET-4' }),
     );
   });
 });

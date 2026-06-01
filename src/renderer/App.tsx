@@ -10,6 +10,7 @@ import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { SessionWarningModal } from './components/SessionWarningModal';
 import { SessionTokenLimitModal } from './components/SessionTokenLimitModal';
 import { ModelSettingsModal } from './components/ModelSettings';
+import { StaleWorkspaces } from './components/StaleWorkspaces';
 import { LeftRail } from './components/LeftRail';
 import { KanbanBoard } from './components/KanbanBoard';
 
@@ -106,7 +107,7 @@ export default function App() {
   // Refinement sessions: restore persisted sessions and listen for updates
   useEffect(() => {
     window.sandstorm.tickets.listRefinements().then((sessions) => {
-      sessions.forEach(upsertRefinementSession);
+      sessions.forEach((s) => upsertRefinementSession(s, { replay: true }));
     }).catch(() => {});
 
     const unsubRefinement = window.sandstorm.on('refinement:update', (data: unknown) => {
@@ -270,9 +271,12 @@ export default function App() {
       {showRefineTicketDialog && <RefineTicketDialog />}
       {showCreateTicketDialog && <CreateTicketDialog />}
       {showStartTicketDialog && <StartTicketDialog />}
-      {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} />}
+      {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} initialError={showCreatePRDialog.initialError} />}
       {showOpenProjectDialog && <OpenProjectDialog />}
       {showModelSettings && <ModelSettingsModal />}
+
+      {/* Stale workspaces modal — shown on app start when stale workspaces exist */}
+      <StaleWorkspaces />
 
       {/* Session warning modal (blocking) */}
       {showSessionWarningModal && sessionWarningLevel && sessionWarningLevel !== 'warning' && sessionWarningLevel !== 'normal' && (

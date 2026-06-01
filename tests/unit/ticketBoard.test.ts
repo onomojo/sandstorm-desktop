@@ -317,7 +317,10 @@ const PROJECT_DIR = '/store-test-proj';
 function setupSandstormMock(ticketsList: unknown[] = []) {
   Object.defineProperty(window, 'sandstorm', {
     value: {
-      tickets: { list: vi.fn().mockResolvedValue(ticketsList) },
+      tickets: {
+        list: vi.fn().mockResolvedValue(ticketsList),
+        specCheckAsync: vi.fn().mockResolvedValue({ sessionId: 'test-sess' }),
+      },
       ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
     },
     writable: true,
@@ -550,7 +553,7 @@ describe('store: upsertRefinementSession → spec_ready transition (#388)', () =
   });
 });
 
-describe('store: openCreatePRDialogForTicket revert-on-cancel', () => {
+describe('store: openCreatePRDialogForTicket (fallback dialog, no optimistic move)', () => {
   beforeEach(() => {
     setupSandstormMock();
     useAppStore.setState({
@@ -562,36 +565,32 @@ describe('store: openCreatePRDialogForTicket revert-on-cancel', () => {
     });
   });
 
-  it('moves ticket to pr_open on open', async () => {
+  it('opens the dialog and sets _prDialogContext without moving the ticket column', async () => {
     useAppStore.getState().openCreatePRDialogForTicket('s1', '42', PROJECT_DIR, 'in_stack');
     await new Promise(resolve => setTimeout(resolve, 0));
-    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-    expect(entry?.column).toBe('pr_open');
-  });
-
-  it('reverts ticket column when dialog closed with prCreated=false', async () => {
-    useAppStore.getState().openCreatePRDialogForTicket('s1', '42', PROJECT_DIR, 'in_stack');
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(useAppStore.getState().boardTickets.find(t => t.ticket_id === '42')?.column).toBe('pr_open');
-
-    useAppStore.getState().setShowCreatePRDialog(null);
-    await new Promise(resolve => setTimeout(resolve, 0));
+    // Ticket stays in in_stack — no optimistic move
     const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
     expect(entry?.column).toBe('in_stack');
+    expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 's1', initialError: undefined });
+    expect(useAppStore.getState()._prDialogContext?.stackId).toBe('s1');
   });
 
-  it('does NOT revert when prCreated flag is set', async () => {
+  it('sets initialError in showCreatePRDialog when provided (Q4 fallback)', () => {
+    useAppStore.getState().openCreatePRDialogForTicket('s1', '42', PROJECT_DIR, 'in_stack', 'gh failed');
+    expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 's1', initialError: 'gh failed' });
+  });
+
+  it('closing the dialog clears _prDialogContext without changing the ticket column', async () => {
     useAppStore.getState().openCreatePRDialogForTicket('s1', '42', PROJECT_DIR, 'in_stack');
     await new Promise(resolve => setTimeout(resolve, 0));
 
-    // Simulate PR was created — set the flag
-    const ctx = useAppStore.getState()._prDialogContext!;
-    useAppStore.setState({ _prDialogContext: { ...ctx, prCreated: true } });
-
     useAppStore.getState().setShowCreatePRDialog(null);
     await new Promise(resolve => setTimeout(resolve, 0));
+    // Ticket is already in in_stack and stays there
     const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-    expect(entry?.column).toBe('pr_open');
+    expect(entry?.column).toBe('in_stack');
+    expect(useAppStore.getState()._prDialogContext).toBeNull();
+    expect((window.sandstorm as any).ticketBoard.setColumn).not.toHaveBeenCalled();
   });
 });
 
@@ -641,22 +640,40 @@ describe('store: setShowRefineTicketDialog revert-on-cancel', () => {
         { ticket_id: '42', project_dir: PROJECT_DIR, column: 'backlog', title: 'Test', updated_at: '' },
       ],
       refinementSessions: [],
+      refineInFlight: {},
+      refineStartErrors: {},
     });
   });
 
-  it('reverts ticket column when dialog closed with no matching refinement session', async () => {
-    // Move the ticket to refining via openRefineDialogFromCard
+  it('openRefineDialogFromCard starts gate in background, moves to refining, does not open dialog', async () => {
     useAppStore.getState().openRefineDialogFromCard('42', PROJECT_DIR, 'backlog');
 
-    // Wait for the optimistic column update
+    // Ticket moves to refining optimistically
     await new Promise(resolve => setTimeout(resolve, 0));
     expect(useAppStore.getState().boardTickets.find(t => t.ticket_id === '42')?.column).toBe('refining');
 
-    // Close dialog — no refinement session exists, so column should revert
+    // Dialog is NOT opened — backgrounding path suppresses modal
+    expect(useAppStore.getState().showRefineTicketDialog).toBe(false);
+    expect(useAppStore.getState().refineTicketPrefill).toBeNull();
+
+    // Gate was started via specCheckAsync
     await new Promise(resolve => setTimeout(resolve, 0));
+    expect((window.sandstorm as any).tickets.specCheckAsync).toHaveBeenCalledWith('42', PROJECT_DIR);
+  });
+
+  it('setShowRefineTicketDialog(false) reverts column when opened manually and closed without session', async () => {
+    // Manually open the dialog (e.g. via "Start refinement" button on a refining card)
+    useAppStore.setState({
+      showRefineTicketDialog: true,
+      _refineDialogContext: { ticketId: '42', projectDir: PROJECT_DIR, previousColumn: 'backlog' },
+    });
+    useAppStore.getState().moveTicketColumn('42', PROJECT_DIR, 'refining');
+
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Close dialog with no session — column reverts
     useAppStore.getState().setShowRefineTicketDialog(false);
 
-    // Wait for revert IPC
     await new Promise(resolve => setTimeout(resolve, 0));
     const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
     expect(entry?.column).toBe('backlog');
@@ -763,6 +780,78 @@ describe('store: resolveRefinementTargets (#393)', () => {
     });
     const result = useAppStore.getState().resolveRefinementTargets('42', PROJECT_DIR);
     expect(result).toEqual({ kind: 'silent', previousColumn: 'spec_ready' });
+  });
+});
+
+describe('store: createPRAutomatic revert-on-cancel (#417)', () => {
+  beforeEach(() => {
+    setupSandstormMock();
+    useAppStore.setState({
+      boardTickets: [
+        { ticket_id: '42', project_dir: PROJECT_DIR, column: 'in_stack', title: 'Test', updated_at: '' },
+      ],
+      stacks: [],
+      _prDialogContext: null,
+      prCreateInFlight: {},
+    });
+  });
+
+  it('reverts ticket to in_stack when dialog canceled after draft_failed', async () => {
+    Object.defineProperty(window, 'sandstorm', {
+      value: {
+        tickets: { list: vi.fn().mockResolvedValue([]) },
+        ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
+        pr: { createAuto: vi.fn().mockResolvedValue({ status: 'draft_failed' }) },
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    await useAppStore.getState().createPRAutomatic('s1', '42', PROJECT_DIR, 'in_stack');
+
+    // After draft_failed the ticket should be at pr_open (optimistic move) and dialog should open
+    const afterFail = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(afterFail?.column).toBe('pr_open');
+    expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 's1', initialError: undefined });
+
+    // User cancels dialog
+    useAppStore.getState().setShowCreatePRDialog(null);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Ticket must revert to in_stack
+    const afterCancel = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(afterCancel?.column).toBe('in_stack');
+    expect(useAppStore.getState()._prDialogContext).toBeNull();
+  });
+
+  it('reverts ticket to in_stack when dialog canceled after create_failed', async () => {
+    const draft = { title: 'My PR', body: 'Description' };
+    Object.defineProperty(window, 'sandstorm', {
+      value: {
+        tickets: { list: vi.fn().mockResolvedValue([]) },
+        ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
+        pr: { createAuto: vi.fn().mockResolvedValue({ status: 'create_failed', draft, error: 'gh failed' }) },
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    await useAppStore.getState().createPRAutomatic('s1', '42', PROJECT_DIR, 'in_stack');
+
+    // After create_failed the ticket should be at pr_open (optimistic move) and dialog should open with error
+    const afterFail = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(afterFail?.column).toBe('pr_open');
+    expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 's1', initialError: 'gh failed' });
+    expect(useAppStore.getState().prDraftCache['s1']).toEqual(draft);
+
+    // User cancels dialog
+    useAppStore.getState().setShowCreatePRDialog(null);
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    // Ticket must revert to in_stack
+    const afterCancel = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(afterCancel?.column).toBe('in_stack');
+    expect(useAppStore.getState()._prDialogContext).toBeNull();
   });
 });
 

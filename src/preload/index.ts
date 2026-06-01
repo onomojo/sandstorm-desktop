@@ -203,6 +203,8 @@ export interface SandstormAPI {
     specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<unknown>;
     specCheckAsync: (ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
     specRefineAsync: (sessionId: string, ticketId: string, projectDir: string, userAnswers: string) => Promise<void>;
+    retryRefinementAsync: (sessionId: string, ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
+    postAnswers: (ticketId: string, projectDir: string, answersBody: string) => Promise<void>;
     cancelRefinement: (sessionId: string) => Promise<void>;
     listRefinements: () => Promise<unknown[]>;
     create: (projectDir: string, title: string, body: string) => Promise<{ url: string; ticketId: string }>;
@@ -215,6 +217,11 @@ export interface SandstormAPI {
     draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
     create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
     merge: (stackId: string, prNumber: number) => Promise<void>;
+    createAuto: (stackId: string) => Promise<
+      | { status: 'created'; url: string; number: number }
+      | { status: 'draft_failed' }
+      | { status: 'create_failed'; draft: { title: string; body: string }; error: string }
+    >;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
@@ -376,6 +383,10 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:specCheckAsync', ticketId, projectDir),
     specRefineAsync: (sessionId, ticketId, projectDir, userAnswers) =>
       ipcRenderer.invoke('tickets:specRefineAsync', sessionId, ticketId, projectDir, userAnswers),
+    retryRefinementAsync: (sessionId, ticketId, projectDir) =>
+      ipcRenderer.invoke('tickets:retryRefinementAsync', sessionId, ticketId, projectDir),
+    postAnswers: (ticketId, projectDir, answersBody) =>
+      ipcRenderer.invoke('tickets:postAnswers', ticketId, projectDir, answersBody),
     cancelRefinement: (sessionId) =>
       ipcRenderer.invoke('tickets:cancelRefinement', sessionId),
     listRefinements: () =>
@@ -395,6 +406,7 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('pr:create', stackId, title, body),
     merge: (stackId, prNumber) =>
       ipcRenderer.invoke('pr:merge', stackId, prNumber),
+    createAuto: (stackId) => ipcRenderer.invoke('pr:createAuto', stackId),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

@@ -83,11 +83,14 @@ import {
   workspacePathFor,
   createPullRequest,
 } from './control-plane/pr-creator';
+import { showNotification } from './tray';
 import { createTicketWithConfig } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
 import { listTicketsWithConfig } from './control-plane/ticket-lister';
+import { listTicketComments, postComment } from './control-plane/ticket-comments';
+import { getLatestUserAnswers, ANSWER_COMMENT_MARKER } from './scheduler/refine-to-comments';
 import { KANBAN_COLUMNS } from '../shared/kanban';
 
 // Set __sandstorm at module-load time so app.evaluate() works immediately
@@ -1218,6 +1221,52 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   ipcMain.handle(
+    'tickets:retryRefinementAsync',
+    async (_event, sessionId: string, ticketId: string, projectDir: string) => {
+      // Read the existing session to determine phase before cancelling it.
+      const existingEntry = sessionId ? activeRefinements.get(sessionId) : undefined;
+      const existingSession = existingEntry?.session;
+
+      // Cancel the existing session internally (without sending a cancelled event
+      // to the renderer, since we are immediately replacing it).
+      if (existingEntry) {
+        existingEntry.cancel?.();
+        activeRefinements.delete(sessionId);
+        deleteRefinement(sessionId);
+      }
+
+      // Determine whether to resume from refine phase or restart from check.
+      let phase: 'check' | 'refine' = 'check';
+      let userAnswers: string | undefined;
+
+      if (existingSession?.phase === 'refine') {
+        try {
+          const comments = await listTicketComments(ticketId, projectDir);
+          const answers = getLatestUserAnswers(comments);
+          if (answers) {
+            phase = 'refine';
+            userAnswers = answers;
+          }
+        } catch {
+          // fall through to check
+        }
+      }
+
+      const newSessionId = startRefinementAsync(ticketId, projectDir, null, phase, userAnswers);
+      return { sessionId: newSessionId };
+    },
+  );
+
+  ipcMain.handle(
+    'tickets:postAnswers',
+    async (_event, ticketId: string, projectDir: string, answersBody: string) => {
+      if (!answersBody.trim()) return;
+      const body = `${ANSWER_COMMENT_MARKER}\n\n${answersBody}`;
+      await postComment(ticketId, projectDir, body);
+    },
+  );
+
+  ipcMain.handle(
     'tickets:create',
     async (_event, projectDir: string, title: string, body: string) => {
       const config = registry.getProjectTicketConfig(projectDir);
@@ -1333,6 +1382,60 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       ['pr', 'merge', String(prNumber), '--merge'],
       { cwd: workspace, timeout: 60000, maxBuffer: 1024 * 1024 },
     );
+  });
+
+  ipcMain.handle('pr:createAuto', async (_event, stackId: string) => {
+    const stack = await stackManager.getStackWithServices(stackId);
+    if (!stack) throw new Error(`Stack "${stackId}" not found`);
+
+    const workspace = workspacePathFor(stack.project_dir, stackId);
+
+    let draft: { title: string; body: string };
+    try {
+      draft = await draftPullRequest(
+        { stackId, workspace, ticket: stack.ticket },
+        {
+          runEphemeral: (prompt, projectDir, timeoutMs) =>
+            agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs),
+          fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
+        },
+      );
+    } catch {
+      return { status: 'draft_failed' as const };
+    }
+
+    if (!fs.existsSync(workspace)) {
+      return { status: 'create_failed' as const, draft, error: 'Workspace directory not found' };
+    }
+
+    try {
+      const result = await createPullRequest(
+        { stackId, title: draft.title, body: draft.body },
+        {
+          workspace,
+          runGitPush: async (commitMsg) => { await stackManager.push(stackId, commitMsg); },
+          createPROnHost: async (prTitle, bodyFilePath, head, base) => {
+            const { stdout } = await execFileAsync(
+              'gh',
+              ['pr', 'create', '--title', prTitle, '--body-file', bodyFilePath, '--base', base, '--head', head],
+              { cwd: workspace, timeout: 60000, maxBuffer: 1024 * 1024 },
+            );
+            return stdout;
+          },
+          checkoutBranch: (branch) =>
+            stackManager.execInContainer(stackId, ['git', 'checkout', '-b', branch]),
+          setPullRequest: (url, num) => stackManager.setPullRequest(stackId, url, num),
+        },
+      );
+      showNotification('PR created', result.url);
+      return { status: 'created' as const, url: result.url, number: result.number };
+    } catch (err) {
+      return {
+        status: 'create_failed' as const,
+        draft,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
   });
 
 }

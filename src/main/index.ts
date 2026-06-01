@@ -25,6 +25,7 @@ import {
 } from './scheduler';
 import { syncAllProjectsCrontab } from './scheduler/scheduler-manager';
 import { runScheduledScript } from './scheduler/script-runner';
+import { runStartupReconciliation } from './control-plane/startup-reconciler';
 
 // Enable remote debugging via env var (used by integration tests and ad-hoc CDP connections)
 if (process.env.REMOTE_DEBUGGING_PORT) {
@@ -377,6 +378,23 @@ app.whenReady().then(async () => {
   } catch {
     // Non-fatal — renderer will check lazily when panel mounts
   }
+
+  // Background startup reconciliation — runs after the window is shown so it
+  // never delays window readiness. Drives stale 'running' stacks to terminal
+  // states or re-attaches watchers. Fire-and-forget; cards update live via
+  // per-stack 'stacks:updated' emissions.
+  mainWindow.webContents.once('did-finish-load', () => {
+    runStartupReconciliation(
+      registry,
+      stackManager,
+      taskWatcher,
+      dockerRuntime,
+      podmanRuntime,
+      () => mainWindow?.webContents.send('stacks:updated')
+    ).catch((err) => {
+      console.warn('[StartupReconciler] Background reconciliation error:', err);
+    });
+  });
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

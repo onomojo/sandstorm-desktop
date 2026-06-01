@@ -964,7 +964,7 @@ export class StackManager {
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
     const runtime = this.getRuntimeForStack(stack);
     const claudeContainer = await this.findClaudeContainer(stack, runtime);
-    const result = await runtime.exec(claudeContainer.id, cmd, { workdir: '/app' });
+    const result = await runtime.exec(claudeContainer.id, cmd, { workdir: '/app', user: 'claude' });
     if (result.exitCode !== 0) {
       throw new Error(
         `exec in container failed (exit ${result.exitCode}): ${result.stderr || result.stdout}`,
