@@ -149,4 +149,40 @@ describe('StaleWorkspaces', () => {
     // Should show "2 selected" in the UI
     expect(screen.getByText(/2 selected/)).toBeDefined();
   });
+
+  // Modal-on-start visibility tests
+  it('renders a modal overlay when stale workspaces exist', () => {
+    useAppStore.setState({ staleWorkspaces: [makeStaleWorkspace()] });
+
+    const { container } = render(<StaleWorkspaces />);
+    expect(container.querySelector('[data-testid="stale-workspaces-modal"]')).not.toBeNull();
+    expect(container.querySelector('[data-testid="stale-workspaces"]')).not.toBeNull();
+  });
+
+  it('modal overlay not present when no stale workspaces', async () => {
+    api.stacks.detectStale.mockResolvedValue([]);
+    useAppStore.setState({ staleWorkspaces: [], staleWorkspacesLoading: false });
+
+    const { container } = render(<StaleWorkspaces />);
+    expect(container.querySelector('[data-testid="stale-workspaces-modal"]')).toBeNull();
+  });
+
+  it('modal overlay not present after dismiss', () => {
+    useAppStore.setState({ staleWorkspaces: [makeStaleWorkspace()] });
+
+    const { container } = render(<StaleWorkspaces />);
+    expect(container.querySelector('[data-testid="stale-workspaces-modal"]')).not.toBeNull();
+
+    fireEvent.click(screen.getByTestId('stale-dismiss-btn'));
+
+    expect(container.querySelector('[data-testid="stale-workspaces-modal"]')).toBeNull();
+  });
+
+  it('modal does not flash during loading (no stale workspaces loaded yet)', () => {
+    // During the initial load, staleWorkspaces is still [] — modal must not appear
+    useAppStore.setState({ staleWorkspaces: [], staleWorkspacesLoading: true });
+
+    const { container } = render(<StaleWorkspaces />);
+    expect(container.querySelector('[data-testid="stale-workspaces-modal"]')).toBeNull();
+  });
 });
