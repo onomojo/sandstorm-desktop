@@ -549,7 +549,7 @@ interface AppState {
   /** Open the refine dialog showing a specific existing session. */
   openRefinementSession: (sessionId: string) => void;
   /** Add or update a refinement session (called on refinement:update events). */
-  upsertRefinementSession: (session: RefinementSession) => void;
+  upsertRefinementSession: (session: RefinementSession, opts?: { replay?: boolean }) => void;
   /** Append a streaming text chunk to a running session's output. */
   appendRefinementStreamChunk: (sessionId: string, delta: string) => void;
   /** Remove a refinement session (after cancel or dismiss). */
@@ -1286,7 +1286,7 @@ export const useAppStore = create<AppState>((set, get) => ({
     showRefineTicketDialog: true,
     currentRefinementSessionId: sessionId,
   }),
-  upsertRefinementSession: (session) => {
+  upsertRefinementSession: (session, opts) => {
     let firedSpecReady = false;
     set((state) => {
       if ((session as { status?: string }).status === 'cancelled') {
@@ -1303,11 +1303,14 @@ export const useAppStore = create<AppState>((set, get) => ({
       // fire moveTicketColumn(ticketId, projectDir, 'spec_ready'). If the previous stored
       // session already satisfied the condition, this is a re-emit and we must not re-fire
       // (would otherwise demote a ticket the user has already advanced to in_stack).
+      // During hydration replay (opts.replay === true), never fire the column move — the ticket
+      // may already be in a later column (in_stack, pr_open, merged) and replaying a passed
+      // session must not demote it back to spec_ready.
       const wasPassed = idx >= 0
         && state.refinementSessions[idx].status === 'ready'
         && state.refinementSessions[idx].result?.passed === true;
       const isPassed = normalized.status === 'ready' && normalized.result?.passed === true;
-      firedSpecReady = isPassed && !wasPassed;
+      firedSpecReady = isPassed && !wasPassed && !opts?.replay;
 
       if (idx >= 0) {
         const next = [...state.refinementSessions];
