@@ -420,6 +420,44 @@ describe('TicketCard', () => {
     expect(screen.queryByTestId('ticket-card-create-pr-42')).toBeNull();
   });
 
+  it('in_stack: shows Resume button when linked stack has status=session_paused', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'session_paused', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-resume-42')).toBeDefined();
+  });
+
+  it('in_stack: does not show Resume button for non-paused statuses', () => {
+    const nonPausedStatuses = ['running', 'idle', 'building', 'completed', 'failed', 'stopped'];
+    nonPausedStatuses.forEach((status) => {
+      const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status, pr_url: null, pr_number: null } as any;
+      const { unmount } = render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+      expect(screen.queryByTestId('ticket-card-resume-42')).toBeNull();
+      unmount();
+    });
+  });
+
+  it('in_stack: does not show Resume button when no linked stack', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-resume-42')).toBeNull();
+  });
+
+  it('in_stack: clicking Resume calls resumeStackWithContinuation(stack.id, true)', async () => {
+    const resumeFn = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ resumeStackWithContinuation: resumeFn } as any);
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'session_paused', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-resume-42'));
+    await waitFor(() => expect(resumeFn).toHaveBeenCalledWith('s1', true));
+  });
+
+  it('in_stack: Resume button does not affect Create PR visibility for eligible statuses', () => {
+    // session_paused is ineligible for PR — no Create PR shown, but Resume is shown
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'session_paused', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-resume-42')).toBeDefined();
+    expect(screen.queryByTestId('ticket-card-create-pr-42')).toBeNull();
+  });
+
   it('pr_open: shows Merge button', () => {
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
     expect(screen.getByTestId('ticket-card-merge-42')).toBeDefined();

@@ -106,7 +106,7 @@ export default function App() {
   // Refinement sessions: restore persisted sessions and listen for updates
   useEffect(() => {
     window.sandstorm.tickets.listRefinements().then((sessions) => {
-      sessions.forEach(upsertRefinementSession);
+      sessions.forEach((s) => upsertRefinementSession(s, { replay: true }));
     }).catch(() => {});
 
     const unsubRefinement = window.sandstorm.on('refinement:update', (data: unknown) => {

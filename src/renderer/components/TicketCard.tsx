@@ -21,6 +21,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     openRefineTicketDialogWith,
     refinementSessions,
     retryRefinementForTicket,
+    resumeStackWithContinuation,
     startStackForTicket,
     stackCreateErrors,
     stackCreateInFlight,
@@ -51,6 +52,12 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
   const handleMerge = () => {
     moveTicketColumn(ticket.ticket_id, ticket.project_dir, 'merged');
+  };
+
+  const handleResume = () => {
+    if (stack) {
+      void resumeStackWithContinuation(stack.id, true);
+    }
   };
 
   const refinementSession = refinementSessions.find(
@@ -182,6 +189,15 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               />
               <span className="text-xs text-sandstorm-muted">{stack.status}</span>
             </div>
+          )}
+          {stack && stack.status === 'session_paused' && (
+            <button
+              onClick={handleResume}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-colors font-medium"
+              data-testid={`ticket-card-resume-${ticket.ticket_id}`}
+            >
+              Resume
+            </button>
           )}
           {stack && makePrEligible(stack) && (
             <button
