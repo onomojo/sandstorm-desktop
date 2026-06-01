@@ -20,6 +20,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     openRefinementSession,
     openRefineTicketDialogWith,
     refinementSessions,
+    retryRefinementForTicket,
     startStackForTicket,
     stackCreateErrors,
     stackCreateInFlight,
@@ -56,6 +57,13 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
   const questionsAwaiting = refinementSession?.result?.questions?.length ?? 0;
 
+  // Error state takes priority: errored, interrupted, or ready+result.error
+  const showErrorState = refinementSession !== undefined && (
+    refinementSession.status === 'errored' ||
+    refinementSession.status === 'interrupted' ||
+    (refinementSession.status === 'ready' && !!refinementSession.result?.error)
+  );
+
   return (
     <div
       className={`bg-sandstorm-surface border border-sandstorm-border rounded-lg p-3 flex flex-col gap-2 shadow-card ${ticket.column === 'merged' ? 'opacity-40' : ''}`}
@@ -89,24 +97,41 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               <div className="h-full bg-sandstorm-state-refining rounded-full animate-pulse w-1/2" />
             </div>
           )}
-          {questionsAwaiting > 0 && (
+          {refinementSession?.status === 'ready' && !showErrorState && questionsAwaiting > 0 && (
             <span className="text-xs text-sandstorm-state-refining">
               {questionsAwaiting} question{questionsAwaiting !== 1 ? 's' : ''} awaiting
             </span>
           )}
-          <button
-            onClick={() => {
-              if (refinementSession) {
-                openRefinementSession(refinementSession.id);
-              } else {
-                openRefineTicketDialogWith(ticket.ticket_id);
-              }
-            }}
-            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-refining/10 text-sandstorm-state-refining border border-sandstorm-state-refining/30 hover:bg-sandstorm-state-refining/20 transition-colors font-medium"
-            data-testid={`ticket-card-answer-${ticket.ticket_id}`}
-          >
-            Answer
-          </button>
+          {/* No session: offer to start refinement */}
+          {!refinementSession && (
+            <button
+              onClick={() => openRefineTicketDialogWith(ticket.ticket_id)}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors font-medium"
+              data-testid={`ticket-card-start-refine-${ticket.ticket_id}`}
+            >
+              Start refinement
+            </button>
+          )}
+          {/* Error/interrupted: offer to retry */}
+          {showErrorState && (
+            <button
+              onClick={() => void retryRefinementForTicket(ticket.ticket_id, ticket.project_dir)}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors font-medium"
+              data-testid={`ticket-card-retry-${ticket.ticket_id}`}
+            >
+              Retry
+            </button>
+          )}
+          {/* Ready with questions and no error: answer questions */}
+          {!showErrorState && refinementSession?.status === 'ready' && questionsAwaiting > 0 && (
+            <button
+              onClick={() => openRefinementSession(refinementSession.id)}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-refining/10 text-sandstorm-state-refining border border-sandstorm-state-refining/30 hover:bg-sandstorm-state-refining/20 transition-colors font-medium"
+              data-testid={`ticket-card-answer-${ticket.ticket_id}`}
+            >
+              Answer
+            </button>
+          )}
         </div>
       )}
 

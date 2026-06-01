@@ -57,9 +57,158 @@ describe('TicketCard', () => {
     expect(entry?.column).toBe('refining');
   });
 
-  it('refining: shows Answer button', () => {
+  it('refining: no session — shows Start refinement button', () => {
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-start-refine-42')).toBeDefined();
+    expect(screen.queryByTestId('ticket-card-answer-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-retry-42')).toBeNull();
+  });
+
+  it('refining: no session — clicking Start refinement calls openRefineTicketDialogWith', () => {
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-start-refine-42'));
+    expect(useAppStore.getState().showRefineTicketDialog).toBe(true);
+    expect(useAppStore.getState().refineTicketPrefill).toBe('42');
+  });
+
+  it('refining: status running — no action buttons shown', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-run',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'running',
+        phase: 'check',
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-answer-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-retry-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-start-refine-42')).toBeNull();
+  });
+
+  it('refining: status ready with questions — shows Answer button', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-ready',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'ready',
+        phase: 'check',
+        result: {
+          passed: false,
+          questions: [{ id: 'q1', question: 'Q?', options: [] }],
+          gateSummary: '',
+          ticketUrl: null,
+          cached: false,
+        },
+        startedAt: 0,
+      }],
+    });
     render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
     expect(screen.getByTestId('ticket-card-answer-42')).toBeDefined();
+    expect(screen.queryByTestId('ticket-card-retry-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-start-refine-42')).toBeNull();
+  });
+
+  it('refining: status ready passed=true, no questions — no button shown', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-pass',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'ready',
+        phase: 'check',
+        result: {
+          passed: true,
+          questions: [],
+          gateSummary: '',
+          ticketUrl: null,
+          cached: false,
+        },
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-answer-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-retry-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-start-refine-42')).toBeNull();
+  });
+
+  it('refining: status errored — shows Retry button', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-err',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'errored',
+        phase: 'check',
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-retry-42')).toBeDefined();
+    expect(screen.queryByTestId('ticket-card-answer-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-start-refine-42')).toBeNull();
+  });
+
+  it('refining: status errored — clicking Retry invokes retryRefinementForTicket', async () => {
+    const retrySpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-err2',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'errored',
+        phase: 'check',
+        startedAt: 0,
+      }],
+      retryRefinementForTicket: retrySpy,
+    } as any);
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-retry-42'));
+    await waitFor(() => expect(retrySpy).toHaveBeenCalledWith('42', PROJECT_DIR));
+  });
+
+  it('refining: status interrupted — shows Retry button', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-int',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'interrupted',
+        phase: 'check',
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-retry-42')).toBeDefined();
+    expect(screen.queryByTestId('ticket-card-answer-42')).toBeNull();
+  });
+
+  it('refining: status ready with result.error — shows Retry, not Answer', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-ready-err',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'ready',
+        phase: 'check',
+        result: {
+          passed: false,
+          questions: [{ id: 'q1', question: 'Q?', options: [] }],
+          gateSummary: '',
+          ticketUrl: null,
+          cached: false,
+          error: 'spec gate failed',
+        },
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-retry-42')).toBeDefined();
+    expect(screen.queryByTestId('ticket-card-answer-42')).toBeNull();
   });
 
   it('spec_ready: shows Start stack button', () => {

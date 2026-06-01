@@ -1,5 +1,5 @@
 import { test, expect } from './fixtures';
-import type { RefineQuestion } from '../../src/renderer/store';
+import type { RefineQuestion, RefinementSession } from '../../src/renderer/store';
 
 test.describe('Refinement streaming panel', () => {
   test('refine-stream-panel shows live streamed text mid-run', async ({ electronApp, mainWindow }) => {
@@ -166,5 +166,141 @@ test.describe('Refinement streaming panel', () => {
     const modal = mainWindow.locator('[data-testid="refine-ticket-dialog"] > div').first();
     const className = await modal.getAttribute('class');
     expect(className).toContain('w-[768px]');
+  });
+
+  test('Answer button hidden while running, visible once ready with questions (#415)', async ({ electronApp, mainWindow }) => {
+    await mainWindow.waitForSelector('text=Sandstorm', { timeout: 15000 });
+    await mainWindow.waitForFunction(
+      () => Boolean((window as unknown as { __useAppStore?: unknown }).__useAppStore),
+      { timeout: 15000 },
+    );
+
+    const TICKET_415 = `ticket-415-${Date.now()}`;
+    const PROJECT_415 = `/tmp/int-test-415-${Date.now()}`;
+    const SESSION_415 = `sess-415-${Date.now()}`;
+
+    // Capture the current lastTicketFetchAt before seeding so we can detect when
+    // the board refresh triggered by setting activeProjectId has completed.
+    const prevFetchAt = await mainWindow.evaluate(() =>
+      (window as unknown as {
+        __useAppStore: { getState: () => { lastTicketFetchAt: number | null } };
+      }).__useAppStore.getState().lastTicketFetchAt,
+    );
+
+    // Seed project/activeProjectId first — this triggers the KanbanBoard useEffect
+    // which calls refreshBoardTickets (an IPC round-trip that will return an empty
+    // array for this fake project directory). Do NOT seed boardTickets yet.
+    await mainWindow.evaluate(({ dir }) => {
+      const store = (window as unknown as {
+        __useAppStore: { setState: (s: Record<string, unknown>) => void };
+      }).__useAppStore;
+      store.setState({
+        projects: [{ id: 9415, name: 'int-test-415', directory: dir, added_at: '' }],
+        activeProjectId: 9415,
+        boardTickets: [],
+        refinementSessions: [],
+        stacks: [],
+      });
+    }, { dir: PROJECT_415 });
+
+    // Wait for the board refresh to complete. The refresh resolves to an empty array
+    // (this project has no DB rows), setting lastTicketFetchAt to a new timestamp.
+    await mainWindow.waitForFunction(
+      (prev: number | null) => {
+        const state = (window as unknown as {
+          __useAppStore: { getState: () => { lastTicketFetchAt: number | null; boardTicketsLoading: boolean } };
+        }).__useAppStore.getState();
+        return state.lastTicketFetchAt !== prev && !state.boardTicketsLoading;
+      },
+      prevFetchAt,
+      { timeout: 5000 },
+    );
+
+    // Now seed boardTickets. The KanbanBoard effect won't fire again because
+    // project.directory hasn't changed, so this seeded state is stable.
+    await mainWindow.evaluate(({ ticketId, dir }) => {
+      (window as unknown as {
+        __useAppStore: { setState: (s: Record<string, unknown>) => void };
+      }).__useAppStore.setState({
+        boardTickets: [{ ticket_id: ticketId, project_dir: dir, column: 'refining', title: 'Ticket 415 test', updated_at: '' }],
+      });
+    }, { ticketId: TICKET_415, dir: PROJECT_415 });
+
+    // Wait for the ticket card to be in the DOM before injecting the session.
+    await mainWindow.waitForSelector(`[data-testid="ticket-card-${TICKET_415}"]`, { timeout: 3000 });
+
+    // Inject a running refinement session via IPC (same path the real daemon uses).
+    await electronApp.evaluate(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (electron: any, args: { sid: string; ticketId: string; dir: string; ts: number }) => {
+        const win = electron.BrowserWindow.getAllWindows()[0];
+        win.webContents.send('refinement:update', {
+          id: args.sid,
+          ticketId: args.ticketId,
+          projectDir: args.dir,
+          status: 'running',
+          phase: 'check',
+          startedAt: args.ts,
+        });
+      },
+      { sid: SESSION_415, ticketId: TICKET_415, dir: PROJECT_415, ts: Date.now() },
+    );
+
+    // Wait for the session to land in the store.
+    await mainWindow.waitForFunction(
+      (sid: string) => {
+        const store = (window as unknown as {
+          __useAppStore: { getState: () => { refinementSessions: Array<{ id: string }> } };
+        }).__useAppStore;
+        return store.getState().refinementSessions.some((s) => s.id === sid);
+      },
+      SESSION_415,
+      { timeout: 5000 },
+    );
+
+    // Assert the Answer button is absent while running.
+    const answerBtn = mainWindow.locator(`[data-testid="ticket-card-answer-${TICKET_415}"]`);
+    await expect(answerBtn).toHaveCount(0);
+
+    // Transition to ready with questions via the same IPC path.
+    await electronApp.evaluate(
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      (electron: any, args: { sid: string; ticketId: string; dir: string; ts: number }) => {
+        const win = electron.BrowserWindow.getAllWindows()[0];
+        win.webContents.send('refinement:update', {
+          id: args.sid,
+          ticketId: args.ticketId,
+          projectDir: args.dir,
+          status: 'ready',
+          phase: 'check',
+          startedAt: args.ts,
+          result: {
+            passed: false,
+            questions: [{ id: 'q1', question: 'What approach should be used?', options: [] }],
+            gateSummary: 'Gate=FAIL, questions=1',
+            ticketUrl: null,
+            cached: false,
+          },
+        });
+      },
+      { sid: SESSION_415, ticketId: TICKET_415, dir: PROJECT_415, ts: Date.now() },
+    );
+
+    // The Answer button must appear once the session is ready with questions.
+    await expect(answerBtn).toBeVisible({ timeout: 5000 });
+
+    // Cleanup
+    await mainWindow.evaluate(() => {
+      const store = (window as unknown as {
+        __useAppStore: { setState: (s: Record<string, unknown>) => void };
+      }).__useAppStore;
+      store.setState({
+        projects: [],
+        activeProjectId: null,
+        refinementSessions: [],
+        stacks: [],
+        boardTickets: [],
+      });
+    });
   });
 });

@@ -556,6 +556,8 @@ interface AppState {
   removeRefinementSession: (sessionId: string) => void;
   /** Set which session id is shown in the refine dialog. */
   setCurrentRefinementSessionId: (id: string | null) => void;
+  /** Cancel the current session for a ticket and start a fresh spec-gate run. Opens the dialog to the new session. */
+  retryRefinementForTicket: (ticketId: string, projectDir: string) => Promise<void>;
   setShowCreateTicketDialog: (show: boolean) => void;
   setShowStartTicketDialog: (show: boolean) => void;
   setShowCreatePRDialog: (state: { stackId: string } | null) => void;
@@ -1335,6 +1337,17 @@ export const useAppStore = create<AppState>((set, get) => ({
       : state.currentRefinementSessionId,
   })),
   setCurrentRefinementSessionId: (id) => set({ currentRefinementSessionId: id }),
+  retryRefinementForTicket: async (ticketId, projectDir) => {
+    const session = get().refinementSessions.find(
+      (s) => s.ticketId === ticketId && s.projectDir === projectDir,
+    );
+    if (session) {
+      await window.sandstorm.tickets.cancelRefinement(session.id).catch(() => {});
+      get().removeRefinementSession(session.id);
+    }
+    const { sessionId } = await window.sandstorm.tickets.specCheckAsync(ticketId, projectDir);
+    get().openRefinementSession(sessionId);
+  },
   setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
   setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
   setShowCreatePRDialog: (state) => {
