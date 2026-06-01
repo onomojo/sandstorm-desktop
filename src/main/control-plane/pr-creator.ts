@@ -191,6 +191,20 @@ export async function draftPullRequest(args: DraftPRArgs, deps: DraftDeps): Prom
 
 const PR_URL_PATTERN = /https:\/\/github\.com\/[^\s]+\/pull\/(\d+)/;
 
+/**
+ * Strip shell-problematic characters from a commit message derived from a PR
+ * title. The bash push script interpolates the message into a `bash -c '...'`
+ * string via single/double-quote concatenation, so double quotes, backticks,
+ * dollar signs, backslashes, and newlines can all break the inner command.
+ */
+export function sanitizeCommitMessage(title: string): string {
+  const cleaned = title
+    .replace(/["`$\\]/g, '')
+    .replace(/\n/g, ' ')
+    .trim();
+  return cleaned || 'Sandstorm changes';
+}
+
 export const MAX_PR_ATTEMPTS = 5;
 
 /**
@@ -282,7 +296,7 @@ export async function createPullRequest(
       }
 
       try {
-        await deps.runGitPush(args.title);
+        await deps.runGitPush(sanitizeCommitMessage(args.title));
       } catch (err) {
         failureReasons.push(
           `attempt ${attempt + 1} on branch "${currentBranch}": git push failed: ${String(err)}`,

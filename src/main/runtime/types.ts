@@ -56,6 +56,7 @@ export interface ExecOpts {
   workdir?: string;
   env?: string[];
   interactive?: boolean;
+  user?: string;
 }
 
 export interface ExecResult {
