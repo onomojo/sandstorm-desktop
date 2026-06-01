@@ -65,6 +65,63 @@ describe('buildDraftPrompt', () => {
     const out = buildDraftPrompt({ ticket: null, branch: 'b', commits: '', diffStat: '', taskOutputTail: '' });
     expect(out).toContain(`${PR_BODY_MAX_BYTES} bytes`);
   });
+
+  it('built-in structure uses QA plan not Test plan', () => {
+    const out = buildDraftPrompt({ ticket: null, branch: 'b', commits: '', diffStat: '', taskOutputTail: '' });
+    expect(out).toContain('## QA plan');
+    expect(out).not.toContain('## Test plan');
+  });
+
+  it('built-in structure includes Summary section', () => {
+    const out = buildDraftPrompt({ ticket: null, branch: 'b', commits: '', diffStat: '', taskOutputTail: '' });
+    expect(out).toContain('## Summary');
+  });
+
+  it('built-in structure does not instruct running automated tests', () => {
+    const out = buildDraftPrompt({ ticket: null, branch: 'b', commits: '', diffStat: '', taskOutputTail: '' });
+    expect(out).not.toMatch(/npm test/);
+    expect(out).not.toMatch(/typecheck/);
+    expect(out).not.toMatch(/run.*build/i);
+  });
+
+  it('uses built-in body structure when projectTemplate is null', () => {
+    const out = buildDraftPrompt({ ticket: null, branch: 'b', commits: '', diffStat: '', taskOutputTail: '', projectTemplate: null });
+    expect(out).toContain('## Summary');
+    expect(out).toContain('## QA plan');
+    expect(out).not.toContain("Follow this project's PR template");
+  });
+
+  it('uses built-in body structure when projectTemplate is undefined', () => {
+    const out = buildDraftPrompt({ ticket: null, branch: 'b', commits: '', diffStat: '', taskOutputTail: '' });
+    expect(out).toContain('## Summary');
+    expect(out).toContain('## QA plan');
+    expect(out).not.toContain("Follow this project's PR template");
+  });
+
+  it('instructs the agent to follow project template when projectTemplate is provided', () => {
+    const template = '## My Section\n<!-- description -->\n\n## Steps\n<!-- steps -->';
+    const out = buildDraftPrompt({ ticket: null, branch: 'b', commits: '', diffStat: '', taskOutputTail: '', projectTemplate: template });
+    expect(out).toContain("Follow this project's PR template");
+    expect(out).toContain(template);
+    expect(out).not.toContain('## QA plan');
+  });
+
+  it('includes [TICKET-ID] title convention in schema when ticket is present', () => {
+    const out = buildDraftPrompt({ ticket: '42', branch: 'b', commits: '', diffStat: '', taskOutputTail: '' });
+    expect(out).toContain('[42] fix:');
+  });
+
+  it('strips leading # from ticket in title convention', () => {
+    const out = buildDraftPrompt({ ticket: '#99', branch: 'b', commits: '', diffStat: '', taskOutputTail: '' });
+    expect(out).toContain('[99] fix:');
+    expect(out).not.toContain('[#99]');
+  });
+
+  it('omits [TICKET-ID] prefix in schema when no ticket', () => {
+    const out = buildDraftPrompt({ ticket: null, branch: 'b', commits: '', diffStat: '', taskOutputTail: '' });
+    expect(out).not.toMatch(/\[\d+\]/);
+    expect(out).toContain('≤70 chars summary');
+  });
 });
 
 describe('parseDraftResponse', () => {
@@ -141,7 +198,7 @@ describe('draftPullRequest', () => {
   });
 
   it('calls the ephemeral agent with a prompt that mentions the branch and commit', async () => {
-    const runEphemeral = vi.fn().mockResolvedValue('{"title":"feat: add b","body":"## Summary\\n- adds b\\n\\n## Test plan\\n- [ ] verify"}');
+    const runEphemeral = vi.fn().mockResolvedValue('{"title":"feat: add b","body":"## Summary\\n- adds b\\n\\n## QA plan\\n- [ ] verify"}');
     const drafted = await draftPullRequest(
       { stackId: 's', workspace, ticket: '42' },
       { runEphemeral },
@@ -170,6 +227,39 @@ describe('draftPullRequest', () => {
     );
     expect(fetchTaskTail).toHaveBeenCalledWith('s');
     expect(runEphemeral.mock.calls[0][0]).toContain('important task log');
+  });
+
+  it('uses built-in structure when .github/pull_request_template.md is absent', async () => {
+    const runEphemeral = vi.fn().mockResolvedValue('{"title":"x","body":"## Summary\\n- y"}');
+    await draftPullRequest({ stackId: 's', workspace, ticket: null }, { runEphemeral });
+    const prompt = runEphemeral.mock.calls[0][0] as string;
+    expect(prompt).toContain('## QA plan');
+    expect(prompt).not.toContain("Follow this project's PR template");
+  });
+
+  it('uses project template when .github/pull_request_template.md exists and is non-empty', async () => {
+    const templateDir = path.join(workspace, '.github');
+    fs.mkdirSync(templateDir, { recursive: true });
+    fs.writeFileSync(path.join(templateDir, 'pull_request_template.md'), '## Custom Section\n<!-- fill me in -->');
+
+    const runEphemeral = vi.fn().mockResolvedValue('{"title":"x","body":"## Custom Section\\n- done"}');
+    await draftPullRequest({ stackId: 's', workspace, ticket: null }, { runEphemeral });
+    const prompt = runEphemeral.mock.calls[0][0] as string;
+    expect(prompt).toContain("Follow this project's PR template");
+    expect(prompt).toContain('## Custom Section');
+    expect(prompt).not.toContain('## QA plan');
+  });
+
+  it('uses built-in structure when .github/pull_request_template.md exists but is whitespace-only', async () => {
+    const templateDir = path.join(workspace, '.github');
+    fs.mkdirSync(templateDir, { recursive: true });
+    fs.writeFileSync(path.join(templateDir, 'pull_request_template.md'), '   \n\n  ');
+
+    const runEphemeral = vi.fn().mockResolvedValue('{"title":"x","body":"## Summary\\n- y"}');
+    await draftPullRequest({ stackId: 's', workspace, ticket: null }, { runEphemeral });
+    const prompt = runEphemeral.mock.calls[0][0] as string;
+    expect(prompt).toContain('## QA plan');
+    expect(prompt).not.toContain("Follow this project's PR template");
   });
 });
 
