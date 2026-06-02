@@ -52,7 +52,7 @@ describe('CreateTicketDialog', () => {
     expect(screen.getByText(/Filed issue #77/)).toBeDefined();
   });
 
-  it('shows the Refine button after success and hands off via store', async () => {
+  it('shows the Refine button after success and starts gate in background without opening RefineTicketDialog', async () => {
     const user = userEvent.setup();
     api.tickets.create.mockResolvedValue({
       url: 'https://github.com/o/r/issues/77', ticketId: '77',
@@ -65,13 +65,13 @@ describe('CreateTicketDialog', () => {
 
     fireEvent.click(screen.getByTestId('create-ticket-refine-now'));
     expect(useAppStore.getState().showCreateTicketDialog).toBe(false);
-    expect(useAppStore.getState().showRefineTicketDialog).toBe(true);
-    // #317 — the just-filed ticket id is handed off so the Refine dialog
-    // doesn't ask for it again.
-    expect(useAppStore.getState().refineTicketPrefill).toBe('77');
+    expect(useAppStore.getState().showRefineTicketDialog).toBe(false);
+    await waitFor(() => {
+      expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('77', '/proj');
+    });
   });
 
-  it('"Refine Now" sets refineTicketPrefill so RefineTicketDialog can auto-run gate and move to refining (#393)', async () => {
+  it('"Refine Now" starts gate in background without opening RefineTicketDialog (regression #447)', async () => {
     const user = userEvent.setup();
     api.tickets.create.mockResolvedValue({
       url: 'https://github.com/o/r/issues/77', ticketId: '77',
@@ -84,10 +84,12 @@ describe('CreateTicketDialog', () => {
 
     fireEvent.click(screen.getByTestId('create-ticket-refine-now'));
 
-    // The prefill is set — when RefineTicketDialog mounts it will consume it,
-    // call resolveRefinementTargets, commitRefinementContext, and specCheckAsync.
-    // Here we just assert the prefill handoff is correct.
-    expect(useAppStore.getState().refineTicketPrefill).toBe('77');
+    expect(useAppStore.getState().showCreateTicketDialog).toBe(false);
+    expect(useAppStore.getState().showRefineTicketDialog).toBe(false);
+    expect(useAppStore.getState().refineTicketPrefill).toBeNull();
+    await waitFor(() => {
+      expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('77', '/proj');
+    });
   });
 
   it('calls refreshBoardTickets with the project directory after successful create', async () => {

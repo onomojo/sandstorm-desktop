@@ -18,7 +18,6 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     openRefineDialogFromCard,
     createPRAutomatic,
     openRefinementSession,
-    openRefineTicketDialogWith,
     refinementSessions,
     retryRefinementForTicket,
     resumeStackWithContinuation,
@@ -133,7 +132,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           {/* No session, not in-flight, no error: offer to start refinement */}
           {!refinementSession && !isRefineInFlight && !showErrorState && (
             <button
-              onClick={() => openRefineTicketDialogWith(ticket.ticket_id)}
+              onClick={() => openRefineDialogFromCard(ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn)}
               className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors font-medium"
               data-testid={`ticket-card-start-refine-${ticket.ticket_id}`}
             >

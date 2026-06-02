@@ -4,7 +4,7 @@ import { useAppStore } from '../store';
 type Phase = 'input' | 'creating' | 'created';
 
 export function CreateTicketDialog() {
-  const { setShowCreateTicketDialog, openRefineTicketDialogWith, activeProject, refreshBoardTickets } = useAppStore();
+  const { setShowCreateTicketDialog, openRefineDialogFromCard, activeProject, refreshBoardTickets } = useAppStore();
   const project = activeProject();
 
   const [title, setTitle] = useState('');
@@ -40,9 +40,7 @@ export function CreateTicketDialog() {
   const handleRefineNow = () => {
     if (!created) return;
     setShowCreateTicketDialog(false);
-    // Hand off the just-filed ticket id so Refine doesn't ask for it again
-    // (#317). The Refine dialog consumes + clears the prefill on mount.
-    openRefineTicketDialogWith(created.ticketId);
+    openRefineDialogFromCard(created.ticketId, project!.directory, 'backlog');
   };
 
   return (

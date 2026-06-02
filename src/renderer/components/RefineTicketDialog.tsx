@@ -220,7 +220,8 @@ export function RefineTicketDialog() {
       projectDir,
       combined,
     );
-  }, [session, gate, answers, projectDir, upsertRefinementSession]);
+    setShowRefineTicketDialog(false);
+  }, [session, gate, answers, projectDir, upsertRefinementSession, setShowRefineTicketDialog]);
 
   const handleStartStack = useCallback(async () => {
     if (!session || !projectDir) return;
