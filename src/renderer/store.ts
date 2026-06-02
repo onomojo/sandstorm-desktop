@@ -769,6 +769,7 @@ declare global {
         retryRefinementAsync: (sessionId: string, ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
         postAnswers: (ticketId: string, projectDir: string, answersBody: string) => Promise<void>;
         cancelRefinement: (sessionId: string) => Promise<void>;
+        discardRefinement: (sessionId: string) => Promise<void>;
         listRefinements: () => Promise<RefinementSession[]>;
         create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
         list: (projectDir: string) => Promise<{ tickets: TicketBoardEntry[]; error: TicketListError | null }>;
