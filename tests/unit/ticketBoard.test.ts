@@ -225,6 +225,50 @@ describe('registry.reconcilePrCreatedTickets', () => {
   });
 });
 
+// --- reconcilePrOpenStuckTickets (bug #450 repair) ---
+
+describe('registry.reconcilePrOpenStuckTickets', () => {
+  it('moves pr_open ticket back to in_stack when linked stack has pr_number == null', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'completed', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'pr_open');
+    registry.reconcilePrOpenStuckTickets();
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('in_stack');
+  });
+
+  it('leaves pr_open ticket at pr_open when linked stack has a non-null pr_number', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'pr_created', runtime: 'docker' });
+    registry.setPullRequest('s1', 'https://github.com/o/r/pull/5', 5);
+    registry.setBoardTicketColumn('T-1', '/proj', 'pr_open');
+    registry.reconcilePrOpenStuckTickets();
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('pr_open');
+  });
+
+  it('leaves pr_open ticket unchanged when there is no linked stack', () => {
+    registry.setBoardTicketColumn('T-orphan', '/proj', 'pr_open');
+    registry.reconcilePrOpenStuckTickets();
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('pr_open');
+  });
+
+  it('is idempotent — running twice leaves cards in in_stack', () => {
+    registry.createStack({ id: 's1', project: 'p', project_dir: '/proj', ticket: 'T-1', branch: null, description: null, status: 'completed', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-1', '/proj', 'pr_open');
+    registry.reconcilePrOpenStuckTickets();
+    registry.reconcilePrOpenStuckTickets();
+    expect(registry.listBoardTickets('/proj')[0].column).toBe('in_stack');
+  });
+
+  it('does not touch in_stack or merged tickets', () => {
+    registry.createStack({ id: 's2', project: 'p', project_dir: '/proj', ticket: 'T-2', branch: null, description: null, status: 'running', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-2', '/proj', 'in_stack');
+    registry.createStack({ id: 's3', project: 'p', project_dir: '/proj', ticket: 'T-3', branch: null, description: null, status: 'completed', runtime: 'docker' });
+    registry.setBoardTicketColumn('T-3', '/proj', 'merged');
+    registry.reconcilePrOpenStuckTickets();
+    const rows = registry.listBoardTickets('/proj');
+    expect(rows.find(r => r.ticket_id === 'T-2')?.column).toBe('in_stack');
+    expect(rows.find(r => r.ticket_id === 'T-3')?.column).toBe('merged');
+  });
+});
+
 // --- deleteClosedEarlyColumnTickets ---
 
 describe('deleteClosedEarlyColumnTickets', () => {
@@ -803,7 +847,7 @@ describe('store: resolveRefinementTargets (#393)', () => {
   });
 });
 
-describe('store: createPRAutomatic revert-on-cancel (#417)', () => {
+describe('store: createPRAutomatic failure handling (#450)', () => {
   beforeEach(() => {
     setupSandstormMock();
     useAppStore.setState({
@@ -813,10 +857,11 @@ describe('store: createPRAutomatic revert-on-cancel (#417)', () => {
       stacks: [],
       _prDialogContext: null,
       prCreateInFlight: {},
+      prCreateErrors: {},
     });
   });
 
-  it('reverts ticket to in_stack when dialog canceled after draft_failed', async () => {
+  it('on draft_failed: card stays in in_stack, inline error set, no dialog', async () => {
     Object.defineProperty(window, 'sandstorm', {
       value: {
         tickets: { list: vi.fn().mockResolvedValue([]) },
@@ -829,22 +874,13 @@ describe('store: createPRAutomatic revert-on-cancel (#417)', () => {
 
     await useAppStore.getState().createPRAutomatic('s1', '42', PROJECT_DIR, 'in_stack');
 
-    // After draft_failed the ticket should be at pr_open (optimistic move) and dialog should open
-    const afterFail = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-    expect(afterFail?.column).toBe('pr_open');
-    expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 's1', initialError: undefined });
-
-    // User cancels dialog
-    useAppStore.getState().setShowCreatePRDialog(null);
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    // Ticket must revert to in_stack
-    const afterCancel = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-    expect(afterCancel?.column).toBe('in_stack');
-    expect(useAppStore.getState()._prDialogContext).toBeNull();
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('in_stack');
+    expect(useAppStore.getState().showCreatePRDialog).toBeNull();
+    expect(useAppStore.getState().prCreateErrors['s1']).toBeTruthy();
   });
 
-  it('reverts ticket to in_stack when dialog canceled after create_failed', async () => {
+  it('on create_failed: card stays in in_stack, inline error set, draft cached, no dialog', async () => {
     const draft = { title: 'My PR', body: 'Description' };
     Object.defineProperty(window, 'sandstorm', {
       value: {
@@ -858,20 +894,50 @@ describe('store: createPRAutomatic revert-on-cancel (#417)', () => {
 
     await useAppStore.getState().createPRAutomatic('s1', '42', PROJECT_DIR, 'in_stack');
 
-    // After create_failed the ticket should be at pr_open (optimistic move) and dialog should open with error
-    const afterFail = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-    expect(afterFail?.column).toBe('pr_open');
-    expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 's1', initialError: 'gh failed' });
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('in_stack');
+    expect(useAppStore.getState().showCreatePRDialog).toBeNull();
+    expect(useAppStore.getState().prCreateErrors['s1']).toBe('gh failed');
     expect(useAppStore.getState().prDraftCache['s1']).toEqual(draft);
+  });
 
-    // User cancels dialog
-    useAppStore.getState().setShowCreatePRDialog(null);
+  it('on status created: card advances to pr_open, no error set', async () => {
+    Object.defineProperty(window, 'sandstorm', {
+      value: {
+        tickets: { list: vi.fn().mockResolvedValue([]) },
+        ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
+        pr: { createAuto: vi.fn().mockResolvedValue({ status: 'created', url: 'https://github.com/o/r/pull/5', number: 5 }) },
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    await useAppStore.getState().createPRAutomatic('s1', '42', PROJECT_DIR, 'in_stack');
+
     await new Promise(resolve => setTimeout(resolve, 0));
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('pr_open');
+    expect(useAppStore.getState().showCreatePRDialog).toBeNull();
+    expect(useAppStore.getState().prCreateErrors['s1']).toBeUndefined();
+  });
 
-    // Ticket must revert to in_stack
-    const afterCancel = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-    expect(afterCancel?.column).toBe('in_stack');
-    expect(useAppStore.getState()._prDialogContext).toBeNull();
+  it('on thrown error: card stays in in_stack, inline error set, no dialog', async () => {
+    Object.defineProperty(window, 'sandstorm', {
+      value: {
+        tickets: { list: vi.fn().mockResolvedValue([]) },
+        ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
+        pr: { createAuto: vi.fn().mockRejectedValue(new Error('IPC crash')) },
+      },
+      writable: true,
+      configurable: true,
+    });
+
+    await useAppStore.getState().createPRAutomatic('s1', '42', PROJECT_DIR, 'in_stack');
+
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('in_stack');
+    expect(useAppStore.getState().showCreatePRDialog).toBeNull();
+    expect(useAppStore.getState().prCreateErrors['s1']).toBe('IPC crash');
   });
 });
 

@@ -438,21 +438,27 @@ describe('TicketCard', () => {
     expect(useAppStore.getState().showCreatePRDialog).toBeNull();
   });
 
-  it('in_stack: clicking Create PR moves ticket to pr_open immediately (optimistic)', async () => {
+  it('in_stack: clicking Create PR moves ticket to pr_open only after confirmed success', async () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
     let resolveAuto!: (v: any) => void;
     api.pr.createAuto.mockReturnValue(new Promise((r) => { resolveAuto = r; }));
     useAppStore.setState({ boardTickets: [makeTicket('in_stack') as any] });
     render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
     fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
-    // Optimistic move happens synchronously before createAuto resolves
+    // Card must NOT move to pr_open before createAuto resolves
+    await act(async () => { await Promise.resolve(); });
+    const entryBefore = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entryBefore?.column).toBe('in_stack');
+    // Now resolve with success — card should advance
+    await act(async () => {
+      resolveAuto({ status: 'created', url: 'https://github.com/o/r/pull/1', number: 1 });
+      await Promise.resolve();
+    });
     await waitFor(() => {
       const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
       expect(entry?.column).toBe('pr_open');
     });
     expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'pr_open');
-    resolveAuto({ status: 'created', url: 'https://github.com/o/r/pull/1', number: 1 });
-    await waitFor(() => expect(useAppStore.getState().prCreateInFlight['s1']).toBeFalsy());
   });
 
   it('in_stack: shows Creating PR... spinner while prCreateInFlight is set', async () => {
@@ -485,42 +491,65 @@ describe('TicketCard', () => {
     expect(api.pr.createAuto).toHaveBeenCalledTimes(1);
   });
 
-  it('in_stack: opens dialog with no cache when draft fails (Q3 fallback)', async () => {
+  it('in_stack: shows inline error and keeps card in in_stack when draft fails', async () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
     api.pr.createAuto.mockResolvedValue({ status: 'draft_failed' });
-    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    useAppStore.setState({ boardTickets: [makeTicket('in_stack') as any] });
+    const { container } = render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
     fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
     await waitFor(() => {
-      expect(useAppStore.getState().showCreatePRDialog).toEqual({ stackId: 's1', initialError: undefined });
+      expect(useAppStore.getState().prCreateErrors['s1']).toBeTruthy();
     });
-    expect(useAppStore.getState().prDraftCache['s1']).toBeUndefined();
+    expect(useAppStore.getState().showCreatePRDialog).toBeNull();
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('in_stack');
+    expect(container.querySelector('[data-testid="ticket-card-pr-create-error-42"]')).not.toBeNull();
   });
 
-  it('in_stack: opens dialog pre-populated with draft and error when create fails (Q4 fallback)', async () => {
+  it('in_stack: shows inline error with draft saved and keeps card in in_stack when create fails', async () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
     api.pr.createAuto.mockResolvedValue({
       status: 'create_failed',
       draft: { title: 'pre-drafted', body: 'pre-body' },
       error: 'gh pr create failed after 5 attempts',
     });
-    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    useAppStore.setState({ boardTickets: [makeTicket('in_stack') as any] });
+    const { container } = render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
     fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
     await waitFor(() => {
-      expect(useAppStore.getState().showCreatePRDialog?.stackId).toBe('s1');
-      expect(useAppStore.getState().showCreatePRDialog?.initialError).toBe('gh pr create failed after 5 attempts');
+      expect(useAppStore.getState().prCreateErrors['s1']).toBe('gh pr create failed after 5 attempts');
     });
+    expect(useAppStore.getState().showCreatePRDialog).toBeNull();
     expect(useAppStore.getState().prDraftCache['s1']).toEqual({ title: 'pre-drafted', body: 'pre-body' });
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('in_stack');
+    expect(container.querySelector('[data-testid="ticket-card-pr-create-error-42"]')).not.toBeNull();
   });
 
-  it('in_stack: spinner clears and dialog opens when createAuto rejects unexpectedly', async () => {
+  it('in_stack: shows inline error and keeps card in in_stack when createAuto rejects unexpectedly', async () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
     api.pr.createAuto.mockRejectedValue(new Error('IPC crash'));
-    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    useAppStore.setState({ boardTickets: [makeTicket('in_stack') as any] });
+    const { container } = render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
     fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
     await waitFor(() => {
-      expect(useAppStore.getState().showCreatePRDialog?.stackId).toBe('s1');
+      expect(useAppStore.getState().prCreateErrors['s1']).toBe('IPC crash');
       expect(useAppStore.getState().prCreateInFlight['s1']).toBeFalsy();
     });
+    expect(useAppStore.getState().showCreatePRDialog).toBeNull();
+    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
+    expect(entry?.column).toBe('in_stack');
+    expect(container.querySelector('[data-testid="ticket-card-pr-create-error-42"]')).not.toBeNull();
+  });
+
+  it('in_stack: Create PR button stays available after a failure (pr_url not set)', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    api.pr.createAuto.mockResolvedValue({ status: 'draft_failed' });
+    useAppStore.setState({ boardTickets: [makeTicket('in_stack') as any] });
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-create-pr-42'));
+    await waitFor(() => expect(useAppStore.getState().prCreateErrors['s1']).toBeTruthy());
+    expect(screen.queryByTestId('ticket-card-create-pr-42')).not.toBeNull();
   });
 
   it('in_stack: Create PR button absent when no matching stack', () => {
@@ -592,20 +621,21 @@ describe('TicketCard', () => {
     expect(screen.queryByTestId('ticket-card-create-pr-42')).toBeNull();
   });
 
-  it('pr_open: shows Merge button', () => {
-    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+  it('pr_open: shows Merge button when stack has pr_number set', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/99', pr_number: 99 } as any;
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
     expect(screen.getByTestId('ticket-card-merge-42')).toBeDefined();
   });
 
-  it('pr_open: clicking Merge with no stack calls ticketBoard.setColumn without teardown or GitHub merge', async () => {
-    useAppStore.setState({ boardTickets: [makeTicket('pr_open') as any], stacks: [] });
+  it('pr_open: Merge button is absent when stack has pr_number == null (stuck card fix)', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-merge-42')).toBeNull();
+  });
+
+  it('pr_open: Merge button is absent when there is no linked stack', () => {
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
-    fireEvent.click(screen.getByTestId('ticket-card-merge-42'));
-    await waitFor(() => {
-      expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'merged');
-    });
-    expect(api.pr.merge).not.toHaveBeenCalled();
-    expect(api.stacks.teardown).not.toHaveBeenCalled();
+    expect(screen.queryByTestId('ticket-card-merge-42')).toBeNull();
   });
 
   it('pr_open: clicking Merge with a stack calls pr.merge → teardown → setColumn in order', async () => {

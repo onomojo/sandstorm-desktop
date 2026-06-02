@@ -1174,6 +1174,25 @@ export class Registry {
   }
 
   /**
+   * Startup repair: for every pr_open board ticket whose linked stack has pr_number == null,
+   * move the ticket back to in_stack. This repairs cards stranded in pr_open after a failed
+   * PR creation (pr_number is set atomically with pr_url only on success).
+   * Cards with no linked stack are left unchanged — the stack may be gone and moving back
+   * could be wrong.
+   */
+  reconcilePrOpenStuckTickets(): void {
+    const rows = this.db.prepare(
+      `SELECT tb.ticket_id, tb.project_dir
+       FROM ticket_board tb
+       JOIN stacks s ON s.ticket = tb.ticket_id AND s.project_dir = tb.project_dir
+       WHERE tb.column = 'pr_open' AND s.pr_number IS NULL`
+    ).all() as { ticket_id: string; project_dir: string }[];
+    for (const row of rows) {
+      this.setBoardTicketColumn(row.ticket_id, row.project_dir, 'in_stack');
+    }
+  }
+
+  /**
    * Backfill: for every stack with status='pr_created' and a non-null ticket,
    * advance the linked ticket from in_stack → pr_open (forward-only, idempotent).
    */

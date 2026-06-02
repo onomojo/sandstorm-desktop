@@ -542,7 +542,9 @@ interface AppState {
   mergeTicket: (ticketId: string, projectDir: string) => Promise<void>;
   /** Per-stack in-flight flag for background PR creation, keyed by stackId. */
   prCreateInFlight: Record<string, boolean>;
-  /** One-click PR creation: draft + create in background; opens fallback dialog on failure. */
+  /** Per-stack inline PR-creation error, keyed by stackId. Set on draft_failed/create_failed/thrown error; cleared on retry. */
+  prCreateErrors: Record<string, string>;
+  /** One-click PR creation: draft + create in background; stays in in_stack with inline error on failure. */
   createPRAutomatic: (stackId: string, ticketId: string, projectDir: string, previousColumn: KanbanColumn) => Promise<void>;
   /** Per-ticket in-flight flag for discard operation, keyed by `${ticketId}|${projectDir}`. */
   discardInFlight: Record<string, boolean>;
@@ -1071,6 +1073,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   stackCreateInFlight: {},
   mergeInFlight: {},
   prCreateInFlight: {},
+  prCreateErrors: {},
   discardInFlight: {},
   discardErrors: {},
   refineInFlight: {},
@@ -1348,22 +1351,25 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   createPRAutomatic: async (stackId, ticketId, projectDir, previousColumn) => {
     if (get().prCreateInFlight[stackId]) return;
-    set((state) => ({ prCreateInFlight: { ...state.prCreateInFlight, [stackId]: true } }));
-    // Optimistic move: advance to pr_open immediately so the card moves without waiting
-    // for the IPC round-trip. If the call fails and the user cancels the fallback dialog,
-    // setShowCreatePRDialog reverts to previousColumn.
-    void get().moveTicketColumn(ticketId, projectDir, 'pr_open');
+    set((state) => ({
+      prCreateInFlight: { ...state.prCreateInFlight, [stackId]: true },
+      prCreateErrors: (() => { const { [stackId]: _, ...rest } = state.prCreateErrors; return rest; })(),
+    }));
     try {
       const result = await window.sandstorm.pr.createAuto(stackId);
-      if (result.status === 'draft_failed') {
-        get().openCreatePRDialogForTicket(stackId, ticketId, projectDir, previousColumn);
+      if (result.status === 'created') {
+        // Only advance to pr_open on confirmed success
+        void get().moveTicketColumn(ticketId, projectDir, 'pr_open');
+      } else if (result.status === 'draft_failed') {
+        set((state) => ({ prCreateErrors: { ...state.prCreateErrors, [stackId]: 'PR draft failed. Please try again.' } }));
       } else if (result.status === 'create_failed') {
         get().setPrDraft(stackId, result.draft);
-        get().openCreatePRDialogForTicket(stackId, ticketId, projectDir, previousColumn, result.error);
+        const msg = result.error ?? 'PR creation failed. Please try again.';
+        set((state) => ({ prCreateErrors: { ...state.prCreateErrors, [stackId]: msg } }));
       }
-      // On 'created': card is already at pr_open; stacks:updated refreshes the stack record
-    } catch {
-      get().openCreatePRDialogForTicket(stackId, ticketId, projectDir, previousColumn);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'PR creation failed. Please try again.';
+      set((state) => ({ prCreateErrors: { ...state.prCreateErrors, [stackId]: msg } }));
     } finally {
       set((state) => {
         const { [stackId]: _, ...rest } = state.prCreateInFlight;
