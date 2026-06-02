@@ -77,7 +77,7 @@ import {
   createPullRequest,
 } from './control-plane/pr-creator';
 import { showNotification } from './tray';
-import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection } from './control-plane/ticket-config';
+import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection, closeTicketWithConfig } from './control-plane/ticket-config';
 import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
@@ -1317,6 +1317,22 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     if (dirError) throw new Error(dirError.error);
     if (!VALID_KANBAN_COLUMNS.includes(column)) throw new Error(`Invalid kanban column: "${column}"`);
     registry.setBoardTicketColumn(ticketId, path.resolve(projectDir), column);
+  });
+
+  ipcMain.handle('ticket:close', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
+    if (!ticketId?.trim()) throw new Error('ticketId is required');
+    const dirError = validateProjectDir(projectDir);
+    if (dirError) throw new Error(dirError.error);
+    const config = registry.getProjectTicketConfig(projectDir);
+    if (!config) throw new Error(`No ticket provider configured for project: ${projectDir}`);
+    await closeTicketWithConfig(ticketId, config, path.resolve(projectDir));
+  });
+
+  ipcMain.handle('ticket-board:delete', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
+    if (!ticketId?.trim()) throw new Error('ticketId is required');
+    const dirError = validateProjectDir(projectDir);
+    if (dirError) throw new Error(dirError.error);
+    registry.deleteBoardTicket(ticketId, path.resolve(projectDir));
   });
 
   // --- PR creation (deterministic UI for make-PR workflow, #310) ---

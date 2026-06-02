@@ -213,9 +213,11 @@ export interface SandstormAPI {
       auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
       jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
     }>;
+    close: (ticketId: string, projectDir: string) => Promise<void>;
   };
   ticketBoard: {
     setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
+    delete: (ticketId: string, projectDir: string) => Promise<void>;
   };
   pr: {
     draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
@@ -401,10 +403,14 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:update', projectDir, ticketId, body),
     testJiraConnection: (params) =>
       ipcRenderer.invoke('tickets:testJiraConnection', params),
+    close: (ticketId, projectDir) =>
+      ipcRenderer.invoke('ticket:close', { ticketId, projectDir }),
   },
   ticketBoard: {
     setColumn: (ticketId, projectDir, column) =>
       ipcRenderer.invoke('ticket-board:set-column', ticketId, projectDir, column),
+    delete: (ticketId, projectDir) =>
+      ipcRenderer.invoke('ticket-board:delete', { ticketId, projectDir }),
   },
   pr: {
     draftBody: (stackId) => ipcRenderer.invoke('pr:draftBody', stackId),

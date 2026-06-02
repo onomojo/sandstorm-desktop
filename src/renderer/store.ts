@@ -544,6 +544,12 @@ interface AppState {
   prCreateInFlight: Record<string, boolean>;
   /** One-click PR creation: draft + create in background; opens fallback dialog on failure. */
   createPRAutomatic: (stackId: string, ticketId: string, projectDir: string, previousColumn: KanbanColumn) => Promise<void>;
+  /** Per-ticket in-flight flag for discard operation, keyed by `${ticketId}|${projectDir}`. */
+  discardInFlight: Record<string, boolean>;
+  /** Per-ticket discard error message, keyed by `${ticketId}|${projectDir}`. Cleared at the start of the next discard attempt. */
+  discardErrors: Record<string, string>;
+  /** Best-effort teardown → card disposition (backlog or close+delete). Surfaces close failure via discardErrors (R2). */
+  discardStack: (ticketId: string, projectDir: string, disposition: 'backlog' | 'close') => Promise<void>;
 
   // Schedules (per-project)
   schedules: ScheduleEntry[];
@@ -783,9 +789,11 @@ declare global {
           auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
           jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
         }>;
+        close: (ticketId: string, projectDir: string) => Promise<void>;
       };
       ticketBoard: {
         setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
+        delete: (ticketId: string, projectDir: string) => Promise<void>;
       };
       pr: {
         draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
@@ -1062,6 +1070,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   stackCreateInFlight: {},
   mergeInFlight: {},
   prCreateInFlight: {},
+  discardInFlight: {},
+  discardErrors: {},
   refineInFlight: {},
   refineStartErrors: {},
 
@@ -1287,6 +1297,50 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => {
         const { [key]: _, ...rest } = state.mergeInFlight;
         return { mergeInFlight: rest };
+      });
+    }
+  },
+
+  discardStack: async (ticketId: string, projectDir: string, disposition: 'backlog' | 'close') => {
+    const key = `${ticketId}|${projectDir}`;
+    if (get().discardInFlight[key]) return;
+    set((state) => ({
+      discardInFlight: { ...state.discardInFlight, [key]: true },
+      discardErrors: (() => { const { [key]: _, ...rest } = state.discardErrors; return rest; })(),
+    }));
+
+    const stack = get().stacks.find(s => s.ticket === ticketId && s.project_dir === projectDir);
+
+    try {
+      // Best-effort teardown: swallow all errors, including missing stacks
+      if (stack) {
+        try {
+          await window.sandstorm.stacks.teardown(stack.id);
+        } catch {
+          // intentional: teardown is best-effort and must not block disposition
+        }
+      }
+
+      if (disposition === 'backlog') {
+        await get().moveTicketColumn(ticketId, projectDir, 'backlog');
+      } else {
+        // Close/archive ticket — rejects on genuine failure (R2)
+        await window.sandstorm.tickets.close(ticketId, projectDir);
+        // On success or already-closed, delete the board row
+        await window.sandstorm.ticketBoard.delete(ticketId, projectDir);
+        set((state) => ({
+          boardTickets: state.boardTickets.filter(
+            t => !(t.ticket_id === ticketId && t.project_dir === projectDir)
+          ),
+        }));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set((state) => ({ discardErrors: { ...state.discardErrors, [key]: `Failed to discard ticket #${ticketId}: ${message}` } }));
+    } finally {
+      set((state) => {
+        const { [key]: _, ...rest } = state.discardInFlight;
+        return { discardInFlight: rest };
       });
     }
   },

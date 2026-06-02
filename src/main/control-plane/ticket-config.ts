@@ -146,6 +146,21 @@ export async function githubListTickets(cwd: string, label?: string): Promise<Ti
   }
 }
 
+export async function githubCloseTicket(ticketId: string, cwd: string): Promise<void> {
+  try {
+    await execFileAsync(
+      'gh',
+      ['issue', 'close', ticketId],
+      { cwd, timeout: 30000, maxBuffer: 2 * 1024 * 1024 }
+    );
+  } catch (err: unknown) {
+    const e = err as { stderr?: string; message?: string };
+    const text = `${e.stderr ?? ''} ${e.message ?? ''}`;
+    if (/already closed/i.test(text)) return;
+    throw new Error(`gh issue close failed: ${e.stderr?.trim() || (err as Error).message}`);
+  }
+}
+
 export async function githubCreateTicket(title: string, body: string, cwd: string): Promise<CreatedTicket> {
   const { stdout } = await execFileAsync(
     'gh',
@@ -354,6 +369,26 @@ export async function jiraUpdateTicket(
   });
 }
 
+export async function jiraCloseTicket(
+  ticketId: string,
+  config: ProjectTicketConfig,
+): Promise<void> {
+  if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
+    throw new Error(
+      'Jira credentials are missing. Configure JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN in Project Settings.'
+    );
+  }
+  const url = `${config.jira_url.replace(/\/$/, '')}/rest/api/3/issue/${ticketId}/archive`;
+  try {
+    await jiraRequest({ url, method: 'PUT', auth: jiraAuth(config) });
+  } catch (err: unknown) {
+    const e = err as { status?: number; body?: string; message?: string };
+    const body = e.body ?? e.message ?? '';
+    if (/already archived/i.test(body)) return;
+    throw err;
+  }
+}
+
 export async function jiraCreateTicket(
   title: string,
   body: string,
@@ -433,6 +468,17 @@ export async function updateTicketWithConfig(
     return githubUpdateTicket(ticketId, body, cwd);
   }
   return jiraUpdateTicket(ticketId, body, config);
+}
+
+export async function closeTicketWithConfig(
+  ticketId: string,
+  config: ProjectTicketConfig,
+  cwd: string,
+): Promise<void> {
+  if (config.provider === 'github') {
+    return githubCloseTicket(ticketId, cwd);
+  }
+  return jiraCloseTicket(ticketId, config);
 }
 
 export async function createTicketWithConfig(opts: {

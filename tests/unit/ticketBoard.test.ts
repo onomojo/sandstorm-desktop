@@ -912,3 +912,38 @@ describe('store: commitRefinementContext (#393)', () => {
     expect(entry?.column).toBe('backlog');
   });
 });
+
+
+// --- deleteBoardTicket (#446) ---
+
+describe('deleteBoardTicket', () => {
+  it('removes exactly the targeted row', () => {
+    registry.seedBoardTicket('del-1', '/proj', 'To be deleted');
+    registry.seedBoardTicket('keep-1', '/proj', 'To keep');
+    registry.deleteBoardTicket('del-1', '/proj');
+    const rows = registry.listBoardTickets('/proj');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ticket_id).toBe('keep-1');
+  });
+
+  it('is a no-op when the row is absent', () => {
+    registry.seedBoardTicket('keep-1', '/proj', 'Keep this');
+    expect(() => registry.deleteBoardTicket('nonexistent', '/proj')).not.toThrow();
+    expect(registry.listBoardTickets('/proj')).toHaveLength(1);
+  });
+
+  it('is scoped to the given project_dir — does not affect other projects', () => {
+    registry.seedBoardTicket('t1', '/alpha', 'Alpha ticket');
+    registry.seedBoardTicket('t1', '/beta', 'Beta ticket');
+    registry.deleteBoardTicket('t1', '/alpha');
+    expect(registry.listBoardTickets('/alpha')).toHaveLength(0);
+    expect(registry.listBoardTickets('/beta')).toHaveLength(1);
+  });
+
+  it('is idempotent — deleting the same row twice does not throw', () => {
+    registry.seedBoardTicket('t1', '/proj', 'T');
+    registry.deleteBoardTicket('t1', '/proj');
+    expect(() => registry.deleteBoardTicket('t1', '/proj')).not.toThrow();
+    expect(registry.listBoardTickets('/proj')).toHaveLength(0);
+  });
+});

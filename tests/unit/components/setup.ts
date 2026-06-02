@@ -176,9 +176,11 @@ export function mockSandstormApi() {
         auth: { ok: true, displayName: 'Test User' },
         jql: { ok: true, count: 5 },
       }),
+      close: vi.fn().mockResolvedValue(undefined),
     },
     ticketBoard: {
       setColumn: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(undefined),
     },
     pr: {
       draftBody: vi.fn().mockResolvedValue({ title: 'Test PR', body: '## Summary\n- thing\n\n## Test plan\n- [ ] check' }),
