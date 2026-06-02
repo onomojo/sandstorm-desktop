@@ -23,6 +23,7 @@ const {
   mockRemoveProjectFromCrontab,
   mockListTicketsWithConfig,
   mockCreateTicketWithConfig,
+  mockCloseTicketWithConfig,
   mockTestJiraConnection,
   mockSessionMonitor,
   mockSpawnSpecCheck,
@@ -52,6 +53,7 @@ const {
     listBoardTickets: vi.fn().mockReturnValue([]),
     setBoardTicketColumn: vi.fn(),
     deleteClosedEarlyColumnTickets: vi.fn().mockReturnValue(0),
+    deleteBoardTicket: vi.fn(),
   };
 
   const mockStackManager = {
@@ -120,6 +122,7 @@ const {
   const mockRemoveProjectFromCrontab = vi.fn();
   const mockListTicketsWithConfig = vi.fn().mockResolvedValue({ ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } });
   const mockCreateTicketWithConfig = vi.fn().mockResolvedValue({ url: 'https://github.com/o/r/issues/1', ticketId: '1' });
+  const mockCloseTicketWithConfig = vi.fn().mockResolvedValue(undefined);
   const mockTestJiraConnection = vi.fn().mockResolvedValue({
     auth: { ok: true, displayName: 'Test User' },
     jql: { ok: true, count: 5 },
@@ -147,6 +150,7 @@ const {
     mockRemoveProjectFromCrontab,
     mockListTicketsWithConfig,
     mockCreateTicketWithConfig,
+    mockCloseTicketWithConfig,
     mockTestJiraConnection,
     mockSessionMonitor,
     mockSpawnSpecCheck,
@@ -231,6 +235,7 @@ vi.mock('../../src/main/control-plane/ticket-lister', () => ({
 
 vi.mock('../../src/main/control-plane/ticket-config', () => ({
   createTicketWithConfig: (...args: unknown[]) => mockCreateTicketWithConfig(...args),
+  closeTicketWithConfig: (...args: unknown[]) => mockCloseTicketWithConfig(...args),
   testJiraConnection: (...args: unknown[]) => mockTestJiraConnection(...args),
 }));
 
@@ -1888,7 +1893,9 @@ describe('IPC Handlers', () => {
       'tickets:update',
       'tickets:list',
       'tickets:testJiraConnection',
+      'ticket:close',
       'ticket-board:set-column',
+      'ticket-board:delete',
       'pr:draftBody',
       'pr:create',
       'pr:merge',
@@ -1905,6 +1912,68 @@ describe('IPC Handlers', () => {
 
     it('registers exactly the expected number of handlers', () => {
       expect(Object.keys(registeredHandlers).length).toBe(expectedChannels.length);
+    });
+  });
+
+  // =========================================================================
+  // ticket:close (#446)
+  // =========================================================================
+  describe('ticket:close', () => {
+    beforeEach(() => {
+      mockRegistry.getProjectTicketConfig.mockReturnValue({ provider: 'github' });
+    });
+
+    it('calls closeTicketWithConfig with ticketId, config, and projectDir', async () => {
+      await invokeHandler('ticket:close', { ticketId: '42', projectDir: '/proj' });
+      expect(mockCloseTicketWithConfig).toHaveBeenCalledWith('42', { provider: 'github' }, '/proj');
+    });
+
+    it('resolves successfully when closeTicketWithConfig resolves', async () => {
+      await expect(
+        invokeHandler('ticket:close', { ticketId: '42', projectDir: '/proj' })
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects when no ticket config is configured for the project', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValue(null);
+      await expect(
+        invokeHandler('ticket:close', { ticketId: '42', projectDir: '/proj' })
+      ).rejects.toThrow(/No ticket provider configured/);
+    });
+
+    it('rejects when ticketId is empty', async () => {
+      await expect(
+        invokeHandler('ticket:close', { ticketId: '', projectDir: '/proj' })
+      ).rejects.toThrow(/ticketId is required/);
+    });
+
+    it('propagates rejection from closeTicketWithConfig', async () => {
+      mockCloseTicketWithConfig.mockRejectedValueOnce(new Error('403 Forbidden'));
+      await expect(
+        invokeHandler('ticket:close', { ticketId: '42', projectDir: '/proj' })
+      ).rejects.toThrow('403 Forbidden');
+    });
+  });
+
+  // =========================================================================
+  // ticket-board:delete (#446)
+  // =========================================================================
+  describe('ticket-board:delete', () => {
+    it('calls registry.deleteBoardTicket with ticketId and resolved projectDir', async () => {
+      await invokeHandler('ticket-board:delete', { ticketId: '42', projectDir: '/proj' });
+      expect(mockRegistry.deleteBoardTicket).toHaveBeenCalledWith('42', '/proj');
+    });
+
+    it('resolves successfully (no-op when row absent)', async () => {
+      await expect(
+        invokeHandler('ticket-board:delete', { ticketId: 'nonexistent', projectDir: '/proj' })
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects when ticketId is empty', async () => {
+      await expect(
+        invokeHandler('ticket-board:delete', { ticketId: '', projectDir: '/proj' })
+      ).rejects.toThrow(/ticketId is required/);
     });
   });
 });
