@@ -143,11 +143,15 @@ describe('TicketCard', () => {
     expect(screen.queryByTestId('ticket-card-retry-42')).toBeNull();
   });
 
-  it('refining: no session — clicking Start refinement calls openRefineTicketDialogWith', () => {
+  it('refining: no session — clicking Start refinement calls openRefineDialogFromCard (background, no dialog)', async () => {
+    useAppStore.setState({ boardTickets: [makeTicket('refining') as any] });
     render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
     fireEvent.click(screen.getByTestId('ticket-card-start-refine-42'));
-    expect(useAppStore.getState().showRefineTicketDialog).toBe(true);
-    expect(useAppStore.getState().refineTicketPrefill).toBe('42');
+    expect(useAppStore.getState().showRefineTicketDialog).toBe(false);
+    expect(useAppStore.getState().refineTicketPrefill).toBeNull();
+    await waitFor(() => {
+      expect(api.tickets.specCheckAsync).toHaveBeenCalledWith('42', PROJECT_DIR);
+    });
   });
 
   it('refining: status running — no action buttons shown', () => {

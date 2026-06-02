@@ -1304,6 +1304,32 @@ describe('RefineTicketDialog', () => {
         expect(api.tickets.specRefineAsync).toHaveBeenCalled();
       });
     });
+
+    it('closes dialog after submitting answers (regression #447)', async () => {
+      const user = userEvent.setup();
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1', ticketId: '310', projectDir: '/proj',
+          status: 'ready', phase: 'check', startedAt: Date.now(),
+          result: {
+            passed: false,
+            questions: SINGLE_OPT_QUESTION,
+            gateSummary: 'Gate=FAIL, questions=1',
+            ticketUrl: null, cached: false,
+          },
+        }],
+        currentRefinementSessionId: 'session-1',
+      });
+
+      render(<RefineTicketDialog />);
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      fireEvent.click(screen.getByTestId('refine-submit-answers'));
+
+      await waitFor(() => {
+        expect(api.tickets.specRefineAsync).toHaveBeenCalled();
+        expect(useAppStore.getState().showRefineTicketDialog).toBe(false);
+      });
+    });
   });
 
   describe('upsertRefinementSession clears streamingOutput on completion', () => {
