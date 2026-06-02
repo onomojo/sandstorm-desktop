@@ -331,6 +331,22 @@ export interface ModelSettings {
   outer_model: string;
 }
 
+export type TicketListError =
+  | { reason: 'missing-creds' }
+  | { reason: 'http-status'; status: number; body?: string }
+  | { reason: 'network'; message: string };
+
+function formatTicketListError(error: TicketListError): string {
+  switch (error.reason) {
+    case 'missing-creds':
+      return 'JIRA credentials missing — configure them in Project Settings';
+    case 'http-status':
+      return `JIRA error ${error.status}${error.body ? ': ' + error.body.slice(0, 100) : ''}`;
+    case 'network':
+      return error.message;
+  }
+}
+
 export interface ProjectTicketConfig {
   provider: 'github' | 'jira';
   jira_url?: string | null;
@@ -751,7 +767,16 @@ declare global {
         cancelRefinement: (sessionId: string) => Promise<void>;
         listRefinements: () => Promise<RefinementSession[]>;
         create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
-        list: (projectDir: string) => Promise<TicketBoardEntry[]>;
+        list: (projectDir: string) => Promise<{ tickets: TicketBoardEntry[]; error: TicketListError | null }>;
+        testJiraConnection: (params: {
+          jiraUrl: string;
+          jiraUsername: string;
+          jiraApiToken: string;
+          label?: string;
+        }) => Promise<{
+          auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
+          jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+        }>;
       };
       ticketBoard: {
         setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
@@ -1037,8 +1062,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshBoardTickets: async (projectDir: string) => {
     try {
       set({ boardTicketsLoading: true });
-      const tickets = await window.sandstorm.tickets.list(projectDir);
-      set({ boardTickets: tickets as TicketBoardEntry[], boardTicketsLoading: false, boardTicketsError: null, lastTicketFetchAt: Date.now() });
+      const { tickets, error } = await window.sandstorm.tickets.list(projectDir);
+      const errorMessage = error ? formatTicketListError(error) : null;
+      set({ boardTickets: tickets ?? [], boardTicketsLoading: false, boardTicketsError: errorMessage, lastTicketFetchAt: Date.now() });
     } catch (err) {
       console.error('[refreshBoardTickets]', err);
       set({ boardTicketsLoading: false, boardTicketsError: String(err) });

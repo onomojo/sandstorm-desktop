@@ -82,7 +82,7 @@ export function KanbanBoard() {
                 <span className="text-xs text-sandstorm-muted animate-pulse">Refreshing…</span>
               )}
               {boardTicketsError && !boardTicketsLoading && (
-                <span className="text-xs text-red-400" data-testid="board-tickets-error">Failed to load tickets</span>
+                <span className="text-xs text-red-400" data-testid="board-tickets-error">{boardTicketsError}</span>
               )}
               {moveTicketColumnError && (
                 <button

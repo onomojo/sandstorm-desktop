@@ -314,11 +314,11 @@ import { useAppStore } from '../../src/renderer/store';
 
 const PROJECT_DIR = '/store-test-proj';
 
-function setupSandstormMock(ticketsList: unknown[] = []) {
+function setupSandstormMock(ticketsList: unknown[] = [], error: unknown = null) {
   Object.defineProperty(window, 'sandstorm', {
     value: {
       tickets: {
-        list: vi.fn().mockResolvedValue(ticketsList),
+        list: vi.fn().mockResolvedValue({ tickets: ticketsList, error }),
         specCheckAsync: vi.fn().mockResolvedValue({ sessionId: 'test-sess' }),
       },
       ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
@@ -349,7 +349,7 @@ describe('store: refreshBoardTickets', () => {
     expect((window.sandstorm as any).tickets.list).toHaveBeenCalledWith(PROJECT_DIR);
   });
 
-  it('clears loading state on fetch error', async () => {
+  it('clears loading state on IPC throw', async () => {
     Object.defineProperty(window, 'sandstorm', {
       value: { tickets: { list: vi.fn().mockRejectedValue(new Error('fail')) }, ticketBoard: { setColumn: vi.fn() } },
       writable: true,
@@ -363,7 +363,7 @@ describe('store: refreshBoardTickets', () => {
     expect(state.boardTickets).toEqual([]);
   });
 
-  it('sets boardTicketsError on fetch error', async () => {
+  it('sets boardTicketsError on IPC throw', async () => {
     Object.defineProperty(window, 'sandstorm', {
       value: { tickets: { list: vi.fn().mockRejectedValue(new Error('network failure')) }, ticketBoard: { setColumn: vi.fn() } },
       writable: true,
@@ -377,14 +377,34 @@ describe('store: refreshBoardTickets', () => {
     expect(typeof state.boardTicketsError).toBe('string');
   });
 
-  it('clears boardTicketsError on successful fetch', async () => {
-    useAppStore.setState({ boardTicketsError: 'previous error' });
-    setupSandstormMock([]);
-
+  it('sets boardTicketsError from structured missing-creds error', async () => {
+    setupSandstormMock([], { reason: 'missing-creds' });
     await useAppStore.getState().refreshBoardTickets(PROJECT_DIR);
+    const state = useAppStore.getState();
+    expect(state.boardTicketsError).toContain('JIRA credentials missing');
+  });
 
+  it('sets boardTicketsError from structured http-status error', async () => {
+    setupSandstormMock([], { reason: 'http-status', status: 401, body: 'Unauthorized' });
+    await useAppStore.getState().refreshBoardTickets(PROJECT_DIR);
+    const state = useAppStore.getState();
+    expect(state.boardTicketsError).toContain('401');
+  });
+
+  it('sets boardTicketsError from structured network error', async () => {
+    setupSandstormMock([], { reason: 'network', message: 'Connection timed out' });
+    await useAppStore.getState().refreshBoardTickets(PROJECT_DIR);
+    const state = useAppStore.getState();
+    expect(state.boardTicketsError).toBe('Connection timed out');
+  });
+
+  it('clears boardTicketsError to null on successful fetch (error:null)', async () => {
+    useAppStore.setState({ boardTicketsError: 'JIRA credentials missing — configure them in Project Settings' });
+    setupSandstormMock([]);
+    await useAppStore.getState().refreshBoardTickets(PROJECT_DIR);
     expect(useAppStore.getState().boardTicketsError).toBeNull();
   });
+
 });
 
 describe('store: moveTicketColumn', () => {
