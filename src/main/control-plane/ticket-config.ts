@@ -34,8 +34,16 @@ export interface TicketListEntry {
   author: string;
 }
 
+/** Structured failure reason carried on the ok:false branch of TicketListResult. */
+export type TicketListError =
+  | { reason: 'missing-creds' }
+  | { reason: 'http-status'; status: number; body?: string }
+  | { reason: 'network'; message: string };
+
 /** Discriminated result for ticket list fetches — lets callers distinguish success from failure. */
-export type TicketListResult = { ok: true; tickets: TicketListEntry[] } | { ok: false };
+export type TicketListResult =
+  | { ok: true; tickets: TicketListEntry[] }
+  | { ok: false; error: TicketListError };
 
 // ---------------------------------------------------------------------------
 // GitHub: built-in ticket operations via gh CLI
@@ -134,7 +142,7 @@ export async function githubListTickets(cwd: string, label?: string): Promise<Ti
       })),
     };
   } catch {
-    return { ok: false };
+    return { ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } };
   }
 }
 
@@ -198,7 +206,10 @@ async function jiraRequest(opts: {
       res.on('data', (chunk: string) => { data += chunk; });
       res.on('end', () => {
         if (res.statusCode && res.statusCode >= 400) {
-          reject(new Error(`Jira API error ${res.statusCode}: ${data.slice(0, 300)}`));
+          reject(Object.assign(
+            new Error(`Jira API error ${res.statusCode}: ${data.slice(0, 300)}`),
+            { status: res.statusCode, body: data.slice(0, 300) },
+          ));
         } else {
           resolve(data);
         }
@@ -273,7 +284,7 @@ export async function jiraListTickets(
   label?: string,
 ): Promise<TicketListResult> {
   if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
-    return { ok: false };
+    return { ok: false, error: { reason: 'missing-creds' } };
   }
   try {
     let jql = 'reporter = currentUser() AND statusCategory != Done';
@@ -298,8 +309,12 @@ export async function jiraListTickets(
         author: issue.fields.reporter?.accountId ?? issue.fields.reporter?.displayName ?? '',
       })),
     };
-  } catch {
-    return { ok: false };
+  } catch (err: unknown) {
+    const e = err as { status?: number; body?: string; message?: string };
+    if (typeof e.status === 'number') {
+      return { ok: false, error: { reason: 'http-status', status: e.status, body: e.body } };
+    }
+    return { ok: false, error: { reason: 'network', message: (err as Error).message ?? String(err) } };
   }
 }
 
@@ -434,6 +449,60 @@ export async function createTicketWithConfig(opts: {
     return githubCreateTicket(title, body, opts.cwd);
   }
   return jiraCreateTicket(title, body, opts.config);
+}
+
+/** Result shape for the Test Connection feature in JIRA settings. */
+export interface TestJiraConnectionResult {
+  auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
+  jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+}
+
+/**
+ * Test a JIRA connection using unsaved form values.
+ * Pings /rest/api/2/myself for auth, then runs the standard list JQL if auth succeeds.
+ */
+export async function testJiraConnection(params: {
+  jiraUrl: string;
+  jiraUsername: string;
+  jiraApiToken: string;
+  label?: string;
+}): Promise<TestJiraConnectionResult> {
+  const { jiraUrl, jiraUsername, jiraApiToken, label } = params;
+  const auth = Buffer.from(`${jiraUsername}:${jiraApiToken}`).toString('base64');
+  const baseUrl = jiraUrl.replace(/\/$/, '');
+
+  let displayName: string;
+  try {
+    const raw = await jiraRequest({ url: `${baseUrl}/rest/api/2/myself`, method: 'GET', auth });
+    const myself = JSON.parse(raw) as { displayName?: string };
+    displayName = myself.displayName ?? 'Unknown User';
+  } catch (err: unknown) {
+    const e = err as { status?: number; message?: string };
+    return {
+      auth: { ok: false, status: e.status, message: e.message ?? String(err) },
+      jql: null,
+    };
+  }
+
+  let jql = 'reporter = currentUser() AND statusCategory != Done';
+  if (label && label.trim()) {
+    jql += ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
+  }
+  const searchUrl =
+    `${baseUrl}/rest/api/2/search` +
+    `?jql=${encodeURIComponent(jql)}&fields=summary&maxResults=100`;
+  try {
+    const raw = await jiraRequest({ url: searchUrl, method: 'GET', auth });
+    const result = JSON.parse(raw) as { total?: number; issues?: unknown[] };
+    const count = result.total ?? result.issues?.length ?? 0;
+    return { auth: { ok: true, displayName }, jql: { ok: true, count } };
+  } catch (err: unknown) {
+    const e = err as { status?: number; message?: string };
+    return {
+      auth: { ok: true, displayName },
+      jql: { ok: false, status: e.status, message: e.message ?? String(err) },
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------

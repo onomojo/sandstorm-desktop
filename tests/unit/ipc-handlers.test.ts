@@ -23,6 +23,7 @@ const {
   mockRemoveProjectFromCrontab,
   mockListTicketsWithConfig,
   mockCreateTicketWithConfig,
+  mockTestJiraConnection,
   mockSessionMonitor,
   mockSpawnSpecCheck,
   mockSpawnSpecRefine,
@@ -111,8 +112,12 @@ const {
   const mockSpawn = vi.fn();
   const mockFetchAccountUsage = vi.fn();
   const mockRemoveProjectFromCrontab = vi.fn();
-  const mockListTicketsWithConfig = vi.fn().mockResolvedValue({ ok: false });
+  const mockListTicketsWithConfig = vi.fn().mockResolvedValue({ ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } });
   const mockCreateTicketWithConfig = vi.fn().mockResolvedValue({ url: 'https://github.com/o/r/issues/1', ticketId: '1' });
+  const mockTestJiraConnection = vi.fn().mockResolvedValue({
+    auth: { ok: true, displayName: 'Test User' },
+    jql: { ok: true, count: 5 },
+  });
 
   const mockSessionMonitor = {
     getState: vi.fn(),
@@ -136,6 +141,7 @@ const {
     mockRemoveProjectFromCrontab,
     mockListTicketsWithConfig,
     mockCreateTicketWithConfig,
+    mockTestJiraConnection,
     mockSessionMonitor,
     mockSpawnSpecCheck,
     mockSpawnSpecRefine,
@@ -216,6 +222,7 @@ vi.mock('../../src/main/control-plane/ticket-lister', () => ({
 
 vi.mock('../../src/main/control-plane/ticket-config', () => ({
   createTicketWithConfig: (...args: unknown[]) => mockCreateTicketWithConfig(...args),
+  testJiraConnection: (...args: unknown[]) => mockTestJiraConnection(...args),
 }));
 
 vi.mock('../../src/main/claude/tools', () => ({
@@ -1315,7 +1322,7 @@ describe('IPC Handlers', () => {
   // Ticket Board
   // =========================================================================
   describe('tickets:list', () => {
-    it('skips the provider fetch and returns DB rows when no provider is configured', async () => {
+    it('skips the provider fetch and returns { tickets, error:null } when no provider is configured', async () => {
       mockRegistry.getProjectTicketConfig.mockReturnValueOnce(null);
       const boardRows = [
         { ticket_id: 'T-1', project_dir: '/proj', column: 'backlog', title: 'First ticket', updated_at: '' },
@@ -1329,10 +1336,10 @@ describe('IPC Handlers', () => {
       expect(mockListTicketsWithConfig).not.toHaveBeenCalled();
       expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
       expect(mockRegistry.listBoardTickets).toHaveBeenCalled();
-      expect(result).toEqual(boardRows);
+      expect(result).toEqual({ tickets: boardRows, error: null });
     });
 
-    it('returns DB rows when the provider fetch throws (graceful degradation)', async () => {
+    it('returns { tickets, error:null } when the provider fetch throws (graceful degradation)', async () => {
       mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
       mockListTicketsWithConfig.mockRejectedValueOnce(new Error('gh not authenticated'));
       const boardRows = [
@@ -1342,7 +1349,22 @@ describe('IPC Handlers', () => {
 
       const result = await invokeHandler('tickets:list', '/proj');
 
-      expect(result).toEqual(boardRows);
+      expect(result).toEqual({ tickets: boardRows, error: null });
+    });
+
+    it('returns structured error in the error field when fetch returns ok:false', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'jira' });
+      const listError = { reason: 'missing-creds' } as const;
+      mockListTicketsWithConfig.mockResolvedValueOnce({ ok: false, error: listError });
+      const boardRows = [{ ticket_id: 'T-1', project_dir: '/proj', column: 'backlog', title: 'Cached', updated_at: '' }];
+      mockRegistry.listBoardTickets.mockReturnValue(boardRows);
+      mockRegistry.seedBoardTicket.mockClear();
+
+      const result = await invokeHandler('tickets:list', '/proj') as { tickets: unknown[]; error: unknown };
+
+      expect(result.tickets).toEqual(boardRows);
+      expect(result.error).toEqual(listError);
+      expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
     });
 
     it('passes the project config to the provider and seeds each returned ticket', async () => {
@@ -1380,7 +1402,7 @@ describe('IPC Handlers', () => {
 
     it('does not call seedBoardTicket or deleteClosedEarlyColumnTickets when fetch returns ok:false', async () => {
       mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
-      mockListTicketsWithConfig.mockResolvedValueOnce({ ok: false });
+      mockListTicketsWithConfig.mockResolvedValueOnce({ ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } });
       mockRegistry.seedBoardTicket.mockClear();
       mockRegistry.deleteClosedEarlyColumnTickets.mockClear();
 
@@ -1409,6 +1431,45 @@ describe('IPC Handlers', () => {
       } finally {
         consoleSpy.mockRestore();
       }
+    });
+  });
+
+  describe('tickets:testJiraConnection', () => {
+    it('delegates to testJiraConnection and returns its result', async () => {
+      const expected = {
+        auth: { ok: true, displayName: 'Alice' },
+        jql: { ok: true, count: 7 },
+      };
+      mockTestJiraConnection.mockResolvedValueOnce(expected);
+
+      const result = await invokeHandler('tickets:testJiraConnection', {
+        jiraUrl: 'https://acme.atlassian.net',
+        jiraUsername: 'user@acme.com',
+        jiraApiToken: 'secret',
+      });
+
+      expect(mockTestJiraConnection).toHaveBeenCalledWith({
+        jiraUrl: 'https://acme.atlassian.net',
+        jiraUsername: 'user@acme.com',
+        jiraApiToken: 'secret',
+      });
+      expect(result).toEqual(expected);
+    });
+
+    it('returns auth:false result when testJiraConnection returns auth failure', async () => {
+      mockTestJiraConnection.mockResolvedValueOnce({
+        auth: { ok: false, status: 401, message: 'Unauthorized' },
+        jql: null,
+      });
+
+      const result = await invokeHandler('tickets:testJiraConnection', {
+        jiraUrl: 'https://acme.atlassian.net',
+        jiraUsername: 'bad@acme.com',
+        jiraApiToken: 'wrong',
+      }) as { auth: { ok: boolean }; jql: null };
+
+      expect(result.auth.ok).toBe(false);
+      expect(result.jql).toBeNull();
     });
   });
 
@@ -1445,10 +1506,10 @@ describe('IPC Handlers', () => {
         { ticket_id: '99', project_dir: '/proj', column: 'backlog', title: 'My Title', updated_at: '' },
       ]);
 
-      const result = await invokeHandler('tickets:list', '/proj');
+      const result = await invokeHandler('tickets:list', '/proj') as { tickets: Array<{ ticket_id: string; column: string }>; error: null };
 
-      expect(result).toHaveLength(1);
-      expect((result as Array<{ ticket_id: string; column: string }>)[0]).toMatchObject({
+      expect(result.tickets).toHaveLength(1);
+      expect(result.tickets[0]).toMatchObject({
         ticket_id: '99',
         column: 'backlog',
       });
@@ -1704,10 +1765,6 @@ describe('IPC Handlers', () => {
       'context:deleteSkill',
       'context:getSettings',
       'context:saveSettings',
-      'specGate:get',
-      'specGate:save',
-      'specGate:getDefault',
-      'specGate:ensure',
       'reviewPrompt:getDefault',
       'modelSettings:getGlobal',
       'modelSettings:setGlobal',
@@ -1748,6 +1805,7 @@ describe('IPC Handlers', () => {
       'tickets:fetchRaw',
       'tickets:update',
       'tickets:list',
+      'tickets:testJiraConnection',
       'ticket-board:set-column',
       'pr:draftBody',
       'pr:create',

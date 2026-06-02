@@ -1,5 +1,22 @@
 # Contributing to Sandstorm Desktop
 
+## PR title convention
+
+PR titles must follow this format:
+
+```
+[TICKET-ID] fix: short description
+```
+
+- **`[TICKET-ID]`** — the issue or ticket number (e.g. `[423]`). Omit only when there is no associated ticket.
+- **verb** — lowercase imperative: `fix`, `add`, `update`, `remove`, `refactor`, etc.
+- **short description** — concise summary of the change; total title length must not exceed 70 characters.
+
+Examples:
+- `[423] add: GH PR template and agent drafter alignment`
+- `[310] fix: cap PR body at 8192 bytes`
+- `add: initial project scaffold` *(no ticket)*
+
 ## Test style guide
 
 ### Anti-pattern: silently assuming a runtime environment

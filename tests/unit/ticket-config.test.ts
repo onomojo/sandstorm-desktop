@@ -16,6 +16,7 @@ import {
   updateTicketWithConfig,
   createTicketWithConfig,
   listTicketsWithConfig,
+  testJiraConnection,
 } from '../../src/main/control-plane/ticket-config';
 import type { ProjectTicketConfig } from '../../src/main/control-plane/registry';
 
@@ -363,25 +364,25 @@ describe('githubListTickets', () => {
     expect(result).toEqual({ ok: true, tickets: [{ id: '1', title: 'Orphan', author: '' }] });
   });
 
-  it('returns ok:false when gh fails (graceful degradation)', async () => {
+  it('returns ok:false with network error when gh fails (graceful degradation)', async () => {
     mockExecFileError('gh not authenticated');
     const result = await githubListTickets('/proj');
-    expect(result).toEqual({ ok: false });
+    expect(result).toEqual({ ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } });
   });
 
-  it('returns ok:false on unparseable output', async () => {
+  it('returns ok:false with network error on unparseable output', async () => {
     mockExecFileSuccess('not json');
     const result = await githubListTickets('/proj');
-    expect(result).toEqual({ ok: false });
+    expect(result).toEqual({ ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } });
   });
 });
 
 describe('jiraListTickets', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns ok:false when credentials are missing', async () => {
+  it('returns ok:false with missing-creds error when credentials are missing', async () => {
     const cfg: ProjectTicketConfig = { provider: 'jira' };
-    expect(await jiraListTickets(cfg)).toEqual({ ok: false });
+    expect(await jiraListTickets(cfg)).toEqual({ ok: false, error: { reason: 'missing-creds' } });
   });
 
   it('maps Jira search results into TicketListEntry[]', async () => {
@@ -403,9 +404,51 @@ describe('jiraListTickets', () => {
     });
   });
 
-  it('returns ok:false on HTTP error', async () => {
+  it('returns ok:false with http-status error on HTTP 401', async () => {
     mockJiraRequest('Unauthorized', 401);
-    expect(await jiraListTickets(JIRA_CONFIG)).toEqual({ ok: false });
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe('http-status');
+      expect((result.error as { reason: 'http-status'; status: number }).status).toBe(401);
+    }
+  });
+
+  it('returns ok:false with http-status error on HTTP 403', async () => {
+    mockJiraRequest('Forbidden', 403);
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe('http-status');
+      expect((result.error as { reason: 'http-status'; status: number }).status).toBe(403);
+    }
+  });
+
+  it('returns ok:false with network error on timeout', async () => {
+    const mockRequest = {
+      on: vi.fn((event: string, handler: Function) => {
+        if (event === 'error') {
+          setTimeout(() => handler(new Error('Jira API request timed out')), 0);
+        }
+        return mockRequest;
+      }),
+      write: vi.fn(),
+      end: vi.fn(),
+      setTimeout: vi.fn().mockReturnThis(),
+      destroy: vi.fn(),
+    };
+    mockHttpsRequest.mockImplementation(() => mockRequest as unknown as ReturnType<typeof https.request>);
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe('network');
+    }
+  });
+
+  it('returns ok:true with empty tickets array when JQL matches zero results', async () => {
+    mockJiraRequest(JSON.stringify({ total: 0, issues: [] }));
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result).toEqual({ ok: true, tickets: [] });
   });
 });
 
@@ -534,4 +577,143 @@ describe('updateTicketWithConfig routing', () => {
   it('rejects empty body', async () => {
     await expect(updateTicketWithConfig('42', '   ', GITHUB_CONFIG, '/proj')).rejects.toThrow('Ticket body cannot be empty');
   });
+});
+
+// ---------------------------------------------------------------------------
+// jiraRequest structured error + testJiraConnection
+// ---------------------------------------------------------------------------
+
+describe('jiraRequest structured rejection', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('jiraListTickets carries http-status error with status and body on HTTP >= 400', async () => {
+    mockJiraRequest('{"errorMessages":["Issue Does Not Exist"]}', 404);
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe('http-status');
+      expect((result.error as { reason: 'http-status'; status: number; body?: string }).status).toBe(404);
+      expect((result.error as { reason: 'http-status'; status: number; body?: string }).body).toContain('errorMessages');
+    }
+  });
+});
+
+describe('testJiraConnection', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns auth ok with displayName on successful myself ping', async () => {
+    // First call: myself, Second call: search
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Alice Smith' })
+        : JSON.stringify({ total: 3, issues: [{}, {}, {}] });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token123',
+    });
+
+    expect(result.auth.ok).toBe(true);
+    if (result.auth.ok) {
+      expect(result.auth.displayName).toBe('Alice Smith');
+    }
+    expect(result.jql).not.toBeNull();
+    if (result.jql && result.jql.ok) {
+      expect(result.jql.count).toBe(3);
+    }
+  });
+
+  it('returns auth fail and jql:null when myself ping returns 401', async () => {
+    mockJiraRequest('Unauthorized', 401);
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'bad@acme.com',
+      jiraApiToken: 'wrong',
+    });
+
+    expect(result.auth.ok).toBe(false);
+    if (!result.auth.ok) {
+      expect(result.auth.status).toBe(401);
+    }
+    expect(result.jql).toBeNull();
+  });
+
+  it('returns auth ok and jql count:0 when JQL returns empty', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Bob' })
+        : JSON.stringify({ total: 0, issues: [] });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+
+    expect(result.auth.ok).toBe(true);
+    if (result.jql && result.jql.ok) {
+      expect(result.jql.count).toBe(0);
+    }
+  });
+
+  it('returns auth ok and jql fail when JQL returns 400', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const statusCode = callCount === 1 ? 200 : 400;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Carol' })
+        : 'Bad JQL';
+      const mockResponse = {
+        statusCode,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+
+    expect(result.auth.ok).toBe(true);
+    expect(result.jql).not.toBeNull();
+    if (result.jql) {
+      expect(result.jql.ok).toBe(false);
+    }
+  });
+
 });

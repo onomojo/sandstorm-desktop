@@ -32,7 +32,6 @@ export interface SandstormAPI {
       needsMigration: boolean;
       missingVerifyScript?: boolean;
       missingServiceLabels?: boolean;
-      missingSpecQualityGate?: boolean;
       networksMigrated?: boolean;
       legacyPortMappings?: boolean;
       ticketProviderUnconfigured?: boolean;
@@ -128,12 +127,6 @@ export interface SandstormAPI {
     getSettings: (projectDir: string) => Promise<string>;
     saveSettings: (projectDir: string, content: string) => Promise<void>;
   };
-  specGate: {
-    get: (projectDir: string) => Promise<string>;
-    save: (projectDir: string, content: string) => Promise<void>;
-    getDefault: () => Promise<string>;
-    ensure: (projectDir: string) => Promise<boolean>;
-  };
   reviewPrompt: {
     getDefault: () => Promise<string>;
   };
@@ -208,9 +201,18 @@ export interface SandstormAPI {
     cancelRefinement: (sessionId: string) => Promise<void>;
     listRefinements: () => Promise<unknown[]>;
     create: (projectDir: string, title: string, body: string) => Promise<{ url: string; ticketId: string }>;
-    list: (projectDir: string) => Promise<unknown[]>;
+    list: (projectDir: string) => Promise<{ tickets: unknown[]; error: unknown }>;
     fetchRaw: (ticketId: string, projectDir: string) => Promise<string | null>;
     update: (projectDir: string, ticketId: string, body: string) => Promise<void>;
+    testJiraConnection: (params: {
+      jiraUrl: string;
+      jiraUsername: string;
+      jiraApiToken: string;
+      label?: string;
+    }) => Promise<{
+      auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
+      jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+    }>;
   };
   ticketBoard: {
     setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
@@ -323,13 +325,6 @@ const api: SandstormAPI = {
     saveSettings: (projectDir, content) =>
       ipcRenderer.invoke('context:saveSettings', projectDir, content),
   },
-  specGate: {
-    get: (projectDir) => ipcRenderer.invoke('specGate:get', projectDir),
-    save: (projectDir, content) =>
-      ipcRenderer.invoke('specGate:save', projectDir, content),
-    getDefault: () => ipcRenderer.invoke('specGate:getDefault'),
-    ensure: (projectDir) => ipcRenderer.invoke('specGate:ensure', projectDir),
-  },
   reviewPrompt: {
     getDefault: () => ipcRenderer.invoke('reviewPrompt:getDefault'),
   },
@@ -395,12 +390,17 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:listRefinements'),
     create: (projectDir, title, body) =>
       ipcRenderer.invoke('tickets:create', projectDir, title, body),
-    list: (projectDir) =>
-      ipcRenderer.invoke('tickets:list', projectDir),
+    list: async (projectDir) => {
+      const raw = await ipcRenderer.invoke('tickets:list', projectDir);
+      if (Array.isArray(raw)) return { tickets: raw, error: null };
+      return raw;
+    },
     fetchRaw: (ticketId, projectDir) =>
       ipcRenderer.invoke('tickets:fetchRaw', ticketId, projectDir),
     update: (projectDir, ticketId, body) =>
       ipcRenderer.invoke('tickets:update', projectDir, ticketId, body),
+    testJiraConnection: (params) =>
+      ipcRenderer.invoke('tickets:testJiraConnection', params),
   },
   ticketBoard: {
     setColumn: (ticketId, projectDir, column) =>

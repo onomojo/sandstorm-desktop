@@ -169,9 +169,13 @@ export function mockSandstormApi() {
       create: vi.fn().mockResolvedValue({
         url: 'https://github.com/o/r/issues/42', ticketId: '42',
       }),
-      list: vi.fn().mockResolvedValue([]),
+      list: vi.fn().mockResolvedValue({ tickets: [], error: null }),
       fetchRaw: vi.fn().mockResolvedValue('Raw ticket body'),
       update: vi.fn().mockResolvedValue(undefined),
+      testJiraConnection: vi.fn().mockResolvedValue({
+        auth: { ok: true, displayName: 'Test User' },
+        jql: { ok: true, count: 5 },
+      }),
     },
     ticketBoard: {
       setColumn: vi.fn().mockResolvedValue(undefined),

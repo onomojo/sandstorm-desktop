@@ -52,13 +52,6 @@ import {
   hasLegacyPortMappings,
   cleanupLegacyPorts,
 } from './compose-generator';
-import {
-  getSpecQualityGate,
-  saveSpecQualityGate,
-  isSpecQualityGateMissing,
-  ensureSpecQualityGate,
-  getDefaultSpecQualityGate,
-} from './spec-quality-gate';
 import { getDefaultReviewPrompt } from './review-prompt';
 import {
   defaultSpecGateDeps,
@@ -84,7 +77,8 @@ import {
   createPullRequest,
 } from './control-plane/pr-creator';
 import { showNotification } from './tray';
-import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig } from './control-plane/ticket-config';
+import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection } from './control-plane/ticket-config';
+import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
@@ -415,9 +409,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         fs.writeFileSync(verifyPath, verifyLines.join('\n') + '\n', { mode: 0o755 });
       }
 
-      // Generate spec quality gate with default criteria
-      saveSpecQualityGate(directory, getDefaultSpecQualityGate());
-
       return { success: true, skippedFiles: skippedFiles.length > 0 ? skippedFiles : undefined };
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -466,7 +457,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         try { fs.unlinkSync(path.join(scriptsDir, scriptName)); } catch { /* missing = no-op */ }
       }
 
-      const missingSpecQualityGate = isSpecQualityGateMissing(directory);
       const legacyPortMappings = hasLegacyPortMappings(directory);
       const ticketProviderUnconfigured = registry.getProjectTicketConfig(directory) === null;
 
@@ -474,12 +464,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         needsMigration:
           !hasVerifyScript ||
           !hasServiceLabels ||
-          missingSpecQualityGate ||
           legacyPortMappings ||
           ticketProviderUnconfigured,
         missingVerifyScript: !hasVerifyScript,
         missingServiceLabels: !hasServiceLabels,
-        missingSpecQualityGate,
         networksMigrated,
         legacyPortMappings,
         ticketProviderUnconfigured,
@@ -546,9 +534,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         if (!fs.existsSync(verifyPath)) {
           fs.writeFileSync(verifyPath, verifyScript, { mode: 0o755 });
         }
-
-        // Ensure spec quality gate exists
-        ensureSpecQualityGate(directory);
 
         // Update compose file with service labels if needed
         const composePath = path.join(sandstormDir, 'docker-compose.yml');
@@ -819,27 +804,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       saveCustomSettings(projectDir, content);
     }
   );
-
-  // --- Spec Quality Gate ---
-
-  ipcMain.handle('specGate:get', async (_event, projectDir: string) => {
-    return getSpecQualityGate(projectDir);
-  });
-
-  ipcMain.handle(
-    'specGate:save',
-    async (_event, projectDir: string, content: string) => {
-      saveSpecQualityGate(projectDir, content);
-    }
-  );
-
-  ipcMain.handle('specGate:getDefault', async () => {
-    return getDefaultSpecQualityGate();
-  });
-
-  ipcMain.handle('specGate:ensure', async (_event, projectDir: string) => {
-    return ensureSpecQualityGate(projectDir);
-  });
 
   // --- Review Prompt ---
 
@@ -1312,6 +1276,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
     // Fetch from the project's configured ticket provider (built-in, no per-project
     // script). When no provider is configured, skip and return existing board rows.
+    let listError: TicketListError | null = null;
     const config = registry.getProjectTicketConfig(normalizedDir);
     if (config) {
       try {
@@ -1325,13 +1290,25 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           if (deletedCount > 0) {
             console.log(`[tickets:list] Removed ${deletedCount} closed early-column ticket(s) from board for project: ${normalizedDir}`);
           }
+        } else {
+          listError = result.error;
+          console.error('[tickets:list] Failed to fetch tickets from provider:', result.error);
         }
       } catch (err) {
         console.error('[tickets:list] Failed to fetch tickets from provider:', err);
       }
     }
 
-    return registry.listBoardTickets(normalizedDir);
+    return { tickets: registry.listBoardTickets(normalizedDir), error: listError };
+  });
+
+  ipcMain.handle('tickets:testJiraConnection', async (_event, params: {
+    jiraUrl: string;
+    jiraUsername: string;
+    jiraApiToken: string;
+    label?: string;
+  }) => {
+    return testJiraConnection(params);
   });
 
   ipcMain.handle('ticket-board:set-column', async (_event, ticketId: string, projectDir: string, column: string) => {

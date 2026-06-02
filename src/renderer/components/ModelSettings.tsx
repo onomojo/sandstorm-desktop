@@ -96,6 +96,14 @@ export function ModelSettingsModal() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  type TestConnState = 'idle' | 'testing' | 'success-with-count' | 'auth-fail' | 'jql-empty';
+  interface TestConnResult {
+    auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
+    jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+  }
+  const [testConnState, setTestConnState] = useState<TestConnState>('idle');
+  const [testConnResult, setTestConnResult] = useState<TestConnResult | null>(null);
+
   useEffect(() => {
     refreshGlobalModelSettings();
   }, [refreshGlobalModelSettings]);
@@ -198,6 +206,29 @@ export function ModelSettingsModal() {
       setError(String(err));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleTestConnection = async () => {
+    setTestConnState('testing');
+    setTestConnResult(null);
+    try {
+      const result = await window.sandstorm.tickets.testJiraConnection({
+        jiraUrl: jiraUrl.trim(),
+        jiraUsername: jiraUsername.trim(),
+        jiraApiToken: jiraApiToken.trim(),
+      });
+      setTestConnResult(result);
+      if (!result.auth.ok) {
+        setTestConnState('auth-fail');
+      } else if (result.jql && result.jql.ok && result.jql.count === 0) {
+        setTestConnState('jql-empty');
+      } else {
+        setTestConnState('success-with-count');
+      }
+    } catch {
+      setTestConnState('auth-fail');
+      setTestConnResult({ auth: { ok: false, message: 'Connection failed' }, jql: null });
     }
   };
 
@@ -477,6 +508,44 @@ export function ModelSettingsModal() {
                       className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
                       data-testid="jira-issue-type"
                     />
+                  </div>
+
+                  <div className="pt-1">
+                    <button
+                      onClick={handleTestConnection}
+                      disabled={testConnState === 'testing' || !jiraUrl.trim() || !jiraUsername.trim() || !jiraApiToken.trim()}
+                      className="px-3 py-1.5 text-xs font-medium rounded-lg border border-sandstorm-border bg-sandstorm-bg text-sandstorm-text hover:border-sandstorm-border-light disabled:opacity-50 disabled:cursor-not-allowed transition-all"
+                      data-testid="jira-test-connection"
+                    >
+                      {testConnState === 'testing' ? 'Testing…' : 'Test Connection'}
+                    </button>
+
+                    {testConnResult && testConnState !== 'testing' && (
+                      <div className="mt-2 space-y-1" data-testid="jira-test-connection-result">
+                        {testConnResult.auth.ok ? (
+                          <p className="text-[11px] text-green-400" data-testid="jira-test-auth-ok">
+                            ✓ Connected as {testConnResult.auth.displayName}
+                          </p>
+                        ) : (
+                          <p className="text-[11px] text-red-400" data-testid="jira-test-auth-fail">
+                            ✗ Auth failed{testConnResult.auth.status ? ` (${testConnResult.auth.status})` : ''}: {(testConnResult.auth as { ok: false; message: string }).message}
+                          </p>
+                        )}
+                        {testConnResult.jql && (
+                          testConnResult.jql.ok ? (
+                            <p className="text-[11px] text-sandstorm-muted" data-testid="jira-test-jql-ok">
+                              {testConnResult.jql.count === 0
+                                ? '⚠ JQL returned 0 tickets — filter may be excluding everything'
+                                : `✓ JQL returned ${testConnResult.jql.count} ticket${testConnResult.jql.count === 1 ? '' : 's'}`}
+                            </p>
+                          ) : (
+                            <p className="text-[11px] text-red-400" data-testid="jira-test-jql-fail">
+                              ✗ JQL failed: {(testConnResult.jql as { ok: false; message: string }).message}
+                            </p>
+                          )
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
