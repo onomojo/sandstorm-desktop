@@ -1221,6 +1221,14 @@ export class Registry {
     ).run(normalizedDir, ...openTicketIds).changes;
   }
 
+  /** Hard-deletes exactly one ticket_board row. No-op when the row is absent. */
+  deleteBoardTicket(ticketId: string, projectDir: string): void {
+    const normalizedDir = path.resolve(projectDir);
+    this.db.prepare(
+      `DELETE FROM ticket_board WHERE ticket_id = ? AND project_dir = ?`
+    ).run(ticketId, normalizedDir);
+  }
+
   /**
    * Resolve the effective model for a project.
    * Resolution order: per-project override > global default > hardcoded fallback

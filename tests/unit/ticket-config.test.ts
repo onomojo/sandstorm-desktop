@@ -6,16 +6,19 @@ import {
   githubUpdateTicket,
   githubCreateTicket,
   githubListTickets,
+  githubCloseTicket,
   jiraFetchTicket,
   jiraFetchRawBody,
   jiraUpdateTicket,
   jiraCreateTicket,
   jiraListTickets,
+  jiraCloseTicket,
   fetchTicketWithConfig,
   fetchRawBodyWithConfig,
   updateTicketWithConfig,
   createTicketWithConfig,
   listTicketsWithConfig,
+  closeTicketWithConfig,
   testJiraConnection,
 } from '../../src/main/control-plane/ticket-config';
 import type { ProjectTicketConfig } from '../../src/main/control-plane/registry';
@@ -716,4 +719,146 @@ describe('testJiraConnection', () => {
     }
   });
 
+});
+
+// ---------------------------------------------------------------------------
+// githubCloseTicket (#446)
+// ---------------------------------------------------------------------------
+
+describe('githubCloseTicket', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('calls gh issue close with the ticket id', async () => {
+    mockExecFileSuccess('');
+    await githubCloseTicket('42', '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'close', '42'],
+      expect.objectContaining({ cwd: '/proj' }),
+      expect.any(Function)
+    );
+  });
+
+  it('resolves when gh succeeds', async () => {
+    mockExecFileSuccess('');
+    await expect(githubCloseTicket('42', '/proj')).resolves.toBeUndefined();
+  });
+
+  it('resolves when issue is already closed (stderr contains already closed)', async () => {
+    const err = Object.assign(new Error('Command failed'), { stderr: 'Issue is already closed.' });
+    mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as Function)(err, '', 'Issue is already closed.');
+      return {} as ReturnType<typeof import('child_process').execFile>;
+    });
+    await expect(githubCloseTicket('42', '/proj')).resolves.toBeUndefined();
+  });
+
+  it('throws a meaningful error on genuine gh failure', async () => {
+    mockExecFileError('authentication failed');
+    await expect(githubCloseTicket('42', '/proj')).rejects.toThrow(/gh issue close failed.*authentication failed/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// jiraCloseTicket (#446)
+// ---------------------------------------------------------------------------
+
+describe('jiraCloseTicket', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('throws when credentials are missing', async () => {
+    const cfg: ProjectTicketConfig = { provider: 'jira' };
+    await expect(jiraCloseTicket('ACME-1', cfg)).rejects.toThrow(/credentials are missing/);
+  });
+
+  it('sends PUT request to the archive endpoint', async () => {
+    const req = mockJiraRequest('', 204);
+    await jiraCloseTicket('ACME-42', JIRA_CONFIG);
+    expect(req.end).toHaveBeenCalled();
+    // Check that the URL path used was the archive endpoint
+    expect(mockHttpsRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ path: expect.stringContaining('/archive') }),
+      expect.any(Function)
+    );
+  });
+
+  it('resolves on 204 success', async () => {
+    mockJiraRequest('', 204);
+    await expect(jiraCloseTicket('ACME-42', JIRA_CONFIG)).resolves.toBeUndefined();
+  });
+
+  it('resolves when already archived (body contains already archived)', async () => {
+    const mockRequest = {
+      on: vi.fn().mockReturnThis(),
+      write: vi.fn(),
+      end: vi.fn(),
+      setTimeout: vi.fn().mockReturnThis(),
+      destroy: vi.fn(),
+    };
+    const mockResponse = {
+      statusCode: 400,
+      on: vi.fn((event: string, handler: Function) => {
+        if (event === 'data') handler('{"errorMessages":["Issue is already archived"]}');
+        if (event === 'end') handler();
+      }),
+    };
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      if (callback) callback(mockResponse);
+      return mockRequest as unknown as ReturnType<typeof import('https').request>;
+    });
+    await expect(jiraCloseTicket('ACME-42', JIRA_CONFIG)).resolves.toBeUndefined();
+  });
+
+  it('rejects when archive returns a genuine error (e.g. 403 Forbidden)', async () => {
+    mockJiraRequest('Forbidden: archive not available on your plan', 403);
+    await expect(jiraCloseTicket('ACME-42', JIRA_CONFIG)).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// closeTicketWithConfig (#446)
+// ---------------------------------------------------------------------------
+
+describe('closeTicketWithConfig', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes GitHub → githubCloseTicket', async () => {
+    mockExecFileSuccess('');
+    await closeTicketWithConfig('42', GITHUB_CONFIG, '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'close', '42'],
+      expect.objectContaining({ cwd: '/proj' }),
+      expect.any(Function)
+    );
+  });
+
+  it('routes JIRA → jiraCloseTicket (archive endpoint)', async () => {
+    mockJiraRequest('', 204);
+    await closeTicketWithConfig('ACME-42', JIRA_CONFIG, '/proj');
+    expect(mockExecFile).not.toHaveBeenCalled();
+    expect(mockHttpsRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ path: expect.stringContaining('/archive') }),
+      expect.any(Function)
+    );
+  });
+
+  it('resolves when GitHub issue is already closed', async () => {
+    const err = Object.assign(new Error('Command failed'), { stderr: 'Issue is already closed.' });
+    mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as Function)(err, '', 'Issue is already closed.');
+      return {} as ReturnType<typeof import('child_process').execFile>;
+    });
+    await expect(closeTicketWithConfig('42', GITHUB_CONFIG, '/proj')).resolves.toBeUndefined();
+  });
+
+  it('rejects on genuine GitHub failure', async () => {
+    mockExecFileError('repository not found');
+    await expect(closeTicketWithConfig('42', GITHUB_CONFIG, '/proj')).rejects.toThrow(/gh issue close failed/);
+  });
+
+  it('rejects on JIRA archive failure', async () => {
+    mockJiraRequest('Forbidden', 403);
+    await expect(closeTicketWithConfig('ACME-42', JIRA_CONFIG, '/proj')).rejects.toThrow();
+  });
 });
