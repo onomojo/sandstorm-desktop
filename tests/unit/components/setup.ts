@@ -165,14 +165,23 @@ export function mockSandstormApi() {
       retryRefinementAsync: vi.fn().mockResolvedValue({ sessionId: 'retry-session-id' }),
       postAnswers: vi.fn().mockResolvedValue(undefined),
       cancelRefinement: vi.fn().mockResolvedValue(undefined),
+      discardRefinement: vi.fn().mockResolvedValue(undefined),
       listRefinements: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue({
         url: 'https://github.com/o/r/issues/42', ticketId: '42',
       }),
-      list: vi.fn().mockResolvedValue([]),
+      list: vi.fn().mockResolvedValue({ tickets: [], error: null }),
+      fetchRaw: vi.fn().mockResolvedValue('Raw ticket body'),
+      update: vi.fn().mockResolvedValue(undefined),
+      testJiraConnection: vi.fn().mockResolvedValue({
+        auth: { ok: true, displayName: 'Test User' },
+        jql: { ok: true, count: 5 },
+      }),
+      close: vi.fn().mockResolvedValue(undefined),
     },
     ticketBoard: {
       setColumn: vi.fn().mockResolvedValue(undefined),
+      delete: vi.fn().mockResolvedValue(undefined),
     },
     pr: {
       draftBody: vi.fn().mockResolvedValue({ title: 'Test PR', body: '## Summary\n- thing\n\n## Test plan\n- [ ] check' }),

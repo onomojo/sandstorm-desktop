@@ -77,7 +77,8 @@ import {
   createPullRequest,
 } from './control-plane/pr-creator';
 import { showNotification } from './tray';
-import { createTicketWithConfig } from './control-plane/ticket-config';
+import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection, closeTicketWithConfig } from './control-plane/ticket-config';
+import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
@@ -1179,6 +1180,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
+  // Discard removes the notification without killing any running subprocess.
+  // Distinct from cancelRefinement which invokes entry.cancel() to terminate.
+  ipcMain.handle('tickets:discardRefinement', (_event, id: string) => {
+    const entry = activeRefinements.get(id);
+    if (entry) {
+      activeRefinements.delete(id);
+      deleteRefinement(id);
+    }
+  });
+
   ipcMain.handle('tickets:listRefinements', () => {
     return Array.from(activeRefinements.values()).map((e) => e.session);
   });
@@ -1242,6 +1253,28 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     },
   );
 
+  ipcMain.handle(
+    'tickets:fetchRaw',
+    async (_event, ticketId: string, projectDir: string) => {
+      const config = registry.getProjectTicketConfig(projectDir);
+      if (!config) {
+        throw new Error('No ticket provider configured for this project. Configure GitHub or Jira in Project Settings.');
+      }
+      return fetchRawBodyWithConfig(ticketId, config, projectDir);
+    },
+  );
+
+  ipcMain.handle(
+    'tickets:update',
+    async (_event, projectDir: string, ticketId: string, body: string) => {
+      const config = registry.getProjectTicketConfig(projectDir);
+      if (!config) {
+        throw new Error('No ticket provider configured for this project. Configure GitHub or Jira in Project Settings.');
+      }
+      await updateTicketWithConfig(ticketId, body, config, projectDir);
+    },
+  );
+
   // --- Ticket board (kanban column persistence, #369) ---
 
   const VALID_KANBAN_COLUMNS: readonly string[] = KANBAN_COLUMNS;
@@ -1253,6 +1286,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
     // Fetch from the project's configured ticket provider (built-in, no per-project
     // script). When no provider is configured, skip and return existing board rows.
+    let listError: TicketListError | null = null;
     const config = registry.getProjectTicketConfig(normalizedDir);
     if (config) {
       try {
@@ -1266,13 +1300,25 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           if (deletedCount > 0) {
             console.log(`[tickets:list] Removed ${deletedCount} closed early-column ticket(s) from board for project: ${normalizedDir}`);
           }
+        } else {
+          listError = result.error;
+          console.error('[tickets:list] Failed to fetch tickets from provider:', result.error);
         }
       } catch (err) {
         console.error('[tickets:list] Failed to fetch tickets from provider:', err);
       }
     }
 
-    return registry.listBoardTickets(normalizedDir);
+    return { tickets: registry.listBoardTickets(normalizedDir), error: listError };
+  });
+
+  ipcMain.handle('tickets:testJiraConnection', async (_event, params: {
+    jiraUrl: string;
+    jiraUsername: string;
+    jiraApiToken: string;
+    label?: string;
+  }) => {
+    return testJiraConnection(params);
   });
 
   ipcMain.handle('ticket-board:set-column', async (_event, ticketId: string, projectDir: string, column: string) => {
@@ -1281,6 +1327,22 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     if (dirError) throw new Error(dirError.error);
     if (!VALID_KANBAN_COLUMNS.includes(column)) throw new Error(`Invalid kanban column: "${column}"`);
     registry.setBoardTicketColumn(ticketId, path.resolve(projectDir), column);
+  });
+
+  ipcMain.handle('ticket:close', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
+    if (!ticketId?.trim()) throw new Error('ticketId is required');
+    const dirError = validateProjectDir(projectDir);
+    if (dirError) throw new Error(dirError.error);
+    const config = registry.getProjectTicketConfig(projectDir);
+    if (!config) throw new Error(`No ticket provider configured for project: ${projectDir}`);
+    await closeTicketWithConfig(ticketId, config, path.resolve(projectDir));
+  });
+
+  ipcMain.handle('ticket-board:delete', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
+    if (!ticketId?.trim()) throw new Error('ticketId is required');
+    const dirError = validateProjectDir(projectDir);
+    if (dirError) throw new Error(dirError.error);
+    registry.deleteBoardTicket(ticketId, path.resolve(projectDir));
   });
 
   // --- PR creation (deterministic UI for make-PR workflow, #310) ---

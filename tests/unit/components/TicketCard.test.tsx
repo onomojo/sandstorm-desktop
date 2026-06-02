@@ -8,6 +8,22 @@ import { TicketCard } from '../../../src/renderer/components/TicketCard';
 import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
 
+// Mock DiscardStackDialog to avoid full dialog rendering in all tests
+vi.mock('../../../src/renderer/components/DiscardStackDialog', () => ({
+  DiscardStackDialog: ({ onBackToBacklog, onCloseTicket, onCancel, 'data-testid': testId }: {
+    onBackToBacklog: () => void;
+    onCloseTicket: () => void;
+    onCancel: () => void;
+    'data-testid'?: string;
+  }) => (
+    <div data-testid={testId ?? 'discard-stack-dialog'} role="dialog">
+      <button data-testid="discard-dialog-back-to-backlog" onClick={onBackToBacklog}>Back to backlog</button>
+      <button data-testid="discard-dialog-close-ticket" onClick={onCloseTicket}>Close ticket</button>
+      <button data-testid="discard-dialog-cancel" onClick={onCancel}>Cancel</button>
+    </div>
+  ),
+}));
+
 const PROJECT_DIR = '/proj';
 
 const makeTicket = (column: string, overrides = {}) => ({
@@ -36,6 +52,8 @@ describe('TicketCard', () => {
       boardTickets: [],
       refineInFlight: {},
       refineStartErrors: {},
+      discardInFlight: {},
+      discardErrors: {},
       showRefineTicketDialog: false,
       refineTicketPrefill: null,
       currentRefinementSessionId: null,
@@ -54,6 +72,33 @@ describe('TicketCard', () => {
   it('backlog: shows Refine button', () => {
     render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
     expect(screen.getByTestId('ticket-card-refine-42')).toBeDefined();
+  });
+
+  it('backlog: shows Edit button', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-edit-42')).toBeDefined();
+  });
+
+  it('backlog: clicking Edit opens EditTicketDialog via store', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-edit-42'));
+    expect(useAppStore.getState().showEditTicketDialog).toBe(true);
+    expect(useAppStore.getState().editTicketTarget).toEqual({ ticketId: '42', projectDir: PROJECT_DIR });
+  });
+
+  it('refining: Edit button NOT shown', () => {
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-edit-42')).toBeNull();
+  });
+
+  it('spec_ready: Edit button NOT shown', () => {
+    render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-edit-42')).toBeNull();
+  });
+
+  it('in_stack: Edit button NOT shown', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-edit-42')).toBeNull();
   });
 
   it('backlog: clicking Refine moves ticket to refining, starts gate in background, does not open dialog', async () => {
@@ -853,5 +898,86 @@ describe('TicketCard', () => {
     });
     render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
     expect(screen.getByText('2 questions awaiting')).toBeDefined();
+  });
+
+  // =========================================================================
+  // Discard (trash) icon — #446
+  // =========================================================================
+
+  it('in_stack: shows Discard button', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-discard-42')).toBeDefined();
+  });
+
+  it('pr_open: shows Discard button', () => {
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-discard-42')).toBeDefined();
+  });
+
+  it('backlog: does NOT show Discard button', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-discard-42')).toBeNull();
+  });
+
+  it('refining: does NOT show Discard button', () => {
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-discard-42')).toBeNull();
+  });
+
+  it('spec_ready: does NOT show Discard button', () => {
+    render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-discard-42')).toBeNull();
+  });
+
+  it('merged: does NOT show Discard button', () => {
+    render(<TicketCard ticket={makeTicket('merged') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-discard-42')).toBeNull();
+  });
+
+  it('in_stack: clicking Discard opens the discard dialog', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.queryByTestId('discard-stack-dialog-42')).toBeNull();
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    expect(screen.getByTestId('discard-stack-dialog-42')).toBeDefined();
+  });
+
+  it('pr_open: clicking Discard opens the discard dialog', () => {
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    expect(screen.queryByTestId('discard-stack-dialog-42')).toBeNull();
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    expect(screen.getByTestId('discard-stack-dialog-42')).toBeDefined();
+  });
+
+  it('in_stack: clicking Cancel in discard dialog closes the dialog', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    expect(screen.getByTestId('discard-stack-dialog-42')).toBeDefined();
+    fireEvent.click(screen.getByTestId('discard-dialog-cancel'));
+    expect(screen.queryByTestId('discard-stack-dialog-42')).toBeNull();
+  });
+
+  it('in_stack: clicking Back to backlog calls discardStack with backlog disposition', async () => {
+    const discardSpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ discardStack: discardSpy } as any);
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    fireEvent.click(screen.getByTestId('discard-dialog-back-to-backlog'));
+    await waitFor(() => expect(discardSpy).toHaveBeenCalledWith('42', PROJECT_DIR, 'backlog'));
+  });
+
+  it('in_stack: clicking Close ticket calls discardStack with close disposition', async () => {
+    const discardSpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ discardStack: discardSpy } as any);
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    fireEvent.click(screen.getByTestId('discard-dialog-close-ticket'));
+    await waitFor(() => expect(discardSpy).toHaveBeenCalledWith('42', PROJECT_DIR, 'close'));
+  });
+
+  it('in_stack: Discard button is disabled while discardInFlight is set', () => {
+    useAppStore.setState({ discardInFlight: { '42|/proj': true } } as any);
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-discard-42') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
   });
 });

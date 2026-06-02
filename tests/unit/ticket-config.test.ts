@@ -2,17 +2,24 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import * as child_process from 'child_process';
 import {
   githubFetchTicket,
+  githubFetchRawBody,
   githubUpdateTicket,
   githubCreateTicket,
   githubListTickets,
+  githubCloseTicket,
   jiraFetchTicket,
+  jiraFetchRawBody,
   jiraUpdateTicket,
   jiraCreateTicket,
   jiraListTickets,
+  jiraCloseTicket,
   fetchTicketWithConfig,
+  fetchRawBodyWithConfig,
   updateTicketWithConfig,
   createTicketWithConfig,
   listTicketsWithConfig,
+  closeTicketWithConfig,
+  testJiraConnection,
 } from '../../src/main/control-plane/ticket-config';
 import type { ProjectTicketConfig } from '../../src/main/control-plane/registry';
 
@@ -360,25 +367,25 @@ describe('githubListTickets', () => {
     expect(result).toEqual({ ok: true, tickets: [{ id: '1', title: 'Orphan', author: '' }] });
   });
 
-  it('returns ok:false when gh fails (graceful degradation)', async () => {
+  it('returns ok:false with network error when gh fails (graceful degradation)', async () => {
     mockExecFileError('gh not authenticated');
     const result = await githubListTickets('/proj');
-    expect(result).toEqual({ ok: false });
+    expect(result).toEqual({ ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } });
   });
 
-  it('returns ok:false on unparseable output', async () => {
+  it('returns ok:false with network error on unparseable output', async () => {
     mockExecFileSuccess('not json');
     const result = await githubListTickets('/proj');
-    expect(result).toEqual({ ok: false });
+    expect(result).toEqual({ ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } });
   });
 });
 
 describe('jiraListTickets', () => {
   beforeEach(() => vi.clearAllMocks());
 
-  it('returns ok:false when credentials are missing', async () => {
+  it('returns ok:false with missing-creds error when credentials are missing', async () => {
     const cfg: ProjectTicketConfig = { provider: 'jira' };
-    expect(await jiraListTickets(cfg)).toEqual({ ok: false });
+    expect(await jiraListTickets(cfg)).toEqual({ ok: false, error: { reason: 'missing-creds' } });
   });
 
   it('maps Jira search results into TicketListEntry[]', async () => {
@@ -400,9 +407,51 @@ describe('jiraListTickets', () => {
     });
   });
 
-  it('returns ok:false on HTTP error', async () => {
+  it('returns ok:false with http-status error on HTTP 401', async () => {
     mockJiraRequest('Unauthorized', 401);
-    expect(await jiraListTickets(JIRA_CONFIG)).toEqual({ ok: false });
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe('http-status');
+      expect((result.error as { reason: 'http-status'; status: number }).status).toBe(401);
+    }
+  });
+
+  it('returns ok:false with http-status error on HTTP 403', async () => {
+    mockJiraRequest('Forbidden', 403);
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe('http-status');
+      expect((result.error as { reason: 'http-status'; status: number }).status).toBe(403);
+    }
+  });
+
+  it('returns ok:false with network error on timeout', async () => {
+    const mockRequest = {
+      on: vi.fn((event: string, handler: Function) => {
+        if (event === 'error') {
+          setTimeout(() => handler(new Error('Jira API request timed out')), 0);
+        }
+        return mockRequest;
+      }),
+      write: vi.fn(),
+      end: vi.fn(),
+      setTimeout: vi.fn().mockReturnThis(),
+      destroy: vi.fn(),
+    };
+    mockHttpsRequest.mockImplementation(() => mockRequest as unknown as ReturnType<typeof https.request>);
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe('network');
+    }
+  });
+
+  it('returns ok:true with empty tickets array when JQL matches zero results', async () => {
+    mockJiraRequest(JSON.stringify({ total: 0, issues: [] }));
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result).toEqual({ ok: true, tickets: [] });
   });
 });
 
@@ -421,5 +470,395 @@ describe('listTicketsWithConfig', () => {
     const result = await listTicketsWithConfig(JIRA_CONFIG, '/proj');
     expect(result).toEqual({ ok: true, tickets: [{ id: 'ACME-1', title: 'J', author: 'a' }] });
     expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Raw body fetch
+// ---------------------------------------------------------------------------
+
+describe('githubFetchRawBody', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns the raw issue body without any wrapper', async () => {
+    mockExecFileSuccess(JSON.stringify({ body: 'Just the raw description.' }));
+    const result = await githubFetchRawBody('42', '/proj');
+    expect(result).toBe('Just the raw description.');
+    expect(result).not.toMatch(/^# Issue:/);
+    expect(result).not.toMatch(/^State:/m);
+  });
+
+  it('returns empty string when body is null', async () => {
+    mockExecFileSuccess(JSON.stringify({ body: null }));
+    const result = await githubFetchRawBody('42', '/proj');
+    expect(result).toBe('');
+  });
+
+  it('calls gh with --json body only', async () => {
+    mockExecFileSuccess(JSON.stringify({ body: 'body text' }));
+    await githubFetchRawBody('99', '/myproj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'view', '99', '--json', 'body'],
+      expect.objectContaining({ cwd: '/myproj' }),
+      expect.any(Function)
+    );
+  });
+
+  it('returns null on gh failure', async () => {
+    mockExecFileError('not found');
+    const result = await githubFetchRawBody('1', '/proj');
+    expect(result).toBeNull();
+  });
+});
+
+describe('jiraFetchRawBody', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns null when credentials are missing', async () => {
+    const cfg: ProjectTicketConfig = { provider: 'jira' };
+    expect(await jiraFetchRawBody('ACME-1', cfg)).toBeNull();
+  });
+
+  it('returns the raw description field without wrapper', async () => {
+    mockJiraRequest(JSON.stringify({ fields: { description: 'Raw Jira body text.' } }));
+    const result = await jiraFetchRawBody('ACME-42', JIRA_CONFIG);
+    expect(result).toBe('Raw Jira body text.');
+    expect(result).not.toMatch(/^# Issue:/);
+    expect(result).not.toMatch(/^State:/m);
+  });
+
+  it('returns empty string when description is null', async () => {
+    mockJiraRequest(JSON.stringify({ fields: { description: null } }));
+    const result = await jiraFetchRawBody('ACME-1', JIRA_CONFIG);
+    expect(result).toBe('');
+  });
+
+  it('returns null on HTTP error', async () => {
+    mockJiraRequest('Unauthorized', 401);
+    const result = await jiraFetchRawBody('ACME-1', JIRA_CONFIG);
+    expect(result).toBeNull();
+  });
+});
+
+describe('fetchRawBodyWithConfig', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes to github for GitHub config', async () => {
+    mockExecFileSuccess(JSON.stringify({ body: 'GitHub raw body' }));
+    const result = await fetchRawBodyWithConfig('42', GITHUB_CONFIG, '/proj');
+    expect(result).toBe('GitHub raw body');
+    expect(mockExecFile).toHaveBeenCalled();
+  });
+
+  it('routes to jira for Jira config', async () => {
+    mockJiraRequest(JSON.stringify({ fields: { description: 'Jira raw body' } }));
+    const result = await fetchRawBodyWithConfig('ACME-1', JIRA_CONFIG, '/proj');
+    expect(result).toBe('Jira raw body');
+    expect(mockExecFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('updateTicketWithConfig routing', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes GitHub → githubUpdateTicket', async () => {
+    mockExecFileSuccess('');
+    await updateTicketWithConfig('42', 'updated body', GITHUB_CONFIG, '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'edit', '42', '--body', 'updated body'],
+      expect.objectContaining({ cwd: '/proj' }),
+      expect.any(Function)
+    );
+  });
+
+  it('rejects empty ticketId', async () => {
+    await expect(updateTicketWithConfig('', 'body', GITHUB_CONFIG, '/proj')).rejects.toThrow('Ticket ID is required');
+  });
+
+  it('rejects empty body', async () => {
+    await expect(updateTicketWithConfig('42', '   ', GITHUB_CONFIG, '/proj')).rejects.toThrow('Ticket body cannot be empty');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// jiraRequest structured error + testJiraConnection
+// ---------------------------------------------------------------------------
+
+describe('jiraRequest structured rejection', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('jiraListTickets carries http-status error with status and body on HTTP >= 400', async () => {
+    mockJiraRequest('{"errorMessages":["Issue Does Not Exist"]}', 404);
+    const result = await jiraListTickets(JIRA_CONFIG);
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.reason).toBe('http-status');
+      expect((result.error as { reason: 'http-status'; status: number; body?: string }).status).toBe(404);
+      expect((result.error as { reason: 'http-status'; status: number; body?: string }).body).toContain('errorMessages');
+    }
+  });
+});
+
+describe('testJiraConnection', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('returns auth ok with displayName on successful myself ping', async () => {
+    // First call: myself, Second call: search
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Alice Smith' })
+        : JSON.stringify({ total: 3, issues: [{}, {}, {}] });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token123',
+    });
+
+    expect(result.auth.ok).toBe(true);
+    if (result.auth.ok) {
+      expect(result.auth.displayName).toBe('Alice Smith');
+    }
+    expect(result.jql).not.toBeNull();
+    if (result.jql && result.jql.ok) {
+      expect(result.jql.count).toBe(3);
+    }
+  });
+
+  it('returns auth fail and jql:null when myself ping returns 401', async () => {
+    mockJiraRequest('Unauthorized', 401);
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'bad@acme.com',
+      jiraApiToken: 'wrong',
+    });
+
+    expect(result.auth.ok).toBe(false);
+    if (!result.auth.ok) {
+      expect(result.auth.status).toBe(401);
+    }
+    expect(result.jql).toBeNull();
+  });
+
+  it('returns auth ok and jql count:0 when JQL returns empty', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Bob' })
+        : JSON.stringify({ total: 0, issues: [] });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+
+    expect(result.auth.ok).toBe(true);
+    if (result.jql && result.jql.ok) {
+      expect(result.jql.count).toBe(0);
+    }
+  });
+
+  it('returns auth ok and jql fail when JQL returns 400', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const statusCode = callCount === 1 ? 200 : 400;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Carol' })
+        : 'Bad JQL';
+      const mockResponse = {
+        statusCode,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+
+    expect(result.auth.ok).toBe(true);
+    expect(result.jql).not.toBeNull();
+    if (result.jql) {
+      expect(result.jql.ok).toBe(false);
+    }
+  });
+
+});
+
+// ---------------------------------------------------------------------------
+// githubCloseTicket (#446)
+// ---------------------------------------------------------------------------
+
+describe('githubCloseTicket', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('calls gh issue close with the ticket id', async () => {
+    mockExecFileSuccess('');
+    await githubCloseTicket('42', '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'close', '42'],
+      expect.objectContaining({ cwd: '/proj' }),
+      expect.any(Function)
+    );
+  });
+
+  it('resolves when gh succeeds', async () => {
+    mockExecFileSuccess('');
+    await expect(githubCloseTicket('42', '/proj')).resolves.toBeUndefined();
+  });
+
+  it('resolves when issue is already closed (stderr contains already closed)', async () => {
+    const err = Object.assign(new Error('Command failed'), { stderr: 'Issue is already closed.' });
+    mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as Function)(err, '', 'Issue is already closed.');
+      return {} as ReturnType<typeof import('child_process').execFile>;
+    });
+    await expect(githubCloseTicket('42', '/proj')).resolves.toBeUndefined();
+  });
+
+  it('throws a meaningful error on genuine gh failure', async () => {
+    mockExecFileError('authentication failed');
+    await expect(githubCloseTicket('42', '/proj')).rejects.toThrow(/gh issue close failed.*authentication failed/);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// jiraCloseTicket (#446)
+// ---------------------------------------------------------------------------
+
+describe('jiraCloseTicket', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('throws when credentials are missing', async () => {
+    const cfg: ProjectTicketConfig = { provider: 'jira' };
+    await expect(jiraCloseTicket('ACME-1', cfg)).rejects.toThrow(/credentials are missing/);
+  });
+
+  it('sends PUT request to the archive endpoint', async () => {
+    const req = mockJiraRequest('', 204);
+    await jiraCloseTicket('ACME-42', JIRA_CONFIG);
+    expect(req.end).toHaveBeenCalled();
+    // Check that the URL path used was the archive endpoint
+    expect(mockHttpsRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ path: expect.stringContaining('/archive') }),
+      expect.any(Function)
+    );
+  });
+
+  it('resolves on 204 success', async () => {
+    mockJiraRequest('', 204);
+    await expect(jiraCloseTicket('ACME-42', JIRA_CONFIG)).resolves.toBeUndefined();
+  });
+
+  it('resolves when already archived (body contains already archived)', async () => {
+    const mockRequest = {
+      on: vi.fn().mockReturnThis(),
+      write: vi.fn(),
+      end: vi.fn(),
+      setTimeout: vi.fn().mockReturnThis(),
+      destroy: vi.fn(),
+    };
+    const mockResponse = {
+      statusCode: 400,
+      on: vi.fn((event: string, handler: Function) => {
+        if (event === 'data') handler('{"errorMessages":["Issue is already archived"]}');
+        if (event === 'end') handler();
+      }),
+    };
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      if (callback) callback(mockResponse);
+      return mockRequest as unknown as ReturnType<typeof import('https').request>;
+    });
+    await expect(jiraCloseTicket('ACME-42', JIRA_CONFIG)).resolves.toBeUndefined();
+  });
+
+  it('rejects when archive returns a genuine error (e.g. 403 Forbidden)', async () => {
+    mockJiraRequest('Forbidden: archive not available on your plan', 403);
+    await expect(jiraCloseTicket('ACME-42', JIRA_CONFIG)).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// closeTicketWithConfig (#446)
+// ---------------------------------------------------------------------------
+
+describe('closeTicketWithConfig', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes GitHub → githubCloseTicket', async () => {
+    mockExecFileSuccess('');
+    await closeTicketWithConfig('42', GITHUB_CONFIG, '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'close', '42'],
+      expect.objectContaining({ cwd: '/proj' }),
+      expect.any(Function)
+    );
+  });
+
+  it('routes JIRA → jiraCloseTicket (archive endpoint)', async () => {
+    mockJiraRequest('', 204);
+    await closeTicketWithConfig('ACME-42', JIRA_CONFIG, '/proj');
+    expect(mockExecFile).not.toHaveBeenCalled();
+    expect(mockHttpsRequest).toHaveBeenCalledWith(
+      expect.objectContaining({ path: expect.stringContaining('/archive') }),
+      expect.any(Function)
+    );
+  });
+
+  it('resolves when GitHub issue is already closed', async () => {
+    const err = Object.assign(new Error('Command failed'), { stderr: 'Issue is already closed.' });
+    mockExecFile.mockImplementation((_cmd, _args, _opts, callback) => {
+      (callback as Function)(err, '', 'Issue is already closed.');
+      return {} as ReturnType<typeof import('child_process').execFile>;
+    });
+    await expect(closeTicketWithConfig('42', GITHUB_CONFIG, '/proj')).resolves.toBeUndefined();
+  });
+
+  it('rejects on genuine GitHub failure', async () => {
+    mockExecFileError('repository not found');
+    await expect(closeTicketWithConfig('42', GITHUB_CONFIG, '/proj')).rejects.toThrow(/gh issue close failed/);
+  });
+
+  it('rejects on JIRA archive failure', async () => {
+    mockJiraRequest('Forbidden', 403);
+    await expect(closeTicketWithConfig('ACME-42', JIRA_CONFIG, '/proj')).rejects.toThrow();
   });
 });

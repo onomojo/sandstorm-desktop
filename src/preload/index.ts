@@ -199,12 +199,26 @@ export interface SandstormAPI {
     retryRefinementAsync: (sessionId: string, ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
     postAnswers: (ticketId: string, projectDir: string, answersBody: string) => Promise<void>;
     cancelRefinement: (sessionId: string) => Promise<void>;
+    discardRefinement: (sessionId: string) => Promise<void>;
     listRefinements: () => Promise<unknown[]>;
     create: (projectDir: string, title: string, body: string) => Promise<{ url: string; ticketId: string }>;
-    list: (projectDir: string) => Promise<unknown[]>;
+    list: (projectDir: string) => Promise<{ tickets: unknown[]; error: unknown }>;
+    fetchRaw: (ticketId: string, projectDir: string) => Promise<string | null>;
+    update: (projectDir: string, ticketId: string, body: string) => Promise<void>;
+    testJiraConnection: (params: {
+      jiraUrl: string;
+      jiraUsername: string;
+      jiraApiToken: string;
+      label?: string;
+    }) => Promise<{
+      auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
+      jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+    }>;
+    close: (ticketId: string, projectDir: string) => Promise<void>;
   };
   ticketBoard: {
     setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
+    delete: (ticketId: string, projectDir: string) => Promise<void>;
   };
   pr: {
     draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
@@ -375,16 +389,31 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:postAnswers', ticketId, projectDir, answersBody),
     cancelRefinement: (sessionId) =>
       ipcRenderer.invoke('tickets:cancelRefinement', sessionId),
+    discardRefinement: (sessionId) =>
+      ipcRenderer.invoke('tickets:discardRefinement', sessionId),
     listRefinements: () =>
       ipcRenderer.invoke('tickets:listRefinements'),
     create: (projectDir, title, body) =>
       ipcRenderer.invoke('tickets:create', projectDir, title, body),
-    list: (projectDir) =>
-      ipcRenderer.invoke('tickets:list', projectDir),
+    list: async (projectDir) => {
+      const raw = await ipcRenderer.invoke('tickets:list', projectDir);
+      if (Array.isArray(raw)) return { tickets: raw, error: null };
+      return raw;
+    },
+    fetchRaw: (ticketId, projectDir) =>
+      ipcRenderer.invoke('tickets:fetchRaw', ticketId, projectDir),
+    update: (projectDir, ticketId, body) =>
+      ipcRenderer.invoke('tickets:update', projectDir, ticketId, body),
+    testJiraConnection: (params) =>
+      ipcRenderer.invoke('tickets:testJiraConnection', params),
+    close: (ticketId, projectDir) =>
+      ipcRenderer.invoke('ticket:close', { ticketId, projectDir }),
   },
   ticketBoard: {
     setColumn: (ticketId, projectDir, column) =>
       ipcRenderer.invoke('ticket-board:set-column', ticketId, projectDir, column),
+    delete: (ticketId, projectDir) =>
+      ipcRenderer.invoke('ticket-board:delete', { ticketId, projectDir }),
   },
   pr: {
     draftBody: (stackId) => ipcRenderer.invoke('pr:draftBody', stackId),

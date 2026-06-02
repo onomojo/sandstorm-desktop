@@ -34,8 +34,16 @@ export interface TicketListEntry {
   author: string;
 }
 
+/** Structured failure reason carried on the ok:false branch of TicketListResult. */
+export type TicketListError =
+  | { reason: 'missing-creds' }
+  | { reason: 'http-status'; status: number; body?: string }
+  | { reason: 'network'; message: string };
+
 /** Discriminated result for ticket list fetches — lets callers distinguish success from failure. */
-export type TicketListResult = { ok: true; tickets: TicketListEntry[] } | { ok: false };
+export type TicketListResult =
+  | { ok: true; tickets: TicketListEntry[] }
+  | { ok: false; error: TicketListError };
 
 // ---------------------------------------------------------------------------
 // GitHub: built-in ticket operations via gh CLI
@@ -68,6 +76,20 @@ export async function githubFetchTicket(ticketId: string, cwd: string): Promise<
     }
     lines.push('', '## Description', '', issue.body ?? '');
     return lines.join('\n');
+  } catch {
+    return null;
+  }
+}
+
+export async function githubFetchRawBody(ticketId: string, cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      ['issue', 'view', ticketId, '--json', 'body'],
+      { cwd, timeout: 30000, maxBuffer: 2 * 1024 * 1024 }
+    );
+    const issue = JSON.parse(stdout) as { body: string | null };
+    return issue.body ?? '';
   } catch {
     return null;
   }
@@ -120,7 +142,22 @@ export async function githubListTickets(cwd: string, label?: string): Promise<Ti
       })),
     };
   } catch {
-    return { ok: false };
+    return { ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } };
+  }
+}
+
+export async function githubCloseTicket(ticketId: string, cwd: string): Promise<void> {
+  try {
+    await execFileAsync(
+      'gh',
+      ['issue', 'close', ticketId],
+      { cwd, timeout: 30000, maxBuffer: 2 * 1024 * 1024 }
+    );
+  } catch (err: unknown) {
+    const e = err as { stderr?: string; message?: string };
+    const text = `${e.stderr ?? ''} ${e.message ?? ''}`;
+    if (/already closed/i.test(text)) return;
+    throw new Error(`gh issue close failed: ${e.stderr?.trim() || (err as Error).message}`);
   }
 }
 
@@ -184,7 +221,10 @@ async function jiraRequest(opts: {
       res.on('data', (chunk: string) => { data += chunk; });
       res.on('end', () => {
         if (res.statusCode && res.statusCode >= 400) {
-          reject(new Error(`Jira API error ${res.statusCode}: ${data.slice(0, 300)}`));
+          reject(Object.assign(
+            new Error(`Jira API error ${res.statusCode}: ${data.slice(0, 300)}`),
+            { status: res.statusCode, body: data.slice(0, 300) },
+          ));
         } else {
           resolve(data);
         }
@@ -259,7 +299,7 @@ export async function jiraListTickets(
   label?: string,
 ): Promise<TicketListResult> {
   if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
-    return { ok: false };
+    return { ok: false, error: { reason: 'missing-creds' } };
   }
   try {
     let jql = 'reporter = currentUser() AND statusCategory != Done';
@@ -284,8 +324,29 @@ export async function jiraListTickets(
         author: issue.fields.reporter?.accountId ?? issue.fields.reporter?.displayName ?? '',
       })),
     };
+  } catch (err: unknown) {
+    const e = err as { status?: number; body?: string; message?: string };
+    if (typeof e.status === 'number') {
+      return { ok: false, error: { reason: 'http-status', status: e.status, body: e.body } };
+    }
+    return { ok: false, error: { reason: 'network', message: (err as Error).message ?? String(err) } };
+  }
+}
+
+export async function jiraFetchRawBody(
+  ticketId: string,
+  config: ProjectTicketConfig,
+): Promise<string | null> {
+  if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
+    return null;
+  }
+  try {
+    const url = `${config.jira_url.replace(/\/$/, '')}/rest/api/2/issue/${ticketId}?fields=description`;
+    const raw = await jiraRequest({ url, method: 'GET', auth: jiraAuth(config) });
+    const issue = JSON.parse(raw) as { fields: { description: string | null } };
+    return issue.fields.description ?? '';
   } catch {
-    return { ok: false };
+    return null;
   }
 }
 
@@ -306,6 +367,26 @@ export async function jiraUpdateTicket(
     auth: jiraAuth(config),
     body: { fields: { description: body } },
   });
+}
+
+export async function jiraCloseTicket(
+  ticketId: string,
+  config: ProjectTicketConfig,
+): Promise<void> {
+  if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
+    throw new Error(
+      'Jira credentials are missing. Configure JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN in Project Settings.'
+    );
+  }
+  const url = `${config.jira_url.replace(/\/$/, '')}/rest/api/3/issue/${ticketId}/archive`;
+  try {
+    await jiraRequest({ url, method: 'PUT', auth: jiraAuth(config) });
+  } catch (err: unknown) {
+    const e = err as { status?: number; body?: string; message?: string };
+    const body = e.body ?? e.message ?? '';
+    if (/already archived/i.test(body)) return;
+    throw err;
+  }
 }
 
 export async function jiraCreateTicket(
@@ -364,6 +445,17 @@ export async function listTicketsWithConfig(
   return jiraListTickets(config, label);
 }
 
+export async function fetchRawBodyWithConfig(
+  ticketId: string,
+  config: ProjectTicketConfig,
+  cwd: string,
+): Promise<string | null> {
+  if (config.provider === 'github') {
+    return githubFetchRawBody(ticketId, cwd);
+  }
+  return jiraFetchRawBody(ticketId, config);
+}
+
 export async function updateTicketWithConfig(
   ticketId: string,
   body: string,
@@ -376,6 +468,17 @@ export async function updateTicketWithConfig(
     return githubUpdateTicket(ticketId, body, cwd);
   }
   return jiraUpdateTicket(ticketId, body, config);
+}
+
+export async function closeTicketWithConfig(
+  ticketId: string,
+  config: ProjectTicketConfig,
+  cwd: string,
+): Promise<void> {
+  if (config.provider === 'github') {
+    return githubCloseTicket(ticketId, cwd);
+  }
+  return jiraCloseTicket(ticketId, config);
 }
 
 export async function createTicketWithConfig(opts: {
@@ -392,6 +495,60 @@ export async function createTicketWithConfig(opts: {
     return githubCreateTicket(title, body, opts.cwd);
   }
   return jiraCreateTicket(title, body, opts.config);
+}
+
+/** Result shape for the Test Connection feature in JIRA settings. */
+export interface TestJiraConnectionResult {
+  auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
+  jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+}
+
+/**
+ * Test a JIRA connection using unsaved form values.
+ * Pings /rest/api/2/myself for auth, then runs the standard list JQL if auth succeeds.
+ */
+export async function testJiraConnection(params: {
+  jiraUrl: string;
+  jiraUsername: string;
+  jiraApiToken: string;
+  label?: string;
+}): Promise<TestJiraConnectionResult> {
+  const { jiraUrl, jiraUsername, jiraApiToken, label } = params;
+  const auth = Buffer.from(`${jiraUsername}:${jiraApiToken}`).toString('base64');
+  const baseUrl = jiraUrl.replace(/\/$/, '');
+
+  let displayName: string;
+  try {
+    const raw = await jiraRequest({ url: `${baseUrl}/rest/api/2/myself`, method: 'GET', auth });
+    const myself = JSON.parse(raw) as { displayName?: string };
+    displayName = myself.displayName ?? 'Unknown User';
+  } catch (err: unknown) {
+    const e = err as { status?: number; message?: string };
+    return {
+      auth: { ok: false, status: e.status, message: e.message ?? String(err) },
+      jql: null,
+    };
+  }
+
+  let jql = 'reporter = currentUser() AND statusCategory != Done';
+  if (label && label.trim()) {
+    jql += ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
+  }
+  const searchUrl =
+    `${baseUrl}/rest/api/2/search` +
+    `?jql=${encodeURIComponent(jql)}&fields=summary&maxResults=100`;
+  try {
+    const raw = await jiraRequest({ url: searchUrl, method: 'GET', auth });
+    const result = JSON.parse(raw) as { total?: number; issues?: unknown[] };
+    const count = result.total ?? result.issues?.length ?? 0;
+    return { auth: { ok: true, displayName }, jql: { ok: true, count } };
+  } catch (err: unknown) {
+    const e = err as { status?: number; message?: string };
+    return {
+      auth: { ok: true, displayName },
+      jql: { ok: false, status: e.status, message: e.message ?? String(err) },
+    };
+  }
 }
 
 // ---------------------------------------------------------------------------

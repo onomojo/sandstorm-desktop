@@ -23,15 +23,23 @@ const {
   mockRemoveProjectFromCrontab,
   mockListTicketsWithConfig,
   mockCreateTicketWithConfig,
+  mockCloseTicketWithConfig,
+  mockTestJiraConnection,
   mockSessionMonitor,
   mockSpawnSpecCheck,
   mockSpawnSpecRefine,
   mockListTicketComments,
+  mockDeleteRefinement,
+  mockPersistRefinement,
+  mockLoadRefinements,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
   const mockSpawnSpecCheck = vi.fn();
   const mockSpawnSpecRefine = vi.fn();
   const mockListTicketComments = vi.fn().mockResolvedValue([]);
+  const mockDeleteRefinement = vi.fn();
+  const mockPersistRefinement = vi.fn();
+  const mockLoadRefinements = vi.fn().mockReturnValue([]);
 
   const mockRegistry = {
     listProjects: vi.fn(),
@@ -45,6 +53,7 @@ const {
     listBoardTickets: vi.fn().mockReturnValue([]),
     setBoardTicketColumn: vi.fn(),
     deleteClosedEarlyColumnTickets: vi.fn().mockReturnValue(0),
+    deleteBoardTicket: vi.fn(),
   };
 
   const mockStackManager = {
@@ -111,8 +120,13 @@ const {
   const mockSpawn = vi.fn();
   const mockFetchAccountUsage = vi.fn();
   const mockRemoveProjectFromCrontab = vi.fn();
-  const mockListTicketsWithConfig = vi.fn().mockResolvedValue({ ok: false });
+  const mockListTicketsWithConfig = vi.fn().mockResolvedValue({ ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } });
   const mockCreateTicketWithConfig = vi.fn().mockResolvedValue({ url: 'https://github.com/o/r/issues/1', ticketId: '1' });
+  const mockCloseTicketWithConfig = vi.fn().mockResolvedValue(undefined);
+  const mockTestJiraConnection = vi.fn().mockResolvedValue({
+    auth: { ok: true, displayName: 'Test User' },
+    jql: { ok: true, count: 5 },
+  });
 
   const mockSessionMonitor = {
     getState: vi.fn(),
@@ -136,10 +150,15 @@ const {
     mockRemoveProjectFromCrontab,
     mockListTicketsWithConfig,
     mockCreateTicketWithConfig,
+    mockCloseTicketWithConfig,
+    mockTestJiraConnection,
     mockSessionMonitor,
     mockSpawnSpecCheck,
     mockSpawnSpecRefine,
     mockListTicketComments,
+    mockDeleteRefinement,
+    mockPersistRefinement,
+    mockLoadRefinements,
   };
 });
 
@@ -216,6 +235,8 @@ vi.mock('../../src/main/control-plane/ticket-lister', () => ({
 
 vi.mock('../../src/main/control-plane/ticket-config', () => ({
   createTicketWithConfig: (...args: unknown[]) => mockCreateTicketWithConfig(...args),
+  closeTicketWithConfig: (...args: unknown[]) => mockCloseTicketWithConfig(...args),
+  testJiraConnection: (...args: unknown[]) => mockTestJiraConnection(...args),
 }));
 
 vi.mock('../../src/main/claude/tools', () => ({
@@ -228,6 +249,12 @@ vi.mock('../../src/main/claude/tools', () => ({
 vi.mock('../../src/main/control-plane/ticket-comments', () => ({
   listTicketComments: (...args: unknown[]) => mockListTicketComments(...args),
   postComment: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../src/main/control-plane/refinement-store', () => ({
+  persistRefinement: (...args: unknown[]) => mockPersistRefinement(...args),
+  deleteRefinement: (...args: unknown[]) => mockDeleteRefinement(...args),
+  loadRefinements: () => mockLoadRefinements(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -1315,7 +1342,7 @@ describe('IPC Handlers', () => {
   // Ticket Board
   // =========================================================================
   describe('tickets:list', () => {
-    it('skips the provider fetch and returns DB rows when no provider is configured', async () => {
+    it('skips the provider fetch and returns { tickets, error:null } when no provider is configured', async () => {
       mockRegistry.getProjectTicketConfig.mockReturnValueOnce(null);
       const boardRows = [
         { ticket_id: 'T-1', project_dir: '/proj', column: 'backlog', title: 'First ticket', updated_at: '' },
@@ -1329,10 +1356,10 @@ describe('IPC Handlers', () => {
       expect(mockListTicketsWithConfig).not.toHaveBeenCalled();
       expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
       expect(mockRegistry.listBoardTickets).toHaveBeenCalled();
-      expect(result).toEqual(boardRows);
+      expect(result).toEqual({ tickets: boardRows, error: null });
     });
 
-    it('returns DB rows when the provider fetch throws (graceful degradation)', async () => {
+    it('returns { tickets, error:null } when the provider fetch throws (graceful degradation)', async () => {
       mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
       mockListTicketsWithConfig.mockRejectedValueOnce(new Error('gh not authenticated'));
       const boardRows = [
@@ -1342,7 +1369,22 @@ describe('IPC Handlers', () => {
 
       const result = await invokeHandler('tickets:list', '/proj');
 
-      expect(result).toEqual(boardRows);
+      expect(result).toEqual({ tickets: boardRows, error: null });
+    });
+
+    it('returns structured error in the error field when fetch returns ok:false', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'jira' });
+      const listError = { reason: 'missing-creds' } as const;
+      mockListTicketsWithConfig.mockResolvedValueOnce({ ok: false, error: listError });
+      const boardRows = [{ ticket_id: 'T-1', project_dir: '/proj', column: 'backlog', title: 'Cached', updated_at: '' }];
+      mockRegistry.listBoardTickets.mockReturnValue(boardRows);
+      mockRegistry.seedBoardTicket.mockClear();
+
+      const result = await invokeHandler('tickets:list', '/proj') as { tickets: unknown[]; error: unknown };
+
+      expect(result.tickets).toEqual(boardRows);
+      expect(result.error).toEqual(listError);
+      expect(mockRegistry.seedBoardTicket).not.toHaveBeenCalled();
     });
 
     it('passes the project config to the provider and seeds each returned ticket', async () => {
@@ -1380,7 +1422,7 @@ describe('IPC Handlers', () => {
 
     it('does not call seedBoardTicket or deleteClosedEarlyColumnTickets when fetch returns ok:false', async () => {
       mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
-      mockListTicketsWithConfig.mockResolvedValueOnce({ ok: false });
+      mockListTicketsWithConfig.mockResolvedValueOnce({ ok: false, error: { reason: 'network', message: 'Failed to fetch GitHub tickets' } });
       mockRegistry.seedBoardTicket.mockClear();
       mockRegistry.deleteClosedEarlyColumnTickets.mockClear();
 
@@ -1409,6 +1451,45 @@ describe('IPC Handlers', () => {
       } finally {
         consoleSpy.mockRestore();
       }
+    });
+  });
+
+  describe('tickets:testJiraConnection', () => {
+    it('delegates to testJiraConnection and returns its result', async () => {
+      const expected = {
+        auth: { ok: true, displayName: 'Alice' },
+        jql: { ok: true, count: 7 },
+      };
+      mockTestJiraConnection.mockResolvedValueOnce(expected);
+
+      const result = await invokeHandler('tickets:testJiraConnection', {
+        jiraUrl: 'https://acme.atlassian.net',
+        jiraUsername: 'user@acme.com',
+        jiraApiToken: 'secret',
+      });
+
+      expect(mockTestJiraConnection).toHaveBeenCalledWith({
+        jiraUrl: 'https://acme.atlassian.net',
+        jiraUsername: 'user@acme.com',
+        jiraApiToken: 'secret',
+      });
+      expect(result).toEqual(expected);
+    });
+
+    it('returns auth:false result when testJiraConnection returns auth failure', async () => {
+      mockTestJiraConnection.mockResolvedValueOnce({
+        auth: { ok: false, status: 401, message: 'Unauthorized' },
+        jql: null,
+      });
+
+      const result = await invokeHandler('tickets:testJiraConnection', {
+        jiraUrl: 'https://acme.atlassian.net',
+        jiraUsername: 'bad@acme.com',
+        jiraApiToken: 'wrong',
+      }) as { auth: { ok: boolean }; jql: null };
+
+      expect(result.auth.ok).toBe(false);
+      expect(result.jql).toBeNull();
     });
   });
 
@@ -1445,10 +1526,10 @@ describe('IPC Handlers', () => {
         { ticket_id: '99', project_dir: '/proj', column: 'backlog', title: 'My Title', updated_at: '' },
       ]);
 
-      const result = await invokeHandler('tickets:list', '/proj');
+      const result = await invokeHandler('tickets:list', '/proj') as { tickets: Array<{ ticket_id: string; column: string }>; error: null };
 
-      expect(result).toHaveLength(1);
-      expect((result as Array<{ ticket_id: string; column: string }>)[0]).toMatchObject({
+      expect(result.tickets).toHaveLength(1);
+      expect(result.tickets[0]).toMatchObject({
         ticket_id: '99',
         column: 'backlog',
       });
@@ -1648,6 +1729,72 @@ describe('IPC Handlers', () => {
   });
 
   // =========================================================================
+  // tickets:discardRefinement
+  // =========================================================================
+  describe('tickets:discardRefinement', () => {
+    beforeEach(() => {
+      mockSpawnSpecCheck.mockReturnValue({
+        promise: new Promise<Record<string, unknown>>(() => {}),
+        cancel: vi.fn(),
+      });
+    });
+
+    it('removes the activeRefinements entry and calls deleteRefinement', async () => {
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-D1', '/tmp/proj-d') as { sessionId: string };
+      mockDeleteRefinement.mockClear();
+
+      await invokeHandler('tickets:discardRefinement', sessionId);
+
+      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
+
+      // The session should no longer appear in listRefinements
+      const list = await invokeHandler('tickets:listRefinements') as unknown[];
+      expect(list.find((s: unknown) => (s as { id: string }).id === sessionId)).toBeUndefined();
+    });
+
+    it('does NOT call entry.cancel for a running session', async () => {
+      const cancelSpy = vi.fn();
+      mockSpawnSpecCheck.mockReturnValue({
+        promise: new Promise<Record<string, unknown>>(() => {}),
+        cancel: cancelSpy,
+      });
+
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-D2', '/tmp/proj-d2') as { sessionId: string };
+
+      await invokeHandler('tickets:discardRefinement', sessionId);
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op for an unknown session id', async () => {
+      mockDeleteRefinement.mockClear();
+      await invokeHandler('tickets:discardRefinement', 'no-such-id');
+      expect(mockDeleteRefinement).not.toHaveBeenCalled();
+    });
+
+    it('removes an errored (terminal-state) session — regression for original bug', async () => {
+      // Register a session and let it error out
+      let rejectFn!: (err: Error) => void;
+      mockSpawnSpecCheck.mockReturnValue({
+        promise: new Promise<Record<string, unknown>>((_resolve, reject) => {
+          rejectFn = reject;
+        }),
+        cancel: vi.fn(),
+      });
+
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-D3', '/tmp/proj-d3') as { sessionId: string };
+      rejectFn(new Error('gate failed'));
+      // Allow the rejection handler to settle
+      await new Promise((r) => setTimeout(r, 0));
+
+      mockDeleteRefinement.mockClear();
+      await invokeHandler('tickets:discardRefinement', sessionId);
+
+      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
+    });
+  });
+
+  // =========================================================================
   // Handler Registration Completeness
   // =========================================================================
   describe('handler registration', () => {
@@ -1739,10 +1886,16 @@ describe('IPC Handlers', () => {
       'tickets:retryRefinementAsync',
       'tickets:postAnswers',
       'tickets:cancelRefinement',
+      'tickets:discardRefinement',
       'tickets:listRefinements',
       'tickets:create',
+      'tickets:fetchRaw',
+      'tickets:update',
       'tickets:list',
+      'tickets:testJiraConnection',
+      'ticket:close',
       'ticket-board:set-column',
+      'ticket-board:delete',
       'pr:draftBody',
       'pr:create',
       'pr:merge',
@@ -1759,6 +1912,68 @@ describe('IPC Handlers', () => {
 
     it('registers exactly the expected number of handlers', () => {
       expect(Object.keys(registeredHandlers).length).toBe(expectedChannels.length);
+    });
+  });
+
+  // =========================================================================
+  // ticket:close (#446)
+  // =========================================================================
+  describe('ticket:close', () => {
+    beforeEach(() => {
+      mockRegistry.getProjectTicketConfig.mockReturnValue({ provider: 'github' });
+    });
+
+    it('calls closeTicketWithConfig with ticketId, config, and projectDir', async () => {
+      await invokeHandler('ticket:close', { ticketId: '42', projectDir: '/proj' });
+      expect(mockCloseTicketWithConfig).toHaveBeenCalledWith('42', { provider: 'github' }, '/proj');
+    });
+
+    it('resolves successfully when closeTicketWithConfig resolves', async () => {
+      await expect(
+        invokeHandler('ticket:close', { ticketId: '42', projectDir: '/proj' })
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects when no ticket config is configured for the project', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValue(null);
+      await expect(
+        invokeHandler('ticket:close', { ticketId: '42', projectDir: '/proj' })
+      ).rejects.toThrow(/No ticket provider configured/);
+    });
+
+    it('rejects when ticketId is empty', async () => {
+      await expect(
+        invokeHandler('ticket:close', { ticketId: '', projectDir: '/proj' })
+      ).rejects.toThrow(/ticketId is required/);
+    });
+
+    it('propagates rejection from closeTicketWithConfig', async () => {
+      mockCloseTicketWithConfig.mockRejectedValueOnce(new Error('403 Forbidden'));
+      await expect(
+        invokeHandler('ticket:close', { ticketId: '42', projectDir: '/proj' })
+      ).rejects.toThrow('403 Forbidden');
+    });
+  });
+
+  // =========================================================================
+  // ticket-board:delete (#446)
+  // =========================================================================
+  describe('ticket-board:delete', () => {
+    it('calls registry.deleteBoardTicket with ticketId and resolved projectDir', async () => {
+      await invokeHandler('ticket-board:delete', { ticketId: '42', projectDir: '/proj' });
+      expect(mockRegistry.deleteBoardTicket).toHaveBeenCalledWith('42', '/proj');
+    });
+
+    it('resolves successfully (no-op when row absent)', async () => {
+      await expect(
+        invokeHandler('ticket-board:delete', { ticketId: 'nonexistent', projectDir: '/proj' })
+      ).resolves.toBeUndefined();
+    });
+
+    it('rejects when ticketId is empty', async () => {
+      await expect(
+        invokeHandler('ticket-board:delete', { ticketId: '', projectDir: '/proj' })
+      ).rejects.toThrow(/ticketId is required/);
     });
   });
 });

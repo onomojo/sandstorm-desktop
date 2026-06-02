@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { useAppStore, KanbanColumn, TicketBoardEntry, Stack } from '../store';
 import { makePrEligible } from '../utils/duration';
 import { suggestStackName } from '../lib/stack-name';
+import { DiscardStackDialog } from './DiscardStackDialog';
 
 interface TicketCardProps {
   ticket: TicketBoardEntry;
@@ -18,6 +19,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     openRefineDialogFromCard,
     createPRAutomatic,
     openRefinementSession,
+    openEditTicketDialog,
     refinementSessions,
     retryRefinementForTicket,
     resumeStackWithContinuation,
@@ -29,16 +31,27 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     prCreateInFlight,
     refineInFlight,
     refineStartErrors,
+    discardStack,
+    discardInFlight,
+    discardErrors,
   } = useAppStore();
+
+  const [showDiscardDialog, setShowDiscardDialog] = useState(false);
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
   const stackKey = `${ticket.ticket_id}|${ticket.project_dir}`;
   const stackCreateError = stackCreateErrors[stackKey];
   const stackInFlight = stackCreateInFlight[stackKey] ?? false;
   const mergeInflight = mergeInFlight[stackKey] ?? false;
+  const discardInflight = discardInFlight[stackKey] ?? false;
+  const discardError = discardErrors[stackKey];
 
   const handleRefine = () => {
     openRefineDialogFromCard(ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn);
+  };
+
+  const handleEdit = () => {
+    openEditTicketDialog(ticket.ticket_id, ticket.project_dir);
   };
 
   const handleStartStack = () => {
@@ -64,6 +77,41 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
       void resumeStackWithContinuation(stack.id, true);
     }
   };
+
+  const handleDiscardBackToBacklog = () => {
+    setShowDiscardDialog(false);
+    void discardStack(ticket.ticket_id, ticket.project_dir, 'backlog');
+  };
+
+  const handleDiscardCloseTicket = () => {
+    setShowDiscardDialog(false);
+    void discardStack(ticket.ticket_id, ticket.project_dir, 'close');
+  };
+
+  const discardSection = (
+    <>
+      {discardError && (
+        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2 py-1.5 break-words">
+          {discardError}
+        </div>
+      )}
+      <button
+        onClick={() => setShowDiscardDialog(true)}
+        disabled={discardInflight}
+        className="w-full text-xs py-1.5 px-3 rounded-md bg-red-500/5 text-red-400/70 border border-red-500/20 hover:bg-red-500/10 hover:text-red-400 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+        data-testid={`ticket-card-discard-${ticket.ticket_id}`}
+      >
+        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
+          <polyline points="3 6 5 6 21 6"/>
+          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+          <path d="M10 11v6"/>
+          <path d="M14 11v6"/>
+          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+        </svg>
+        Discard
+      </button>
+    </>
+  );
 
   const refinementSession = refinementSessions.find(
     (s) => s.ticketId === ticket.ticket_id && s.projectDir === ticket.project_dir
@@ -98,13 +146,22 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
       {/* Column-specific content */}
       {ticket.column === 'backlog' && (
-        <button
-          onClick={handleRefine}
-          className="mt-1 w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors font-medium"
-          data-testid={`ticket-card-refine-${ticket.ticket_id}`}
-        >
-          Refine
-        </button>
+        <div className="flex flex-col gap-2 mt-1">
+          <button
+            onClick={handleEdit}
+            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-surface-hover text-sandstorm-muted border border-sandstorm-border hover:border-sandstorm-accent/30 hover:text-sandstorm-text transition-colors font-medium"
+            data-testid={`ticket-card-edit-${ticket.ticket_id}`}
+          >
+            Edit
+          </button>
+          <button
+            onClick={handleRefine}
+            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors font-medium"
+            data-testid={`ticket-card-refine-${ticket.ticket_id}`}
+          >
+            Refine
+          </button>
+        </div>
       )}
 
       {ticket.column === 'refining' && (
@@ -233,6 +290,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               )}
             </button>
           )}
+          {discardSection}
         </div>
       )}
 
@@ -257,11 +315,21 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           >
             {mergeInflight ? 'Merging…' : 'Merge'}
           </button>
+          {discardSection}
         </div>
       )}
 
       {ticket.column === 'merged' && (
         <span className="text-xs text-sandstorm-state-merged font-medium">Merged</span>
+      )}
+
+      {showDiscardDialog && (
+        <DiscardStackDialog
+          onBackToBacklog={handleDiscardBackToBacklog}
+          onCloseTicket={handleDiscardCloseTicket}
+          onCancel={() => setShowDiscardDialog(false)}
+          data-testid={`discard-stack-dialog-${ticket.ticket_id}`}
+        />
       )}
     </div>
   );

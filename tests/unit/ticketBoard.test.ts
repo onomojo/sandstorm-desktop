@@ -314,11 +314,11 @@ import { useAppStore } from '../../src/renderer/store';
 
 const PROJECT_DIR = '/store-test-proj';
 
-function setupSandstormMock(ticketsList: unknown[] = []) {
+function setupSandstormMock(ticketsList: unknown[] = [], error: unknown = null) {
   Object.defineProperty(window, 'sandstorm', {
     value: {
       tickets: {
-        list: vi.fn().mockResolvedValue(ticketsList),
+        list: vi.fn().mockResolvedValue({ tickets: ticketsList, error }),
         specCheckAsync: vi.fn().mockResolvedValue({ sessionId: 'test-sess' }),
       },
       ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
@@ -349,7 +349,7 @@ describe('store: refreshBoardTickets', () => {
     expect((window.sandstorm as any).tickets.list).toHaveBeenCalledWith(PROJECT_DIR);
   });
 
-  it('clears loading state on fetch error', async () => {
+  it('clears loading state on IPC throw', async () => {
     Object.defineProperty(window, 'sandstorm', {
       value: { tickets: { list: vi.fn().mockRejectedValue(new Error('fail')) }, ticketBoard: { setColumn: vi.fn() } },
       writable: true,
@@ -363,7 +363,7 @@ describe('store: refreshBoardTickets', () => {
     expect(state.boardTickets).toEqual([]);
   });
 
-  it('sets boardTicketsError on fetch error', async () => {
+  it('sets boardTicketsError on IPC throw', async () => {
     Object.defineProperty(window, 'sandstorm', {
       value: { tickets: { list: vi.fn().mockRejectedValue(new Error('network failure')) }, ticketBoard: { setColumn: vi.fn() } },
       writable: true,
@@ -377,14 +377,34 @@ describe('store: refreshBoardTickets', () => {
     expect(typeof state.boardTicketsError).toBe('string');
   });
 
-  it('clears boardTicketsError on successful fetch', async () => {
-    useAppStore.setState({ boardTicketsError: 'previous error' });
-    setupSandstormMock([]);
-
+  it('sets boardTicketsError from structured missing-creds error', async () => {
+    setupSandstormMock([], { reason: 'missing-creds' });
     await useAppStore.getState().refreshBoardTickets(PROJECT_DIR);
+    const state = useAppStore.getState();
+    expect(state.boardTicketsError).toContain('JIRA credentials missing');
+  });
 
+  it('sets boardTicketsError from structured http-status error', async () => {
+    setupSandstormMock([], { reason: 'http-status', status: 401, body: 'Unauthorized' });
+    await useAppStore.getState().refreshBoardTickets(PROJECT_DIR);
+    const state = useAppStore.getState();
+    expect(state.boardTicketsError).toContain('401');
+  });
+
+  it('sets boardTicketsError from structured network error', async () => {
+    setupSandstormMock([], { reason: 'network', message: 'Connection timed out' });
+    await useAppStore.getState().refreshBoardTickets(PROJECT_DIR);
+    const state = useAppStore.getState();
+    expect(state.boardTicketsError).toBe('Connection timed out');
+  });
+
+  it('clears boardTicketsError to null on successful fetch (error:null)', async () => {
+    useAppStore.setState({ boardTicketsError: 'JIRA credentials missing — configure them in Project Settings' });
+    setupSandstormMock([]);
+    await useAppStore.getState().refreshBoardTickets(PROJECT_DIR);
     expect(useAppStore.getState().boardTicketsError).toBeNull();
   });
+
 });
 
 describe('store: moveTicketColumn', () => {
@@ -890,5 +910,40 @@ describe('store: commitRefinementContext (#393)', () => {
     await new Promise(r => setTimeout(r, 0));
     const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
     expect(entry?.column).toBe('backlog');
+  });
+});
+
+
+// --- deleteBoardTicket (#446) ---
+
+describe('deleteBoardTicket', () => {
+  it('removes exactly the targeted row', () => {
+    registry.seedBoardTicket('del-1', '/proj', 'To be deleted');
+    registry.seedBoardTicket('keep-1', '/proj', 'To keep');
+    registry.deleteBoardTicket('del-1', '/proj');
+    const rows = registry.listBoardTickets('/proj');
+    expect(rows).toHaveLength(1);
+    expect(rows[0].ticket_id).toBe('keep-1');
+  });
+
+  it('is a no-op when the row is absent', () => {
+    registry.seedBoardTicket('keep-1', '/proj', 'Keep this');
+    expect(() => registry.deleteBoardTicket('nonexistent', '/proj')).not.toThrow();
+    expect(registry.listBoardTickets('/proj')).toHaveLength(1);
+  });
+
+  it('is scoped to the given project_dir — does not affect other projects', () => {
+    registry.seedBoardTicket('t1', '/alpha', 'Alpha ticket');
+    registry.seedBoardTicket('t1', '/beta', 'Beta ticket');
+    registry.deleteBoardTicket('t1', '/alpha');
+    expect(registry.listBoardTickets('/alpha')).toHaveLength(0);
+    expect(registry.listBoardTickets('/beta')).toHaveLength(1);
+  });
+
+  it('is idempotent — deleting the same row twice does not throw', () => {
+    registry.seedBoardTicket('t1', '/proj', 'T');
+    registry.deleteBoardTicket('t1', '/proj');
+    expect(() => registry.deleteBoardTicket('t1', '/proj')).not.toThrow();
+    expect(registry.listBoardTickets('/proj')).toHaveLength(0);
   });
 });

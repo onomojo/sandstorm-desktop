@@ -331,6 +331,22 @@ export interface ModelSettings {
   outer_model: string;
 }
 
+export type TicketListError =
+  | { reason: 'missing-creds' }
+  | { reason: 'http-status'; status: number; body?: string }
+  | { reason: 'network'; message: string };
+
+function formatTicketListError(error: TicketListError): string {
+  switch (error.reason) {
+    case 'missing-creds':
+      return 'JIRA credentials missing — configure them in Project Settings';
+    case 'http-status':
+      return `JIRA error ${error.status}${error.body ? ': ' + error.body.slice(0, 100) : ''}`;
+    case 'network':
+      return error.message;
+  }
+}
+
 export interface ProjectTicketConfig {
   provider: 'github' | 'jira';
   jira_url?: string | null;
@@ -407,6 +423,8 @@ interface AppState {
   /** ID of the session currently shown in the refine dialog (null = new refinement). */
   currentRefinementSessionId: string | null;
   showCreateTicketDialog: boolean;
+  showEditTicketDialog: boolean;
+  editTicketTarget: { ticketId: string; projectDir: string } | null;
   showStartTicketDialog: boolean;
   showCreatePRDialog: { stackId: string; initialError?: string } | null;
   /**
@@ -526,6 +544,12 @@ interface AppState {
   prCreateInFlight: Record<string, boolean>;
   /** One-click PR creation: draft + create in background; opens fallback dialog on failure. */
   createPRAutomatic: (stackId: string, ticketId: string, projectDir: string, previousColumn: KanbanColumn) => Promise<void>;
+  /** Per-ticket in-flight flag for discard operation, keyed by `${ticketId}|${projectDir}`. */
+  discardInFlight: Record<string, boolean>;
+  /** Per-ticket discard error message, keyed by `${ticketId}|${projectDir}`. Cleared at the start of the next discard attempt. */
+  discardErrors: Record<string, string>;
+  /** Best-effort teardown → card disposition (backlog or close+delete). Surfaces close failure via discardErrors (R2). */
+  discardStack: (ticketId: string, projectDir: string, disposition: 'backlog' | 'close') => Promise<void>;
 
   // Schedules (per-project)
   schedules: ScheduleEntry[];
@@ -571,6 +595,8 @@ interface AppState {
   /** Cancel the current session for a ticket and start a fresh spec-gate run. Opens the dialog to the new session. */
   retryRefinementForTicket: (ticketId: string, projectDir: string) => Promise<void>;
   setShowCreateTicketDialog: (show: boolean) => void;
+  setShowEditTicketDialog: (show: boolean) => void;
+  openEditTicketDialog: (ticketId: string, projectDir: string) => void;
   setShowStartTicketDialog: (show: boolean) => void;
   setShowCreatePRDialog: (state: { stackId: string; initialError?: string } | null) => void;
   setPrDraft: (stackId: string, draft: { title: string; body: string }) => void;
@@ -749,12 +775,26 @@ declare global {
         retryRefinementAsync: (sessionId: string, ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
         postAnswers: (ticketId: string, projectDir: string, answersBody: string) => Promise<void>;
         cancelRefinement: (sessionId: string) => Promise<void>;
+        discardRefinement: (sessionId: string) => Promise<void>;
         listRefinements: () => Promise<RefinementSession[]>;
         create: (projectDir: string, title: string, body: string) => Promise<{ url: string; number: number; ticketId: string }>;
-        list: (projectDir: string) => Promise<TicketBoardEntry[]>;
+        list: (projectDir: string) => Promise<{ tickets: TicketBoardEntry[]; error: TicketListError | null }>;
+        fetchRaw: (ticketId: string, projectDir: string) => Promise<string | null>;
+        update: (projectDir: string, ticketId: string, body: string) => Promise<void>;
+        testJiraConnection: (params: {
+          jiraUrl: string;
+          jiraUsername: string;
+          jiraApiToken: string;
+          label?: string;
+        }) => Promise<{
+          auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
+          jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+        }>;
+        close: (ticketId: string, projectDir: string) => Promise<void>;
       };
       ticketBoard: {
         setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
+        delete: (ticketId: string, projectDir: string) => Promise<void>;
       };
       pr: {
         draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
@@ -855,6 +895,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   refinementSessions: [],
   currentRefinementSessionId: null,
   showCreateTicketDialog: false,
+  showEditTicketDialog: false,
+  editTicketTarget: null,
   showStartTicketDialog: false,
   showCreatePRDialog: null,
   prDraftCache: {},
@@ -1029,6 +1071,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   stackCreateInFlight: {},
   mergeInFlight: {},
   prCreateInFlight: {},
+  discardInFlight: {},
+  discardErrors: {},
   refineInFlight: {},
   refineStartErrors: {},
 
@@ -1037,8 +1081,9 @@ export const useAppStore = create<AppState>((set, get) => ({
   refreshBoardTickets: async (projectDir: string) => {
     try {
       set({ boardTicketsLoading: true });
-      const tickets = await window.sandstorm.tickets.list(projectDir);
-      set({ boardTickets: tickets as TicketBoardEntry[], boardTicketsLoading: false, boardTicketsError: null, lastTicketFetchAt: Date.now() });
+      const { tickets, error } = await window.sandstorm.tickets.list(projectDir);
+      const errorMessage = error ? formatTicketListError(error) : null;
+      set({ boardTickets: tickets ?? [], boardTicketsLoading: false, boardTicketsError: errorMessage, lastTicketFetchAt: Date.now() });
     } catch (err) {
       console.error('[refreshBoardTickets]', err);
       set({ boardTicketsLoading: false, boardTicketsError: String(err) });
@@ -1253,6 +1298,50 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => {
         const { [key]: _, ...rest } = state.mergeInFlight;
         return { mergeInFlight: rest };
+      });
+    }
+  },
+
+  discardStack: async (ticketId: string, projectDir: string, disposition: 'backlog' | 'close') => {
+    const key = `${ticketId}|${projectDir}`;
+    if (get().discardInFlight[key]) return;
+    set((state) => ({
+      discardInFlight: { ...state.discardInFlight, [key]: true },
+      discardErrors: (() => { const { [key]: _, ...rest } = state.discardErrors; return rest; })(),
+    }));
+
+    const stack = get().stacks.find(s => s.ticket === ticketId && s.project_dir === projectDir);
+
+    try {
+      // Best-effort teardown: swallow all errors, including missing stacks
+      if (stack) {
+        try {
+          await window.sandstorm.stacks.teardown(stack.id);
+        } catch {
+          // intentional: teardown is best-effort and must not block disposition
+        }
+      }
+
+      if (disposition === 'backlog') {
+        await get().moveTicketColumn(ticketId, projectDir, 'backlog');
+      } else {
+        // Close/archive ticket — rejects on genuine failure (R2)
+        await window.sandstorm.tickets.close(ticketId, projectDir);
+        // On success or already-closed, delete the board row
+        await window.sandstorm.ticketBoard.delete(ticketId, projectDir);
+        set((state) => ({
+          boardTickets: state.boardTickets.filter(
+            t => !(t.ticket_id === ticketId && t.project_dir === projectDir)
+          ),
+        }));
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set((state) => ({ discardErrors: { ...state.discardErrors, [key]: `Failed to discard ticket #${ticketId}: ${message}` } }));
+    } finally {
+      set((state) => {
+        const { [key]: _, ...rest } = state.discardInFlight;
+        return { discardInFlight: rest };
       });
     }
   },
@@ -1492,6 +1581,8 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
   setShowCreateTicketDialog: (show) => set({ showCreateTicketDialog: show }),
+  setShowEditTicketDialog: (show) => set({ showEditTicketDialog: show }),
+  openEditTicketDialog: (ticketId, projectDir) => set({ showEditTicketDialog: true, editTicketTarget: { ticketId, projectDir } }),
   setShowStartTicketDialog: (show) => set({ showStartTicketDialog: show }),
   setShowCreatePRDialog: (state) => {
     if (!state) {
