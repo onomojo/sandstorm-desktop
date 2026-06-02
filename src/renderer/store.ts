@@ -422,6 +422,10 @@ interface AppState {
   refinementSessions: RefinementSession[];
   /** ID of the session currently shown in the refine dialog (null = new refinement). */
   currentRefinementSessionId: string | null;
+  /** In-memory draft answers keyed by sessionId — survives dialog close/reopen (#459). Not persisted to disk. */
+  refineAnswerDrafts: Record<string, { optionId: string | null; text: string }[]>;
+  setRefineAnswerDraft: (sessionId: string, answers: { optionId: string | null; text: string }[]) => void;
+  clearRefineAnswerDraft: (sessionId: string) => void;
   showCreateTicketDialog: boolean;
   showEditTicketDialog: boolean;
   editTicketTarget: { ticketId: string; projectDir: string } | null;
@@ -896,6 +900,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   refineTicketPrefill: null,
   refinementSessions: [],
   currentRefinementSessionId: null,
+  refineAnswerDrafts: {},
   showCreateTicketDialog: false,
   showEditTicketDialog: false,
   editTicketTarget: null,
@@ -1541,12 +1546,16 @@ export const useAppStore = create<AppState>((set, get) => ({
     next[idx] = { ...session, streamingOutput: (session.streamingOutput ?? '') + delta };
     return { refinementSessions: next };
   }),
-  removeRefinementSession: (sessionId) => set((state) => ({
-    refinementSessions: state.refinementSessions.filter((s) => s.id !== sessionId),
-    currentRefinementSessionId: state.currentRefinementSessionId === sessionId
-      ? null
-      : state.currentRefinementSessionId,
-  })),
+  removeRefinementSession: (sessionId) => set((state) => {
+    const { [sessionId]: _, ...draftsNext } = state.refineAnswerDrafts;
+    return {
+      refinementSessions: state.refinementSessions.filter((s) => s.id !== sessionId),
+      currentRefinementSessionId: state.currentRefinementSessionId === sessionId
+        ? null
+        : state.currentRefinementSessionId,
+      refineAnswerDrafts: draftsNext,
+    };
+  }),
   setCurrentRefinementSessionId: (id) => set({ currentRefinementSessionId: id }),
   retryRefinementForTicket: async (ticketId, projectDir) => {
     const key = `${ticketId}|${projectDir}`;
@@ -1619,6 +1628,15 @@ export const useAppStore = create<AppState>((set, get) => ({
       const next = { ...state.prDraftCache };
       delete next[stackId];
       return { prDraftCache: next };
+    }),
+  setRefineAnswerDraft: (sessionId, answers) =>
+    set((state) => ({
+      refineAnswerDrafts: { ...state.refineAnswerDrafts, [sessionId]: answers },
+    })),
+  clearRefineAnswerDraft: (sessionId) =>
+    set((state) => {
+      const { [sessionId]: _, ...next } = state.refineAnswerDrafts;
+      return { refineAnswerDrafts: next };
     }),
   setLoading: (loading) => set({ loading }),
   setError: (error) => set({ error }),

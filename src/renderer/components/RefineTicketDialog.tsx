@@ -53,6 +53,8 @@ export function RefineTicketDialog() {
     resolveRefinementTargets,
     commitRefinementContext,
     boardTickets,
+    setRefineAnswerDraft,
+    clearRefineAnswerDraft,
   } = useAppStore();
   const project = activeProject();
 
@@ -75,7 +77,7 @@ export function RefineTicketDialog() {
   const gate: SpecGateResult | null = session?.result ?? null;
   const sessionError = session?.error ?? null;
 
-  // Initialise answers when gate questions change.
+  // Initialise answers when gate questions change, restoring from draft if available.
   // Defensively coerce legacy string[] items (old persisted sessions) to RefineQuestion.
   useEffect(() => {
     if (gate && !gate.passed && gate.questions.length > 0) {
@@ -84,12 +86,20 @@ export function RefineTicketDialog() {
           ? { id: 'q', question: q as string, options: [] }
           : (!Array.isArray((q as RefineQuestion).options) ? { ...(q as RefineQuestion), options: [] } : q as RefineQuestion)
       );
-      setAnswers(normalized.map((q) => {
+      // Read draft imperatively to avoid adding refineAnswerDrafts as a reactive dep.
+      // Questions are not re-fetched on reopen (same gate.questions), so position is stable;
+      // draft[i] corresponds to normalized[i] (id-first match degenerates to positional here).
+      const sessionId = useAppStore.getState().currentRefinementSessionId;
+      const draft = sessionId ? (useAppStore.getState().refineAnswerDrafts[sessionId] ?? null) : null;
+      setAnswers(normalized.map((q, i) => {
+        const saved = draft?.[i];
+        if (saved !== undefined) return saved;
         const firstRecommended = q.options.find((o) => o.recommended === true);
         return { optionId: firstRecommended ? firstRecommended.id : null, text: '' };
       }));
     }
-  }, [gate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gate, currentRefinementSessionId]);
 
   // Suggest stack name when gate passes
   useEffect(() => {
@@ -221,8 +231,9 @@ export function RefineTicketDialog() {
       projectDir,
       combined,
     );
+    clearRefineAnswerDraft(session.id);
     setShowRefineTicketDialog(false);
-  }, [session, gate, answers, projectDir, upsertRefinementSession, setShowRefineTicketDialog]);
+  }, [session, gate, answers, projectDir, upsertRefinementSession, setShowRefineTicketDialog, clearRefineAnswerDraft]);
 
   const handleStartStack = useCallback(async () => {
     if (!session || !projectDir) return;
@@ -500,6 +511,7 @@ export function RefineTicketDialog() {
                                         const next = [...answers];
                                         next[i] = { ...ans, optionId: ans.optionId === opt.id ? null : opt.id };
                                         setAnswers(next);
+                                        if (session) setRefineAnswerDraft(session.id, next);
                                       }}
                                       className="accent-sandstorm-accent"
                                       data-testid={`refine-option-${i}-${opt.id}`}
@@ -524,6 +536,7 @@ export function RefineTicketDialog() {
                               const next = [...answers];
                               next[i] = { ...ans, text: e.target.value };
                               setAnswers(next);
+                              if (session) setRefineAnswerDraft(session.id, next);
                             }}
                             rows={2}
                             placeholder="Add more detail…"

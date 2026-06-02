@@ -52,7 +52,8 @@ describe('RefineTicketDialog', () => {
       refinementSessions: [],
       currentRefinementSessionId: null,
       stacks: [],
-    });
+      refineAnswerDrafts: {},
+    } as any);
     // Default: specCheckAsync returns a sessionId immediately
     api.tickets.specCheckAsync = vi.fn().mockResolvedValue({ sessionId: 'session-1' });
     api.tickets.specRefineAsync = vi.fn().mockResolvedValue(undefined);
@@ -1402,6 +1403,260 @@ describe('RefineTicketDialog', () => {
       render(<RefineTicketDialog />);
       const titleEl = screen.getByTestId('refine-ticket-title');
       expect(titleEl.className).toContain('truncate');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Draft preservation (#459)
+  // ---------------------------------------------------------------------------
+  describe('refine answer draft preservation (#459)', () => {
+    const makeFailSession = (id = 'session-1', questions = MULTI_OPT_QUESTIONS) => ({
+      id,
+      ticketId: '310',
+      projectDir: '/proj',
+      status: 'ready' as const,
+      phase: 'check' as const,
+      startedAt: Date.now(),
+      result: {
+        passed: false,
+        questions,
+        gateSummary: 'Gate=FAIL',
+        ticketUrl: null,
+        cached: false,
+      },
+    });
+
+    const setFailState = (id = 'session-1', questions = MULTI_OPT_QUESTIONS) => {
+      useAppStore.setState({
+        refinementSessions: [makeFailSession(id, questions)],
+        currentRefinementSessionId: id,
+        refineAnswerDrafts: {},
+      } as any);
+    };
+
+    it('backdrop click preserves answers — reopening restores option and text', async () => {
+      const user = userEvent.setup();
+      setFailState();
+
+      const { unmount } = render(<RefineTicketDialog />);
+
+      // Select option and type text
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      await user.type(screen.getByTestId('refine-answer-0'), 'some context');
+
+      // Simulate backdrop click (closes dialog but keeps session)
+      const backdrop = screen.getByTestId('refine-ticket-dialog');
+      fireEvent.click(backdrop);
+      unmount();
+
+      // Draft must be persisted in the store even after unmount
+      expect(useAppStore.getState().refineAnswerDrafts['session-1']).toBeDefined();
+      expect(useAppStore.getState().refineAnswerDrafts['session-1'][0].optionId).toBe('a');
+      expect(useAppStore.getState().refineAnswerDrafts['session-1'][0].text).toBe('some context');
+
+      // Reopen the dialog
+      useAppStore.setState({ showRefineTicketDialog: true } as any);
+      render(<RefineTicketDialog />);
+
+      // Assert option is still selected and textarea retains value
+      const radio = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      expect(radio.checked).toBe(true);
+      const textarea = screen.getByTestId('refine-answer-0') as HTMLTextAreaElement;
+      expect(textarea.value).toBe('some context');
+    });
+
+    it('switching sessions shows each session draft independently', async () => {
+      const user = userEvent.setup();
+
+      const session2 = {
+        id: 'session-2',
+        ticketId: '311',
+        projectDir: '/proj',
+        status: 'ready' as const,
+        phase: 'check' as const,
+        startedAt: Date.now(),
+        result: {
+          passed: false,
+          questions: SINGLE_OPT_QUESTION,
+          gateSummary: 'Gate=FAIL',
+          ticketUrl: null,
+          cached: false,
+        },
+      };
+
+      useAppStore.setState({
+        refinementSessions: [makeFailSession('session-1'), session2],
+        currentRefinementSessionId: 'session-1',
+        refineAnswerDrafts: {},
+      } as any);
+
+      render(<RefineTicketDialog />);
+
+      // Enter answer for session-1
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      await user.type(screen.getByTestId('refine-answer-0'), 'session1 note');
+
+      // Switch to session-2 — answers should be empty/default
+      act(() => {
+        useAppStore.getState().setCurrentRefinementSessionId('session-2');
+      });
+
+      await waitFor(() => {
+        const radio = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+        // No draft for session-2 yet, so no option pre-selected
+        expect(radio.checked).toBe(false);
+        const textarea = screen.getByTestId('refine-answer-0') as HTMLTextAreaElement;
+        expect(textarea.value).toBe('');
+      });
+
+      // Switch back to session-1 — drafts restored
+      act(() => {
+        useAppStore.getState().setCurrentRefinementSessionId('session-1');
+      });
+
+      await waitFor(() => {
+        const radio = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+        expect(radio.checked).toBe(true);
+        const textarea = screen.getByTestId('refine-answer-0') as HTMLTextAreaElement;
+        expect(textarea.value).toBe('session1 note');
+      });
+    });
+
+    it('submit answers clears the draft for that session', async () => {
+      const user = userEvent.setup();
+      setFailState('session-1', SINGLE_OPT_QUESTION);
+
+      render(<RefineTicketDialog />);
+      await user.click(screen.getByTestId('refine-option-0-a'));
+      await user.type(screen.getByTestId('refine-answer-0'), 'before submit');
+
+      // Confirm draft saved
+      expect(useAppStore.getState().refineAnswerDrafts['session-1']).toBeDefined();
+
+      fireEvent.click(screen.getByTestId('refine-submit-answers'));
+
+      await waitFor(() => {
+        expect(api.tickets.specRefineAsync).toHaveBeenCalled();
+        expect(useAppStore.getState().refineAnswerDrafts['session-1']).toBeUndefined();
+      });
+    });
+
+    it('retry (handleRetry) discards old session draft and new session starts empty', async () => {
+      // Use errored state to show the refine-retry button
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1',
+          ticketId: '310',
+          projectDir: '/proj',
+          status: 'errored' as const,
+          phase: 'check' as const,
+          startedAt: Date.now(),
+          error: 'gate error',
+        }],
+        currentRefinementSessionId: 'session-1',
+        refineAnswerDrafts: {},
+      } as any);
+      // Pre-populate draft for session-1
+      useAppStore.getState().setRefineAnswerDraft('session-1', [{ optionId: 'a', text: 'old note' }]);
+
+      // New session returned by specCheckAsync
+      api.tickets.specCheckAsync = vi.fn().mockResolvedValue({ sessionId: 'session-2' });
+
+      render(<RefineTicketDialog />);
+      fireEvent.click(screen.getByTestId('refine-retry'));
+
+      await waitFor(() => {
+        expect(useAppStore.getState().currentRefinementSessionId).toBe('session-2');
+      });
+
+      // Old session draft must be gone
+      expect(useAppStore.getState().refineAnswerDrafts['session-1']).toBeUndefined();
+      // New session has no draft
+      expect(useAppStore.getState().refineAnswerDrafts['session-2']).toBeUndefined();
+    });
+
+    it('restores guarded against length mismatch (more questions than saved answers)', async () => {
+      // Pre-save draft with only 1 answer for a 2-question session
+      useAppStore.setState({
+        refinementSessions: [makeFailSession('session-1', MULTI_OPT_QUESTIONS)],
+        currentRefinementSessionId: 'session-1',
+        refineAnswerDrafts: {
+          'session-1': [{ optionId: 'b', text: 'only first' }],
+        },
+      } as any);
+
+      // Should not crash
+      expect(() => render(<RefineTicketDialog />)).not.toThrow();
+
+      // First question answer restored from draft
+      const radio = screen.getByTestId('refine-option-0-b') as HTMLInputElement;
+      expect(radio.checked).toBe(true);
+      const textarea0 = screen.getByTestId('refine-answer-0') as HTMLTextAreaElement;
+      expect(textarea0.value).toBe('only first');
+
+      // Second question falls back to default (no optionId, empty text)
+      const textarea1 = screen.getByTestId('refine-answer-1') as HTMLTextAreaElement;
+      expect(textarea1.value).toBe('');
+    });
+
+    it('legacy string questions use positional fallback on restore', async () => {
+      const legacyQuestions = [
+        'What approach should we use?' as unknown as ReturnType<typeof Object>,
+        'Any performance concerns?' as unknown as ReturnType<typeof Object>,
+      ];
+      // These will be coerced to RefineQuestion with id 'q' and empty options
+      useAppStore.setState({
+        refinementSessions: [{
+          id: 'session-1',
+          ticketId: '310',
+          projectDir: '/proj',
+          status: 'ready' as const,
+          phase: 'check' as const,
+          startedAt: Date.now(),
+          result: {
+            passed: false,
+            questions: legacyQuestions as any,
+            gateSummary: 'Gate=FAIL',
+            ticketUrl: null,
+            cached: false,
+          },
+        }],
+        currentRefinementSessionId: 'session-1',
+        refineAnswerDrafts: {
+          'session-1': [
+            { optionId: null, text: 'approach note' },
+            { optionId: null, text: 'perf note' },
+          ],
+        },
+      } as any);
+
+      render(<RefineTicketDialog />);
+
+      const textarea0 = screen.getByTestId('refine-answer-0') as HTMLTextAreaElement;
+      const textarea1 = screen.getByTestId('refine-answer-1') as HTMLTextAreaElement;
+      expect(textarea0.value).toBe('approach note');
+      expect(textarea1.value).toBe('perf note');
+    });
+
+    it('no draft on first open — default recommended option pre-selected', () => {
+      const recommendedQuestions = [{
+        id: 'q1',
+        question: 'Pick one',
+        options: [
+          { id: 'a', label: 'Option A', recommended: true },
+          { id: 'b', label: 'Option B' },
+        ],
+      }];
+      useAppStore.setState({
+        refinementSessions: [makeFailSession('session-1', recommendedQuestions)],
+        currentRefinementSessionId: 'session-1',
+        refineAnswerDrafts: {},
+      } as any);
+
+      render(<RefineTicketDialog />);
+
+      const radioA = screen.getByTestId('refine-option-0-a') as HTMLInputElement;
+      expect(radioA.checked).toBe(true);
     });
   });
 
