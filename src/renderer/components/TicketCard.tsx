@@ -29,6 +29,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     mergeTicket,
     mergeInFlight,
     prCreateInFlight,
+    prCreateErrors,
     refineInFlight,
     refineStartErrors,
   } = useAppStore();
@@ -54,6 +55,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   };
 
   const prInFlight = stack ? (prCreateInFlight[stack.id] ?? false) : false;
+  const prCreateError = stack ? (prCreateErrors[stack.id] ?? null) : null;
 
   const handleCreatePR = () => {
     if (stack && !prInFlight) {
@@ -208,6 +210,14 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               {stackCreateError}
             </div>
           )}
+          {prCreateError && (
+            <div
+              className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2 py-1.5 break-words"
+              data-testid={`ticket-card-pr-create-error-${ticket.ticket_id}`}
+            >
+              {prCreateError}
+            </div>
+          )}
           {stack && (
             <div className="flex items-center gap-1.5">
               <span
@@ -264,14 +274,16 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               PR #{stack.pr_number}
             </a>
           )}
-          <button
-            onClick={handleMerge}
-            disabled={mergeInflight}
-            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-propen/10 text-sandstorm-state-propen border border-sandstorm-state-propen/30 hover:bg-sandstorm-state-propen/20 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-            data-testid={`ticket-card-merge-${ticket.ticket_id}`}
-          >
-            {mergeInflight ? 'Merging…' : 'Merge'}
-          </button>
+          {stack?.pr_number != null && (
+            <button
+              onClick={handleMerge}
+              disabled={mergeInflight}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-propen/10 text-sandstorm-state-propen border border-sandstorm-state-propen/30 hover:bg-sandstorm-state-propen/20 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              data-testid={`ticket-card-merge-${ticket.ticket_id}`}
+            >
+              {mergeInflight ? 'Merging…' : 'Merge'}
+            </button>
+          )}
         </div>
       )}
 

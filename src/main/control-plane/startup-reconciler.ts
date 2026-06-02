@@ -92,6 +92,11 @@ export async function runStartupReconciliation(
     workspaceExistsFn = defaultWorkspaceExists,
   } = deps;
 
+  // Repair cards stuck in pr_open after a failed PR creation (runs before stack reconciliation
+  // so the board is consistent when the renderer loads).
+  registry.reconcilePrOpenStuckTickets();
+  notifyUpdate();
+
   const staleStacks = registry.listStacks().filter((s) => RECONCILE_STATUSES.has(s.status));
 
   for (const stack of staleStacks) {
