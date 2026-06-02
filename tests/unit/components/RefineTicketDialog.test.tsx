@@ -1332,6 +1332,79 @@ describe('RefineTicketDialog', () => {
     });
   });
 
+  describe('ticket title display (#451)', () => {
+    const sessionBase = {
+      id: 'session-1', ticketId: '310', projectDir: '/proj',
+      status: 'running' as const, phase: 'check' as const, startedAt: Date.now(),
+    };
+
+    it('shows ticket title when board entry has a non-empty title', () => {
+      useAppStore.setState({
+        refinementSessions: [sessionBase],
+        currentRefinementSessionId: 'session-1',
+        boardTickets: [
+          { ticket_id: '310', project_dir: '/proj', column: 'refining', title: 'Add dark mode', updated_at: '' },
+        ],
+      });
+      render(<RefineTicketDialog />);
+      expect(screen.getByText('#310')).toBeDefined();
+      expect(screen.getByTestId('refine-ticket-title').textContent).toBe('Add dark mode');
+    });
+
+    it('falls back to bare #N when board entry has empty title', () => {
+      useAppStore.setState({
+        refinementSessions: [sessionBase],
+        currentRefinementSessionId: 'session-1',
+        boardTickets: [
+          { ticket_id: '310', project_dir: '/proj', column: 'refining', title: '', updated_at: '' },
+        ],
+      });
+      render(<RefineTicketDialog />);
+      expect(screen.getByText('#310')).toBeDefined();
+      expect(screen.queryByTestId('refine-ticket-title')).toBeNull();
+    });
+
+    it('falls back to bare #N when no board entry exists', () => {
+      useAppStore.setState({
+        refinementSessions: [sessionBase],
+        currentRefinementSessionId: 'session-1',
+        boardTickets: [],
+      });
+      render(<RefineTicketDialog />);
+      expect(screen.getByText('#310')).toBeDefined();
+      expect(screen.queryByTestId('refine-ticket-title')).toBeNull();
+    });
+
+    it('treats whitespace-only title as empty and falls back to bare #N', () => {
+      useAppStore.setState({
+        refinementSessions: [sessionBase],
+        currentRefinementSessionId: 'session-1',
+        boardTickets: [
+          { ticket_id: '310', project_dir: '/proj', column: 'refining', title: '   ', updated_at: '' },
+        ],
+      });
+      render(<RefineTicketDialog />);
+      expect(screen.getByText('#310')).toBeDefined();
+      expect(screen.queryByTestId('refine-ticket-title')).toBeNull();
+    });
+
+    it('applies truncation class to title element for long titles', () => {
+      useAppStore.setState({
+        refinementSessions: [sessionBase],
+        currentRefinementSessionId: 'session-1',
+        boardTickets: [
+          {
+            ticket_id: '310', project_dir: '/proj', column: 'refining', updated_at: '',
+            title: 'This is an extremely long ticket title that would overflow the 768px modal if not properly truncated with CSS ellipsis',
+          },
+        ],
+      });
+      render(<RefineTicketDialog />);
+      const titleEl = screen.getByTestId('refine-ticket-title');
+      expect(titleEl.className).toContain('truncate');
+    });
+  });
+
   describe('upsertRefinementSession clears streamingOutput on completion', () => {
     it('clears streamingOutput when status transitions to ready', () => {
       useAppStore.setState({
