@@ -1179,6 +1179,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
+  // Discard removes the notification without killing any running subprocess.
+  // Distinct from cancelRefinement which invokes entry.cancel() to terminate.
+  ipcMain.handle('tickets:discardRefinement', (_event, id: string) => {
+    const entry = activeRefinements.get(id);
+    if (entry) {
+      activeRefinements.delete(id);
+      deleteRefinement(id);
+    }
+  });
+
   ipcMain.handle('tickets:listRefinements', () => {
     return Array.from(activeRefinements.values()).map((e) => e.session);
   });

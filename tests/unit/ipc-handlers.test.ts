@@ -27,11 +27,17 @@ const {
   mockSpawnSpecCheck,
   mockSpawnSpecRefine,
   mockListTicketComments,
+  mockDeleteRefinement,
+  mockPersistRefinement,
+  mockLoadRefinements,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
   const mockSpawnSpecCheck = vi.fn();
   const mockSpawnSpecRefine = vi.fn();
   const mockListTicketComments = vi.fn().mockResolvedValue([]);
+  const mockDeleteRefinement = vi.fn();
+  const mockPersistRefinement = vi.fn();
+  const mockLoadRefinements = vi.fn().mockReturnValue([]);
 
   const mockRegistry = {
     listProjects: vi.fn(),
@@ -140,6 +146,9 @@ const {
     mockSpawnSpecCheck,
     mockSpawnSpecRefine,
     mockListTicketComments,
+    mockDeleteRefinement,
+    mockPersistRefinement,
+    mockLoadRefinements,
   };
 });
 
@@ -228,6 +237,12 @@ vi.mock('../../src/main/claude/tools', () => ({
 vi.mock('../../src/main/control-plane/ticket-comments', () => ({
   listTicketComments: (...args: unknown[]) => mockListTicketComments(...args),
   postComment: vi.fn().mockResolvedValue(undefined),
+}));
+
+vi.mock('../../src/main/control-plane/refinement-store', () => ({
+  persistRefinement: (...args: unknown[]) => mockPersistRefinement(...args),
+  deleteRefinement: (...args: unknown[]) => mockDeleteRefinement(...args),
+  loadRefinements: () => mockLoadRefinements(),
 }));
 
 // ---------------------------------------------------------------------------
@@ -1648,6 +1663,72 @@ describe('IPC Handlers', () => {
   });
 
   // =========================================================================
+  // tickets:discardRefinement
+  // =========================================================================
+  describe('tickets:discardRefinement', () => {
+    beforeEach(() => {
+      mockSpawnSpecCheck.mockReturnValue({
+        promise: new Promise<Record<string, unknown>>(() => {}),
+        cancel: vi.fn(),
+      });
+    });
+
+    it('removes the activeRefinements entry and calls deleteRefinement', async () => {
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-D1', '/tmp/proj-d') as { sessionId: string };
+      mockDeleteRefinement.mockClear();
+
+      await invokeHandler('tickets:discardRefinement', sessionId);
+
+      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
+
+      // The session should no longer appear in listRefinements
+      const list = await invokeHandler('tickets:listRefinements') as unknown[];
+      expect(list.find((s: unknown) => (s as { id: string }).id === sessionId)).toBeUndefined();
+    });
+
+    it('does NOT call entry.cancel for a running session', async () => {
+      const cancelSpy = vi.fn();
+      mockSpawnSpecCheck.mockReturnValue({
+        promise: new Promise<Record<string, unknown>>(() => {}),
+        cancel: cancelSpy,
+      });
+
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-D2', '/tmp/proj-d2') as { sessionId: string };
+
+      await invokeHandler('tickets:discardRefinement', sessionId);
+
+      expect(cancelSpy).not.toHaveBeenCalled();
+    });
+
+    it('is a no-op for an unknown session id', async () => {
+      mockDeleteRefinement.mockClear();
+      await invokeHandler('tickets:discardRefinement', 'no-such-id');
+      expect(mockDeleteRefinement).not.toHaveBeenCalled();
+    });
+
+    it('removes an errored (terminal-state) session — regression for original bug', async () => {
+      // Register a session and let it error out
+      let rejectFn!: (err: Error) => void;
+      mockSpawnSpecCheck.mockReturnValue({
+        promise: new Promise<Record<string, unknown>>((_resolve, reject) => {
+          rejectFn = reject;
+        }),
+        cancel: vi.fn(),
+      });
+
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-D3', '/tmp/proj-d3') as { sessionId: string };
+      rejectFn(new Error('gate failed'));
+      // Allow the rejection handler to settle
+      await new Promise((r) => setTimeout(r, 0));
+
+      mockDeleteRefinement.mockClear();
+      await invokeHandler('tickets:discardRefinement', sessionId);
+
+      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
+    });
+  });
+
+  // =========================================================================
   // Handler Registration Completeness
   // =========================================================================
   describe('handler registration', () => {
@@ -1739,6 +1820,7 @@ describe('IPC Handlers', () => {
       'tickets:retryRefinementAsync',
       'tickets:postAnswers',
       'tickets:cancelRefinement',
+      'tickets:discardRefinement',
       'tickets:listRefinements',
       'tickets:create',
       'tickets:list',

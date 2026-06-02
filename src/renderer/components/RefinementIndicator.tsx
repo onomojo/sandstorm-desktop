@@ -42,6 +42,8 @@ export function RefinementIndicator() {
     setShowRefineTicketDialog,
     showRefineTicketDialog,
     activeProject,
+    currentRefinementSessionId,
+    removeRefinementSession,
   } = useAppStore();
   const project = activeProject();
   const [expanded, setExpanded] = useState(false);
@@ -60,6 +62,21 @@ export function RefinementIndicator() {
     openRefinementSession(session.id);
     setShowRefineTicketDialog(true);
     setExpanded(false);
+  };
+
+  const handleDiscard = async (sessionId: string) => {
+    const isCurrentSession = currentRefinementSessionId === sessionId;
+    await window.sandstorm.tickets.discardRefinement(sessionId);
+    removeRefinementSession(sessionId);
+    if (isCurrentSession) {
+      setShowRefineTicketDialog(false);
+    }
+  };
+
+  const handleClearAll = async () => {
+    for (const session of visibleSessions) {
+      await handleDiscard(session.id);
+    }
   };
 
   return (
@@ -90,23 +107,44 @@ export function RefinementIndicator() {
           data-testid="refinement-indicator-dropdown"
         >
           {visibleSessions.map((session) => (
-            <button
+            <div
               key={session.id}
-              onClick={() => handleOpen(session)}
-              className="w-full flex items-center gap-2 px-3 py-2 hover:bg-sandstorm-surface-hover text-left transition-colors"
-              data-testid={`refinement-session-${session.id}`}
+              className="w-full flex items-center hover:bg-sandstorm-surface-hover transition-colors"
             >
-              <StatusDot session={session} />
-              <div className="min-w-0 flex-1">
-                <div className="text-xs text-sandstorm-text font-mono truncate">
-                  #{session.ticketId}
+              <button
+                onClick={() => handleOpen(session)}
+                className="flex items-center gap-2 px-3 py-2 flex-1 min-w-0 text-left"
+                data-testid={`refinement-session-${session.id}`}
+              >
+                <StatusDot session={session} />
+                <div className="min-w-0 flex-1">
+                  <div className="text-xs text-sandstorm-text font-mono truncate">
+                    #{session.ticketId}
+                  </div>
+                  <div className={`text-[10px] ${statusColor(session)}`}>
+                    {sessionLabel(session)}
+                  </div>
                 </div>
-                <div className={`text-[10px] ${statusColor(session)}`}>
-                  {sessionLabel(session)}
-                </div>
-              </div>
-            </button>
+              </button>
+              <button
+                onClick={() => void handleDiscard(session.id)}
+                className="shrink-0 px-2 py-2 text-sandstorm-muted hover:text-sandstorm-text transition-colors"
+                aria-label={`Discard refinement for ticket ${session.ticketId}`}
+                data-testid={`refinement-session-discard-${session.id}`}
+              >
+                ✕
+              </button>
+            </div>
           ))}
+          <div className="border-t border-sandstorm-border px-3 py-1.5">
+            <button
+              onClick={() => void handleClearAll()}
+              className="text-xs text-sandstorm-muted hover:text-sandstorm-text transition-colors"
+              data-testid="refinement-clear-all"
+            >
+              Clear all
+            </button>
+          </div>
         </div>
       )}
 
