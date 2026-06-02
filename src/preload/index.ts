@@ -202,6 +202,8 @@ export interface SandstormAPI {
     listRefinements: () => Promise<unknown[]>;
     create: (projectDir: string, title: string, body: string) => Promise<{ url: string; ticketId: string }>;
     list: (projectDir: string) => Promise<{ tickets: unknown[]; error: unknown }>;
+    fetchRaw: (ticketId: string, projectDir: string) => Promise<string | null>;
+    update: (projectDir: string, ticketId: string, body: string) => Promise<void>;
     testJiraConnection: (params: {
       jiraUrl: string;
       jiraUsername: string;
@@ -393,6 +395,10 @@ const api: SandstormAPI = {
       if (Array.isArray(raw)) return { tickets: raw, error: null };
       return raw;
     },
+    fetchRaw: (ticketId, projectDir) =>
+      ipcRenderer.invoke('tickets:fetchRaw', ticketId, projectDir),
+    update: (projectDir, ticketId, body) =>
+      ipcRenderer.invoke('tickets:update', projectDir, ticketId, body),
     testJiraConnection: (params) =>
       ipcRenderer.invoke('tickets:testJiraConnection', params),
   },

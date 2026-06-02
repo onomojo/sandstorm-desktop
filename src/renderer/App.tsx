@@ -4,6 +4,7 @@ import { StackDetail } from './components/StackDetail';
 import { NewStackDialog } from './components/NewStackDialog';
 import { RefineTicketDialog } from './components/RefineTicketDialog';
 import { CreateTicketDialog } from './components/CreateTicketDialog';
+import { EditTicketDialog } from './components/EditTicketDialog';
 import { StartTicketDialog } from './components/StartTicketDialog';
 import { CreatePRDialog } from './components/CreatePRDialog';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
@@ -29,6 +30,7 @@ export default function App() {
     showNewStackDialog,
     showRefineTicketDialog,
     showCreateTicketDialog,
+    showEditTicketDialog,
     showStartTicketDialog,
     showCreatePRDialog,
     showOpenProjectDialog,
@@ -93,12 +95,13 @@ export default function App() {
     };
   }, []);
 
-  // Close create-ticket dialog on Escape
+  // Close create-ticket and edit-ticket dialogs on Escape
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key !== 'Escape') return;
       const state = useAppStore.getState();
       if (state.showCreateTicketDialog) state.setShowCreateTicketDialog(false);
+      if (state.showEditTicketDialog) state.setShowEditTicketDialog(false);
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
@@ -270,6 +273,7 @@ export default function App() {
       {showNewStackDialog && <NewStackDialog />}
       {showRefineTicketDialog && <RefineTicketDialog />}
       {showCreateTicketDialog && <CreateTicketDialog />}
+      {showEditTicketDialog && <EditTicketDialog />}
       {showStartTicketDialog && <StartTicketDialog />}
       {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} initialError={showCreatePRDialog.initialError} />}
       {showOpenProjectDialog && <OpenProjectDialog />}
