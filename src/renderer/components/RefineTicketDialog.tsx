@@ -52,6 +52,7 @@ export function RefineTicketDialog() {
     moveTicketColumn,
     resolveRefinementTargets,
     commitRefinementContext,
+    boardTickets,
   } = useAppStore();
   const project = activeProject();
 
@@ -372,11 +373,24 @@ export function RefineTicketDialog() {
             )}
 
             {/* Show ticket ID read-only when a session exists */}
-            {session && (
-              <div className="text-xs text-sandstorm-muted">
-                Ticket: <span className="font-mono text-sandstorm-text">#{session.ticketId}</span>
-              </div>
-            )}
+            {session && (() => {
+              const boardEntry = boardTickets.find(
+                (t) => t.ticket_id === session.ticketId && t.project_dir === session.projectDir
+              );
+              const title = boardEntry?.title?.trim() || '';
+              return (
+                <div className="text-xs text-sandstorm-muted flex items-baseline gap-1.5 min-w-0">
+                  <span className="shrink-0">Ticket:</span>
+                  <span className="font-mono text-sandstorm-text shrink-0">#{session.ticketId}</span>
+                  {title && (
+                    <>
+                      <span className="shrink-0">—</span>
+                      <span className="text-sandstorm-text truncate min-w-0" data-testid="refine-ticket-title">{title}</span>
+                    </>
+                  )}
+                </div>
+              );
+            })()}
 
             {isRunning && (
               <div className="space-y-2" data-testid="refine-running">
