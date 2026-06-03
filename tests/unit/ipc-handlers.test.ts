@@ -1456,6 +1456,23 @@ describe('IPC Handlers', () => {
         consoleSpy.mockRestore();
       }
     });
+
+    it('re-seeds a reopened ticket into backlog on the next sync', async () => {
+      // Ticket was previously discarded (deleted from board). User reopens it on
+      // the provider. Next sync fetches it as an open issue and seedBoardTicket
+      // inserts it back at column='backlog' (INSERT … VALUES (?, ?, 'backlog', ?)).
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
+      mockListTicketsWithConfig.mockResolvedValueOnce({
+        ok: true,
+        tickets: [{ id: 'REOPEN-1', title: 'Reopened ticket', author: 'alice' }],
+      });
+      mockRegistry.listBoardTickets.mockReturnValue([]);
+      mockRegistry.seedBoardTicket.mockClear();
+
+      await invokeHandler('tickets:list', '/proj');
+
+      expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('REOPEN-1', '/proj', 'Reopened ticket');
+    });
   });
 
   describe('tickets:testJiraConnection', () => {

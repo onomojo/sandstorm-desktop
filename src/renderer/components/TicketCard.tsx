@@ -3,6 +3,7 @@ import { useAppStore, KanbanColumn, TicketBoardEntry, Stack } from '../store';
 import { makePrEligible } from '../utils/duration';
 import { suggestStackName } from '../lib/stack-name';
 import { DiscardStackDialog } from './DiscardStackDialog';
+import { ConfirmDialog } from './ConfirmDialog';
 
 interface TicketCardProps {
   ticket: TicketBoardEntry;
@@ -35,12 +36,14 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     discardStack,
     discardInFlight,
     discardErrors,
+    removeRefinementSession,
     autoResolveConflicts,
     autoResolveInFlight,
     autoResolveErrors,
   } = useAppStore();
 
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
+  const [showEarlyDiscardDialog, setShowEarlyDiscardDialog] = useState(false);
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
   const stackKey = `${ticket.ticket_id}|${ticket.project_dir}`;
@@ -99,7 +102,16 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     void discardStack(ticket.ticket_id, ticket.project_dir, 'close');
   };
 
-  const discardSection = (
+  const handleEarlyDiscardConfirm = async () => {
+    setShowEarlyDiscardDialog(false);
+    if (ticket.column === 'refining' && refinementSession) {
+      await window.sandstorm.tickets.cancelRefinement(refinementSession.id).catch(() => {});
+      removeRefinementSession(refinementSession.id);
+    }
+    void discardStack(ticket.ticket_id, ticket.project_dir, 'close');
+  };
+
+  const makeDiscardSection = (onClick: () => void) => (
     <>
       {discardError && (
         <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2 py-1.5 break-words">
@@ -107,7 +119,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
         </div>
       )}
       <button
-        onClick={() => setShowDiscardDialog(true)}
+        onClick={onClick}
         disabled={discardInflight}
         className="w-full text-xs py-1.5 px-3 rounded-md bg-red-500/5 text-red-400/70 border border-red-500/20 hover:bg-red-500/10 hover:text-red-400 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
         data-testid={`ticket-card-discard-${ticket.ticket_id}`}
@@ -123,6 +135,9 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
       </button>
     </>
   );
+
+  const discardSection = makeDiscardSection(() => setShowDiscardDialog(true));
+  const earlyDiscardSection = makeDiscardSection(() => setShowEarlyDiscardDialog(true));
 
   const refinementSession = refinementSessions.find(
     (s) => s.ticketId === ticket.ticket_id && s.projectDir === ticket.project_dir
@@ -172,6 +187,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           >
             Refine
           </button>
+          {earlyDiscardSection}
         </div>
       )}
 
@@ -237,18 +253,22 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               Answer
             </button>
           )}
+          {earlyDiscardSection}
         </div>
       )}
 
       {ticket.column === 'spec_ready' && (
-        <button
-          onClick={handleStartStack}
-          disabled={stackInFlight}
-          className="mt-1 w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-ready/10 text-sandstorm-state-ready border border-sandstorm-state-ready/30 hover:bg-sandstorm-state-ready/20 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
-          data-testid={`ticket-card-start-stack-${ticket.ticket_id}`}
-        >
-          Start stack
-        </button>
+        <div className="flex flex-col gap-2 mt-1">
+          <button
+            onClick={handleStartStack}
+            disabled={stackInFlight}
+            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-state-ready/10 text-sandstorm-state-ready border border-sandstorm-state-ready/30 hover:bg-sandstorm-state-ready/20 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+            data-testid={`ticket-card-start-stack-${ticket.ticket_id}`}
+          >
+            Start stack
+          </button>
+          {earlyDiscardSection}
+        </div>
       )}
 
       {ticket.column === 'in_stack' && (
@@ -367,6 +387,16 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
       {ticket.column === 'merged' && (
         <span className="text-xs text-sandstorm-state-merged font-medium">Merged</span>
+      )}
+
+      {showEarlyDiscardDialog && (
+        <ConfirmDialog
+          title="Discard ticket?"
+          body="This closes the issue on the provider and removes the card from your board. Reopening the issue on the provider will re-add it to the backlog on the next sync."
+          confirmLabel="Discard ticket"
+          onConfirm={() => void handleEarlyDiscardConfirm()}
+          onCancel={() => setShowEarlyDiscardDialog(false)}
+        />
       )}
 
       {showDiscardDialog && (
