@@ -229,6 +229,12 @@ export interface SandstormAPI {
       | { status: 'draft_failed' }
       | { status: 'create_failed'; draft: { title: string; body: string }; error: string }
     >;
+    autoResolve: (ticketId: string, projectDir: string) => Promise<
+      | { status: 'resolved' }
+      | { status: 'no_conflicts' }
+      | { status: 'unknown_state' }
+      | { status: 'failed'; error: string }
+    >;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
@@ -422,6 +428,8 @@ const api: SandstormAPI = {
     merge: (stackId, prNumber) =>
       ipcRenderer.invoke('pr:merge', stackId, prNumber),
     createAuto: (stackId) => ipcRenderer.invoke('pr:createAuto', stackId),
+    autoResolve: (ticketId, projectDir) =>
+      ipcRenderer.invoke('pr:autoResolve', ticketId, projectDir),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

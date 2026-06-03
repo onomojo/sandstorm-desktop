@@ -1,4 +1,5 @@
-import { spawn, execSync } from 'child_process';
+import { spawn, execSync, execFile } from 'child_process';
+import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
 import { Registry, Stack, StackHistoryRecord, Task, TokenUsage } from './registry';
@@ -9,6 +10,9 @@ import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
 import { fetchTicketWithConfig } from './ticket-config';
 import { referencesTicket } from './ticket-fetcher';
+import { workspacePathFor } from './pr-creator';
+
+const execFileAsync = promisify(execFile);
 
 declare const __GIT_COMMIT__: string;
 
@@ -55,6 +59,13 @@ export interface TaskStatusResult {
 
 /** Byte caps for MCP tool response payloads. See #255. */
 export const TASK_OUTPUT_MAX_BYTES = 4096;
+
+/** Result type returned by `autoResolveConflicts`. */
+export type AutoResolveResult =
+  | { status: 'resolved' }
+  | { status: 'no_conflicts' }
+  | { status: 'unknown_state' }
+  | { status: 'failed'; error: string };
 export const LOGS_PER_CONTAINER_MAX_BYTES = 8192;
 export const LOGS_TOTAL_MAX_BYTES = 32768;
 
@@ -1676,6 +1687,214 @@ export class StackManager {
       return false;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * Wait for a specific dispatched task to reach a terminal state.
+   * Event-driven via TaskWatcher, with a 2-second polling backstop and a
+   * bounded timeout (default 30 minutes).
+   */
+  awaitTaskCompletion(
+    stackId: string,
+    taskId: number,
+    opts?: { timeoutMs?: number }
+  ): Promise<Task> {
+    const timeoutMs = opts?.timeoutMs ?? 30 * 60 * 1000;
+
+    return new Promise<Task>((resolve, reject) => {
+      let settled = false;
+      let pollInterval: ReturnType<typeof setInterval> | null = null;
+      let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+      const settle = (task?: Task, err?: Error) => {
+        if (settled) return;
+        settled = true;
+        this.taskWatcher.removeListener('task:completed', onCompleted);
+        this.taskWatcher.removeListener('task:failed', onFailed);
+        if (pollInterval !== null) clearInterval(pollInterval);
+        if (timeoutHandle !== null) clearTimeout(timeoutHandle);
+        if (err) reject(err);
+        else resolve(task!);
+      };
+
+      const isTerminal = (t: Task) =>
+        t.status === 'completed' || t.status === 'failed' || t.status === 'needs_human';
+
+      const onCompleted = ({ stackId: sid, task }: { stackId: string; task: Task }) => {
+        if (sid === stackId && task.id === taskId) settle(task);
+      };
+      const onFailed = ({ stackId: sid, task }: { stackId: string; task: Task }) => {
+        if (sid === stackId && task.id === taskId) settle(task);
+      };
+
+      this.taskWatcher.on('task:completed', onCompleted);
+      this.taskWatcher.on('task:failed', onFailed);
+
+      // Backstop: poll every 2 s in case the terminal event was emitted before
+      // the listener was registered.
+      pollInterval = setInterval(() => {
+        try {
+          const tasks = this.registry.getTasksForStack(stackId);
+          const task = tasks.find(t => t.id === taskId);
+          if (task && isTerminal(task)) settle(task);
+        } catch { /* best effort */ }
+      }, 2000);
+
+      timeoutHandle = setTimeout(() => {
+        settle(
+          undefined,
+          new SandstormError(
+            ErrorCode.TASK_DISPATCH_FAILED,
+            'Auto-resolve timed out waiting for task completion'
+          )
+        );
+      }, timeoutMs);
+
+      // Immediate backstop: task may already be terminal before we set up listeners.
+      try {
+        const tasks = this.registry.getTasksForStack(stackId);
+        const task = tasks.find(t => t.id === taskId);
+        if (task && isTerminal(task)) { settle(task); return; }
+      } catch { /* ignore */ }
+    });
+  }
+
+  /**
+   * Resolve merge conflicts for the PR associated with `ticketId` / `projectDir`.
+   * Queries GitHub for the PR's merge state, dispatches the inner agent to merge
+   * the base branch and resolve conflicts, waits for the task to complete, and
+   * pushes the result on success.
+   *
+   * The associated stack is reused if it exists; if it was torn down, it is
+   * recreated from the branch stored in history and torn down again afterwards.
+   */
+  async autoResolveConflicts(ticketId: string, projectDir: string): Promise<AutoResolveResult> {
+    // Find live stack for this ticket
+    const liveStack = this.registry.listStacks().find(
+      s => s.ticket === ticketId && s.project_dir === projectDir
+    ) ?? null;
+
+    let stackId: string | null = liveStack?.id ?? null;
+    let autoCreated = false;
+
+    // Workspace dir for gh commands: use the stack workspace if it exists, else projectDir
+    const ghCwd = liveStack
+      ? workspacePathFor(projectDir, liveStack.id)
+      : projectDir;
+
+    // === Determine PR info ===
+    let mergeable: string;
+    let baseRefName: string;
+
+    if (liveStack && liveStack.pr_number != null) {
+      // Live stack with a known PR number
+      const { stdout } = await execFileAsync(
+        'gh',
+        ['pr', 'view', String(liveStack.pr_number), '--json', 'mergeable,mergeStateStatus,baseRefName'],
+        { cwd: ghCwd, timeout: 30000, maxBuffer: 1024 * 1024 }
+      );
+      const pr = JSON.parse(stdout.trim()) as { mergeable: string; mergeStateStatus: string; baseRefName: string };
+      mergeable = pr.mergeable ?? 'UNKNOWN';
+      baseRefName = pr.baseRefName;
+    } else if (!liveStack) {
+      // Stack torn down — look in history for the branch
+      const history = this.registry.listStackHistory()
+        .filter(h => h.ticket === ticketId && h.project_dir === projectDir)
+        .sort((a, b) => new Date(b.finished_at).getTime() - new Date(a.finished_at).getTime())[0];
+
+      if (!history?.branch) {
+        throw new SandstormError(
+          ErrorCode.STACK_NOT_FOUND,
+          `No stack found for ticket ${ticketId} in project ${projectDir}`
+        );
+      }
+
+      const { stdout } = await execFileAsync(
+        'gh',
+        ['pr', 'list', '--head', history.branch, '--json', 'number,mergeable,mergeStateStatus,baseRefName', '--state', 'open', '--limit', '1'],
+        { cwd: projectDir, timeout: 30000, maxBuffer: 1024 * 1024 }
+      );
+      const prList = JSON.parse(stdout.trim()) as Array<{ number: number; mergeable: string; mergeStateStatus: string; baseRefName: string }>;
+
+      if (prList.length === 0) {
+        throw new SandstormError(
+          ErrorCode.STACK_NOT_FOUND,
+          `No open PR found for branch '${history.branch}'`
+        );
+      }
+
+      const pr = prList[0];
+      mergeable = pr.mergeable ?? 'UNKNOWN';
+      baseRefName = pr.baseRefName;
+
+      // Early-exit non-conflicting states before creating a new stack
+      if (mergeable === 'MERGEABLE') return { status: 'no_conflicts' };
+      if (mergeable !== 'CONFLICTING') return { status: 'unknown_state' };
+
+      // CONFLICTING — recreate the stack from the branch
+      const name = `auto-${ticketId.replace(/[^a-z0-9]/gi, '-').slice(0, 20)}-${Date.now().toString(36)}`;
+      this.createStack({
+        name,
+        projectDir,
+        ticket: ticketId,
+        branch: history.branch,
+        runtime: history.runtime,
+        gateApproved: true,
+      });
+      stackId = name;
+      autoCreated = true;
+
+      // Wait for the build to complete (up to 3 min) before dispatching
+      const buildDeadline = Date.now() + 180_000;
+      while (Date.now() < buildDeadline) {
+        const s = this.registry.getStack(stackId);
+        if (!s || s.status === 'failed') {
+          throw new SandstormError(ErrorCode.COMPOSE_FAILED, s?.error || 'Stack creation failed');
+        }
+        if (['up', 'idle', 'running', 'completed', 'pushed', 'pr_created'].includes(s.status)) break;
+        await new Promise(r => setTimeout(r, 2000));
+      }
+    } else {
+      // Live stack exists but has no pr_number
+      return { status: 'failed', error: 'Stack has no associated PR number' };
+    }
+
+    // === Handle non-conflicting states ===
+    if (mergeable === 'MERGEABLE') return { status: 'no_conflicts' };
+    if (mergeable !== 'CONFLICTING') return { status: 'unknown_state' };
+
+    // === Dispatch resolution task ===
+    const resolvePrompt = [
+      'Resolve merge conflicts with the base branch.',
+      '',
+      'Steps:',
+      '1. Run `git fetch origin`',
+      `2. Merge the base branch into the current branch: \`git merge origin/${baseRefName}\``,
+      '3. Resolve any merge conflicts',
+      '4. Ensure the working tree builds and all tests pass',
+      '',
+      'Do not force-push. Produce a clean merge commit.',
+    ].join('\n');
+
+    try {
+      const dispatchResult = await this.dispatchTask(stackId!, resolvePrompt, undefined, {
+        gateApproved: true,
+        skipTicketFetch: true,
+      });
+
+      const terminalTask = await this.awaitTaskCompletion(stackId!, dispatchResult.id);
+
+      if (terminalTask.exit_code !== 0) {
+        return { status: 'failed', error: 'Auto-resolve failed: inner agent could not resolve conflicts or verify failed' };
+      }
+
+      await this.push(stackId!, 'Auto-resolve merge conflicts');
+      return { status: 'resolved' };
+    } finally {
+      if (autoCreated && stackId) {
+        await this.teardownStack(stackId).catch(() => {});
+      }
     }
   }
 

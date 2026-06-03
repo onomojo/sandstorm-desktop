@@ -553,6 +553,13 @@ interface AppState {
   /** Best-effort teardown → card disposition (backlog or close+delete). Surfaces close failure via discardErrors (R2). */
   discardStack: (ticketId: string, projectDir: string, disposition: 'backlog' | 'close') => Promise<void>;
 
+  /** Per-ticket in-flight flag for auto-resolve, keyed by `${ticketId}|${projectDir}`. Guards against double-clicks. */
+  autoResolveInFlight: Record<string, boolean>;
+  /** Per-ticket error message for auto-resolve, keyed by `${ticketId}|${projectDir}`. Cleared at the start of the next attempt. */
+  autoResolveErrors: Record<string, string>;
+  /** Query PR merge state and dispatch the inner agent to resolve conflicts if conflicting. */
+  autoResolveConflicts: (ticketId: string, projectDir: string) => Promise<void>;
+
   // Schedules (per-project)
   schedules: ScheduleEntry[];
   schedulesLoading: boolean;
@@ -806,6 +813,12 @@ declare global {
           | { status: 'created'; url: string; number: number }
           | { status: 'draft_failed' }
           | { status: 'create_failed'; draft: { title: string; body: string }; error: string }
+        >;
+        autoResolve: (ticketId: string, projectDir: string) => Promise<
+          | { status: 'resolved' }
+          | { status: 'no_conflicts' }
+          | { status: 'unknown_state' }
+          | { status: 'failed'; error: string }
         >;
       };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
@@ -1374,6 +1387,39 @@ export const useAppStore = create<AppState>((set, get) => ({
       set((state) => {
         const { [stackId]: _, ...rest } = state.prCreateInFlight;
         return { prCreateInFlight: rest };
+      });
+    }
+  },
+
+  autoResolveInFlight: {},
+  autoResolveErrors: {},
+
+  autoResolveConflicts: async (ticketId: string, projectDir: string) => {
+    const key = `${ticketId}|${projectDir}`;
+    if (get().autoResolveInFlight[key]) return;
+
+    set((state) => ({
+      autoResolveInFlight: { ...state.autoResolveInFlight, [key]: true },
+      autoResolveErrors: (() => { const { [key]: _, ...rest } = state.autoResolveErrors; return rest; })(),
+    }));
+
+    try {
+      const result = await window.sandstorm.pr.autoResolve(ticketId, projectDir);
+      if (result.status === 'no_conflicts') {
+        set((state) => ({ autoResolveErrors: { ...state.autoResolveErrors, [key]: 'No conflicts to resolve.' } }));
+      } else if (result.status === 'unknown_state') {
+        set((state) => ({ autoResolveErrors: { ...state.autoResolveErrors, [key]: 'Mergeability unknown, try again.' } }));
+      } else if (result.status === 'failed') {
+        set((state) => ({ autoResolveErrors: { ...state.autoResolveErrors, [key]: result.error } }));
+      }
+      // status === 'resolved': no error to set
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      set((state) => ({ autoResolveErrors: { ...state.autoResolveErrors, [key]: message } }));
+    } finally {
+      set((state) => {
+        const { [key]: _, ...rest } = state.autoResolveInFlight;
+        return { autoResolveInFlight: rest };
       });
     }
   },
