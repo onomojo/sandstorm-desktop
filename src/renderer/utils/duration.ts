@@ -62,7 +62,6 @@ const PR_ELIGIBLE_STATUSES = new Set([
   'completed',
   'failed',
   'pushed',
-  'needs_human',
   'verify_blocked_environmental',
 ]);
 
