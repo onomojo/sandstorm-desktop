@@ -1605,7 +1605,7 @@ describe('IPC Handlers', () => {
         },
       );
 
-      await invokeHandler('pr:merge', 'stack-1', 99);
+      const result = await invokeHandler('pr:merge', 'stack-1', 99);
 
       expect(execFile).toHaveBeenCalledWith(
         'gh',
@@ -1617,6 +1617,7 @@ describe('IPC Handlers', () => {
       const ghArgs = callArgs[1] as string[];
       expect(ghArgs).not.toContain('--merge');
       expect(ghArgs).not.toContain('--delete-branch');
+      expect(result).toEqual({ status: 'merged' });
     });
 
     it('throws when stack is not found', async () => {
@@ -1624,19 +1625,71 @@ describe('IPC Handlers', () => {
       await expect(invokeHandler('pr:merge', 'missing-stack', 1)).rejects.toThrow('Stack "missing-stack" not found');
     });
 
-    it('propagates gh CLI error to caller', async () => {
+    it('returns { status: "conflict" } when merge fails and re-query reports CONFLICTING', async () => {
       const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 42, status: 'pr_created', services: [] };
       mockStackManager.getStackWithServices.mockResolvedValue(stack);
-      (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
+      const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
+      // First call: gh pr merge fails
+      mockExecFile.mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(new Error('pull request has conflicts'), '', '');
+        },
+      );
+      // Second call: gh pr view --json mergeable returns CONFLICTING.
+      // Note: execFile is mocked as vi.fn() without util.promisify.custom, so promisify resolves
+      // with the first non-error argument directly. Pass the { stdout } object as that first arg.
+      mockExecFile.mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(null, { stdout: JSON.stringify({ mergeable: 'CONFLICTING' }), stderr: '' } as any);
+        },
+      );
+
+      const result = await invokeHandler('pr:merge', 'stack-1', 42);
+
+      expect(result).toEqual({ status: 'conflict' });
+    });
+
+    it('returns { status: "failed" } when merge fails and re-query reports UNKNOWN', async () => {
+      const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 42, status: 'pr_created', services: [] };
+      mockStackManager.getStackWithServices.mockResolvedValue(stack);
+      const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
+      mockExecFile.mockImplementationOnce(
         (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
           callback(new Error('branch protection rule'), '', '');
         },
       );
+      mockExecFile.mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(null, { stdout: JSON.stringify({ mergeable: 'UNKNOWN' }), stderr: '' } as any);
+        },
+      );
 
-      await expect(invokeHandler('pr:merge', 'stack-1', 42)).rejects.toThrow('branch protection rule');
+      const result = await invokeHandler('pr:merge', 'stack-1', 42);
+
+      expect(result).toEqual({ status: 'failed', error: 'branch protection rule' });
     });
 
-    it('treats an already-merged PR as success (does not throw) — error message form', async () => {
+    it('returns { status: "failed" } when merge fails and re-query itself throws', async () => {
+      const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 42, status: 'pr_created', services: [] };
+      mockStackManager.getStackWithServices.mockResolvedValue(stack);
+      const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
+      mockExecFile.mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(new Error('network error'), '', '');
+        },
+      );
+      mockExecFile.mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(new Error('gh not found'), '', '');
+        },
+      );
+
+      const result = await invokeHandler('pr:merge', 'stack-1', 42);
+
+      expect(result).toEqual({ status: 'failed', error: 'network error' });
+    });
+
+    it('treats an already-merged PR as success — returns { status: "merged" } (error message form)', async () => {
       const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 99, status: 'pr_created', services: [] };
       mockStackManager.getStackWithServices.mockResolvedValue(stack);
       (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
@@ -1645,10 +1698,11 @@ describe('IPC Handlers', () => {
         },
       );
 
-      await expect(invokeHandler('pr:merge', 'stack-1', 99)).resolves.toBeUndefined();
+      const result = await invokeHandler('pr:merge', 'stack-1', 99);
+      expect(result).toEqual({ status: 'merged' });
     });
 
-    it('treats an already-merged PR as success when the detail is on stderr', async () => {
+    it('treats an already-merged PR as success — returns { status: "merged" } when detail is on stderr', async () => {
       const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 99, status: 'pr_created', services: [] };
       mockStackManager.getStackWithServices.mockResolvedValue(stack);
       (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
@@ -1660,7 +1714,8 @@ describe('IPC Handlers', () => {
         },
       );
 
-      await expect(invokeHandler('pr:merge', 'stack-1', 99)).resolves.toBeUndefined();
+      const result = await invokeHandler('pr:merge', 'stack-1', 99);
+      expect(result).toEqual({ status: 'merged' });
     });
   });
 

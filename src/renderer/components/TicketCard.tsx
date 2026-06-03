@@ -40,6 +40,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     autoResolveConflicts,
     autoResolveInFlight,
     autoResolveErrors,
+    mergeConflicts,
   } = useAppStore();
 
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
@@ -54,6 +55,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const discardError = discardErrors[stackKey];
   const autoResolveInflight = autoResolveInFlight[stackKey] ?? false;
   const autoResolveError = autoResolveErrors[stackKey];
+  const hasConflict = mergeConflicts[stackKey] ?? false;
 
   const handleRefine = () => {
     openRefineDialogFromCard(ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn);
@@ -346,7 +348,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               PR #{stack.pr_number}
             </a>
           )}
-          {stack?.pr_number != null && (
+          {stack?.pr_number != null && !hasConflict && (
             <button
               onClick={handleMerge}
               disabled={mergeInflight}
@@ -364,23 +366,25 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               {autoResolveError}
             </div>
           )}
-          <button
-            onClick={handleAutoResolve}
-            disabled={autoResolveInflight}
-            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-surface-hover text-sandstorm-muted border border-sandstorm-border hover:border-sandstorm-accent/30 hover:text-sandstorm-text transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
-            data-testid={`ticket-card-auto-resolve-${ticket.ticket_id}`}
-          >
-            {autoResolveInflight ? (
-              <>
-                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="animate-spin flex-shrink-0">
-                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="48" strokeDashoffset="32"/>
-                </svg>
-                Resolving…
-              </>
-            ) : (
-              'Auto-resolve conflicts'
-            )}
-          </button>
+          {hasConflict && (
+            <button
+              onClick={handleAutoResolve}
+              disabled={autoResolveInflight}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-surface-hover text-sandstorm-muted border border-sandstorm-border hover:border-sandstorm-accent/30 hover:text-sandstorm-text transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+              data-testid={`ticket-card-auto-resolve-${ticket.ticket_id}`}
+            >
+              {autoResolveInflight ? (
+                <>
+                  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="animate-spin flex-shrink-0">
+                    <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="48" strokeDashoffset="32"/>
+                  </svg>
+                  Resolving…
+                </>
+              ) : (
+                'Auto-resolve conflicts'
+              )}
+            </button>
+          )}
           {discardSection}
         </div>
       )}

@@ -1418,14 +1418,28 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         ['pr', 'merge', String(prNumber), '--squash'],
         { cwd: workspace, timeout: 60000, maxBuffer: 1024 * 1024 },
       );
+      return { status: 'merged' } as const;
     } catch (err) {
-      // An already-merged PR is the desired end state, not a failure: swallow it so the
-      // caller still proceeds to tear down the stack and advance the card. gh reports this
-      // on stderr (e.g. "GraphQL: Pull request is already merged"); the generic execFile
-      // error message may instead read "Command failed: …", so check both.
+      // An already-merged PR is the desired end state, not a failure.
       const detail = err as { stderr?: unknown; message?: unknown };
       const text = `${String(detail?.stderr ?? '')} ${String(detail?.message ?? '')}`;
-      if (!/already merged/i.test(text)) throw err;
+      if (/already merged/i.test(text)) return { status: 'merged' } as const;
+      // Re-query mergeability to distinguish conflict failures from other failures.
+      const originalError = err instanceof Error ? err.message : String(err);
+      try {
+        const { stdout } = await execFileAsync(
+          'gh',
+          ['pr', 'view', String(prNumber), '--json', 'mergeable'],
+          { cwd: workspace, timeout: 30000, maxBuffer: 1024 * 1024 },
+        );
+        const pr = JSON.parse(stdout.trim()) as { mergeable?: string };
+        if ((pr.mergeable ?? 'UNKNOWN') === 'CONFLICTING') {
+          return { status: 'conflict' } as const;
+        }
+      } catch {
+        // Re-query failed; fall through to return failed with the original error.
+      }
+      return { status: 'failed', error: originalError } as const;
     }
   });
 
