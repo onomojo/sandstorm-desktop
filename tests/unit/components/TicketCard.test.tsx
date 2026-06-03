@@ -944,19 +944,19 @@ describe('TicketCard', () => {
     expect(screen.getByTestId('ticket-card-discard-42')).toBeDefined();
   });
 
-  it('backlog: does NOT show Discard button', () => {
+  it('backlog: shows Discard button', () => {
     render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
-    expect(screen.queryByTestId('ticket-card-discard-42')).toBeNull();
+    expect(screen.getByTestId('ticket-card-discard-42')).toBeDefined();
   });
 
-  it('refining: does NOT show Discard button', () => {
+  it('refining: shows Discard button', () => {
     render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
-    expect(screen.queryByTestId('ticket-card-discard-42')).toBeNull();
+    expect(screen.getByTestId('ticket-card-discard-42')).toBeDefined();
   });
 
-  it('spec_ready: does NOT show Discard button', () => {
+  it('spec_ready: shows Discard button', () => {
     render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
-    expect(screen.queryByTestId('ticket-card-discard-42')).toBeNull();
+    expect(screen.getByTestId('ticket-card-discard-42')).toBeDefined();
   });
 
   it('merged: does NOT show Discard button', () => {
@@ -1007,6 +1007,139 @@ describe('TicketCard', () => {
   it('in_stack: Discard button is disabled while discardInFlight is set', () => {
     useAppStore.setState({ discardInFlight: { '42|/proj': true } } as any);
     render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-discard-42') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  // =========================================================================
+  // Early-column discard (backlog / refining / spec_ready) — #462
+  // =========================================================================
+
+  it('backlog: clicking Discard opens ConfirmDialog (not DiscardStackDialog)', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    expect(screen.queryByTestId('confirm-dialog-confirm')).toBeNull();
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    expect(screen.getByTestId('confirm-dialog-confirm')).toBeDefined();
+    expect(screen.queryByTestId('discard-stack-dialog-42')).toBeNull();
+  });
+
+  it('backlog: ConfirmDialog shows correct copy', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    expect(screen.getByText('Discard ticket?')).toBeDefined();
+    expect(screen.getByTestId('confirm-dialog-confirm').textContent).toBe('Discard ticket');
+  });
+
+  it('backlog: cancelling ConfirmDialog closes it without calling discardStack', async () => {
+    const discardSpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ discardStack: discardSpy } as any);
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    fireEvent.click(screen.getByTestId('confirm-dialog-cancel'));
+    expect(screen.queryByTestId('confirm-dialog-confirm')).toBeNull();
+    await act(async () => {});
+    expect(discardSpy).not.toHaveBeenCalled();
+  });
+
+  it('backlog: confirming Discard calls discardStack with close disposition and does not call cancelRefinement', async () => {
+    const discardSpy = vi.fn().mockResolvedValue(undefined);
+    const removeSpy = vi.fn();
+    useAppStore.setState({ discardStack: discardSpy, removeRefinementSession: removeSpy } as any);
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+    await waitFor(() => expect(discardSpy).toHaveBeenCalledWith('42', PROJECT_DIR, 'close'));
+    expect(api.tickets.cancelRefinement).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
+  });
+
+  it('spec_ready: clicking Discard opens ConfirmDialog', () => {
+    render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    expect(screen.getByTestId('confirm-dialog-confirm')).toBeDefined();
+    expect(screen.queryByTestId('discard-stack-dialog-42')).toBeNull();
+  });
+
+  it('spec_ready: confirming Discard calls discardStack with close disposition and does not call cancelRefinement', async () => {
+    const discardSpy = vi.fn().mockResolvedValue(undefined);
+    const removeSpy = vi.fn();
+    useAppStore.setState({ discardStack: discardSpy, removeRefinementSession: removeSpy } as any);
+    render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+    await waitFor(() => expect(discardSpy).toHaveBeenCalledWith('42', PROJECT_DIR, 'close'));
+    expect(api.tickets.cancelRefinement).not.toHaveBeenCalled();
+    expect(removeSpy).not.toHaveBeenCalled();
+  });
+
+  it('refining: clicking Discard opens ConfirmDialog (not DiscardStackDialog)', () => {
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    expect(screen.getByTestId('confirm-dialog-confirm')).toBeDefined();
+    expect(screen.queryByTestId('discard-stack-dialog-42')).toBeNull();
+  });
+
+  it('refining: confirming Discard with no active session calls discardStack without cancelRefinement', async () => {
+    const discardSpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ discardStack: discardSpy, refinementSessions: [] } as any);
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+    await waitFor(() => expect(discardSpy).toHaveBeenCalledWith('42', PROJECT_DIR, 'close'));
+    expect(api.tickets.cancelRefinement).not.toHaveBeenCalled();
+  });
+
+  it('refining: confirming Discard with active session calls cancelRefinement, removeRefinementSession, then discardStack in order', async () => {
+    const callOrder: string[] = [];
+    const discardSpy = vi.fn().mockImplementation(async () => { callOrder.push('discard'); });
+    const removeSpy = vi.fn().mockImplementation(() => { callOrder.push('remove'); });
+    api.tickets.cancelRefinement.mockImplementation(async () => { callOrder.push('cancel'); });
+
+    useAppStore.setState({
+      discardStack: discardSpy,
+      removeRefinementSession: removeSpy,
+      refinementSessions: [{
+        id: 'sess-discard',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'running',
+        phase: 'check',
+        startedAt: 0,
+      }],
+    } as any);
+
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(discardSpy).toHaveBeenCalled());
+    expect(api.tickets.cancelRefinement).toHaveBeenCalledWith('sess-discard');
+    expect(removeSpy).toHaveBeenCalledWith('sess-discard');
+    expect(discardSpy).toHaveBeenCalledWith('42', PROJECT_DIR, 'close');
+    expect(callOrder).toEqual(['cancel', 'remove', 'discard']);
+  });
+
+  it('backlog: Discard button is disabled while discardInFlight is set', () => {
+    useAppStore.setState({ discardInFlight: { '42|/proj': true } } as any);
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-discard-42') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('spec_ready: Discard button is disabled while discardInFlight is set', () => {
+    useAppStore.setState({ discardInFlight: { '42|/proj': true } } as any);
+    render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-discard-42') as HTMLButtonElement;
+    expect(btn.disabled).toBe(true);
+  });
+
+  it('refining: Discard button is disabled while discardInFlight is set', () => {
+    useAppStore.setState({ discardInFlight: { '42|/proj': true } } as any);
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
     const btn = screen.getByTestId('ticket-card-discard-42') as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
