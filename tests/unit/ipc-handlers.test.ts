@@ -32,6 +32,7 @@ const {
   mockDeleteRefinement,
   mockPersistRefinement,
   mockLoadRefinements,
+  mockUsageEngine,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
   const mockSpawnSpecCheck = vi.fn();
@@ -139,6 +140,13 @@ const {
     forcePoll: vi.fn(),
   };
 
+  const mockUsageEngine = {
+    getSummary: vi.fn(),
+    getDaily: vi.fn(),
+    getByModel: vi.fn(),
+    getSessions: vi.fn(),
+  };
+
   return {
     registeredHandlers,
     mockRegistry,
@@ -162,6 +170,7 @@ const {
     mockDeleteRefinement,
     mockPersistRefinement,
     mockLoadRefinements,
+    mockUsageEngine,
   };
 });
 
@@ -202,6 +211,15 @@ vi.mock('../../src/main/custom-context', () => mockCustomContext);
 
 vi.mock('../../src/main/control-plane/account-usage', () => ({
   fetchAccountUsage: mockFetchAccountUsage,
+}));
+
+vi.mock('os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('os')>();
+  return { ...actual, default: { ...actual, homedir: () => '/mock-home' } };
+});
+
+vi.mock('../../src/main/telemetry/usage-engine', () => ({
+  createUsageEngine: vi.fn(() => mockUsageEngine),
 }));
 
 vi.mock('child_process', () => ({
@@ -548,6 +566,93 @@ describe('IPC Handlers', () => {
       expect(result).toEqual(usage);
     });
 
+  });
+
+  // =========================================================================
+  // Telemetry IPC handlers
+  // =========================================================================
+  describe('telemetry', () => {
+    const range = { since: '2024-01-01', until: '2024-01-31' };
+
+    it('stats:telemetry:summary delegates to usageEngine.getSummary', async () => {
+      const summary = {
+        monthCost: 12.5,
+        prevMonthCost: 8.0,
+        tokens: { input: 1000, output: 500, cacheCreate: 200, cacheRead: 800, total: 2500 },
+        cacheHitPct: 44.4,
+        sessions: 3,
+        ticketsShipped: null,
+        costPerTicket: null,
+        unpricedModels: [],
+        skippedLines: 0,
+      };
+      mockUsageEngine.getSummary.mockReturnValue(summary);
+
+      const result = await invokeHandler('stats:telemetry:summary', range);
+      expect(result).toEqual(summary);
+      expect(mockUsageEngine.getSummary).toHaveBeenCalledWith(range);
+    });
+
+    it('stats:telemetry:summary returns null for ticketsShipped and costPerTicket', async () => {
+      mockUsageEngine.getSummary.mockReturnValue({
+        monthCost: 0,
+        prevMonthCost: 0,
+        tokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
+        cacheHitPct: 0,
+        sessions: 0,
+        ticketsShipped: null,
+        costPerTicket: null,
+        unpricedModels: [],
+        skippedLines: 0,
+      });
+
+      const result = await invokeHandler('stats:telemetry:summary', range) as { ticketsShipped: unknown; costPerTicket: unknown };
+      expect(result.ticketsShipped).toBeNull();
+      expect(result.costPerTicket).toBeNull();
+    });
+
+    it('stats:telemetry:daily delegates to usageEngine.getDaily', async () => {
+      const daily = [
+        { date: '2024-01-15', cost: 1.5, tokens: { input: 100, output: 50, cacheCreate: 0, cacheRead: 0 }, byModel: { 'claude-opus-4-5': 1.5 } },
+      ];
+      mockUsageEngine.getDaily.mockReturnValue(daily);
+
+      const result = await invokeHandler('stats:telemetry:daily', range);
+      expect(result).toEqual(daily);
+      expect(mockUsageEngine.getDaily).toHaveBeenCalledWith(range);
+    });
+
+    it('stats:telemetry:byModel delegates to usageEngine.getByModel', async () => {
+      const byModel = [
+        { model: 'claude-opus-4-5', cost: 10.0, tokens: { input: 500, output: 250, cacheCreate: 0, cacheRead: 0, total: 750 }, sessions: 2, unpriced: false },
+      ];
+      mockUsageEngine.getByModel.mockReturnValue(byModel);
+
+      const result = await invokeHandler('stats:telemetry:byModel', range);
+      expect(result).toEqual(byModel);
+      expect(mockUsageEngine.getByModel).toHaveBeenCalledWith(range);
+    });
+
+    it('stats:telemetry:session delegates to usageEngine.getSessions', async () => {
+      const sessions = [
+        {
+          sid: 'sess-abc',
+          ticket: null,
+          stack: null,
+          model: 'claude-opus-4-5',
+          start: '2024-01-15T10:00:00.000Z',
+          durMin: 5.0,
+          tokens: { input: 200, output: 100, cacheCreate: 0, cacheRead: 500, total: 800 },
+          cost: 3.75,
+          turns: 4,
+        },
+      ];
+      mockUsageEngine.getSessions.mockReturnValue(sessions);
+
+      const result = await invokeHandler('stats:telemetry:session', range);
+      expect(result).toEqual(sessions);
+      expect(mockUsageEngine.getSessions).toHaveBeenCalledWith(range);
+    });
   });
 
   // =========================================================================
@@ -2062,6 +2167,10 @@ describe('IPC Handlers', () => {
       'darkFactory:setEnabled',
       'stacks:getNeedsHumanQuestions',
       'stacks:resumeNeedsHuman',
+      'stats:telemetry:summary',
+      'stats:telemetry:daily',
+      'stats:telemetry:byModel',
+      'stats:telemetry:session',
     ];
 
     it('registers all expected IPC channels', () => {

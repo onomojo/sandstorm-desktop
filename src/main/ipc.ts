@@ -87,6 +87,9 @@ import { listTicketsWithConfig } from './control-plane/ticket-lister';
 import { listTicketComments, postComment } from './control-plane/ticket-comments';
 import { getLatestUserAnswers, ANSWER_COMMENT_MARKER } from './scheduler/refine-to-comments';
 import { KANBAN_COLUMNS } from '../shared/kanban';
+import os from 'os';
+import { createUsageEngine } from './telemetry/usage-engine';
+import type { DateRange } from './telemetry/usage-engine';
 
 // Set __sandstorm at module-load time so app.evaluate() works immediately
 // after electron.launch() resolves — which happens during createWindow(),
@@ -755,6 +758,28 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stats:account-usage', async () => {
     return fetchAccountUsage();
+  });
+
+  // --- Telemetry (host orchestrator usage) ---
+
+  const hostEngine = createUsageEngine(
+    os.homedir() + '/.claude/projects'
+  );
+
+  ipcMain.handle('stats:telemetry:summary', async (_event, range: DateRange) => {
+    return hostEngine.getSummary(range);
+  });
+
+  ipcMain.handle('stats:telemetry:daily', async (_event, range: DateRange) => {
+    return hostEngine.getDaily(range);
+  });
+
+  ipcMain.handle('stats:telemetry:byModel', async (_event, range: DateRange) => {
+    return hostEngine.getByModel(range);
+  });
+
+  ipcMain.handle('stats:telemetry:session', async (_event, range: DateRange) => {
+    return hostEngine.getSessions(range);
   });
 
   // --- Custom Context ---
