@@ -546,6 +546,8 @@ interface AppState {
   startStackForTicket: (ticketId: string, projectDir: string) => Promise<void>;
   /** Per-ticket merge in-flight flag, keyed by `${ticketId}|${projectDir}`. Guards against double-clicks on Merge. */
   mergeInFlight: Record<string, boolean>;
+  /** Per-ticket conflict flag, keyed by `${ticketId}|${projectDir}`. Set when a merge attempt fails due to confirmed CONFLICTING mergeability; cleared when auto-resolve returns resolved or no_conflicts. Ephemeral — resets on page reload. */
+  mergeConflicts: Record<string, boolean>;
   /** GitHub PR merge → stack teardown → card move to 'merged', in that order. Aborts on any failure and surfaces via moveTicketColumnError. */
   mergeTicket: (ticketId: string, projectDir: string) => Promise<void>;
   /** Per-stack in-flight flag for background PR creation, keyed by stackId. */
@@ -818,7 +820,7 @@ declare global {
       pr: {
         draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
         create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
-        merge: (stackId: string, prNumber: number) => Promise<void>;
+        merge: (stackId: string, prNumber: number) => Promise<{ status: 'merged' } | { status: 'conflict' } | { status: 'failed'; error: string }>;
         createAuto: (stackId: string) => Promise<
           | { status: 'created'; url: string; number: number }
           | { status: 'draft_failed' }
@@ -1109,6 +1111,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   stackCreateErrors: {},
   stackCreateInFlight: {},
   mergeInFlight: {},
+  mergeConflicts: {},
   prCreateInFlight: {},
   prCreateErrors: {},
   discardInFlight: {},
@@ -1311,16 +1314,30 @@ export const useAppStore = create<AppState>((set, get) => ({
     // "Stack not found" from pr.merge or teardown means the backend record is already gone
     // (e.g. torn down externally, or a test-injected fake stack). Treat as non-fatal so the
     // column still advances to 'merged'. Real failures (branch protection, docker error, etc.)
-    // re-throw and surface via moveTicketColumnError.
+    // surface via moveTicketColumnError.
     const isStackNotFound = (err: unknown) =>
       /Stack ".+" not found/.test(err instanceof Error ? err.message : String(err));
 
     try {
       if (stack?.pr_number != null) {
+        let mergeResult: { status: 'merged' } | { status: 'conflict' } | { status: 'failed'; error: string };
         try {
-          await window.sandstorm.pr.merge(stack.id, stack.pr_number);
+          mergeResult = await window.sandstorm.pr.merge(stack.id, stack.pr_number);
         } catch (err) {
           if (!isStackNotFound(err)) throw err;
+          mergeResult = { status: 'merged' };
+        }
+
+        if (mergeResult.status === 'conflict') {
+          set((state) => ({
+            mergeConflicts: { ...state.mergeConflicts, [key]: true },
+            autoResolveErrors: { ...state.autoResolveErrors, [key]: 'Merge failed — conflicts must be resolved' },
+          }));
+          return;
+        }
+        if (mergeResult.status === 'failed') {
+          set({ moveTicketColumnError: `Failed to merge ticket #${ticketId}: ${mergeResult.error}` });
+          return;
         }
       }
       if (stack) {
@@ -1429,14 +1446,20 @@ export const useAppStore = create<AppState>((set, get) => ({
 
     try {
       const result = await window.sandstorm.pr.autoResolve(ticketId, projectDir);
-      if (result.status === 'no_conflicts') {
-        set((state) => ({ autoResolveErrors: { ...state.autoResolveErrors, [key]: 'No conflicts to resolve.' } }));
+      if (result.status === 'resolved') {
+        set((state) => ({
+          mergeConflicts: (() => { const { [key]: _, ...rest } = state.mergeConflicts; return rest; })(),
+        }));
+      } else if (result.status === 'no_conflicts') {
+        set((state) => ({
+          autoResolveErrors: { ...state.autoResolveErrors, [key]: 'No conflicts to resolve.' },
+          mergeConflicts: (() => { const { [key]: _, ...rest } = state.mergeConflicts; return rest; })(),
+        }));
       } else if (result.status === 'unknown_state') {
         set((state) => ({ autoResolveErrors: { ...state.autoResolveErrors, [key]: 'Mergeability unknown, try again.' } }));
       } else if (result.status === 'failed') {
         set((state) => ({ autoResolveErrors: { ...state.autoResolveErrors, [key]: result.error } }));
       }
-      // status === 'resolved': no error to set
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       set((state) => ({ autoResolveErrors: { ...state.autoResolveErrors, [key]: message } }));
