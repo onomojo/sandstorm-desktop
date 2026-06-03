@@ -558,8 +558,8 @@ describe('TicketCard', () => {
   });
 
   // All 14 StackStatus values — PR button visibility map
-  const ELIGIBLE_STATUSES = ['completed', 'failed', 'pushed', 'needs_human', 'verify_blocked_environmental'];
-  const INELIGIBLE_STATUSES = ['building', 'rebuilding', 'up', 'running', 'idle', 'stopped', 'pr_created', 'rate_limited', 'session_paused'];
+  const ELIGIBLE_STATUSES = ['completed', 'failed', 'pushed', 'verify_blocked_environmental'];
+  const INELIGIBLE_STATUSES = ['building', 'rebuilding', 'up', 'running', 'idle', 'stopped', 'pr_created', 'rate_limited', 'session_paused', 'needs_human'];
 
   ELIGIBLE_STATUSES.forEach((status) => {
     it(`in_stack: Create PR button is present for status="${status}"`, () => {

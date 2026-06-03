@@ -761,4 +761,139 @@ describe('Stack Lifecycle Integration', () => {
       expect(updateCallback.mock.calls.length).toBeGreaterThan(callsAfterPR);
     });
   });
+
+  describe('registry: completeTaskNeedsHuman + reopenTaskForResume (#461)', () => {
+    it('persists questionsJson in needs_human_questions column', async () => {
+      registry.createStack(makeStack('nh-questions'));
+      const task = registry.createTask('nh-questions', 'Fix the bug');
+      const questionsJson = JSON.stringify([{ id: 'q1', question: 'How?', options: [] }]);
+      registry.completeTaskNeedsHuman(task.id, 'Agent stopped', questionsJson);
+      const stored = registry.getNeedsHumanQuestions('nh-questions');
+      expect(stored).toBe(questionsJson);
+    });
+
+    it('stores null when questionsJson is omitted (fallback to plain-text)', async () => {
+      registry.createStack(makeStack('nh-no-questions'));
+      const task = registry.createTask('nh-no-questions', 'Task');
+      registry.completeTaskNeedsHuman(task.id, 'Agent stopped');
+      const stored = registry.getNeedsHumanQuestions('nh-no-questions');
+      expect(stored).toBeNull();
+    });
+
+    it('getNeedsHumanQuestions returns null when task is not needs_human', async () => {
+      registry.createStack(makeStack('nh-running'));
+      registry.createTask('nh-running', 'Still running');
+      const stored = registry.getNeedsHumanQuestions('nh-running');
+      expect(stored).toBeNull();
+    });
+
+    it('reopenTaskForResume clears finished_at and exit_code and sets status to running', async () => {
+      registry.createStack(makeStack('nh-reopen'));
+      const task = registry.createTask('nh-reopen', 'Task to reopen');
+      registry.completeTaskNeedsHuman(task.id, 'STOP_AND_ASK reason');
+      const before = registry.getMostRecentTask('nh-reopen')!;
+      expect(before.status).toBe('needs_human');
+      expect(before.exit_code).toBe(1);
+
+      registry.reopenTaskForResume(task.id);
+      const after = registry.getMostRecentTask('nh-reopen')!;
+      expect(after.status).toBe('running');
+      expect(after.exit_code).toBeNull();
+      expect(after.finished_at).toBeNull();
+    });
+  });
+
+  describe('resumeNeedsHumanStack (#461)', () => {
+    it('throws STACK_NOT_FOUND for unknown stack', async () => {
+      await expect(
+        manager.resumeNeedsHumanStack('no-such', 'answers')
+      ).rejects.toThrow(expect.objectContaining({ code: ErrorCode.STACK_NOT_FOUND }));
+    });
+
+    it('throws INVALID_INPUT for stack not in needs_human state', async () => {
+      registry.createStack(makeStack('not-nh', 'completed'));
+      await expect(
+        manager.resumeNeedsHumanStack('not-nh', 'answers')
+      ).rejects.toThrow(expect.objectContaining({ code: ErrorCode.INVALID_INPUT }));
+    });
+
+    it('Case A: resumes with --resume when session_id is present', async () => {
+      registry.createStack(makeStack('nh-case-a', 'needs_human'));
+      const task = registry.createTask('nh-case-a', 'Task that stopped');
+      registry.setTaskSessionId(task.id, 'session-abc');
+      registry.completeTaskNeedsHuman(task.id, 'STOP_AND_ASK: needs input');
+      registry.updateStackStatus('nh-case-a', 'needs_human');
+
+      vi.spyOn(manager, 'ensureStackContainersRunning' as any).mockResolvedValue(undefined);
+      const dispatchSpy = vi.spyOn(manager, 'dispatchContinuation' as any).mockResolvedValue(undefined);
+
+      await manager.resumeNeedsHumanStack('nh-case-a', 'My answers here');
+
+      expect(dispatchSpy).toHaveBeenCalledOnce();
+      const callArgs = dispatchSpy.mock.calls[0];
+      expect(callArgs[3]).toContain('My answers here');
+    });
+
+    it('Case B: fresh dispatch when session_id is absent', async () => {
+      registry.createStack(makeStack('nh-case-b', 'needs_human'));
+      const task = registry.createTask('nh-case-b', 'Original prompt');
+      registry.completeTaskNeedsHuman(task.id, 'STOP_AND_ASK: needs input');
+      registry.updateStackStatus('nh-case-b', 'needs_human');
+
+      vi.spyOn(manager, 'ensureStackContainersRunning' as any).mockResolvedValue(undefined);
+      const dispatchTaskSpy = vi.spyOn(manager, 'dispatchTask').mockResolvedValue({
+        id: 99, stack_id: 'nh-case-b', status: 'running',
+      });
+
+      await manager.resumeNeedsHumanStack('nh-case-b', 'answers to questions');
+
+      expect(dispatchTaskSpy).toHaveBeenCalledOnce();
+      const callArgs = dispatchTaskSpy.mock.calls[0];
+      expect(callArgs[1]).toContain('Original prompt');
+      expect(callArgs[1]).toContain('answers to questions');
+    });
+
+    it('reverts to needs_human on container failure', async () => {
+      registry.createStack(makeStack('nh-revert', 'needs_human'));
+      const task = registry.createTask('nh-revert', 'Task');
+      registry.completeTaskNeedsHuman(task.id, 'Stop reason');
+      registry.updateStackStatus('nh-revert', 'needs_human');
+
+      vi.spyOn(manager, 'ensureStackContainersRunning' as any).mockRejectedValueOnce(
+        new Error('Container start failed')
+      );
+
+      await expect(
+        manager.resumeNeedsHumanStack('nh-revert', 'answers')
+      ).rejects.toThrow('Container start failed');
+
+      expect(registry.getStack('nh-revert')!.status).toBe('needs_human');
+    });
+
+    it('Case A: re-terminates task and reverts stack to needs_human when dispatchContinuation fails', async () => {
+      registry.createStack(makeStack('nh-dispatch-fail', 'needs_human'));
+      const task = registry.createTask('nh-dispatch-fail', 'Task that stopped');
+      registry.setTaskSessionId(task.id, 'session-xyz');
+      const questionsJson = JSON.stringify([{ id: 'q1', question: 'Which approach?', options: [{ id: 'a', label: 'Option A', recommended: true }] }]);
+      registry.completeTaskNeedsHuman(task.id, 'STOP_AND_ASK: needs input', questionsJson);
+      registry.updateStackStatus('nh-dispatch-fail', 'needs_human');
+
+      vi.spyOn(manager, 'ensureStackContainersRunning' as any).mockResolvedValue(undefined);
+      vi.spyOn(manager, 'dispatchContinuation' as any).mockRejectedValueOnce(
+        new Error('Dispatch failed after reopen')
+      );
+
+      await expect(
+        manager.resumeNeedsHumanStack('nh-dispatch-fail', 'My answers')
+      ).rejects.toThrow('Dispatch failed after reopen');
+
+      // Task must not be stranded in 'running' — it should be reverted to needs_human
+      const tasks = registry.getTasksForStack('nh-dispatch-fail');
+      expect(tasks[0].status).toBe('needs_human');
+      // Stack must also revert to needs_human
+      expect(registry.getStack('nh-dispatch-fail')!.status).toBe('needs_human');
+      // Structured questions must be preserved so the Answer modal can re-render them on retry
+      expect(tasks[0].needs_human_questions).toBe(questionsJson);
+    });
+  });
 });

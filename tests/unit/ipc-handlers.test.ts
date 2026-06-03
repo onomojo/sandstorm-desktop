@@ -1902,6 +1902,8 @@ describe('IPC Handlers', () => {
       'pr:createAuto',
       'projectTicketConfig:get',
       'projectTicketConfig:set',
+      'stacks:getNeedsHumanQuestions',
+      'stacks:resumeNeedsHuman',
     ];
 
     it('registers all expected IPC channels', () => {

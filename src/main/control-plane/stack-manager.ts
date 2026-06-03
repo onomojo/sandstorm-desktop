@@ -657,7 +657,8 @@ export class StackManager {
   private async dispatchContinuation(
     stack: Stack,
     stackId: string,
-    task: Task
+    task: Task,
+    continuationPrompt: string = 'Continue the work that was halted by token limits. Keep going from where you left off.'
   ): Promise<void> {
     const runtime = this.getRuntimeForStack(stack);
     let claudeContainer = await this.findClaudeContainer(stack, runtime);
@@ -672,9 +673,6 @@ export class StackManager {
     this.registry.setTaskResumedAt(task.id, new Date().toISOString());
     this.registry.updateStackStatus(stackId, 'running');
     this.notifyUpdate();
-
-    const continuationPrompt =
-      'Continue the work that was halted by token limits. Keep going from where you left off.';
 
     const cliArgs = ['task', stackId, '--resume', task.session_id!];
     if (task.model) cliArgs.push('--model', task.model);
@@ -692,6 +690,67 @@ export class StackManager {
 
     this.taskWatcher.watch(stackId, claudeContainer.id);
     this.taskWatcher.streamOutput(stackId, claudeContainer.id, () => {}).catch(() => {});
+  }
+
+  /**
+   * Resume a needs_human stack by providing answers to the agent's questions.
+   * Uses --resume <session_id> if available; falls back to fresh dispatch if not.
+   */
+  async resumeNeedsHumanStack(stackId: string, answers: string): Promise<void> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    if (stack.status !== 'needs_human') {
+      throw new SandstormError(ErrorCode.INVALID_INPUT, `Stack "${stackId}" is not in needs_human state`);
+    }
+
+    const task = this.registry.getMostRecentTask(stackId);
+    if (!task) throw new SandstormError(ErrorCode.INTERNAL_ERROR, `No task found for stack "${stackId}"`);
+
+    // Bring containers up
+    this.registry.updateStackStatus(stackId, 'building');
+    this.notifyUpdate();
+    try {
+      await this.ensureStackContainersRunning(stack, stackId);
+    } catch (err) {
+      this.registry.updateStackStatus(stackId, 'needs_human');
+      this.notifyUpdate();
+      throw err;
+    }
+
+    const continuationPrompt =
+      `The agent was waiting for human input. Here are the answers to the questions:\n\n${answers}\n\nPlease continue the work from where you left off.`;
+
+    try {
+      if (task.session_id) {
+        // Case A: resume with existing Claude session — reopen task then dispatch continuation
+        this.registry.reopenTaskForResume(task.id);
+        await this.dispatchContinuation(stack, stackId, { ...task, status: 'running' }, continuationPrompt);
+      } else {
+        // Case B: no session_id — close the original task and redispatch fresh with original prompt + answers
+        this.registry.interruptTask(task.id);
+        const freshPrompt = `${task.prompt}\n\n---\nAdditional context from human:\n${answers}`;
+        try {
+          await this.dispatchTask(stackId, freshPrompt, task.model ?? undefined, {
+            skipTicketFetch: true,
+          });
+        } catch (err) {
+          // Revert task to terminal needs_human state so it doesn't strand in interrupted
+          this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
+          this.registry.updateStackStatus(stackId, 'needs_human');
+          this.notifyUpdate();
+          throw err;
+        }
+      }
+    } catch (err) {
+      if (task.session_id) {
+        // Revert task to terminal needs_human state so it doesn't strand in running
+        this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
+        this.registry.updateStackStatus(stackId, 'needs_human');
+        this.notifyUpdate();
+      }
+      throw err;
+    }
   }
 
   async teardownStack(stackId: string): Promise<void> {
