@@ -225,7 +225,7 @@ export interface SandstormAPI {
   pr: {
     draftBody: (stackId: string) => Promise<{ title: string; body: string }>;
     create: (stackId: string, title: string, body: string) => Promise<{ url: string; number: number }>;
-    merge: (stackId: string, prNumber: number) => Promise<void>;
+    merge: (stackId: string, prNumber: number) => Promise<{ status: 'merged' } | { status: 'conflict' } | { status: 'failed'; error: string }>;
     createAuto: (stackId: string) => Promise<
       | { status: 'created'; url: string; number: number }
       | { status: 'draft_failed' }

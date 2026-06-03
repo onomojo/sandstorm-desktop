@@ -54,8 +54,10 @@ describe('TicketCard', () => {
       refineStartErrors: {},
       discardInFlight: {},
       discardErrors: {},
+      mergeInFlight: {},
       autoResolveInFlight: {},
       autoResolveErrors: {},
+      mergeConflicts: {},
       showRefineTicketDialog: false,
       refineTicketPrefill: null,
       currentRefinementSessionId: null,
@@ -644,7 +646,7 @@ describe('TicketCard', () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/99', pr_number: 99 } as any;
     useAppStore.setState({ boardTickets: [makeTicket('pr_open') as any], stacks: [stack] });
     const callOrder: string[] = [];
-    api.pr.merge.mockImplementation(async () => { callOrder.push('merge'); });
+    api.pr.merge.mockImplementation(async () => { callOrder.push('merge'); return { status: 'merged' }; });
     api.stacks.teardown.mockImplementation(async () => { callOrder.push('teardown'); });
     api.ticketBoard.setColumn.mockImplementation(async () => { callOrder.push('setColumn'); });
 
@@ -658,10 +660,10 @@ describe('TicketCard', () => {
     expect(callOrder).toEqual(['merge', 'teardown', 'setColumn']);
   });
 
-  it('pr_open: GitHub merge failure aborts teardown and column move, surfaces error', async () => {
+  it('pr_open: GitHub merge failure (non-conflict) aborts teardown and column move, surfaces error', async () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/99', pr_number: 99 } as any;
     useAppStore.setState({ boardTickets: [makeTicket('pr_open') as any], stacks: [stack] });
-    api.pr.merge.mockRejectedValueOnce(new Error('branch protection'));
+    api.pr.merge.mockResolvedValueOnce({ status: 'failed', error: 'branch protection' });
 
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
     fireEvent.click(screen.getByTestId('ticket-card-merge-42'));
@@ -672,6 +674,20 @@ describe('TicketCard', () => {
     expect(api.ticketBoard.setColumn).not.toHaveBeenCalled();
     const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
     expect(entry?.column).toBe('pr_open');
+  });
+
+  it('pr_open: GitHub merge failure (non-conflict) does not set conflict flag or show auto-resolve button', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/99', pr_number: 99 } as any;
+    useAppStore.setState({ boardTickets: [makeTicket('pr_open') as any], stacks: [stack] });
+    api.pr.merge.mockResolvedValueOnce({ status: 'failed', error: 'branch protection' });
+
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-merge-42'));
+    await waitFor(() => {
+      expect(useAppStore.getState().moveTicketColumnError).toContain('branch protection');
+    });
+    expect(useAppStore.getState().mergeConflicts['42|/proj']).toBeFalsy();
+    expect(screen.queryByTestId('ticket-card-auto-resolve-42')).toBeNull();
   });
 
   it('pr_open: teardown failure after successful merge surfaces error and keeps card in pr_open', async () => {
@@ -726,8 +742,8 @@ describe('TicketCard', () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/99', pr_number: 99 } as any;
     useAppStore.setState({ boardTickets: [makeTicket('pr_open') as any], stacks: [stack] });
 
-    let resolveMerge!: () => void;
-    const mergePromise = new Promise<void>((r) => { resolveMerge = r; });
+    let resolveMerge!: (v: { status: string }) => void;
+    const mergePromise = new Promise<{ status: string }>((r) => { resolveMerge = r; });
     api.pr.merge.mockReturnValueOnce(mergePromise);
 
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
@@ -736,7 +752,7 @@ describe('TicketCard', () => {
     fireEvent.click(btn);
 
     await act(async () => {
-      resolveMerge();
+      resolveMerge({ status: 'merged' });
       await Promise.resolve();
     });
 
@@ -759,18 +775,55 @@ describe('TicketCard', () => {
     expect(screen.getByTestId('ticket-card-pr-link-42').textContent).toContain('99');
   });
 
-  it('pr_open: Auto-resolve conflicts button is always visible', () => {
+  it('pr_open: Auto-resolve conflicts button is absent when there is no conflict (regression)', () => {
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-auto-resolve-42')).toBeNull();
+  });
+
+  it('pr_open: Auto-resolve conflicts button is absent when stack has no pr_number and no conflict flag', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-auto-resolve-42')).toBeNull();
+  });
+
+  it('pr_open: conflict flag set → Merge button absent, auto-resolve button present', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/99', pr_number: 99 } as any;
+    useAppStore.setState({ mergeConflicts: { [`42|${PROJECT_DIR}`]: true } } as any);
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-merge-42')).toBeNull();
     expect(screen.getByTestId('ticket-card-auto-resolve-42')).toBeDefined();
   });
 
-  it('pr_open: Auto-resolve conflicts button is visible even when stack has no pr_number', () => {
-    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_number: null } as any;
+  it('pr_open: conflict flag set → conflict message visible in error area', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/99', pr_number: 99 } as any;
+    useAppStore.setState({
+      mergeConflicts: { [`42|${PROJECT_DIR}`]: true },
+      autoResolveErrors: { [`42|${PROJECT_DIR}`]: 'Merge failed — conflicts must be resolved' },
+    } as any);
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
+    const badge = screen.getByTestId('ticket-card-auto-resolve-error-42');
+    expect(badge.textContent).toContain('Merge failed — conflicts must be resolved');
+  });
+
+  it('pr_open: merge returns conflict → conflict flag set, auto-resolve button shown, merge button hidden', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/99', pr_number: 99 } as any;
+    useAppStore.setState({ boardTickets: [makeTicket('pr_open') as any], stacks: [stack] });
+    api.pr.merge.mockResolvedValueOnce({ status: 'conflict' });
+
+    const { rerender } = render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-merge-42'));
+    await waitFor(() => {
+      expect(useAppStore.getState().mergeConflicts['42|/proj']).toBe(true);
+    });
+    rerender(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-merge-42')).toBeNull();
     expect(screen.getByTestId('ticket-card-auto-resolve-42')).toBeDefined();
+    expect(api.stacks.teardown).not.toHaveBeenCalled();
+    expect(api.ticketBoard.setColumn).not.toHaveBeenCalled();
   });
 
   it('pr_open: clicking Auto-resolve calls pr.autoResolve with ticketId and projectDir', async () => {
+    useAppStore.setState({ mergeConflicts: { [`42|${PROJECT_DIR}`]: true } } as any);
     api.pr.autoResolve.mockResolvedValue({ status: 'resolved' });
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
     fireEvent.click(screen.getByTestId('ticket-card-auto-resolve-42'));
@@ -778,7 +831,10 @@ describe('TicketCard', () => {
   });
 
   it('pr_open: Auto-resolve button shows spinner while in-flight', () => {
-    useAppStore.setState({ autoResolveInFlight: { [`42|${PROJECT_DIR}`]: true } } as any);
+    useAppStore.setState({
+      autoResolveInFlight: { [`42|${PROJECT_DIR}`]: true },
+      mergeConflicts: { [`42|${PROJECT_DIR}`]: true },
+    } as any);
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
     const btn = screen.getByTestId('ticket-card-auto-resolve-42');
     expect(btn.textContent).toContain('Resolving');
@@ -786,7 +842,10 @@ describe('TicketCard', () => {
   });
 
   it('pr_open: Auto-resolve button is disabled while in-flight', () => {
-    useAppStore.setState({ autoResolveInFlight: { [`42|${PROJECT_DIR}`]: true } } as any);
+    useAppStore.setState({
+      autoResolveInFlight: { [`42|${PROJECT_DIR}`]: true },
+      mergeConflicts: { [`42|${PROJECT_DIR}`]: true },
+    } as any);
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
     const btn = screen.getByTestId('ticket-card-auto-resolve-42');
     expect(btn).toHaveProperty('disabled', true);
@@ -800,6 +859,7 @@ describe('TicketCard', () => {
   });
 
   it('pr_open: double-click on Auto-resolve does not call pr.autoResolve twice', async () => {
+    useAppStore.setState({ mergeConflicts: { [`42|${PROJECT_DIR}`]: true } } as any);
     let resolveFirst!: () => void;
     const firstPromise = new Promise<{ status: string }>((r) => { resolveFirst = r as () => void; });
     api.pr.autoResolve.mockReturnValueOnce(firstPromise);
