@@ -837,6 +837,43 @@ declare global {
         getEnabled: (projectDir: string) => Promise<boolean>;
         setEnabled: (projectDir: string, enabled: boolean) => Promise<void>;
       };
+      telemetry: {
+        summary: (range: { since: string; until: string }) => Promise<{
+          monthCost: number;
+          prevMonthCost: number;
+          tokens: { input: number; output: number; cacheCreate: number; cacheRead: number; total: number };
+          cacheHitPct: number;
+          sessions: number;
+          ticketsShipped: null;
+          costPerTicket: null;
+          unpricedModels: string[];
+          skippedLines: number;
+        }>;
+        daily: (range: { since: string; until: string }) => Promise<Array<{
+          date: string;
+          cost: number;
+          tokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
+          byModel: Record<string, number>;
+        }>>;
+        byModel: (range: { since: string; until: string }) => Promise<Array<{
+          model: string;
+          cost: number;
+          tokens: { input: number; output: number; cacheCreate: number; cacheRead: number; total: number };
+          sessions: number;
+          unpriced: boolean;
+        }>>;
+        session: (range: { since: string; until: string }) => Promise<Array<{
+          sid: string;
+          ticket: null;
+          stack: null;
+          model: string;
+          start: string;
+          durMin: number;
+          tokens: { input: number; output: number; cacheCreate: number; cacheRead: number; total: number };
+          cost: number;
+          turns: number;
+        }>>;
+      };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
   }

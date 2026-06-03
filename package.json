@@ -30,6 +30,7 @@
     "@xterm/addon-fit": "^0.10.0",
     "@xterm/xterm": "^5.5.0",
     "better-sqlite3": "^12.8.0",
+    "ccusage": "20.0.6",
     "detect-port": "^2.0.0",
     "dockerode": "^4.0.4",
     "node-pty": "^1.1.0",

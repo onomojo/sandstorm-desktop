@@ -242,6 +242,12 @@ export interface SandstormAPI {
     getEnabled: (projectDir: string) => Promise<boolean>;
     setEnabled: (projectDir: string, enabled: boolean) => Promise<void>;
   };
+  telemetry: {
+    summary: (range: { since: string; until: string }) => Promise<unknown>;
+    daily: (range: { since: string; until: string }) => Promise<unknown[]>;
+    byModel: (range: { since: string; until: string }) => Promise<unknown[]>;
+    session: (range: { since: string; until: string }) => Promise<unknown[]>;
+  };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
@@ -444,6 +450,12 @@ const api: SandstormAPI = {
   darkFactory: {
     getEnabled: (projectDir) => ipcRenderer.invoke('darkFactory:getEnabled', projectDir),
     setEnabled: (projectDir, enabled) => ipcRenderer.invoke('darkFactory:setEnabled', projectDir, enabled),
+  },
+  telemetry: {
+    summary: (range) => ipcRenderer.invoke('stats:telemetry:summary', range),
+    daily: (range) => ipcRenderer.invoke('stats:telemetry:daily', range),
+    byModel: (range) => ipcRenderer.invoke('stats:telemetry:byModel', range),
+    session: (range) => ipcRenderer.invoke('stats:telemetry:session', range),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>
