@@ -80,6 +80,7 @@ const {
     getRateLimitState: vi.fn(),
     getWorkflowProgress: vi.fn(),
     resumeStackWithContinuation: vi.fn(),
+    autoResolveConflicts: vi.fn(),
   };
 
   const mockDockerRuntime = {
@@ -1660,6 +1661,54 @@ describe('IPC Handlers', () => {
   });
 
   // =========================================================================
+  // PR Auto-Resolve
+  // =========================================================================
+  describe('pr:autoResolve', () => {
+    it('delegates to stackManager.autoResolveConflicts and returns the result', async () => {
+      mockStackManager.autoResolveConflicts.mockResolvedValue({ status: 'resolved' });
+
+      const result = await invokeHandler('pr:autoResolve', 'T-1', '/proj');
+
+      expect(mockStackManager.autoResolveConflicts).toHaveBeenCalledWith('T-1', '/proj');
+      expect(result).toEqual({ status: 'resolved' });
+    });
+
+    it('propagates errors thrown by autoResolveConflicts', async () => {
+      mockStackManager.autoResolveConflicts.mockRejectedValue(new Error('Stack "T-1" not found'));
+
+      await expect(invokeHandler('pr:autoResolve', 'T-1', '/proj')).rejects.toThrow('Stack "T-1" not found');
+    });
+
+    it('returns no_conflicts when PR is already mergeable', async () => {
+      mockStackManager.autoResolveConflicts.mockResolvedValue({ status: 'no_conflicts' });
+
+      const result = await invokeHandler('pr:autoResolve', 'T-2', '/proj');
+
+      expect(result).toEqual({ status: 'no_conflicts' });
+    });
+
+    it('returns unknown_state when mergeable is UNKNOWN', async () => {
+      mockStackManager.autoResolveConflicts.mockResolvedValue({ status: 'unknown_state' });
+
+      const result = await invokeHandler('pr:autoResolve', 'T-3', '/proj');
+
+      expect(result).toEqual({ status: 'unknown_state' });
+    });
+
+    it('returns failed when agent could not resolve', async () => {
+      mockStackManager.autoResolveConflicts.mockResolvedValue({
+        status: 'failed',
+        error: 'Auto-resolve failed: inner agent could not resolve conflicts or verify failed',
+      });
+
+      const result = await invokeHandler('pr:autoResolve', 'T-4', '/proj') as { status: string; error: string };
+
+      expect(result.status).toBe('failed');
+      expect(result.error).toMatch(/inner agent/);
+    });
+  });
+
+  // =========================================================================
   // Phase-aware retryRefinementAsync
   // =========================================================================
   describe('tickets:retryRefinementAsync', () => {
@@ -1917,8 +1966,11 @@ describe('IPC Handlers', () => {
       'pr:create',
       'pr:merge',
       'pr:createAuto',
+      'pr:autoResolve',
       'projectTicketConfig:get',
       'projectTicketConfig:set',
+      'stacks:getNeedsHumanQuestions',
+      'stacks:resumeNeedsHuman',
     ];
 
     it('registers all expected IPC channels', () => {

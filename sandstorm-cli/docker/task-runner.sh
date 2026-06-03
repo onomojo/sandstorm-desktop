@@ -42,6 +42,11 @@ check_for_stop_and_ask() {
     reason=$(echo "$stop_line" | sed 's/.*STOP_AND_ASK:[[:space:]]*//')
     echo "$reason" > /tmp/claude-stop-reason.txt
     log_loop "Agent signaled STOP_AND_ASK: $reason"
+    if [ -f /tmp/claude-stop-questions.json ]; then
+      local questions_content
+      questions_content=$(cat /tmp/claude-stop-questions.json 2>/dev/null || echo "")
+      log_loop "Structured questions: $questions_content"
+    fi
     return 0
   fi
   return 1

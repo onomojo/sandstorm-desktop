@@ -65,6 +65,7 @@ export interface Task {
   review_verdicts: string | null;
   verify_outputs: string | null;
   execution_summary: string | null;
+  needs_human_questions: string | null;
   execution_started_at: string | null;
   execution_finished_at: string | null;
   review_started_at: string | null;
@@ -534,6 +535,13 @@ export class Registry {
       this.setSchemaVersion(16);
     }
 
+    if (currentVersion < 17) {
+      // Structured questions emitted by the agent at STOP_AND_ASK time.
+      // Stored as a JSON string (RefineQuestion[]) so the renderer can render them.
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN needs_human_questions TEXT'); } catch { /* exists */ }
+      this.setSchemaVersion(17);
+    }
+
   }
 
   // --- Projects ---
@@ -636,10 +644,10 @@ export class Registry {
     }
   }
 
-  completeTaskNeedsHuman(taskId: number, reason: string): void {
+  completeTaskNeedsHuman(taskId: number, reason: string, questionsJson?: string | null): void {
     this.db.prepare(
-      "UPDATE tasks SET status = 'needs_human', exit_code = 1, warnings = ?, finished_at = datetime('now') WHERE id = ?"
-    ).run(reason, taskId);
+      "UPDATE tasks SET status = 'needs_human', exit_code = 1, warnings = ?, needs_human_questions = ?, finished_at = datetime('now') WHERE id = ?"
+    ).run(reason, questionsJson ?? null, taskId);
 
     const task = this.db.prepare(
       'SELECT stack_id FROM tasks WHERE id = ?'
@@ -647,6 +655,18 @@ export class Registry {
     if (task) {
       this.updateStackStatus(task.stack_id, 'needs_human');
     }
+  }
+
+  reopenTaskForResume(taskId: number): void {
+    this.db.prepare(
+      "UPDATE tasks SET status = 'running', finished_at = NULL, exit_code = NULL WHERE id = ?"
+    ).run(taskId);
+  }
+
+  getNeedsHumanQuestions(stackId: string): string | null {
+    const task = this.getMostRecentTask(stackId);
+    if (!task || task.status !== 'needs_human') return null;
+    return task.needs_human_questions ?? null;
   }
 
   completeTaskVerifyBlockedEnvironmental(taskId: number, reason: string): void {

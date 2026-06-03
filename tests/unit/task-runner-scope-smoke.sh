@@ -76,10 +76,14 @@ LOG
 # ---------------------------------------------------------------------------
 
 # Extract everything up to (not including) the "# ─── Main Loop" line
+STOP_QUESTIONS_FILE="$tmpdir/claude-stop-questions.json"
+
 FUNC_SOURCE=$(sed -n '1,/^# ─── Main Loop/p' "$TASK_RUNNER" | head -n -1)
 
 # Override the stop-reason path inside the function before eval
 FUNC_SOURCE="${FUNC_SOURCE//\/tmp\/claude-stop-reason.txt/$STOP_REASON_FILE}"
+# Override the stop-questions path inside the function before eval
+FUNC_SOURCE="${FUNC_SOURCE//\/tmp\/claude-stop-questions.json/$STOP_QUESTIONS_FILE}"
 
 eval "$FUNC_SOURCE"
 
@@ -131,8 +135,22 @@ if [ "$BEFORE_INT_DIFF" != "$AFTER_INT_DIFF" ]; then
   FAIL=1
 fi
 
+# ---------------------------------------------------------------------------
+# Additional: verify questions JSON file detection is logged when present.
+# ---------------------------------------------------------------------------
+SAMPLE_QUESTIONS='[{"id":"q1","question":"Fix out-of-scope file?","options":[{"id":"skip","label":"Skip","recommended":true}]}]'
+echo "$SAMPLE_QUESTIONS" > "$STOP_QUESTIONS_FILE"
+
+LOG_OUTPUT=$(check_for_stop_and_ask "$TASK_LOG" 2>&1 || true)
+if ! echo "$LOG_OUTPUT" | grep -q '"q1"'; then
+  echo "FAIL: check_for_stop_and_ask did not forward questions JSON content" >&2
+  FAIL=1
+fi
+
+rm -f "$STOP_QUESTIONS_FILE"
+
 if [ $FAIL -eq 0 ]; then
-  echo "PASS: status=needs_human, reason captured, no tests/integration/ diff"
+  echo "PASS: status=needs_human, reason captured, questions JSON forwarded, no tests/integration/ diff"
   exit 0
 else
   echo ""

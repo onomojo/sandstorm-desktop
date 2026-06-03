@@ -37,6 +37,9 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     discardInFlight,
     discardErrors,
     removeRefinementSession,
+    autoResolveConflicts,
+    autoResolveInFlight,
+    autoResolveErrors,
   } = useAppStore();
 
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
@@ -49,6 +52,8 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const mergeInflight = mergeInFlight[stackKey] ?? false;
   const discardInflight = discardInFlight[stackKey] ?? false;
   const discardError = discardErrors[stackKey];
+  const autoResolveInflight = autoResolveInFlight[stackKey] ?? false;
+  const autoResolveError = autoResolveErrors[stackKey];
 
   const handleRefine = () => {
     openRefineDialogFromCard(ticket.ticket_id, ticket.project_dir, ticket.column as KanbanColumn);
@@ -75,6 +80,10 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
   const handleMerge = () => {
     void mergeTicket(ticket.ticket_id, ticket.project_dir);
+  };
+
+  const handleAutoResolve = () => {
+    void autoResolveConflicts(ticket.ticket_id, ticket.project_dir);
   };
 
   const handleResume = () => {
@@ -347,6 +356,31 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               {mergeInflight ? 'Merging…' : 'Merge'}
             </button>
           )}
+          {autoResolveError && (
+            <div
+              className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2 py-1.5 break-words"
+              data-testid={`ticket-card-auto-resolve-error-${ticket.ticket_id}`}
+            >
+              {autoResolveError}
+            </div>
+          )}
+          <button
+            onClick={handleAutoResolve}
+            disabled={autoResolveInflight}
+            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-surface-hover text-sandstorm-muted border border-sandstorm-border hover:border-sandstorm-accent/30 hover:text-sandstorm-text transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
+            data-testid={`ticket-card-auto-resolve-${ticket.ticket_id}`}
+          >
+            {autoResolveInflight ? (
+              <>
+                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="animate-spin flex-shrink-0">
+                  <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="48" strokeDashoffset="32"/>
+                </svg>
+                Resolving…
+              </>
+            ) : (
+              'Auto-resolve conflicts'
+            )}
+          </button>
           {discardSection}
         </div>
       )}
