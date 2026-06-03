@@ -36,6 +36,16 @@ const SUSPICIOUS_DURATION_MS = 30_000;
 const BACKOFF_BASE_MS = 500;
 const BACKOFF_MAX_MS = 30_000;
 
+/** How often the background liveness check runs while a task is 'running' (ms) */
+export const LIVENESS_CHECK_INTERVAL_MS = 60_000;
+/** No raw-log growth for this long ⇒ candidate stall (pending process-liveness confirmation) */
+export const LIVENESS_STALL_THRESHOLD_MS = 5 * 60_000;
+
+/** Terminal statuses used by the liveness check's idempotency guard */
+const LIVENESS_TERMINAL_STATUSES = new Set([
+  'completed', 'failed', 'needs_human', 'verify_blocked_environmental', 'token_limited',
+]);
+
 export class TaskWatcher extends EventEmitter {
   private watchers = new Map<string, NodeJS.Timeout>();
   private errorCounts = new Map<string, number>();
@@ -58,15 +68,41 @@ export class TaskWatcher extends EventEmitter {
   /** Track container IDs for each watched stack (for on-demand progress queries) */
   private containerIds = new Map<string, string>();
 
+  /** Liveness tracking — last known /tmp/claude-raw.log size per stack */
+  private livenessLogSize = new Map<string, number>();
+  /** Liveness tracking — timestamp of last observed log growth per stack */
+  private livenessLastActivityAt = new Map<string, number>();
+  /** Liveness tracking — setInterval handles for the periodic liveness checks */
+  private livenessTimers = new Map<string, ReturnType<typeof setInterval>>();
+  /** Effective liveness check interval (overridable in tests) */
+  private livenessCheckIntervalMs: number;
+  /** Effective stall threshold (overridable in tests) */
+  private livenessStallThresholdMs: number;
+
+  /** Callback invoked when a stall is confirmed and investigation should be dispatched */
+  private onDispatchInvestigation?: (stackId: string, task: Task) => Promise<void>;
+
   constructor(
     private registry: Registry,
     private dockerRuntime: ContainerRuntime,
     private podmanRuntime: ContainerRuntime,
-    options?: { pollInterval?: number; tokenPollInterval?: number }
+    options?: {
+      pollInterval?: number;
+      tokenPollInterval?: number;
+      livenessCheckInterval?: number;
+      livenessStallThreshold?: number;
+    }
   ) {
     super();
     this.pollInterval = options?.pollInterval ?? 2000;
     this.tokenPollInterval = options?.tokenPollInterval ?? 5_000;
+    this.livenessCheckIntervalMs = options?.livenessCheckInterval ?? LIVENESS_CHECK_INTERVAL_MS;
+    this.livenessStallThresholdMs = options?.livenessStallThreshold ?? LIVENESS_STALL_THRESHOLD_MS;
+  }
+
+  /** Register a callback invoked when a stalled task needs investigation dispatch */
+  setDispatchInvestigation(callback: (stackId: string, task: Task) => Promise<void>): void {
+    this.onDispatchInvestigation = callback;
   }
 
   /**
@@ -96,6 +132,16 @@ export class TaskWatcher extends EventEmitter {
     this.stalePollCounts.set(stackId, 0);
     this.containerIds.set(stackId, containerId);
 
+    // Initialize liveness tracking — assume active at watch start
+    this.livenessLogSize.set(stackId, 0);
+    this.livenessLastActivityAt.set(stackId, Date.now());
+    const livenessTimer = setInterval(() => {
+      this.checkLiveness(stackId, containerId).catch((err) => {
+        console.warn(`[TaskWatcher] Liveness check error for ${stackId}:`, (err as Error)?.message ?? err);
+      });
+    }, this.livenessCheckIntervalMs);
+    this.livenessTimers.set(stackId, livenessTimer);
+
     this.schedulePoll(stackId, containerId, this.pollInterval);
   }
 
@@ -117,6 +163,15 @@ export class TaskWatcher extends EventEmitter {
       controller.abort();
       this.activeOutputStreams.delete(stackId);
     }
+
+    // Clean up liveness tracking
+    const livenessTimer = this.livenessTimers.get(stackId);
+    if (livenessTimer) {
+      clearInterval(livenessTimer);
+      this.livenessTimers.delete(stackId);
+    }
+    this.livenessLogSize.delete(stackId);
+    this.livenessLastActivityAt.delete(stackId);
   }
 
   unwatchAll(): void {
@@ -503,6 +558,97 @@ export class TaskWatcher extends EventEmitter {
       this.readTaskIterations(taskId, stackId, containerId).catch(() => {}),
       this.readTaskMetadata(taskId, stackId, containerId).catch(() => {}),
     ]);
+  }
+
+  /**
+   * Background liveness check for a running task. Fires every LIVENESS_CHECK_INTERVAL_MS.
+   * Uses /tmp/claude-raw.log size growth as the activity signal. If no growth is seen
+   * for LIVENESS_STALL_THRESHOLD_MS AND pgrep confirms the claude process is dead,
+   * triggers automatic investigation-and-recovery.
+   */
+  private async checkLiveness(stackId: string, containerId: string): Promise<void> {
+    // Guard: abort if no longer watching (e.g. unwatch was called concurrently)
+    if (!this.watchers.has(stackId)) return;
+
+    const runtime = this.getRuntimeForStack(stackId);
+
+    // 1. Read current raw log size — do NOT update lastActivityAt on exec failure
+    try {
+      const sizeResult = await runtime.exec(containerId, ['stat', '-c', '%s', '/tmp/claude-raw.log']);
+      const currentSize = parseInt(sizeResult.stdout.trim(), 10);
+      if (!isNaN(currentSize)) {
+        const lastSize = this.livenessLogSize.get(stackId) ?? 0;
+        if (currentSize > lastSize) {
+          // Log grew — reset stall clock
+          this.livenessLogSize.set(stackId, currentSize);
+          this.livenessLastActivityAt.set(stackId, Date.now());
+        }
+      }
+      // NaN size: treat like transient error — don't update anything
+    } catch {
+      // Exec error (container gone, daemon down) — skip this cycle entirely
+      // to avoid falsely declaring a stall (issue spec: transient errors must
+      // not count as no-log-growth and must not reset lastActivityAt)
+      return;
+    }
+
+    // 2. Not yet stalled
+    const lastActivity = this.livenessLastActivityAt.get(stackId) ?? Date.now();
+    if (Date.now() - lastActivity < this.livenessStallThresholdMs) return;
+
+    // 3. Candidate stall — confirm process is actually dead before recovering
+    try {
+      const pgrepResult = await runtime.exec(containerId, ['pgrep', '-f', 'claude']);
+      if (pgrepResult.stdout.trim()) return; // Process alive — long quiet tool call, not stalled
+    } catch {
+      // pgrep exec failed — skip recovery to avoid false positive
+      return;
+    }
+
+    // 4. Process dead + stalled — stop liveness timer to prevent double-recovery
+    const livenessTimer = this.livenessTimers.get(stackId);
+    if (livenessTimer) {
+      clearInterval(livenessTimer);
+      this.livenessTimers.delete(stackId);
+    }
+
+    // 5. Idempotency guard: re-read status file before dispatching recovery
+    try {
+      const statusResult = await runtime.exec(containerId, ['cat', '/tmp/claude-task.status']);
+      const status = statusResult.stdout.trim();
+      if (LIVENESS_TERMINAL_STATUSES.has(status)) {
+        // Status became terminal concurrently — normal poll will handle it
+        return;
+      }
+    } catch {
+      // Can't read status — skip recovery to avoid false positive
+      return;
+    }
+
+    // 6. Still 'running' — look up task and dispatch investigation
+    const task = this.registry.getRunningTask(stackId);
+    if (!task) return; // Already resolved by another path
+
+    if (!task.session_id) {
+      // No session_id — cannot resume; mark needs_human (edge case 2)
+      this.registry.completeTaskNeedsHuman(
+        task.id,
+        'Task stalled with no resumable session — needs human review'
+      );
+      this.onStatusChange?.();
+      this.unwatch(stackId);
+      return;
+    }
+
+    // 7. Dispatch investigation via callback (fire-and-forget; errors logged by caller)
+    if (this.onDispatchInvestigation) {
+      this.onDispatchInvestigation(stackId, task).catch((err) => {
+        console.warn(
+          `[TaskWatcher] Investigation dispatch failed for ${stackId}:`,
+          (err as Error)?.message ?? err
+        );
+      });
+    }
   }
 
   /**

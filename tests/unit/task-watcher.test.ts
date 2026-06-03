@@ -650,7 +650,13 @@ describe('TaskWatcher', () => {
     expect(taskFailed).toBe(true);
 
     const execFn = runtime.exec as ReturnType<typeof vi.fn>;
-    expect(execFn.mock.calls.length).toBe(30);
+    // Count only the status-poll calls (backoff cycles) — liveness checks add
+    // additional exec calls (stat /tmp/claude-raw.log) that are not part of
+    // the backoff loop.
+    const backoffCalls = execFn.mock.calls.filter(
+      ([_id, cmd]: [string, string[]]) => Array.isArray(cmd) && cmd.includes('/tmp/claude-task.status')
+    );
+    expect(backoffCalls.length).toBe(30);
 
     watcher.unwatchAll();
     vi.useRealTimers();

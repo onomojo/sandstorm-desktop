@@ -24,6 +24,21 @@ const INVESTIGATE_PROMPT =
   'Also write the exit code to /tmp/claude-task.exit: "0" for completed, "1" for all others. ' +
   'Stop immediately after writing these files — do not perform any other work.';
 
+/**
+ * Recovery prompt for the live liveness check. Unlike INVESTIGATE_PROMPT (which
+ * is used for fresh-dispatch investigation), this is delivered via --resume
+ * <session_id> so the original session can inspect its own prior context.
+ * The key difference: if work is incomplete, this prompt instructs the session
+ * to finish the remaining work rather than just writing a terminal status.
+ */
+export const INVESTIGATE_AND_FINISH_PROMPT =
+  'Your task\'s status was stuck at "running" — the process died before writing a terminal status. ' +
+  'Inspect your prior work: run "git status", "git log --oneline -10", check test results, and review the tail of /tmp/claude-raw.log. ' +
+  'If all intended work is complete and tests pass, write "completed" to /tmp/claude-task.status and "0" to /tmp/claude-task.exit, then stop. ' +
+  'If work was attempted but tests fail or an error occurred, write "failed" to /tmp/claude-task.status and "1" to /tmp/claude-task.exit, then stop. ' +
+  'If the task is genuinely incomplete, finish the remaining work — do NOT write to the status files yourself; ' +
+  'let the normal task lifecycle write the terminal status when you are done.';
+
 export interface ReconcilerDeps {
   fetchTicketStateFn?: (ticketId: string, cwd: string) => Promise<'OPEN' | 'CLOSED'>;
   workspaceExistsFn?: (stack: Stack) => boolean;
