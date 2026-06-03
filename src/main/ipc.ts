@@ -919,6 +919,14 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return sessionMonitor.forcePoll();
   });
 
+  ipcMain.handle('stacks:getNeedsHumanQuestions', (_event, stackId: string) => {
+    return registry.getNeedsHumanQuestions(stackId);
+  });
+
+  ipcMain.handle('stacks:resumeNeedsHuman', async (_event, stackId: string, answers: string) => {
+    await stackManager.resumeNeedsHumanStack(stackId, answers);
+  });
+
   ipcMain.on('session:activity', () => {
     sessionMonitor.reportActivity();
   });

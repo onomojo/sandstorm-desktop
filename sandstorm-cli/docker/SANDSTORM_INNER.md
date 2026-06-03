@@ -76,13 +76,32 @@ The in-scope files list the *primary* targets. You are authorized — and expect
 
 ### STOP_AND_ASK — deadlock break
 
-If you determine that verify cannot pass **without** making out-of-scope changes (e.g., a pre-existing broken test unrelated to your ticket keeps failing), do NOT silently drift. Instead, output exactly:
+If you determine that verify cannot pass **without** making out-of-scope changes (e.g., a pre-existing broken test unrelated to your ticket keeps failing), do NOT silently drift. Instead:
+
+**Step 1 — write structured questions to `/tmp/claude-stop-questions.json`** (MUST be done before the STOP_AND_ASK line). The file MUST contain a JSON array of `RefineQuestion` objects:
+
+```json
+[
+  {
+    "id": "q1",
+    "question": "What should we do about the pre-existing broken test in foo.test.ts?",
+    "options": [
+      { "id": "skip", "label": "Skip it for now and re-dispatch after fixing", "recommended": true },
+      { "id": "fix", "label": "Fix it as part of this task (out-of-scope exception)" }
+    ]
+  }
+]
+```
+
+Required fields: `id` (string), `question` (string), `options` (array). Each option needs `id` and `label`; mark one with `"recommended": true` to pre-select it.
+
+**Step 2 — output exactly:**
 
 ```
 STOP_AND_ASK: <one-sentence reason naming the out-of-scope file or problem>
 ```
 
-on its own line, then stop immediately without making further changes. The harness will halt the loop, set the stack status to `needs_human`, and surface your reason to the human operator. The human will then fix the pre-existing issue separately and re-dispatch your ticket.
+on its own line, then stop immediately without making further changes. The harness will halt the loop, set the stack status to `needs_human`, and surface your questions to the human operator. The human will answer your questions in the UI and re-dispatch your ticket with the answers as context.
 
 ## What you should NOT do
 

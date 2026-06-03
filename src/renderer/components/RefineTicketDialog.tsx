@@ -2,6 +2,7 @@ import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react'
 import { useAppStore, SpecGateResult, RefinementSession, RefineQuestion } from '../store';
 import type { KanbanColumn } from '../store';
 import { ConfirmDialog } from './ConfirmDialog';
+import { QuestionList, QuestionAnswer, normalizeQuestion, combineAnswers, defaultAnswers, isSubmitDisabled } from './QuestionList';
 
 type LocalPhase = 'input' | 'starting';
 
@@ -58,7 +59,7 @@ export function RefineTicketDialog() {
 
   const [ticketId, setTicketId] = useState('');
   const [localPhase, setLocalPhase] = useState<LocalPhase>('input');
-  const [answers, setAnswers] = useState<{ optionId: string | null; text: string }[]>([]);
+  const [answers, setAnswers] = useState<QuestionAnswer[]>([]);
   const [localError, setLocalError] = useState<string | null>(null);
   const [stackName, setStackName] = useState('');
   const [confirmingCancel, setConfirmingCancel] = useState(false);
@@ -79,15 +80,8 @@ export function RefineTicketDialog() {
   // Defensively coerce legacy string[] items (old persisted sessions) to RefineQuestion.
   useEffect(() => {
     if (gate && !gate.passed && gate.questions.length > 0) {
-      const normalized = gate.questions.map((q): RefineQuestion =>
-        typeof q === 'string'
-          ? { id: 'q', question: q as string, options: [] }
-          : (!Array.isArray((q as RefineQuestion).options) ? { ...(q as RefineQuestion), options: [] } : q as RefineQuestion)
-      );
-      setAnswers(normalized.map((q) => {
-        const firstRecommended = q.options.find((o) => o.recommended === true);
-        return { optionId: firstRecommended ? firstRecommended.id : null, text: '' };
-      }));
+      const normalized = gate.questions.map((q, i) => normalizeQuestion(q, i));
+      setAnswers(defaultAnswers(normalized));
     }
   }, [gate]);
 
@@ -185,23 +179,9 @@ export function RefineTicketDialog() {
 
   const handleSubmitAnswers = useCallback(async () => {
     if (!session || !projectDir) return;
-    const questions = gate?.questions ?? [];
-    const combined = questions
-      .map((q, i) => {
-        const ans = answers[i];
-        const questionText = typeof q === 'string' ? q : q.question;
-        const selectedLabel =
-          ans?.optionId != null
-            ? (typeof q === 'string' ? null : q.options.find((o) => o.id === ans.optionId)?.label ?? null)
-            : null;
-        const lines = [
-          `Q${i + 1}: ${questionText}`,
-          `Selected: ${selectedLabel ?? '(none)'}`,
-          `Additional context: ${ans?.text.trim() || '(none)'}`,
-        ];
-        return lines.join('\n');
-      })
-      .join('\n\n');
+    const rawQuestions = gate?.questions ?? [];
+    const questions = rawQuestions.map((q, i) => normalizeQuestion(q, i));
+    const combined = combineAnswers(questions, answers);
     setLocalError(null);
     // Update session optimistically to 'running' while we wait
     upsertRefinementSession({ ...session, status: 'running', phase: 'refine' });
@@ -473,67 +453,12 @@ export function RefineTicketDialog() {
                     No structured questions parsed. The full report was committed to the ticket — open it on GitHub to read it.
                   </div>
                 ) : (
-                  <div className="space-y-4">
-                    {gate.questions.map((q, i) => {
-                      const qItem: RefineQuestion = typeof q === 'string'
-                        ? { id: `q${i}`, question: q as string, options: [] }
-                        : (!Array.isArray((q as RefineQuestion).options) ? { ...(q as RefineQuestion), options: [] } : q as RefineQuestion);
-                      const ans = answers[i] ?? { optionId: null, text: '' };
-                      return (
-                        <div key={i} className="space-y-2">
-                          <p className="text-xs text-sandstorm-text-secondary">
-                            <span className="text-sandstorm-muted">{i + 1}.</span> {qItem.question}
-                          </p>
-                          {qItem.options.length > 0 && (
-                            <div className="space-y-1 pl-3">
-                              {qItem.options.map((opt, optIdx) => {
-                                const isFirstRecommended = opt.recommended === true && optIdx === qItem.options.findIndex((o) => o.recommended === true);
-                                return (
-                                  <label key={opt.id} className="flex items-center gap-2 cursor-pointer">
-                                    <input
-                                      type="radio"
-                                      name={`refine-q-${i}`}
-                                      value={opt.id}
-                                      checked={ans.optionId === opt.id}
-                                      onChange={() => {}}
-                                      onClick={() => {
-                                        const next = [...answers];
-                                        next[i] = { ...ans, optionId: ans.optionId === opt.id ? null : opt.id };
-                                        setAnswers(next);
-                                      }}
-                                      className="accent-sandstorm-accent"
-                                      data-testid={`refine-option-${i}-${opt.id}`}
-                                    />
-                                    <span className="text-xs text-sandstorm-text">{opt.label}</span>
-                                    {isFirstRecommended && (
-                                      <span
-                                        className="text-xs font-medium text-sandstorm-accent border border-sandstorm-accent/40 rounded px-1.5 py-0.5 leading-none"
-                                        data-testid={`refine-option-recommended-${i}-${opt.id}`}
-                                      >
-                                        Recommended
-                                      </span>
-                                    )}
-                                  </label>
-                                );
-                              })}
-                            </div>
-                          )}
-                          <textarea
-                            value={ans.text}
-                            onChange={(e) => {
-                              const next = [...answers];
-                              next[i] = { ...ans, text: e.target.value };
-                              setAnswers(next);
-                            }}
-                            rows={2}
-                            placeholder="Add more detail…"
-                            className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2 text-xs text-sandstorm-text resize-none outline-none focus:border-sandstorm-accent/50 focus:ring-1 focus:ring-sandstorm-accent/20"
-                            data-testid={`refine-answer-${i}`}
-                          />
-                        </div>
-                      );
-                    })}
-                  </div>
+                  <QuestionList
+                    questions={gate.questions.map((q, i) => normalizeQuestion(q, i))}
+                    answers={answers}
+                    onAnswersChange={setAnswers}
+                    testIdPrefix="refine"
+                  />
                 )}
               </div>
             )}
@@ -595,7 +520,7 @@ export function RefineTicketDialog() {
                 {showFailState && gate && gate.questions.length > 0 && (
                   <button
                     onClick={handleSubmitAnswers}
-                    disabled={answers.some((a) => a.optionId === null && !a.text.trim())}
+                    disabled={isSubmitDisabled(answers)}
                     className="px-5 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white text-xs font-medium rounded-lg disabled:opacity-40 disabled:cursor-not-allowed transition-all active:scale-[0.98] shadow-glow"
                     data-testid="refine-submit-answers"
                   >

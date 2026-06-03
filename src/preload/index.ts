@@ -71,6 +71,8 @@ export interface SandstormAPI {
     setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
     detectStale: () => Promise<unknown[]>;
     cleanupStale: (workspacePaths: string[]) => Promise<unknown[]>;
+    getNeedsHumanQuestions: (stackId: string) => Promise<string | null>;
+    resumeNeedsHuman: (stackId: string, answers: string) => Promise<void>;
   };
   tasks: {
     dispatch: (stackId: string, prompt: string, model?: string) => Promise<unknown>;
@@ -269,6 +271,10 @@ const api: SandstormAPI = {
     detectStale: () => ipcRenderer.invoke('stacks:detectStale'),
     cleanupStale: (workspacePaths: string[]) =>
       ipcRenderer.invoke('stacks:cleanupStale', workspacePaths),
+    getNeedsHumanQuestions: (stackId: string) =>
+      ipcRenderer.invoke('stacks:getNeedsHumanQuestions', stackId),
+    resumeNeedsHuman: (stackId: string, answers: string) =>
+      ipcRenderer.invoke('stacks:resumeNeedsHuman', stackId, answers),
   },
   tasks: {
     dispatch: (stackId, prompt, model?) =>

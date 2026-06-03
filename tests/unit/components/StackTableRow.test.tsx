@@ -215,10 +215,10 @@ describe('StackTableRow primary-action chip (#315)', () => {
     expect(screen.getByTestId('row-make-pr-fail1')).toBeDefined();
   });
 
-  it('shows Make PR chip when status is needs_human and pr_url is null', () => {
+  it('does NOT show Make PR chip for needs_human (regression: stray PR button)', () => {
     vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
     renderRow(makeStack({ id: 'nh1', status: 'needs_human', pr_url: null }));
-    expect(screen.getByTestId('row-make-pr-nh1')).toBeDefined();
+    expect(screen.queryByTestId('row-make-pr-nh1')).toBeNull();
   });
 
   it('shows Make PR chip when status is verify_blocked_environmental and pr_url is null', () => {
@@ -332,6 +332,44 @@ describe('StackTableRow session_paused Resume button', () => {
     fireEvent.click(screen.getByTestId('row-resume-paused2'));
 
     expect(resumeFn).toHaveBeenCalledWith('paused2', true);
+  });
+});
+
+describe('StackTableRow needs_human Answer button (#461)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows Answer button for needs_human stacks', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'nh1', status: 'needs_human', pr_url: null }));
+    expect(screen.getByTestId('row-answer-nh1')).toBeDefined();
+  });
+
+  it('does not show Answer button for other statuses', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'done', status: 'completed', pr_url: null }));
+    expect(screen.queryByTestId('row-answer-done')).toBeNull();
+  });
+
+  it('does not show PR button for needs_human (regression check)', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'nh2', status: 'needs_human', pr_url: null }));
+    expect(screen.queryByTestId('row-make-pr-nh2')).toBeNull();
+  });
+
+  it('opens AnswerQuestionsModal when Answer button is clicked', async () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    (window.sandstorm.stacks as Record<string, unknown>).getNeedsHumanQuestions = vi.fn().mockResolvedValue(null);
+    renderRow(makeStack({ id: 'nh3', status: 'needs_human', pr_url: null }));
+    fireEvent.click(screen.getByTestId('row-answer-nh3'));
+    expect(screen.getByTestId('answer-questions-modal')).toBeDefined();
   });
 });
 

@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 import { getStackDuration, isTerminalStatus, makePrEligible, DURATION_UPDATE_INTERVAL } from '../utils/duration';
 import { StackRowPopover } from './StackRowPopover';
+import { AnswerQuestionsModal } from './AnswerQuestionsModal';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -50,6 +51,7 @@ export function StackTableRow({
     getStackDuration(stack.created_at, stack.updated_at, stack.status),
   );
   const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
+  const [showAnswerModal, setShowAnswerModal] = useState(false);
   const rowRef = useRef<HTMLTableRowElement>(null);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -125,6 +127,16 @@ export function StackTableRow({
     } catch (err) {
       alert(`Failed to resume: ${err}`);
     }
+  };
+
+  const handleAnswer = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setShowAnswerModal(true);
+  };
+
+  const handleAnswerResumed = async () => {
+    setShowAnswerModal(false);
+    await refreshStacks();
   };
 
   const handlePrLink = (e: React.MouseEvent) => {
@@ -222,6 +234,16 @@ export function StackTableRow({
                 ▶ Resume
               </button>
             )}
+            {stack.status === 'needs_human' && (
+              <button
+                onClick={handleAnswer}
+                className="text-[10px] font-medium px-2 py-0.5 rounded bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-colors"
+                data-testid={`row-answer-${stack.id}`}
+                title="Answer the agent's questions and resume"
+              >
+                Answer
+              </button>
+            )}
             {makePrEligible(stack) && (
               <button
                 onClick={handleMakePr}
@@ -263,6 +285,17 @@ export function StackTableRow({
         <tr aria-hidden>
           <td colSpan={6} className="p-0">
             <StackRowPopover stack={stack} metrics={metrics} anchorRect={popoverRect} />
+          </td>
+        </tr>
+      )}
+      {showAnswerModal && (
+        <tr aria-hidden>
+          <td colSpan={6} className="p-0">
+            <AnswerQuestionsModal
+              stackId={stack.id}
+              onClose={() => setShowAnswerModal(false)}
+              onResumed={handleAnswerResumed}
+            />
           </td>
         </tr>
       )}

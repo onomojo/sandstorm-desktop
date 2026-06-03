@@ -1952,6 +1952,8 @@ describe('IPC Handlers', () => {
       'pr:autoResolve',
       'projectTicketConfig:get',
       'projectTicketConfig:set',
+      'stacks:getNeedsHumanQuestions',
+      'stacks:resumeNeedsHuman',
     ];
 
     it('registers all expected IPC channels', () => {

@@ -677,6 +677,8 @@ declare global {
         setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
         detectStale: () => Promise<StaleWorkspace[]>;
         cleanupStale: (workspacePaths: string[]) => Promise<CleanupResult[]>;
+        getNeedsHumanQuestions: (stackId: string) => Promise<string | null>;
+        resumeNeedsHuman: (stackId: string, answers: string) => Promise<void>;
       };
       tasks: {
         dispatch: (stackId: string, prompt: string, model?: string) => Promise<Task>;
