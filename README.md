@@ -1,10 +1,10 @@
-![Sandstorm Desktop](resources/icon.png)
+![Sandstorm](resources/icon.png)
 
-# Sandstorm Desktop
+# Sandstorm
 
 **Deploy a fleet of AI agents. Ship 10x faster.**
 
-Sandstorm Desktop is a local orchestration platform that spins up isolated AI coding agents in parallel. Each agent gets its own Docker environment with a full repo clone, running services, and a dedicated Claude Code instance. You dispatch work, review diffs, and push code — all from one interface.
+Sandstorm is a local orchestration platform that spins up isolated AI coding agents in parallel. Each agent gets its own Docker environment with a full repo clone, running services, and a dedicated Claude Code instance. You dispatch work, review diffs, and push code — all from one interface.
 
 No cloud. No waiting. No seat limits. Just you and as many agents as your machine can run.
 
@@ -41,20 +41,18 @@ You  --->  Outer Claude (orchestrator)
 
 ---
 
-## Install
+## Build from source
 
-### Linux
+Requires Node.js, Docker, and Git.
 
-Download `sandstorm-desktop-0.1.0-linux.AppImage` from the [latest release](https://github.com/onomojo/sandstorm-desktop/releases/latest).
+    git clone https://github.com/onomojo/sandstorm-desktop.git
+    cd sandstorm-desktop
+    npm run build
 
-```bash
-chmod +x sandstorm-desktop-0.1.0-linux.AppImage
-./sandstorm-desktop-0.1.0-linux.AppImage
-```
+`npm run build` runs the whole pipeline (install, compile, native-module rebuild, package) and is self-sufficient from a clean clone. When it finishes:
 
-### macOS
-
-Download `sandstorm-desktop-0.1.0-mac.dmg` from the [latest release](https://github.com/onomojo/sandstorm-desktop/releases/latest). Open it and drag Sandstorm Desktop to Applications.
+- **Linux:** run `release/sandstorm.AppImage`
+- **macOS:** open `release/sandstorm.dmg` and drag Sandstorm to Applications
 
 ---
 
@@ -71,7 +69,7 @@ Download `sandstorm-desktop-0.1.0-mac.dmg` from the [latest release](https://git
 
 ## Quick start
 
-1. Launch Sandstorm Desktop
+1. Launch Sandstorm
 2. **Open Project** — select a directory with a `docker-compose.yml`
 3. **Initialize** — if the project hasn't been set up, click "Initialize Sandstorm"
 4. **New Stack** — create an isolated workspace
@@ -100,28 +98,7 @@ npm test             # run tests
 npx tsc --noEmit     # type check
 ```
 
-### Build & package
-
-```bash
-npm run build
-npx electron-rebuild
-npm run package -- --config.npmRebuild=false
-```
-
-### Building for macOS
-
-macOS builds require macOS (for code signing):
-
-```bash
-git clone git@github.com:onomojo/sandstorm-desktop.git
-cd sandstorm-desktop
-npm install
-npm run build
-npx electron-rebuild
-npm run package -- --config.npmRebuild=false
-```
-
-Produces a `.dmg` in `release/`.
+The one full-build command is `npm run build`, which produces `release/sandstorm.AppImage` on Linux and `release/sandstorm.dmg` on macOS.
 
 ---
 

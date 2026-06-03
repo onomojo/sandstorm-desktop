@@ -1,7 +1,7 @@
 appId: com.sandstorm.desktop
-productName: Sandstorm Desktop
+productName: Sandstorm
 npmRebuild: false
-artifactName: "sandstorm-desktop-${version}.${ext}"
+artifactName: "sandstorm.${ext}"
 directories:
   output: release
   buildResources: resources
@@ -24,16 +24,16 @@ mac:
   target: [dmg]
   icon: resources/icon.icns
   category: public.app-category.developer-tools
-  artifactName: "sandstorm-desktop-${version}-mac.${ext}"
+  artifactName: "sandstorm.${ext}"
 win:
   target: [nsis]
   icon: resources/icon.ico
-  artifactName: "sandstorm-desktop-${version}-win.${ext}"
+  artifactName: "sandstorm.${ext}"
 linux:
   target: [AppImage]
   icon: resources/icon.png
   category: Development
-  artifactName: "sandstorm-desktop-${version}-linux.${ext}"
+  artifactName: "sandstorm.${ext}"
 nsis:
   oneClick: false
   allowToChangeInstallationDirectory: true
