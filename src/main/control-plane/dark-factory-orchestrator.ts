@@ -19,12 +19,20 @@ function makeStackName(ticketId: string): string {
   return id ? `ticket-${id}` : '';
 }
 
+/** Default per-stack readiness timeout (10 minutes). */
+const STACK_READY_TIMEOUT_MS = 600_000;
+
+/** Default poll interval when waiting for a stack to become ready. */
+const STACK_READY_POLL_INTERVAL_MS = 1_000;
+
 export class DarkFactoryOrchestrator {
   constructor(
     private readonly registry: Registry,
     private readonly stackManager: StackManager,
     private readonly agentBackend: AgentBackend,
     private readonly notifyUpdate: () => void,
+    private readonly stackReadyTimeoutMs: number = STACK_READY_TIMEOUT_MS,
+    private readonly pollIntervalMs: number = STACK_READY_POLL_INTERVAL_MS,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -37,6 +45,53 @@ export class DarkFactoryOrchestrator {
 
     this.startStack(ticketId, projectDir).catch((err) => {
       console.warn(`[DarkFactory] startStack failed for ${ticketId}:`, err);
+    });
+  }
+
+  /**
+   * Invoked once when dark factory transitions from disabled → enabled.
+   * Serially starts a stack for every ticket currently in spec_ready, in
+   * board order (oldest created_at first). Waits for each stack to reach
+   * 'up' or 'failed' before dispatching the next one. On failure or
+   * timeout the failed ticket stays in in_stack and the batch continues.
+   */
+  async handleDarkFactoryEnabled(projectDir: string): Promise<void> {
+    const tickets = this.registry.listBoardTickets(projectDir)
+      .filter((t) => t.column === 'spec_ready');
+
+    for (const ticket of tickets) {
+      const stackName = makeStackName(ticket.ticket_id);
+      if (!stackName) continue;
+
+      try {
+        await this.startStack(ticket.ticket_id, projectDir);
+      } catch (err) {
+        console.warn(`[DarkFactory] handleDarkFactoryEnabled: startStack failed for ${ticket.ticket_id}:`, err);
+        continue;
+      }
+
+      await this.awaitStackReady(stackName, this.stackReadyTimeoutMs);
+    }
+  }
+
+  /** Polls registry until the stack is 'up' or 'failed', or the timeout elapses. */
+  private awaitStackReady(stackName: string, timeoutMs: number): Promise<void> {
+    const start = Date.now();
+    return new Promise<void>((resolve) => {
+      const poll = () => {
+        const status = this.registry.getStack(stackName)?.status;
+        if (status === 'up' || status === 'failed') {
+          resolve();
+          return;
+        }
+        if (Date.now() - start >= timeoutMs) {
+          console.warn(`[DarkFactory] stack ${stackName} did not become ready within ${timeoutMs}ms, continuing`);
+          resolve();
+          return;
+        }
+        setTimeout(poll, this.pollIntervalMs);
+      };
+      poll();
     });
   }
 

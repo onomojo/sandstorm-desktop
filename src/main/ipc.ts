@@ -1505,7 +1505,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   ipcMain.handle('darkFactory:setEnabled', (_event, projectDir: string, enabled: boolean) => {
+    const prior = registry.getDarkFactoryEnabled(projectDir);
     registry.setDarkFactoryEnabled(projectDir, enabled);
+    if (!prior && enabled) {
+      darkFactoryOrchestrator?.handleDarkFactoryEnabled(projectDir).catch((err) => {
+        console.warn('[DarkFactory] handleDarkFactoryEnabled failed:', err);
+      });
+    }
   });
 
   ipcMain.handle('pr:autoResolve', async (_event, ticketId: string, projectDir: string) => {
