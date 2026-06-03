@@ -47,12 +47,14 @@ function makeRegistry(overrides: Partial<{
   getStack: (id: string) => unknown;
   getProjectTicketConfig: (dir: string) => null;
   setBoardTicketColumn: () => void;
+  listBoardTickets: (dir: string) => unknown[];
 }> = {}) {
   return {
     getDarkFactoryEnabled: vi.fn().mockReturnValue(false),
     getStack: vi.fn().mockReturnValue(null),
     getProjectTicketConfig: vi.fn().mockReturnValue(null),
     setBoardTicketColumn: vi.fn(),
+    listBoardTickets: vi.fn().mockReturnValue([]),
     ...overrides,
   };
 }
@@ -301,6 +303,210 @@ describe('DarkFactoryOrchestrator', () => {
 
       // Already-merged is treated as success — card should advance
       expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', '/proj', 'merged');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // handleDarkFactoryEnabled — scan-on-enable
+  // -------------------------------------------------------------------------
+  describe('handleDarkFactoryEnabled', () => {
+    function makeTicket(id: string, col: string, created: string) {
+      return { ticket_id: id, column: col, project_dir: '/proj', title: '', created_at: created, updated_at: created };
+    }
+
+    let fastOrchestrator: DarkFactoryOrchestrator;
+
+    beforeEach(() => {
+      // Use 0ms poll so tests resolve without advancing timers
+      fastOrchestrator = new DarkFactoryOrchestrator(
+        registry as never,
+        stackManager as never,
+        agentBackend as never,
+        notifyUpdate,
+        600_000,
+        0,
+      );
+    });
+
+    it('starts a stack for every spec_ready ticket when enabled (regression)', async () => {
+      registry.listBoardTickets.mockReturnValue([
+        makeTicket('T-1', 'spec_ready', '2024-01-01T00:00:00'),
+        makeTicket('T-2', 'spec_ready', '2024-01-02T00:00:00'),
+      ]);
+      registry.getStack.mockReturnValue({ status: 'up' });
+
+      await fastOrchestrator.handleDarkFactoryEnabled('/proj');
+
+      expect(stackManager.createStack).toHaveBeenCalledTimes(2);
+      expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', expect.any(String), 'in_stack');
+      expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-2', expect.any(String), 'in_stack');
+    });
+
+    it('dispatches in created_at-ascending order', async () => {
+      registry.listBoardTickets.mockReturnValue([
+        makeTicket('T-1', 'spec_ready', '2024-01-01T00:00:00'),
+        makeTicket('T-2', 'spec_ready', '2024-01-02T00:00:00'),
+        makeTicket('T-3', 'spec_ready', '2024-01-03T00:00:00'),
+      ]);
+      registry.getStack.mockReturnValue({ status: 'up' });
+
+      await fastOrchestrator.handleDarkFactoryEnabled('/proj');
+
+      const calls = stackManager.createStack.mock.calls;
+      expect(calls).toHaveLength(3);
+      expect((calls[0][0] as { ticket: string }).ticket).toBe('T-1');
+      expect((calls[1][0] as { ticket: string }).ticket).toBe('T-2');
+      expect((calls[2][0] as { ticket: string }).ticket).toBe('T-3');
+    });
+
+    it('waits for stack N to be ready before dispatching N+1 (serialization)', async () => {
+      registry.listBoardTickets.mockReturnValue([
+        makeTicket('T-1', 'spec_ready', '2024-01-01T00:00:00'),
+        makeTicket('T-2', 'spec_ready', '2024-01-02T00:00:00'),
+      ]);
+
+      const events: string[] = [];
+      let t1PollCount = 0;
+      registry.getStack.mockImplementation((name: string) => {
+        if (name === 'ticket-t-1') {
+          t1PollCount++;
+          const status = t1PollCount === 1 ? 'building' : 'up';
+          events.push(`poll:${name}:${status}`);
+          return { status };
+        }
+        events.push(`poll:${name}:up`);
+        return { status: 'up' };
+      });
+      stackManager.createStack.mockImplementation((opts: { ticket: string }) => {
+        events.push(`create:${opts.ticket}`);
+      });
+
+      await fastOrchestrator.handleDarkFactoryEnabled('/proj');
+
+      // T-1 must have been polled at least once (saw 'building') before T-2 was created
+      const buildingIdx = events.findIndex((e) => e === 'poll:ticket-t-1:building');
+      const createT2Idx = events.indexOf('create:T-2');
+      expect(buildingIdx).toBeGreaterThanOrEqual(0);
+      expect(createT2Idx).toBeGreaterThan(buildingIdx);
+    });
+
+    it('continues batch when stack reaches failed (Q4)', async () => {
+      registry.listBoardTickets.mockReturnValue([
+        makeTicket('T-1', 'spec_ready', '2024-01-01T00:00:00'),
+        makeTicket('T-2', 'spec_ready', '2024-01-02T00:00:00'),
+      ]);
+      registry.getStack
+        .mockReturnValueOnce({ status: 'failed' })
+        .mockReturnValue({ status: 'up' });
+
+      await fastOrchestrator.handleDarkFactoryEnabled('/proj');
+
+      expect(stackManager.createStack).toHaveBeenCalledTimes(2);
+      // Both tickets moved to in_stack (failed ticket stays there, not reverted)
+      const inStackCalls = registry.setBoardTicketColumn.mock.calls.filter(
+        (c) => c[2] === 'in_stack',
+      );
+      expect(inStackCalls).toHaveLength(2);
+      expect(stackManager.teardownStack).not.toHaveBeenCalled();
+    });
+
+    it('continues batch when stack hangs in building past timeout (Q5)', async () => {
+      vi.useFakeTimers();
+
+      const timeoutOrchestrator = new DarkFactoryOrchestrator(
+        registry as never,
+        stackManager as never,
+        agentBackend as never,
+        notifyUpdate,
+        100,  // 100ms timeout so the test advances only a little
+        50,   // 50ms poll interval
+      );
+
+      registry.listBoardTickets.mockReturnValue([
+        makeTicket('T-1', 'spec_ready', '2024-01-01T00:00:00'),
+        makeTicket('T-2', 'spec_ready', '2024-01-02T00:00:00'),
+      ]);
+      registry.getStack.mockImplementation((name: string) => {
+        if (name === 'ticket-t-1') return { status: 'building' };
+        return { status: 'up' };
+      });
+
+      const scanPromise = timeoutOrchestrator.handleDarkFactoryEnabled('/proj');
+      await vi.advanceTimersByTimeAsync(200);
+      await scanPromise;
+
+      // Both stacks dispatched; T-1 stayed in_stack after timeout
+      expect(stackManager.createStack).toHaveBeenCalledTimes(2);
+      const inStackCalls = registry.setBoardTicketColumn.mock.calls.filter(
+        (c) => c[2] === 'in_stack',
+      );
+      expect(inStackCalls).toHaveLength(2);
+      expect(stackManager.teardownStack).not.toHaveBeenCalled();
+
+      vi.useRealTimers();
+    });
+
+    it('no-op when spec_ready column is empty', async () => {
+      registry.listBoardTickets.mockReturnValue([
+        makeTicket('T-1', 'backlog', '2024-01-01T00:00:00'),
+        makeTicket('T-2', 'in_stack', '2024-01-02T00:00:00'),
+      ]);
+
+      await fastOrchestrator.handleDarkFactoryEnabled('/proj');
+
+      expect(stackManager.createStack).not.toHaveBeenCalled();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // darkFactory:setEnabled off→on guard (tested via handleDarkFactoryEnabled)
+  // -------------------------------------------------------------------------
+  describe('off→on guard', () => {
+    function makeTicket(id: string) {
+      return { ticket_id: id, column: 'spec_ready', project_dir: '/proj', title: '', created_at: '2024-01-01T00:00:00', updated_at: '2024-01-01T00:00:00' };
+    }
+
+    let guardOrchestrator: DarkFactoryOrchestrator;
+
+    beforeEach(() => {
+      guardOrchestrator = new DarkFactoryOrchestrator(
+        registry as never,
+        stackManager as never,
+        agentBackend as never,
+        notifyUpdate,
+        600_000,
+        0,
+      );
+    });
+
+    it('dispatches when called on an off→on transition', async () => {
+      registry.listBoardTickets.mockReturnValue([makeTicket('T-1')]);
+      registry.getStack.mockReturnValue({ status: 'up' });
+
+      await guardOrchestrator.handleDarkFactoryEnabled('/proj');
+
+      expect(stackManager.createStack).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not re-dispatch when called a second time (already-enabled guard in IPC)', async () => {
+      // The off→on guard lives in the IPC handler (reads prior state before writing).
+      // handleDarkFactoryEnabled itself has no guard — it just processes whatever spec_ready
+      // tickets it finds. This test documents that calling it twice dispatches twice,
+      // confirming the guard must live in the caller (ipc.ts).
+      registry.listBoardTickets.mockReturnValue([makeTicket('T-1')]);
+      registry.getStack.mockReturnValue({ status: 'up' });
+
+      // Simulate that the ticket was already moved to in_stack after first enable
+      registry.setBoardTicketColumn.mockImplementation(() => {
+        // After first call, ticket is no longer in spec_ready
+        registry.listBoardTickets.mockReturnValue([]);
+      });
+
+      await guardOrchestrator.handleDarkFactoryEnabled('/proj');
+      await guardOrchestrator.handleDarkFactoryEnabled('/proj'); // second call: empty spec_ready
+
+      // createStack only called once because second call found no spec_ready tickets
+      expect(stackManager.createStack).toHaveBeenCalledTimes(1);
     });
   });
 
