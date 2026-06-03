@@ -66,6 +66,8 @@ export function ModelSettingsModal() {
     setProjectModelSettings,
     getProjectTicketConfig,
     setProjectTicketConfig,
+    getDarkFactoryEnabled,
+    setDarkFactoryEnabled,
   } = useAppStore();
 
   const project = activeProject();
@@ -81,6 +83,10 @@ export function ModelSettingsModal() {
   const [projectOuter, setProjectOuter] = useState('global');
   const [projectDirty, setProjectDirty] = useState(false);
   const [projectLoaded, setProjectLoaded] = useState(false);
+
+  // Dark factory state
+  const [darkFactoryEnabled, setDarkFactoryEnabledLocal] = useState(false);
+  const [darkFactoryLoaded, setDarkFactoryLoaded] = useState(false);
 
   // Ticket config state
   const [ticketProvider, setTicketProvider] = useState<'github' | 'jira'>('github');
@@ -123,9 +129,12 @@ export function ModelSettingsModal() {
       setProjectInner('global');
       setProjectOuter('global');
     }
+    const dfEnabled = await getDarkFactoryEnabled(project.directory);
+    setDarkFactoryEnabledLocal(dfEnabled);
+    setDarkFactoryLoaded(true);
     setProjectLoaded(true);
     setProjectDirty(false);
-  }, [project, getProjectModelSettings]);
+  }, [project, getProjectModelSettings, getDarkFactoryEnabled]);
 
   const loadTicketConfig = useCallback(async () => {
     if (!project) return;
@@ -178,6 +187,7 @@ export function ModelSettingsModal() {
         inner_model: projectInner,
         outer_model: projectOuter,
       });
+      await setDarkFactoryEnabled(project.directory, darkFactoryEnabled);
       setProjectDirty(false);
     } catch (err) {
       setError(String(err));
@@ -346,7 +356,7 @@ export function ModelSettingsModal() {
             </>
           )}
 
-          {activeTab === 'project' && project && projectLoaded && (
+          {activeTab === 'project' && project && projectLoaded && darkFactoryLoaded && (
             <>
               <div>
                 <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
@@ -390,6 +400,34 @@ export function ModelSettingsModal() {
                     />
                   ))}
                 </div>
+              </div>
+
+              {/* Dark factory toggle */}
+              <div>
+                <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
+                  Dark Factory Mode
+                </label>
+                <p className="text-[10px] text-sandstorm-muted mb-3">
+                  Automates the pipeline from spec_ready onward: spins a stack, creates a PR, and merges — hands-off.
+                </p>
+                <button
+                  role="switch"
+                  aria-checked={darkFactoryEnabled}
+                  onClick={() => { setDarkFactoryEnabledLocal(!darkFactoryEnabled); setProjectDirty(true); }}
+                  className={`relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full border-2 border-transparent transition-colors focus:outline-none focus:ring-2 focus:ring-sandstorm-accent focus:ring-offset-1 ${
+                    darkFactoryEnabled ? 'bg-sandstorm-accent' : 'bg-sandstorm-border'
+                  }`}
+                  data-testid="dark-factory-toggle"
+                >
+                  <span
+                    className={`pointer-events-none inline-block h-4 w-4 rounded-full bg-white shadow transform transition-transform ${
+                      darkFactoryEnabled ? 'translate-x-4' : 'translate-x-0'
+                    }`}
+                  />
+                </button>
+                <span className="ml-2 text-[11px] text-sandstorm-muted" data-testid="dark-factory-status">
+                  {darkFactoryEnabled ? 'Enabled' : 'Disabled'}
+                </span>
               </div>
 
               {/* Effective model summary */}

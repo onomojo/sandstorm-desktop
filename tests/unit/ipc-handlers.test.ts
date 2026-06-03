@@ -54,6 +54,8 @@ const {
     setBoardTicketColumn: vi.fn(),
     deleteClosedEarlyColumnTickets: vi.fn().mockReturnValue(0),
     deleteBoardTicket: vi.fn(),
+    getDarkFactoryEnabled: vi.fn().mockReturnValue(false),
+    setDarkFactoryEnabled: vi.fn(),
   };
 
   const mockStackManager = {
@@ -193,6 +195,7 @@ vi.mock('../../src/main/index', () => ({
   dockerConnectionManager: mockDockerConnectionManager,
   sessionMonitor: mockSessionMonitor,
   cliDir: '/tmp/sandstorm-cli',
+  darkFactoryOrchestrator: null,
 }));
 
 vi.mock('../../src/main/custom-context', () => mockCustomContext);
@@ -1576,7 +1579,7 @@ describe('IPC Handlers', () => {
   // PR Merge
   // =========================================================================
   describe('pr:merge', () => {
-    it('invokes gh pr merge with --merge and no --delete-branch, cwd set to stack workspace', async () => {
+    it('invokes gh pr merge with --squash (not --merge) and no --delete-branch, cwd set to stack workspace', async () => {
       const stack = { id: 'stack-1', project_dir: '/proj', pr_number: 99, status: 'pr_created', services: [] };
       mockStackManager.getStackWithServices.mockResolvedValue(stack);
       (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
@@ -1589,12 +1592,13 @@ describe('IPC Handlers', () => {
 
       expect(execFile).toHaveBeenCalledWith(
         'gh',
-        ['pr', 'merge', '99', '--merge'],
+        ['pr', 'merge', '99', '--squash'],
         expect.objectContaining({ cwd: '/proj/.sandstorm/workspaces/stack-1' }),
         expect.any(Function),
       );
       const callArgs = (execFile as unknown as ReturnType<typeof vi.fn>).mock.calls.at(-1) as unknown[];
       const ghArgs = callArgs[1] as string[];
+      expect(ghArgs).not.toContain('--merge');
       expect(ghArgs).not.toContain('--delete-branch');
     });
 
@@ -1632,7 +1636,7 @@ describe('IPC Handlers', () => {
       mockStackManager.getStackWithServices.mockResolvedValue(stack);
       (execFile as unknown as ReturnType<typeof vi.fn>).mockImplementationOnce(
         (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
-          const err = Object.assign(new Error('Command failed: gh pr merge 99 --merge'), {
+          const err = Object.assign(new Error('Command failed: gh pr merge 99 --squash'), {
             stderr: 'GraphQL: Pull request is already merged (mergePullRequest)',
           });
           callback(err, '', err.stderr);
@@ -1640,6 +1644,36 @@ describe('IPC Handlers', () => {
       );
 
       await expect(invokeHandler('pr:merge', 'stack-1', 99)).resolves.toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // Dark Factory IPC handlers
+  // =========================================================================
+  describe('darkFactory:getEnabled', () => {
+    it('returns false by default', async () => {
+      mockRegistry.getDarkFactoryEnabled.mockReturnValue(false);
+      const result = await invokeHandler('darkFactory:getEnabled', '/proj');
+      expect(result).toBe(false);
+      expect(mockRegistry.getDarkFactoryEnabled).toHaveBeenCalledWith('/proj');
+    });
+
+    it('returns true when enabled', async () => {
+      mockRegistry.getDarkFactoryEnabled.mockReturnValue(true);
+      const result = await invokeHandler('darkFactory:getEnabled', '/proj');
+      expect(result).toBe(true);
+    });
+  });
+
+  describe('darkFactory:setEnabled', () => {
+    it('calls setDarkFactoryEnabled on registry', async () => {
+      await invokeHandler('darkFactory:setEnabled', '/proj', true);
+      expect(mockRegistry.setDarkFactoryEnabled).toHaveBeenCalledWith('/proj', true);
+    });
+
+    it('passes false correctly', async () => {
+      await invokeHandler('darkFactory:setEnabled', '/proj', false);
+      expect(mockRegistry.setDarkFactoryEnabled).toHaveBeenCalledWith('/proj', false);
     });
   });
 
@@ -1952,6 +1986,8 @@ describe('IPC Handlers', () => {
       'pr:autoResolve',
       'projectTicketConfig:get',
       'projectTicketConfig:set',
+      'darkFactory:getEnabled',
+      'darkFactory:setEnabled',
       'stacks:getNeedsHumanQuestions',
       'stacks:resumeNeedsHuman',
     ];

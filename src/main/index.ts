@@ -26,6 +26,7 @@ import {
 import { syncAllProjectsCrontab } from './scheduler/scheduler-manager';
 import { runScheduledScript } from './scheduler/script-runner';
 import { runStartupReconciliation } from './control-plane/startup-reconciler';
+import { DarkFactoryOrchestrator } from './control-plane/dark-factory-orchestrator';
 
 // Enable remote debugging via env var (used by integration tests and ad-hoc CDP connections)
 if (process.env.REMOTE_DEBUGGING_PORT) {
@@ -46,6 +47,7 @@ export let agentBackend: AgentBackend;
 export let dockerConnectionManager: DockerConnectionManager | null = null;
 export let sessionMonitor: SessionMonitor;
 export let schedulerSocketServer: SchedulerSocketServer;
+export let darkFactoryOrchestrator: DarkFactoryOrchestrator;
 
 // Track in-flight scheduler dispatches to prevent overlapping concurrent
 // runs of the same schedule. Each action Promise clears its own entry in
@@ -331,10 +333,19 @@ async function initializeApp(): Promise<void> {
     console.warn('[scheduler] Initial crontab sync failed (non-fatal):', err);
   }
 
+  // Initialize dark factory orchestrator
+  darkFactoryOrchestrator = new DarkFactoryOrchestrator(
+    registry,
+    stackManager,
+    agentBackend,
+    () => mainWindow?.webContents.send('stacks:updated'),
+  );
+
   // Listen for task events to send to renderer
   taskWatcher.on('task:completed', ({ stackId, task }) => {
     mainWindow?.webContents.send('task:completed', { stackId, task });
     mainWindow?.webContents.send('stacks:updated');
+    darkFactoryOrchestrator.handleTaskCompleted(stackId, task);
   });
 
   taskWatcher.on('task:failed', ({ stackId, task }) => {

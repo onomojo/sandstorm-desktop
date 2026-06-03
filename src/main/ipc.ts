@@ -14,6 +14,7 @@ import {
   agentBackend,
   dockerConnectionManager,
   sessionMonitor,
+  darkFactoryOrchestrator,
 } from './index';
 import {
   createSchedule,
@@ -1335,6 +1336,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     if (dirError) throw new Error(dirError.error);
     if (!VALID_KANBAN_COLUMNS.includes(column)) throw new Error(`Invalid kanban column: "${column}"`);
     registry.setBoardTicketColumn(ticketId, path.resolve(projectDir), column);
+    darkFactoryOrchestrator?.handleTicketColumnChanged(ticketId, path.resolve(projectDir), column);
   });
 
   ipcMain.handle('ticket:close', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
@@ -1413,7 +1415,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     try {
       await execFileAsync(
         'gh',
-        ['pr', 'merge', String(prNumber), '--merge'],
+        ['pr', 'merge', String(prNumber), '--squash'],
         { cwd: workspace, timeout: 60000, maxBuffer: 1024 * 1024 },
       );
     } catch (err) {
@@ -1471,6 +1473,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         },
       );
       showNotification('PR created', result.url);
+      darkFactoryOrchestrator?.handlePrCreated(stackId, result.number);
       return { status: 'created' as const, url: result.url, number: result.number };
     } catch (err) {
       return {
@@ -1479,6 +1482,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         error: err instanceof Error ? err.message : String(err),
       };
     }
+  });
+
+  // --- Dark Factory ---
+
+  ipcMain.handle('darkFactory:getEnabled', (_event, projectDir: string) => {
+    return registry.getDarkFactoryEnabled(projectDir);
+  });
+
+  ipcMain.handle('darkFactory:setEnabled', (_event, projectDir: string, enabled: boolean) => {
+    registry.setDarkFactoryEnabled(projectDir, enabled);
   });
 
   ipcMain.handle('pr:autoResolve', async (_event, ticketId: string, projectDir: string) => {
