@@ -704,6 +704,50 @@ export class StackManager {
   }
 
   /**
+   * Dispatch an investigation-and-finish session for a stalled task.
+   * Called by the TaskWatcher liveness check when a running task's process
+   * has died without writing a terminal status. Uses --resume <session_id>
+   * so the original session can inspect its own prior work and either finish
+   * or write a terminal status. Distinct from dispatchContinuation (token-limit
+   * resume) — this path delivers the INVESTIGATE_AND_FINISH_PROMPT.
+   */
+  async dispatchInvestigation(stackId: string, task: Task, investigationPrompt: string): Promise<void> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    const runtime = this.getRuntimeForStack(stack);
+    let claudeContainer = await this.findClaudeContainer(stack, runtime);
+
+    if (claudeContainer.status !== 'running') {
+      await this.ensureStackContainersRunning(stack, stackId);
+      claudeContainer = await this.findClaudeContainer(stack, runtime);
+    }
+
+    await this.waitForClaudeReady(claudeContainer.id, runtime);
+
+    this.registry.setTaskResumedAt(task.id, new Date().toISOString());
+    this.registry.updateStackStatus(stackId, 'running');
+    this.notifyUpdate();
+
+    const cliArgs = ['task', stackId, '--resume', task.session_id!];
+    if (task.model) cliArgs.push('--model', task.model);
+    cliArgs.push(investigationPrompt);
+
+    const result = await this.runCli(stack.project_dir, cliArgs);
+    if (result.exitCode !== 0) {
+      this.registry.updateStackStatus(stackId, 'needs_human');
+      this.notifyUpdate();
+      throw new SandstormError(
+        ErrorCode.TASK_DISPATCH_FAILED,
+        result.stderr.trim() || result.stdout.trim() || 'Investigation dispatch failed'
+      );
+    }
+
+    this.taskWatcher.watch(stackId, claudeContainer.id);
+    this.taskWatcher.streamOutput(stackId, claudeContainer.id, () => {}).catch(() => {});
+  }
+
+  /**
    * Resume a needs_human stack by providing answers to the agent's questions.
    * Uses --resume <session_id> if available; falls back to fresh dispatch if not.
    */

@@ -25,7 +25,7 @@ import {
 } from './scheduler';
 import { syncAllProjectsCrontab } from './scheduler/scheduler-manager';
 import { runScheduledScript } from './scheduler/script-runner';
-import { runStartupReconciliation } from './control-plane/startup-reconciler';
+import { runStartupReconciliation, INVESTIGATE_AND_FINISH_PROMPT } from './control-plane/startup-reconciler';
 import { DarkFactoryOrchestrator } from './control-plane/dark-factory-orchestrator';
 import { APP_USER_DATA_NAME } from './app-identity';
 
@@ -149,6 +149,13 @@ async function initializeApp(): Promise<void> {
     cliDir
   );
   stackManager.setPortProxy(portProxy);
+
+  // Wire liveness-check investigation dispatch: when TaskWatcher detects a stalled
+  // task (process dead + no log growth for 5 min), it calls back here to resume
+  // the original session with an investigate-and-finish prompt.
+  taskWatcher.setDispatchInvestigation(async (stackId, task) => {
+    await stackManager.dispatchInvestigation(stackId, task, INVESTIGATE_AND_FINISH_PROMPT);
+  });
 
   // Backfill: advance any tickets stuck in in_stack whose linked stack is already pr_created.
   registry.reconcilePrCreatedTickets();
