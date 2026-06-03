@@ -1473,4 +1473,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
+  ipcMain.handle('pr:autoResolve', async (_event, ticketId: string, projectDir: string) => {
+    return stackManager.autoResolveConflicts(ticketId, projectDir);
+  });
+
 }
