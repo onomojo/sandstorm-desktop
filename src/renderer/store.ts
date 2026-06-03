@@ -478,6 +478,10 @@ interface AppState {
   getProjectTicketConfig: (projectDir: string) => Promise<ProjectTicketConfig | null>;
   setProjectTicketConfig: (projectDir: string, config: ProjectTicketConfig) => Promise<void>;
 
+  // Dark factory
+  getDarkFactoryEnabled: (projectDir: string) => Promise<boolean>;
+  setDarkFactoryEnabled: (projectDir: string, enabled: boolean) => Promise<void>;
+
   // Session monitor
   sessionMonitorState: SessionMonitorState | null;
   sessionMonitorSettings: SessionMonitorSettings | null;
@@ -808,6 +812,10 @@ declare global {
           | { status: 'create_failed'; draft: { title: string; body: string }; error: string }
         >;
       };
+      darkFactory: {
+        getEnabled: (projectDir: string) => Promise<boolean>;
+        setEnabled: (projectDir: string, enabled: boolean) => Promise<void>;
+      };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
   }
@@ -1001,6 +1009,15 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setProjectTicketConfig: async (projectDir, config) => {
     await window.sandstorm.projectTicketConfig.set(projectDir, config);
+  },
+
+  // Dark factory
+  getDarkFactoryEnabled: async (projectDir) => {
+    return window.sandstorm.darkFactory.getEnabled(projectDir);
+  },
+
+  setDarkFactoryEnabled: async (projectDir, enabled) => {
+    await window.sandstorm.darkFactory.setEnabled(projectDir, enabled);
   },
 
   // Session monitor

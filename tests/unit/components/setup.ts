@@ -189,6 +189,10 @@ export function mockSandstormApi() {
       merge: vi.fn().mockResolvedValue(undefined),
       createAuto: vi.fn().mockResolvedValue({ status: 'created', url: 'https://github.com/o/r/pull/1', number: 1 }),
     },
+    darkFactory: {
+      getEnabled: vi.fn().mockResolvedValue(false),
+      setEnabled: vi.fn().mockResolvedValue(undefined),
+    },
     on: vi.fn().mockReturnValue(() => {}),
   };
 

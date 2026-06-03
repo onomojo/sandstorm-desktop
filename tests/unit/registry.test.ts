@@ -1178,4 +1178,51 @@ describe('Registry', () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // Dark Factory
+  // ---------------------------------------------------------------------------
+  describe('Dark Factory', () => {
+    it('returns false by default for a new project', () => {
+      expect(registry.getDarkFactoryEnabled('/some/project')).toBe(false);
+    });
+
+    it('returns false for an unknown project', () => {
+      expect(registry.getDarkFactoryEnabled('/does/not/exist')).toBe(false);
+    });
+
+    it('enables dark factory for a project', () => {
+      registry.setDarkFactoryEnabled('/my/project', true);
+      expect(registry.getDarkFactoryEnabled('/my/project')).toBe(true);
+    });
+
+    it('disables dark factory after enabling', () => {
+      registry.setDarkFactoryEnabled('/my/project', true);
+      registry.setDarkFactoryEnabled('/my/project', false);
+      expect(registry.getDarkFactoryEnabled('/my/project')).toBe(false);
+    });
+
+    it('isolates per-project settings', () => {
+      registry.setDarkFactoryEnabled('/project-a', true);
+      registry.setDarkFactoryEnabled('/project-b', false);
+      expect(registry.getDarkFactoryEnabled('/project-a')).toBe(true);
+      expect(registry.getDarkFactoryEnabled('/project-b')).toBe(false);
+    });
+
+    it('normalizes project paths (trailing slash, relative path)', () => {
+      registry.setDarkFactoryEnabled('/my/project', true);
+      // path.resolve normalizes the path
+      expect(registry.getDarkFactoryEnabled('/my/project')).toBe(true);
+    });
+
+    it('persists across registry reopen (survives DB close/reopen)', async () => {
+      registry.setDarkFactoryEnabled('/persistent/project', true);
+      registry.close();
+      const registry2 = await Registry.create(dbPath);
+      expect(registry2.getDarkFactoryEnabled('/persistent/project')).toBe(true);
+      registry2.close();
+      // Prevent afterEach double-close — reopen so afterEach can close it
+      registry = await Registry.create(dbPath);
+    });
+  });
+
 });

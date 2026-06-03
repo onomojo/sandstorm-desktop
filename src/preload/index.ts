@@ -230,6 +230,10 @@ export interface SandstormAPI {
       | { status: 'create_failed'; draft: { title: string; body: string }; error: string }
     >;
   };
+  darkFactory: {
+    getEnabled: (projectDir: string) => Promise<boolean>;
+    setEnabled: (projectDir: string, enabled: boolean) => Promise<void>;
+  };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
@@ -422,6 +426,10 @@ const api: SandstormAPI = {
     merge: (stackId, prNumber) =>
       ipcRenderer.invoke('pr:merge', stackId, prNumber),
     createAuto: (stackId) => ipcRenderer.invoke('pr:createAuto', stackId),
+  },
+  darkFactory: {
+    getEnabled: (projectDir) => ipcRenderer.invoke('darkFactory:getEnabled', projectDir),
+    setEnabled: (projectDir, enabled) => ipcRenderer.invoke('darkFactory:setEnabled', projectDir, enabled),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

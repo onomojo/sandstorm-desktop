@@ -534,6 +534,17 @@ export class Registry {
       this.setSchemaVersion(16);
     }
 
+    if (currentVersion < 17) {
+      // Per-project dark factory flag: opt-in automation of the post-refinement pipeline.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS project_dark_factory (
+          key     TEXT PRIMARY KEY,
+          enabled INTEGER NOT NULL DEFAULT 0
+        );
+      `);
+      this.setSchemaVersion(17);
+    }
+
   }
 
   // --- Projects ---
@@ -1137,6 +1148,21 @@ export class Registry {
   removeProjectTicketConfig(projectDir: string): void {
     const key = `project:${path.resolve(projectDir)}`;
     this.db.prepare('DELETE FROM project_ticket_config WHERE key = ?').run(key);
+  }
+
+  // --- Dark Factory ---
+
+  getDarkFactoryEnabled(projectDir: string): boolean {
+    const key = `project:${path.resolve(projectDir)}`;
+    const row = this.db.prepare('SELECT enabled FROM project_dark_factory WHERE key = ?').get(key) as { enabled: number } | undefined;
+    return row ? row.enabled === 1 : false;
+  }
+
+  setDarkFactoryEnabled(projectDir: string, enabled: boolean): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    this.db.prepare(
+      'INSERT OR REPLACE INTO project_dark_factory (key, enabled) VALUES (?, ?)'
+    ).run(key, enabled ? 1 : 0);
   }
 
   // --- Ticket Board ---

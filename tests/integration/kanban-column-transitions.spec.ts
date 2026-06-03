@@ -421,3 +421,81 @@ test.describe('Kanban column sync via setPullRequest (#403)', () => {
     });
   });
 });
+
+/**
+ * Dark factory flag persists via IPC — regression for #458.
+ * Verifies that darkFactory:getEnabled / darkFactory:setEnabled IPC handlers
+ * round-trip correctly through the real SQLite registry.
+ */
+const DF_PROJECT = `/tmp/dark-factory-${Date.now()}`;
+
+test.describe('Dark factory flag persistence (#458)', () => {
+  test('flag defaults to false and persists enable/disable via IPC', async ({ mainWindow }) => {
+    await mainWindow.waitForSelector('[data-testid="kanban-board"]', { timeout: 15000 });
+
+    // Default should be false
+    const initialState = await mainWindow.evaluate((dir) => {
+      return (window as unknown as {
+        sandstorm: { darkFactory: { getEnabled: (d: string) => Promise<boolean> } };
+      }).sandstorm.darkFactory.getEnabled(dir);
+    }, DF_PROJECT);
+    expect(initialState).toBe(false);
+
+    // Enable
+    await mainWindow.evaluate((dir) => {
+      return (window as unknown as {
+        sandstorm: { darkFactory: { setEnabled: (d: string, e: boolean) => Promise<void> } };
+      }).sandstorm.darkFactory.setEnabled(dir, true);
+    }, DF_PROJECT);
+
+    const enabledState = await mainWindow.evaluate((dir) => {
+      return (window as unknown as {
+        sandstorm: { darkFactory: { getEnabled: (d: string) => Promise<boolean> } };
+      }).sandstorm.darkFactory.getEnabled(dir);
+    }, DF_PROJECT);
+    expect(enabledState).toBe(true);
+
+    // Disable again
+    await mainWindow.evaluate((dir) => {
+      return (window as unknown as {
+        sandstorm: { darkFactory: { setEnabled: (d: string, e: boolean) => Promise<void> } };
+      }).sandstorm.darkFactory.setEnabled(dir, false);
+    }, DF_PROJECT);
+
+    const disabledState = await mainWindow.evaluate((dir) => {
+      return (window as unknown as {
+        sandstorm: { darkFactory: { getEnabled: (d: string) => Promise<boolean> } };
+      }).sandstorm.darkFactory.getEnabled(dir);
+    }, DF_PROJECT);
+    expect(disabledState).toBe(false);
+  });
+
+  test('with flag OFF, no automated action fires when ticket moves to spec_ready', async ({ mainWindow }) => {
+    await mainWindow.waitForSelector('[data-testid="kanban-board"]', { timeout: 15000 });
+
+    const dfTicket = `df-off-${Date.now()}`;
+
+    // Flag is OFF (default)
+    await mainWindow.evaluate((dir) => {
+      return (window as unknown as {
+        sandstorm: { darkFactory: { setEnabled: (d: string, e: boolean) => Promise<void> } };
+      }).sandstorm.darkFactory.setEnabled(dir, false);
+    }, DF_PROJECT);
+
+    // Move ticket to spec_ready
+    await mainWindow.evaluate(({ id, dir }) => {
+      return (window as unknown as {
+        sandstorm: { ticketBoard: { setColumn: (i: string, d: string, c: string) => Promise<void> } };
+      }).sandstorm.ticketBoard.setColumn(id, dir, 'spec_ready');
+    }, { id: dfTicket, dir: DF_PROJECT });
+
+    // No stack should be created automatically
+    await new Promise((r) => setTimeout(r, 200));
+    const stacks = await mainWindow.evaluate((ticket) => {
+      return (window as unknown as {
+        sandstorm: { stacks: { list: () => Promise<Array<{ ticket: string | null }>> } };
+      }).sandstorm.stacks.list().then((all) => all.filter((s) => s.ticket === ticket));
+    }, dfTicket);
+    expect(stacks).toHaveLength(0);
+  });
+});
