@@ -1,5 +1,5 @@
 import React, { useState, useMemo, useCallback, useEffect, useRef } from 'react';
-import { useAppStore, SpecGateResult, RefinementSession, RefineQuestion } from '../store';
+import { useAppStore, SpecGateResult, RefinementSession } from '../store';
 import type { KanbanColumn } from '../store';
 import { ConfirmDialog } from './ConfirmDialog';
 import { QuestionList, QuestionAnswer, normalizeQuestion, combineAnswers, defaultAnswers, isSubmitDisabled } from './QuestionList';
@@ -54,6 +54,8 @@ export function RefineTicketDialog() {
     resolveRefinementTargets,
     commitRefinementContext,
     boardTickets,
+    setRefineAnswerDraft,
+    clearRefineAnswerDraft,
   } = useAppStore();
   const project = activeProject();
 
@@ -76,14 +78,21 @@ export function RefineTicketDialog() {
   const gate: SpecGateResult | null = session?.result ?? null;
   const sessionError = session?.error ?? null;
 
-  // Initialise answers when gate questions change.
-  // Defensively coerce legacy string[] items (old persisted sessions) to RefineQuestion.
+  // Initialise answers when gate questions change, restoring from draft if available.
+  // normalizeQuestion handles legacy string[] items (old persisted sessions).
   useEffect(() => {
     if (gate && !gate.passed && gate.questions.length > 0) {
       const normalized = gate.questions.map((q, i) => normalizeQuestion(q, i));
-      setAnswers(defaultAnswers(normalized));
+      // Read draft imperatively to avoid adding refineAnswerDrafts as a reactive dep.
+      // Questions are not re-fetched on reopen (same gate.questions), so position is stable;
+      // draft[i] corresponds to normalized[i] (id-first match degenerates to positional here).
+      const sessionId = useAppStore.getState().currentRefinementSessionId;
+      const draft = sessionId ? (useAppStore.getState().refineAnswerDrafts[sessionId] ?? null) : null;
+      const defaults = defaultAnswers(normalized);
+      setAnswers(normalized.map((_, i) => draft?.[i] ?? defaults[i]));
     }
-  }, [gate]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [gate, currentRefinementSessionId]);
 
   // Suggest stack name when gate passes
   useEffect(() => {
@@ -201,8 +210,9 @@ export function RefineTicketDialog() {
       projectDir,
       combined,
     );
+    clearRefineAnswerDraft(session.id);
     setShowRefineTicketDialog(false);
-  }, [session, gate, answers, projectDir, upsertRefinementSession, setShowRefineTicketDialog]);
+  }, [session, gate, answers, projectDir, upsertRefinementSession, setShowRefineTicketDialog, clearRefineAnswerDraft]);
 
   const handleStartStack = useCallback(async () => {
     if (!session || !projectDir) return;
@@ -456,7 +466,10 @@ export function RefineTicketDialog() {
                   <QuestionList
                     questions={gate.questions.map((q, i) => normalizeQuestion(q, i))}
                     answers={answers}
-                    onAnswersChange={setAnswers}
+                    onAnswersChange={(next) => {
+                      setAnswers(next);
+                      if (session) setRefineAnswerDraft(session.id, next);
+                    }}
                     testIdPrefix="refine"
                   />
                 )}
