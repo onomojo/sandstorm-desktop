@@ -19,8 +19,12 @@
  *  - The renderer's active project (no UI flow for adding /tmp/... as a project)
  *  - Dialog "succeeded" flags (so cancelling the dialog after the move doesn't
  *    revert — we're testing column persistence, not dialog UX)
- *  - The stack record (Create PR / Merge enablement depends on a stack with the
- *    ticket; we inject one rather than running the real Docker build)
+ *  - The stack record (Merge enablement depends on a stack with the ticket;
+ *    we create a real stack DB row via stacks.create(forceBypass:true) rather
+ *    than running the real Docker build, and advance to pr_open via the real
+ *    stacks.setPr IPC rather than the Create PR UI button — the button fires
+ *    pr:createAuto which requires Docker + gh and cannot succeed in the
+ *    Playwright test environment)
  *
  * The bug being regressed against (#388) was that moveTicketColumn was wired
  * for backlog→refining and refining→in_stack-via-card but NOT for the gate-pass
@@ -156,61 +160,64 @@ test.describe('Kanban column transitions (#388)', () => {
     await mainWindow.click(`[data-testid="ticket-card-start-stack-${TICKET_ID}"]`);
     await assertColumn(mainWindow, 'in_stack', TICKET_ID);
 
-    // Inject a fake stack so Create PR enables for the next step.
-    await mainWindow.evaluate(({ id, dir, stackId }) => {
-      const store = (window as unknown as {
-        __useAppStore: {
-          setState: (s: Record<string, unknown>) => void;
-        };
-      }).__useAppStore;
-      store.setState({
-        stacks: [{
-          id: stackId, project: 'kanban-388-test', project_dir: dir, ticket: id,
-          branch: null, description: null, status: 'completed', error: null,
-          pr_url: null, pr_number: null, runtime: 'docker',
-          total_input_tokens: 0, total_output_tokens: 0,
-          total_execution_input_tokens: 0, total_execution_output_tokens: 0,
-          total_review_input_tokens: 0, total_review_output_tokens: 0,
-          rate_limit_reset_at: null, created_at: '', updated_at: '',
-          current_model: null, services: [],
-        }],
-      });
-    }, { id: TICKET_ID, dir: PROJECT_DIR, stackId: STACK_ID });
+    // Create a real stack DB row linked to this ticket. forceBypass skips the
+    // spec gate (ticket is already in in_stack, past spec_ready). createStack
+    // inserts the DB row synchronously before the IPC resolves; the Docker build
+    // runs in the background and fails gracefully since Docker is unavailable in
+    // the test env.
+    await mainWindow.evaluate(({ stackId, ticketId, dir }) => {
+      return (window as unknown as {
+        sandstorm: { stacks: { create: (opts: Record<string, unknown>) => Promise<unknown> } };
+      }).sandstorm.stacks.create({ name: stackId, projectDir: dir, ticket: ticketId, runtime: 'docker', forceBypass: true });
+    }, { stackId: STACK_ID, ticketId: TICKET_ID, dir: PROJECT_DIR });
     await assertColumn(mainWindow, 'in_stack', TICKET_ID);
 
-    // --- 4. in_stack → pr_open (real click on Create PR card button) --------
-    await mainWindow.click(`[data-testid="ticket-card-create-pr-${TICKET_ID}"]`);
-    await assertColumn(mainWindow, 'pr_open', TICKET_ID);
-    await mainWindow.evaluate(() => {
-      const store = (window as unknown as {
-        __useAppStore: {
-          getState: () => { _prDialogContext: Record<string, unknown> | null };
-          setState: (s: Record<string, unknown>) => void;
-        };
-      }).__useAppStore;
-      const ctx = store.getState()._prDialogContext;
-      if (ctx) store.setState({ _prDialogContext: { ...ctx, prCreated: true } });
-    });
-    const prDialog = mainWindow.locator('[data-testid="create-pr-dialog"]');
-    if (await prDialog.isVisible().catch(() => false)) {
-      await prDialog.click({ position: { x: 5, y: 5 } });
-      await prDialog.waitFor({ state: 'hidden', timeout: 3000 }).catch(() => {});
-    }
+    // --- 4. in_stack → pr_open (via stacks.setPr IPC, mirroring the #403 pattern) ---
+    // The real Create PR button fires pr:createAuto which requires Docker + gh
+    // and cannot succeed in the Playwright test environment. Instead we call
+    // stacks.setPr directly — the same path the agent/CLI uses — which calls
+    // stackManager.setPullRequest() → advanceTicketToPrOpenIfInStack()
+    // → notifyUpdate() → stacks:updated broadcast → App.tsx refreshBoardTickets()
+    // → card moves reactively to pr_open.
+    await mainWindow.evaluate(({ stackId }) => {
+      return (window as unknown as {
+        sandstorm: { stacks: { setPr: (id: string, url: string, num: number) => Promise<void> } };
+      }).sandstorm.stacks.setPr(stackId, 'https://github.com/o/r/pull/388', 388);
+    }, { stackId: STACK_ID });
     await assertColumn(mainWindow, 'pr_open', TICKET_ID);
 
-    // Give the stack a pr_number so the link renders before the Merge click.
-    await mainWindow.evaluate(({ id }) => {
+    // Wait for refreshStacks (called in the same stacks:updated listener as
+    // refreshBoardTickets) to populate the store with the updated stack pr_url
+    // and pr_number. This confirms the listener fired before we read the stacks.
+    await mainWindow.waitForFunction(({ stackId }) => {
+      const store = (window as unknown as {
+        __useAppStore: { getState: () => { stacks: Array<{ id: string; pr_url: string | null; pr_number: number | null }> } };
+      }).__useAppStore;
+      return store.getState().stacks.some(
+        (s: { id: string; pr_url: string | null; pr_number: number | null }) =>
+          s.id === stackId && s.pr_url !== null && s.pr_number != null,
+      );
+    }, { stackId: STACK_ID });
+
+    // Swap the real stack's ID for a non-DB fake before the Merge click.
+    // mergeTicket calls pr:merge and stacks:teardown via IPC; both look up the
+    // stack in the DB by ID. A fake ID causes "Stack not found" — which
+    // mergeTicket's isStackNotFound guard swallows — so moveTicketColumn still
+    // advances the card. Without this, pr:merge finds the real stack, runs
+    // `gh pr merge`, and throws an unswallowable error (no gh / workspace in
+    // the test env).
+    await mainWindow.evaluate(({ stackId }) => {
       const store = (window as unknown as {
         __useAppStore: {
-          getState: () => { stacks: Array<{ id: string; ticket: string | null }> };
+          getState: () => { stacks: Array<Record<string, unknown>> };
           setState: (s: Record<string, unknown>) => void;
         };
       }).__useAppStore;
       const stacks = store.getState().stacks.map((s) =>
-        s.ticket === id ? { ...s, pr_number: 388, pr_url: 'https://github.com/o/r/pull/388' } : s,
+        s.id === stackId ? { ...s, id: `${stackId}-merge-bypass` } : s,
       );
       store.setState({ stacks });
-    }, { id: TICKET_ID });
+    }, { stackId: STACK_ID });
 
     // --- 5. pr_open → merged (real click on Merge card button) -------------
     await mainWindow.click(`[data-testid="ticket-card-merge-${TICKET_ID}"]`);
