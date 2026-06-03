@@ -27,6 +27,14 @@ import { syncAllProjectsCrontab } from './scheduler/scheduler-manager';
 import { runScheduledScript } from './scheduler/script-runner';
 import { runStartupReconciliation } from './control-plane/startup-reconciler';
 import { DarkFactoryOrchestrator } from './control-plane/dark-factory-orchestrator';
+import { APP_USER_DATA_NAME } from './app-identity';
+
+// Pin the userData directory name independent of the package.json `name` /
+// electron-builder productName. Electron resolves app.getPath('userData') from
+// app.getName(); renaming the package to 'sandstorm' (#485) moved userData and
+// hid every existing project/ticket-config. Must run before whenReady and any
+// getPath('userData') call. See app-identity.ts.
+app.setName(APP_USER_DATA_NAME);
 
 // Enable remote debugging via env var (used by integration tests and ad-hoc CDP connections)
 if (process.env.REMOTE_DEBUGGING_PORT) {
