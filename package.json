@@ -1,5 +1,5 @@
 {
-  "name": "sandstorm-desktop",
+  "name": "sandstorm",
   "version": "0.1.0",
   "type": "module",
   "description": "Desktop control plane for Sandstorm agent orchestration",
@@ -10,8 +10,11 @@
   "main": "dist/main/index.cjs",
   "scripts": {
     "dev": "electron-vite dev",
-    "prebuild": "git config --global --add safe.directory /app 2>/dev/null; git rev-parse --short HEAD > src/renderer/build-version.txt 2>/dev/null || echo unknown > src/renderer/build-version.txt",
-    "build": "electron-vite build",
+    "build-version": "git config --global --add safe.directory /app 2>/dev/null; git rev-parse --short HEAD > src/renderer/build-version.txt 2>/dev/null || echo unknown > src/renderer/build-version.txt",
+    "prebuild": "npm run build-version",
+    "prebuild:vite": "npm run build-version",
+    "build:vite": "electron-vite build",
+    "build": "bash scripts/build.sh",
     "preview": "electron-vite preview",
     "package": "electron-builder",
     "package:all": "electron-builder -mwl",
@@ -21,8 +24,7 @@
     "test:integration": "PLAYWRIGHT_TEST=1 xvfb-run --server-num=50 playwright test --config playwright.integration.config.ts",
     "test:e2e": "playwright test",
     "lint": "eslint src/",
-    "typecheck": "tsc --noEmit",
-    "release": "bash scripts/build.sh"
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@xterm/addon-fit": "^0.10.0",

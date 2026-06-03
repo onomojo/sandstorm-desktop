@@ -28,8 +28,8 @@ function resolvePackagedBinary(): string {
     );
   }
 
-  // Look for the executable — productName is "Sandstorm Desktop" → binary is "sandstorm-desktop"
-  const expectedBinary = path.join(unpackedDir, 'sandstorm-desktop');
+  // Look for the executable — productName is "Sandstorm" → binary is "sandstorm"
+  const expectedBinary = path.join(unpackedDir, 'sandstorm');
   if (fs.existsSync(expectedBinary)) {
     return expectedBinary;
   }

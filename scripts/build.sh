@@ -25,7 +25,7 @@ git rev-parse --short HEAD > src/renderer/build-version.txt
 echo "    Commit: $(cat src/renderer/build-version.txt)"
 
 echo "==> Building app..."
-npm run build
+npm run build:vite
 
 echo "==> Rebuilding native modules for Electron..."
 # electron-rebuild recompiles native Node modules for Electron's Node version.
