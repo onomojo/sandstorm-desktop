@@ -71,6 +71,8 @@ export interface SandstormAPI {
     setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
     detectStale: () => Promise<unknown[]>;
     cleanupStale: (workspacePaths: string[]) => Promise<unknown[]>;
+    getNeedsHumanQuestions: (stackId: string) => Promise<string | null>;
+    resumeNeedsHuman: (stackId: string, answers: string) => Promise<void>;
   };
   tasks: {
     dispatch: (stackId: string, prompt: string, model?: string) => Promise<unknown>;
@@ -229,6 +231,12 @@ export interface SandstormAPI {
       | { status: 'draft_failed' }
       | { status: 'create_failed'; draft: { title: string; body: string }; error: string }
     >;
+    autoResolve: (ticketId: string, projectDir: string) => Promise<
+      | { status: 'resolved' }
+      | { status: 'no_conflicts' }
+      | { status: 'unknown_state' }
+      | { status: 'failed'; error: string }
+    >;
   };
   darkFactory: {
     getEnabled: (projectDir: string) => Promise<boolean>;
@@ -267,6 +275,10 @@ const api: SandstormAPI = {
     detectStale: () => ipcRenderer.invoke('stacks:detectStale'),
     cleanupStale: (workspacePaths: string[]) =>
       ipcRenderer.invoke('stacks:cleanupStale', workspacePaths),
+    getNeedsHumanQuestions: (stackId: string) =>
+      ipcRenderer.invoke('stacks:getNeedsHumanQuestions', stackId),
+    resumeNeedsHuman: (stackId: string, answers: string) =>
+      ipcRenderer.invoke('stacks:resumeNeedsHuman', stackId, answers),
   },
   tasks: {
     dispatch: (stackId, prompt, model?) =>
@@ -426,6 +438,8 @@ const api: SandstormAPI = {
     merge: (stackId, prNumber) =>
       ipcRenderer.invoke('pr:merge', stackId, prNumber),
     createAuto: (stackId) => ipcRenderer.invoke('pr:createAuto', stackId),
+    autoResolve: (ticketId, projectDir) =>
+      ipcRenderer.invoke('pr:autoResolve', ticketId, projectDir),
   },
   darkFactory: {
     getEnabled: (projectDir) => ipcRenderer.invoke('darkFactory:getEnabled', projectDir),

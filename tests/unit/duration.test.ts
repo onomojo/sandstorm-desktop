@@ -4,6 +4,7 @@ import {
   formatDuration,
   getStackDuration,
   isTerminalStatus,
+  makePrEligible,
   DURATION_UPDATE_INTERVAL,
 } from '../../src/renderer/utils/duration';
 
@@ -187,5 +188,37 @@ describe('getStackDuration', () => {
 describe('DURATION_UPDATE_INTERVAL', () => {
   it('is 5 seconds', () => {
     expect(DURATION_UPDATE_INTERVAL).toBe(5000);
+  });
+});
+
+describe('makePrEligible', () => {
+  const eligible = (status: string) => makePrEligible({ status, pr_url: null });
+
+  it('returns true for completed', () => {
+    expect(eligible('completed')).toBe(true);
+  });
+
+  it('returns true for pushed', () => {
+    expect(eligible('pushed')).toBe(true);
+  });
+
+  it('returns true for failed', () => {
+    expect(eligible('failed')).toBe(true);
+  });
+
+  it('returns true for verify_blocked_environmental', () => {
+    expect(eligible('verify_blocked_environmental')).toBe(true);
+  });
+
+  it('returns false for needs_human (regression: stray PR button)', () => {
+    expect(eligible('needs_human')).toBe(false);
+  });
+
+  it('returns false for running', () => {
+    expect(eligible('running')).toBe(false);
+  });
+
+  it('returns false when pr_url already set', () => {
+    expect(makePrEligible({ status: 'completed', pr_url: 'https://github.com/o/r/pull/1' })).toBe(false);
   });
 });

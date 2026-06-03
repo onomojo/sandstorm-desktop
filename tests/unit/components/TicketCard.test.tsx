@@ -54,6 +54,8 @@ describe('TicketCard', () => {
       refineStartErrors: {},
       discardInFlight: {},
       discardErrors: {},
+      autoResolveInFlight: {},
+      autoResolveErrors: {},
       showRefineTicketDialog: false,
       refineTicketPrefill: null,
       currentRefinementSessionId: null,
@@ -558,8 +560,8 @@ describe('TicketCard', () => {
   });
 
   // All 14 StackStatus values — PR button visibility map
-  const ELIGIBLE_STATUSES = ['completed', 'failed', 'pushed', 'needs_human', 'verify_blocked_environmental'];
-  const INELIGIBLE_STATUSES = ['building', 'rebuilding', 'up', 'running', 'idle', 'stopped', 'pr_created', 'rate_limited', 'session_paused'];
+  const ELIGIBLE_STATUSES = ['completed', 'failed', 'pushed', 'verify_blocked_environmental'];
+  const INELIGIBLE_STATUSES = ['building', 'rebuilding', 'up', 'running', 'idle', 'stopped', 'pr_created', 'rate_limited', 'session_paused', 'needs_human'];
 
   ELIGIBLE_STATUSES.forEach((status) => {
     it(`in_stack: Create PR button is present for status="${status}"`, () => {
@@ -755,6 +757,59 @@ describe('TicketCard', () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/99', pr_number: 99 } as any;
     render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
     expect(screen.getByTestId('ticket-card-pr-link-42').textContent).toContain('99');
+  });
+
+  it('pr_open: Auto-resolve conflicts button is always visible', () => {
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-auto-resolve-42')).toBeDefined();
+  });
+
+  it('pr_open: Auto-resolve conflicts button is visible even when stack has no pr_number', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-auto-resolve-42')).toBeDefined();
+  });
+
+  it('pr_open: clicking Auto-resolve calls pr.autoResolve with ticketId and projectDir', async () => {
+    api.pr.autoResolve.mockResolvedValue({ status: 'resolved' });
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-auto-resolve-42'));
+    await waitFor(() => expect(api.pr.autoResolve).toHaveBeenCalledWith('42', PROJECT_DIR));
+  });
+
+  it('pr_open: Auto-resolve button shows spinner while in-flight', () => {
+    useAppStore.setState({ autoResolveInFlight: { [`42|${PROJECT_DIR}`]: true } } as any);
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-auto-resolve-42');
+    expect(btn.textContent).toContain('Resolving');
+    expect(btn).toHaveProperty('disabled', true);
+  });
+
+  it('pr_open: Auto-resolve button is disabled while in-flight', () => {
+    useAppStore.setState({ autoResolveInFlight: { [`42|${PROJECT_DIR}`]: true } } as any);
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-auto-resolve-42');
+    expect(btn).toHaveProperty('disabled', true);
+  });
+
+  it('pr_open: shows auto-resolve error badge when autoResolveErrors is set', () => {
+    useAppStore.setState({ autoResolveErrors: { [`42|${PROJECT_DIR}`]: 'Auto-resolve failed' } } as any);
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    const badge = screen.getByTestId('ticket-card-auto-resolve-error-42');
+    expect(badge.textContent).toContain('Auto-resolve failed');
+  });
+
+  it('pr_open: double-click on Auto-resolve does not call pr.autoResolve twice', async () => {
+    let resolveFirst!: () => void;
+    const firstPromise = new Promise<{ status: string }>((r) => { resolveFirst = r as () => void; });
+    api.pr.autoResolve.mockReturnValueOnce(firstPromise);
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-auto-resolve-42');
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    resolveFirst({ status: 'resolved' } as any);
+    await waitFor(() => expect(useAppStore.getState().autoResolveInFlight[`42|${PROJECT_DIR}`]).toBeFalsy());
+    expect(api.pr.autoResolve).toHaveBeenCalledTimes(1);
   });
 
   it('merged: card is dimmed', () => {

@@ -131,10 +131,11 @@ export class TaskWatcher extends EventEmitter {
     status: 'completed' | 'failed' | 'needs_human',
     exitCode: number,
     containerId?: string,
-    stopReason?: string
+    stopReason?: string,
+    questionsJson?: string | null
   ): void {
     if (status === 'needs_human') {
-      this.registry.completeTaskNeedsHuman(task.id, stopReason ?? 'Agent signaled STOP_AND_ASK — needs human intervention');
+      this.registry.completeTaskNeedsHuman(task.id, stopReason ?? 'Agent signaled STOP_AND_ASK — needs human intervention', questionsJson);
     } else {
       this.registry.completeTask(task.id, exitCode);
     }
@@ -624,13 +625,27 @@ export class TaskWatcher extends EventEmitter {
 
         if (status === 'needs_human') {
           let stopReason = 'Agent signaled STOP_AND_ASK — needs human intervention';
+          let questionsJson: string | null = null;
           try {
             const reasonResult = await runtime.exec(containerId, ['cat', '/tmp/claude-stop-reason.txt']);
             if (reasonResult.stdout.trim()) {
               stopReason = reasonResult.stdout.trim();
             }
           } catch { /* best effort */ }
-          this.completeTaskAndNotify(task, stackId, 'needs_human', 1, containerId, stopReason);
+          try {
+            const questionsResult = await runtime.exec(containerId, ['cat', '/tmp/claude-stop-questions.json']);
+            if (questionsResult.stdout.trim()) {
+              const parsed = JSON.parse(questionsResult.stdout.trim());
+              if (Array.isArray(parsed) && parsed.every(
+                (q: unknown) => q && typeof q === 'object' &&
+                  typeof (q as Record<string, unknown>).id === 'string' &&
+                  typeof (q as Record<string, unknown>).question === 'string'
+              )) {
+                questionsJson = questionsResult.stdout.trim();
+              }
+            }
+          } catch { /* best effort — malformed/absent JSON falls back to null */ }
+          this.completeTaskAndNotify(task, stackId, 'needs_human', 1, containerId, stopReason, questionsJson);
           return;
         }
 
