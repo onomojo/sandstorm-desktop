@@ -36,7 +36,6 @@ export function KanbanBoard() {
     stacks,
     activeProject,
     refreshBoardTickets,
-    setShowNewStackDialog,
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<BoardTab>('active');
@@ -124,16 +123,6 @@ export function KanbanBoard() {
         {/* Right side controls */}
         <div className="flex items-center gap-2">
           <RefinementIndicator />
-          <button
-            onClick={() => setShowNewStackDialog(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-sandstorm-accent text-sandstorm-rail text-xs font-semibold hover:bg-sandstorm-accent-hover transition-colors"
-            data-testid="new-stack-btn"
-          >
-            <svg width="12" height="12" viewBox="0 0 24 24" fill="none">
-              <path d="M12 5v14M5 12h14" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round"/>
-            </svg>
-            New Stack
-          </button>
         </div>
       </div>
 

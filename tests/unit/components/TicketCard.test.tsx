@@ -353,17 +353,16 @@ describe('TicketCard', () => {
       });
     });
 
-    // Dialog must NOT be opened
-    expect(useAppStore.getState().showNewStackDialog).toBe(false);
     expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'in_stack');
   });
 
-  it('spec_ready: clicking Start stack does not open NewStackDialog', async () => {
+  it('spec_ready: clicking Start stack calls startStackForTicket without opening a dialog', async () => {
+    useAppStore.setState({ boardTickets: [makeTicket('spec_ready') as any] });
     render(<TicketCard ticket={makeTicket('spec_ready') as any} stacks={[]} />);
     fireEvent.click(screen.getByTestId('ticket-card-start-stack-42'));
-    // Give the action a chance to run
     await act(async () => {});
-    expect(useAppStore.getState().showNewStackDialog).toBe(false);
+    // Stack creation path fires without any dialog being shown
+    expect(api.stacks.create).toHaveBeenCalled();
   });
 
   it('spec_ready: on tickets.fetch failure, card stays in in_stack and shows error indicator', async () => {

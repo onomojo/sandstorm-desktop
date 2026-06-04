@@ -658,44 +658,6 @@ describe('store: openCreatePRDialogForTicket (fallback dialog, no optimistic mov
   });
 });
 
-describe('store: setShowNewStackDialog revert-on-cancel', () => {
-  beforeEach(() => {
-    setupSandstormMock();
-    useAppStore.setState({
-      boardTickets: [
-        { ticket_id: '42', project_dir: PROJECT_DIR, column: 'spec_ready', title: 'Test', updated_at: '' },
-      ],
-      stacks: [],
-      _newStackDialogContext: null,
-    });
-  });
-
-  it('reverts ticket column when dialog closed with stackCreated=false', async () => {
-    useAppStore.getState().openNewStackDialogForTicket('42', PROJECT_DIR, 'spec_ready');
-    await new Promise(resolve => setTimeout(resolve, 0));
-    expect(useAppStore.getState().boardTickets.find(t => t.ticket_id === '42')?.column).toBe('in_stack');
-
-    useAppStore.getState().setShowNewStackDialog(false);
-    await new Promise(resolve => setTimeout(resolve, 0));
-    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-    expect(entry?.column).toBe('spec_ready');
-  });
-
-  it('does NOT revert when stackCreated flag is set', async () => {
-    useAppStore.getState().openNewStackDialogForTicket('42', PROJECT_DIR, 'spec_ready');
-    await new Promise(resolve => setTimeout(resolve, 0));
-
-    // Simulate stack was created — set the flag
-    const ctx = useAppStore.getState()._newStackDialogContext!;
-    useAppStore.setState({ _newStackDialogContext: { ...ctx, stackCreated: true } });
-
-    useAppStore.getState().setShowNewStackDialog(false);
-    await new Promise(resolve => setTimeout(resolve, 0));
-    const entry = useAppStore.getState().boardTickets.find(t => t.ticket_id === '42');
-    expect(entry?.column).toBe('in_stack');
-  });
-});
-
 describe('store: setShowRefineTicketDialog revert-on-cancel', () => {
   beforeEach(() => {
     setupSandstormMock();

@@ -17,20 +17,8 @@ test.describe('Navigation', () => {
     await expect(mainWindow.locator('[data-testid="tab-history"]')).toBeVisible();
   });
 
-  test('NewStackDialog can be opened from KanbanBoard and closed', async ({ mainWindow }) => {
-    await mainWindow.waitForSelector('[data-testid="new-stack-btn"]', { timeout: 15000 });
-
-    // Open dialog
-    await mainWindow.click('[data-testid="new-stack-btn"]');
-    await expect(mainWindow.locator('[data-testid="stack-name"]')).toBeVisible({ timeout: 5000 });
-
-    // Close via Cancel
-    await mainWindow.click('text=Cancel');
-    await expect(mainWindow.locator('[data-testid="stack-name"]')).not.toBeVisible({ timeout: 5000 });
-  });
-
-  test('app remains stable after repeated tab and dialog interactions', async ({ mainWindow }) => {
-    await mainWindow.waitForSelector('[data-testid="new-stack-btn"]', { timeout: 15000 });
+  test('app remains stable after repeated tab interactions', async ({ mainWindow }) => {
+    await mainWindow.waitForSelector('[data-testid="tab-active"]', { timeout: 15000 });
 
     // Toggle Active/History tabs multiple times to verify stability.
     for (let i = 0; i < 3; i++) {
@@ -40,16 +28,8 @@ test.describe('Navigation', () => {
       await mainWindow.waitForTimeout(300);
     }
 
-    // App should still be responsive — LeftRail and the New Stack button stay
-    // interactive after repeated tab toggles.
+    // App should still be responsive after repeated tab toggles.
     await expect(mainWindow.locator('[data-testid="left-rail"]')).toBeVisible();
-    await expect(mainWindow.locator('[data-testid="new-stack-btn"]')).toBeVisible();
-
-    // Open and close the New Stack dialog to verify interactivity.
-    await mainWindow.click('[data-testid="new-stack-btn"]');
-    await expect(mainWindow.locator('[data-testid="stack-name"]')).toBeVisible({ timeout: 5000 });
-    await mainWindow.click('text=Cancel');
-    await expect(mainWindow.locator('[data-testid="stack-name"]')).not.toBeVisible({ timeout: 5000 });
   });
 
   test('LeftRail Add project button opens the Open Project dialog', async ({ mainWindow }) => {
