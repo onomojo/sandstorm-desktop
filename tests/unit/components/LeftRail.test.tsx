@@ -192,6 +192,40 @@ describe('LeftRail', () => {
     expect(useAppStore.getState().showModelSettings).toBe(true);
   });
 
+  it('renders telemetry nav button when a project is active', () => {
+    render(<LeftRail />);
+    expect(screen.getByTestId('telemetry-nav-btn')).toBeDefined();
+  });
+
+  it('clicking telemetry nav button sets mainView to telemetry and calls selectStack(null)', () => {
+    render(<LeftRail />);
+    fireEvent.click(screen.getByTestId('telemetry-nav-btn'));
+    const state = useAppStore.getState();
+    expect(state.mainView).toBe('telemetry');
+    expect(state.selectedStackId).toBeNull();
+  });
+
+  it('applies active styling to telemetry nav button when mainView is telemetry', () => {
+    useAppStore.setState({ mainView: 'telemetry' });
+    render(<LeftRail />);
+    const btn = screen.getByTestId('telemetry-nav-btn');
+    expect(btn.className).toContain('bg-sandstorm-accent/15');
+  });
+
+  it('shows month cost subline when telemetrySummary is set', () => {
+    useAppStore.setState({
+      telemetrySummary: {
+        monthCost: 4.2,
+        prevMonthCost: 3.1,
+        tokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
+        cacheHitPct: 0,
+        sessions: 0,
+      },
+    });
+    render(<LeftRail />);
+    expect(screen.getByText('$4.20 this month')).toBeDefined();
+  });
+
   it('active project pill swaps count badge for gear on hover and restores badge on mouse-leave', async () => {
     useAppStore.setState({
       boardTickets: [
