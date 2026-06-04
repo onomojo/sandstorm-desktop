@@ -198,6 +198,11 @@ export class StackManager {
     this.appVersion = StackManager.resolveAppVersion();
   }
 
+  /** Register a callback invoked when a task completes (used by rollup store for cache invalidation). */
+  setOnTaskCompleted(cb: (stackId: string) => void): void {
+    this.taskWatcher.onTaskCompleted = cb;
+  }
+
   /**
    * Resolve the app's git commit hash.
    * Prefers the build-time define; falls back to git at runtime (dev mode).

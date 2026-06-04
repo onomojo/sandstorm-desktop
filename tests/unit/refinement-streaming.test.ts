@@ -43,6 +43,17 @@ vi.mock('electron', () => ({
   },
 }));
 
+vi.mock('../../src/main/telemetry/rollup-store', () => ({
+  TicketRollupStore: vi.fn().mockImplementation(() => ({
+    getByTicket: vi.fn().mockReturnValue([]),
+    refresh: vi.fn(),
+    markStackDirty: vi.fn(),
+    markDirty: vi.fn(),
+    ticketsShipped: vi.fn().mockReturnValue(0),
+    totalTicketCost: vi.fn().mockReturnValue(0),
+  })),
+}));
+
 vi.mock('../../src/main/index', () => ({
   registry: {
     listProjects: vi.fn(),
@@ -50,6 +61,7 @@ vi.mock('../../src/main/index', () => ({
     removeProject: vi.fn(),
     getProject: vi.fn(),
     getPorts: vi.fn(),
+    getDb: vi.fn().mockReturnValue({}),
   },
   stackManager: {
     setOnStackUpdate: vi.fn(),
@@ -75,6 +87,7 @@ vi.mock('../../src/main/index', () => ({
     getRateLimitState: vi.fn(),
     getWorkflowProgress: vi.fn(),
     resumeStackWithContinuation: vi.fn(),
+    setOnTaskCompleted: vi.fn(),
   },
   dockerRuntime: {
     isAvailable: vi.fn(),

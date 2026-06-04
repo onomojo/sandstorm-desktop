@@ -90,6 +90,7 @@ import { KANBAN_COLUMNS } from '../shared/kanban';
 import os from 'os';
 import { createUsageEngine } from './telemetry/usage-engine';
 import type { DateRange } from './telemetry/usage-engine';
+import { TicketRollupStore } from './telemetry/rollup-store';
 
 // Set __sandstorm at module-load time so app.evaluate() works immediately
 // after electron.launch() resolves — which happens during createWindow(),
@@ -760,14 +761,30 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return fetchAccountUsage();
   });
 
-  // --- Telemetry (host orchestrator usage) ---
+  // --- Telemetry (host orchestrator usage + per-ticket attribution) ---
 
   const hostEngine = createUsageEngine(
     os.homedir() + '/.claude/projects'
   );
 
+  const rollupStore = new TicketRollupStore(registry.getDb());
+
+  // Wire auto-invalidation hooks so the rollup cache stays fresh
+  registry.onStackArchived = (stackId) => rollupStore.markStackDirty(stackId);
+  registry.onBoardTicketMoved = (_ticketId, column) => {
+    if (column === 'merged') rollupStore.markDirty();
+  };
+  stackManager.setOnTaskCompleted((stackId) => rollupStore.markStackDirty(stackId));
+
   ipcMain.handle('stats:telemetry:summary', async (_event, range: DateRange) => {
-    return hostEngine.getSummary(range);
+    const summary = hostEngine.getSummary(range);
+    const shipped = rollupStore.ticketsShipped();
+    const totalCost = rollupStore.totalTicketCost();
+    return {
+      ...summary,
+      ticketsShipped: shipped,
+      costPerTicket: shipped > 0 ? totalCost / shipped : null,
+    };
   });
 
   ipcMain.handle('stats:telemetry:daily', async (_event, range: DateRange) => {
@@ -780,6 +797,15 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stats:telemetry:session', async (_event, range: DateRange) => {
     return hostEngine.getSessions(range);
+  });
+
+  ipcMain.handle('stats:telemetry:byTicket', async () => {
+    return rollupStore.getByTicket();
+  });
+
+  ipcMain.handle('stats:telemetry:refresh', async () => {
+    rollupStore.refresh();
+    return { ok: true };
   });
 
   // --- Custom Context ---

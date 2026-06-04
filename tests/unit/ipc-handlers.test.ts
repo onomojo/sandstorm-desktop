@@ -33,6 +33,7 @@ const {
   mockPersistRefinement,
   mockLoadRefinements,
   mockUsageEngine,
+  mockRollupStoreInstance,
 } = vi.hoisted(() => {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
   const mockSpawnSpecCheck = vi.fn();
@@ -57,6 +58,7 @@ const {
     deleteBoardTicket: vi.fn(),
     getDarkFactoryEnabled: vi.fn().mockReturnValue(false),
     setDarkFactoryEnabled: vi.fn(),
+    getDb: vi.fn().mockReturnValue({}),
   };
 
   const mockStackManager = {
@@ -84,6 +86,7 @@ const {
     getWorkflowProgress: vi.fn(),
     resumeStackWithContinuation: vi.fn(),
     autoResolveConflicts: vi.fn(),
+    setOnTaskCompleted: vi.fn(),
   };
 
   const mockDockerRuntime = {
@@ -147,6 +150,15 @@ const {
     getSessions: vi.fn(),
   };
 
+  const mockRollupStoreInstance = {
+    getByTicket: vi.fn().mockReturnValue([]),
+    refresh: vi.fn(),
+    markStackDirty: vi.fn(),
+    markDirty: vi.fn(),
+    ticketsShipped: vi.fn().mockReturnValue(0),
+    totalTicketCost: vi.fn().mockReturnValue(0),
+  };
+
   return {
     registeredHandlers,
     mockRegistry,
@@ -171,6 +183,7 @@ const {
     mockPersistRefinement,
     mockLoadRefinements,
     mockUsageEngine,
+    mockRollupStoreInstance,
   };
 });
 
@@ -220,6 +233,10 @@ vi.mock('os', async (importOriginal) => {
 
 vi.mock('../../src/main/telemetry/usage-engine', () => ({
   createUsageEngine: vi.fn(() => mockUsageEngine),
+}));
+
+vi.mock('../../src/main/telemetry/rollup-store', () => ({
+  TicketRollupStore: vi.fn().mockImplementation(() => mockRollupStoreInstance),
 }));
 
 vi.mock('child_process', () => ({
@@ -574,7 +591,7 @@ describe('IPC Handlers', () => {
   describe('telemetry', () => {
     const range = { since: '2024-01-01', until: '2024-01-31' };
 
-    it('stats:telemetry:summary delegates to usageEngine.getSummary', async () => {
+    it('stats:telemetry:summary delegates to usageEngine.getSummary and enriches attribution', async () => {
       const summary = {
         monthCost: 12.5,
         prevMonthCost: 8.0,
@@ -588,12 +605,15 @@ describe('IPC Handlers', () => {
       };
       mockUsageEngine.getSummary.mockReturnValue(summary);
 
-      const result = await invokeHandler('stats:telemetry:summary', range);
-      expect(result).toEqual(summary);
+      const result = await invokeHandler('stats:telemetry:summary', range) as typeof summary;
       expect(mockUsageEngine.getSummary).toHaveBeenCalledWith(range);
+      // Attribution values come from rollup store (mocked to return 0)
+      expect(result.monthCost).toBe(12.5);
+      expect(result.ticketsShipped).toBe(0); // from rollupStore.ticketsShipped()
+      expect(result.costPerTicket).toBeNull(); // null when ticketsShipped = 0
     });
 
-    it('stats:telemetry:summary returns null for ticketsShipped and costPerTicket', async () => {
+    it('stats:telemetry:summary returns null for costPerTicket when no tickets shipped', async () => {
       mockUsageEngine.getSummary.mockReturnValue({
         monthCost: 0,
         prevMonthCost: 0,
@@ -607,8 +627,8 @@ describe('IPC Handlers', () => {
       });
 
       const result = await invokeHandler('stats:telemetry:summary', range) as { ticketsShipped: unknown; costPerTicket: unknown };
-      expect(result.ticketsShipped).toBeNull();
-      expect(result.costPerTicket).toBeNull();
+      expect(result.ticketsShipped).toBe(0); // rollupStore returns 0 shipped
+      expect(result.costPerTicket).toBeNull(); // null when 0 shipped
     });
 
     it('stats:telemetry:daily delegates to usageEngine.getDaily', async () => {
@@ -652,6 +672,35 @@ describe('IPC Handlers', () => {
       const result = await invokeHandler('stats:telemetry:session', range);
       expect(result).toEqual(sessions);
       expect(mockUsageEngine.getSessions).toHaveBeenCalledWith(range);
+    });
+
+    it('stats:telemetry:byTicket delegates to rollupStore.getByTicket and returns the array', async () => {
+      const entries = [
+        {
+          ticketId: 'T-42',
+          title: 'Fix the bug',
+          column: 'merged',
+          model: 'claude-opus-4-5',
+          cost: 2.5,
+          tokens: { input: 500, output: 200, cacheRead: 100, cacheCreation: 50 },
+          cacheHit: 16.7,
+          lifecycle: null,
+          unpriced: false,
+        },
+      ];
+      mockRollupStoreInstance.getByTicket.mockReturnValueOnce(entries);
+
+      const result = await invokeHandler('stats:telemetry:byTicket');
+
+      expect(mockRollupStoreInstance.getByTicket).toHaveBeenCalledOnce();
+      expect(result).toEqual(entries);
+    });
+
+    it('stats:telemetry:refresh triggers rollup rebuild and returns { ok: true }', async () => {
+      const result = await invokeHandler('stats:telemetry:refresh');
+
+      expect(mockRollupStoreInstance.refresh).toHaveBeenCalledOnce();
+      expect(result).toEqual({ ok: true });
     });
   });
 
@@ -2171,6 +2220,8 @@ describe('IPC Handlers', () => {
       'stats:telemetry:daily',
       'stats:telemetry:byModel',
       'stats:telemetry:session',
+      'stats:telemetry:byTicket',
+      'stats:telemetry:refresh',
     ];
 
     it('registers all expected IPC channels', () => {
