@@ -22,9 +22,6 @@ vi.mock('../../../src/renderer/components/StackDetail', () => ({
     </div>
   ),
 }));
-vi.mock('../../../src/renderer/components/NewStackDialog', () => ({
-  NewStackDialog: () => <div data-testid="new-stack-dialog" />,
-}));
 vi.mock('../../../src/renderer/components/OpenProjectDialog', () => ({
   OpenProjectDialog: () => <div data-testid="open-project-dialog" />,
 }));
@@ -45,7 +42,6 @@ describe('App', () => {
       projects: [],
       activeProjectId: null,
       selectedStackId: null,
-      showNewStackDialog: false,
       showOpenProjectDialog: false,
       dockerConnected: true,
       error: null,
@@ -96,12 +92,6 @@ describe('App', () => {
     render(<App />);
     expect(screen.getByTestId('stack-detail')).toBeDefined();
     expect(screen.queryByTestId('kanban-board')).toBeNull();
-  });
-
-  it('renders NewStackDialog when showNewStackDialog is true', () => {
-    useAppStore.setState({ showNewStackDialog: true });
-    render(<App />);
-    expect(screen.getByTestId('new-stack-dialog')).toBeDefined();
   });
 
   it('renders OpenProjectDialog when showOpenProjectDialog is true', () => {

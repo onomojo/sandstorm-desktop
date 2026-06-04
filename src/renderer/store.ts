@@ -417,7 +417,6 @@ interface AppState {
   stacks: Stack[];
   stackHistory: StackHistoryRecord[];
   selectedStackId: string | null;
-  showNewStackDialog: boolean;
   showRefineTicketDialog: boolean;
   /**
    * Optional ticket id passed when opening the Refine dialog from another
@@ -535,12 +534,9 @@ interface AppState {
   commitRefinementContext: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
   /** Starts the spec gate in the background (no modal) for an initial Refine click from a backlog card. Moves ticket to 'refining'. */
   openRefineDialogFromCard: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
-  /** Opens the new stack dialog for a ticket and moves it to 'in_stack' optimistically. Reverts on cancel. */
-  openNewStackDialogForTicket: (ticketId: string, projectDir: string, previousColumn: KanbanColumn) => void;
   /** Opens the Create PR dialog as fallback (Q3/Q4). Does NOT move the ticket column optimistically. */
   openCreatePRDialogForTicket: (stackId: string, ticketId: string, projectDir: string, previousColumn: KanbanColumn, initialError?: string) => void;
   _refineDialogContext: { ticketId: string; projectDir: string; previousColumn: KanbanColumn } | null;
-  _newStackDialogContext: { ticketId: string; projectDir: string; previousColumn: KanbanColumn; stackCreated: boolean } | null;
   _prDialogContext: { stackId: string; ticketId: string; projectDir: string; previousColumn: KanbanColumn; prCreated: boolean } | null;
   /** Per-ticket create error message, keyed by `${ticketId}|${projectDir}`. Set on fetch/create failure; cleared on retry success or column change away from in_stack. */
   stackCreateErrors: Record<string, string>;
@@ -604,7 +600,6 @@ interface AppState {
   // Stack actions
   setStacks: (stacks: Stack[]) => void;
   selectStack: (id: string | null) => void;
-  setShowNewStackDialog: (show: boolean) => void;
   setShowRefineTicketDialog: (show: boolean) => void;
   /** Open the Refine dialog with a ticket id already filled in. */
   openRefineTicketDialogWith: (ticketId: string) => void;
@@ -965,7 +960,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   stackHistory: [],
   stackMetrics: {},
   selectedStackId: null,
-  showNewStackDialog: false,
   showRefineTicketDialog: false,
   refineTicketPrefill: null,
   refinementSessions: [],
@@ -1151,7 +1145,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   moveTicketColumnError: null,
   lastTicketFetchAt: null,
   _refineDialogContext: null,
-  _newStackDialogContext: null,
   _prDialogContext: null,
   stackCreateErrors: {},
   stackCreateInFlight: {},
@@ -1288,11 +1281,6 @@ export const useAppStore = create<AppState>((set, get) => ({
           };
         });
       });
-  },
-
-  openNewStackDialogForTicket: (ticketId, projectDir, previousColumn) => {
-    set({ showNewStackDialog: true, _newStackDialogContext: { ticketId, projectDir, previousColumn, stackCreated: false } });
-    void get().moveTicketColumn(ticketId, projectDir, 'in_stack');
   },
 
   openCreatePRDialogForTicket: (stackId, ticketId, projectDir, previousColumn, initialError?: string) => {
@@ -1589,18 +1577,6 @@ export const useAppStore = create<AppState>((set, get) => ({
   // Stack actions
   setStacks: (stacks) => set({ stacks }),
   selectStack: (id) => set({ selectedStackId: id }),
-  setShowNewStackDialog: (show) => {
-    if (!show) {
-      const ctx = get()._newStackDialogContext;
-      if (ctx) {
-        set({ _newStackDialogContext: null });
-        if (!ctx.stackCreated) {
-          void get().moveTicketColumn(ctx.ticketId, ctx.projectDir, ctx.previousColumn);
-        }
-      }
-    }
-    set({ showNewStackDialog: show });
-  },
   setShowRefineTicketDialog: (show) => {
     if (!show) {
       const ctx = get()._refineDialogContext;
@@ -1779,14 +1755,6 @@ export const useAppStore = create<AppState>((set, get) => ({
       const stacks = await window.sandstorm.stacks.list();
       const state = get();
       const updates: Partial<typeof state> = { stacks, error: null };
-
-      // Mark new-stack dialog context as succeeded if a matching stack is now visible
-      const newStackCtx = state._newStackDialogContext;
-      if (newStackCtx && !newStackCtx.stackCreated) {
-        if (stacks.some((s) => s.ticket === newStackCtx.ticketId)) {
-          updates._newStackDialogContext = { ...newStackCtx, stackCreated: true };
-        }
-      }
 
       // Mark PR dialog context as succeeded if the stack now has a pr_url
       const prCtx = state._prDialogContext;

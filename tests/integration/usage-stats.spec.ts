@@ -59,10 +59,8 @@ test.describe('Usage Stats', () => {
 
     expect(criticalErrors).toEqual([]);
 
-    // App should still be functional — the KanbanBoard's New Stack button is
-    // interactive once the renderer has settled.
-    const newStackBtn = mainWindow.locator('[data-testid="new-stack-btn"]');
-    await expect(newStackBtn).toBeVisible({ timeout: 5000 });
+    // App should still be functional — the KanbanBoard remains visible after settling.
+    await expect(mainWindow.locator('[data-testid="kanban-board"]')).toBeVisible({ timeout: 5000 });
   });
 
   test('session monitor reports claude CLI availability', async ({ mainWindow }) => {
