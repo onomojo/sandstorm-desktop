@@ -23,8 +23,10 @@ OUTPUT_FILE="${1:?Usage: token-counter.sh <output-file> [iteration] [phase]}"
 ITERATION="${2:-}"
 PHASE="${3:-}"
 
-# Track current turn's input tokens (set by message_start, used by message_delta)
+# Track current turn's input and cache tokens (set by message_start, used by message_delta)
 current_input=0
+current_cache_creation=0
+current_cache_read=0
 
 # Build jq metadata suffix for output objects
 if [ -n "$ITERATION" ] && [ -n "$PHASE" ]; then
@@ -48,16 +50,20 @@ while IFS= read -r line; do
       case "$event_type" in
         message_start)
           in_tokens=$(echo "$event" | jq -r '(.message.usage.input_tokens // 0)' 2>/dev/null)
+          cc_tokens=$(echo "$event" | jq -r '(.message.usage.cache_creation_input_tokens // 0)' 2>/dev/null)
+          cr_tokens=$(echo "$event" | jq -r '(.message.usage.cache_read_input_tokens // 0)' 2>/dev/null)
           current_input="${in_tokens:-0}"
+          current_cache_creation="${cc_tokens:-0}"
+          current_cache_read="${cr_tokens:-0}"
           if [ "${current_input:-0}" -gt 0 ] 2>/dev/null; then
-            tokens=$(echo "$event" | jq -c "{in: (.message.usage.input_tokens // 0), out: 0${META}, partial: true}" 2>/dev/null)
+            tokens=$(echo "$event" | jq -c "{in: (.message.usage.input_tokens // 0), out: 0, cc: (.message.usage.cache_creation_input_tokens // 0), cr: (.message.usage.cache_read_input_tokens // 0)${META}, partial: true}" 2>/dev/null)
             [ -n "$tokens" ] && echo "$tokens" >> "$OUTPUT_FILE"
           fi
           ;;
         message_delta)
           out_tokens=$(echo "$event" | jq -r '(.usage.output_tokens // 0)' 2>/dev/null)
           if [ "${out_tokens:-0}" -gt 0 ] 2>/dev/null; then
-            tokens=$(echo "$event" | jq -c "{in: ${current_input:-0}, out: (.usage.output_tokens // 0)${META}, partial: true}" 2>/dev/null)
+            tokens=$(echo "$event" | jq -c "{in: ${current_input:-0}, out: (.usage.output_tokens // 0), cc: ${current_cache_creation:-0}, cr: ${current_cache_read:-0}${META}, partial: true}" 2>/dev/null)
             [ -n "$tokens" ] && echo "$tokens" >> "$OUTPUT_FILE"
           fi
           ;;
@@ -67,9 +73,11 @@ while IFS= read -r line; do
           in_tokens=$(echo "$event" | jq -r '(.usage.input_tokens // 0)' 2>/dev/null)
           out_tokens=$(echo "$event" | jq -r '(.usage.output_tokens // 0)' 2>/dev/null)
           if [ "${in_tokens:-0}" -gt 0 ] || [ "${out_tokens:-0}" -gt 0 ]; then
-            tokens=$(echo "$event" | jq -c "{in: (.usage.input_tokens // 0), out: (.usage.output_tokens // 0)${META}}" 2>/dev/null)
+            tokens=$(echo "$event" | jq -c "{in: (.usage.input_tokens // 0), out: (.usage.output_tokens // 0), cc: (.usage.cache_creation_input_tokens // 0), cr: (.usage.cache_read_input_tokens // 0)${META}}" 2>/dev/null)
             [ -n "$tokens" ] && echo "$tokens" >> "$OUTPUT_FILE"
             current_input=0
+            current_cache_creation=0
+            current_cache_read=0
           fi
           ;;
       esac

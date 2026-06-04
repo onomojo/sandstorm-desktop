@@ -58,6 +58,8 @@ export class TaskWatcher extends EventEmitter {
   private stalePollCounts = new Map<string, number>();
   private pollInterval: number;
   private onStatusChange?: () => void;
+  /** Optional callback invoked after a task completes — used by rollup store for cache invalidation. */
+  onTaskCompleted?: (stackId: string) => void;
   /** Tracks the last time we polled tokens for each stack (to throttle reads) */
   private lastTokenPoll = new Map<string, number>();
   /** How often to poll tokens while a task is running (ms) */
@@ -206,10 +208,16 @@ export class TaskWatcher extends EventEmitter {
     }
 
     // Read token usage, session ID, loop iterations, and execution metadata (async, best-effort)
+    // onTaskCompleted fires after readTaskTokens completes so the dirty signal is set
+    // only once the new token values are actually written to the DB.
     if (containerId) {
-      this.readTaskTokens(task.id, stackId, containerId).catch(() => {});
+      this.readTaskTokens(task.id, stackId, containerId)
+        .catch(() => {})
+        .then(() => this.onTaskCompleted?.(stackId));
       this.readTaskIterations(task.id, stackId, containerId).catch(() => {});
       this.readTaskMetadata(task.id, stackId, containerId).catch(() => {});
+    } else {
+      this.onTaskCompleted?.(stackId);
     }
 
     const updatedTask = {
@@ -246,19 +254,24 @@ export class TaskWatcher extends EventEmitter {
         runtime.exec(containerId, ['cat', '/tmp/claude-raw.log']).catch(() => ({ stdout: '' })),
       ]);
 
-      // Parse phase token totals
+      // Parse phase token totals (including cache fields from token-counter.sh cc/cr)
       const execTokens = parsePhaseTokenTotals(execResult.stdout);
       const reviewTokens = parsePhaseTokenTotals(reviewResult.stdout);
 
       const totalInput = execTokens.input_tokens + reviewTokens.input_tokens;
       const totalOutput = execTokens.output_tokens + reviewTokens.output_tokens;
+      const totalCacheRead = execTokens.cache_read_tokens + reviewTokens.cache_read_tokens;
+      const totalCacheCreation = execTokens.cache_creation_tokens + reviewTokens.cache_creation_tokens;
 
-      if (totalInput > 0 || totalOutput > 0) {
+      if (totalInput > 0 || totalOutput > 0 || totalCacheRead > 0 || totalCacheCreation > 0) {
         this.registry.updateTaskTokens(taskId, totalInput, totalOutput, {
           executionInput: execTokens.input_tokens,
           executionOutput: execTokens.output_tokens,
           reviewInput: reviewTokens.input_tokens,
           reviewOutput: reviewTokens.output_tokens,
+        }, {
+          cacheRead: totalCacheRead,
+          cacheCreation: totalCacheCreation,
         });
       }
 

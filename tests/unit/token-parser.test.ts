@@ -263,6 +263,8 @@ describe('parsePhaseTokenTotals', () => {
     const result = parsePhaseTokenTotals('');
     expect(result.input_tokens).toBe(0);
     expect(result.output_tokens).toBe(0);
+    expect(result.cache_creation_tokens).toBe(0);
+    expect(result.cache_read_tokens).toBe(0);
   });
 
   it('returns zeros for non-JSON input', () => {
@@ -275,6 +277,8 @@ describe('parsePhaseTokenTotals', () => {
     const result = parsePhaseTokenTotals('{"in":1500,"out":800}\n');
     expect(result.input_tokens).toBe(1500);
     expect(result.output_tokens).toBe(800);
+    expect(result.cache_creation_tokens).toBe(0);
+    expect(result.cache_read_tokens).toBe(0);
   });
 
   it('sums multiple token lines', () => {
@@ -287,6 +291,33 @@ describe('parsePhaseTokenTotals', () => {
     const result = parsePhaseTokenTotals(output);
     expect(result.input_tokens).toBe(3500);
     expect(result.output_tokens).toBe(1700);
+  });
+
+  it('parses cc and cr cache fields from token-counter.sh output', () => {
+    const output = [
+      '{"in":1000,"out":500,"cc":200,"cr":800}',
+      '{"in":500,"out":100,"cc":100,"cr":400}',
+    ].join('\n');
+    const result = parsePhaseTokenTotals(output);
+    expect(result.cache_creation_tokens).toBe(300);
+    expect(result.cache_read_tokens).toBe(1200);
+  });
+
+  it('ignores cc/cr on partial entries', () => {
+    const output = [
+      '{"in":100,"out":0,"cc":500,"cr":1000,"partial":true}',
+      '{"in":100,"out":50,"cc":500,"cr":1000}',
+    ].join('\n');
+    const result = parsePhaseTokenTotals(output);
+    // Only the non-partial result entry contributes
+    expect(result.cache_creation_tokens).toBe(500);
+    expect(result.cache_read_tokens).toBe(1000);
+  });
+
+  it('defaults cc/cr to 0 when absent (legacy lines)', () => {
+    const result = parsePhaseTokenTotals('{"in":100,"out":50}\n');
+    expect(result.cache_creation_tokens).toBe(0);
+    expect(result.cache_read_tokens).toBe(0);
   });
 
   it('handles mixed valid and invalid lines', () => {
@@ -330,6 +361,8 @@ describe('parsePhaseTokenSteps', () => {
       phase: 'execution',
       input_tokens: 1000,
       output_tokens: 500,
+      cache_creation_tokens: 0,
+      cache_read_tokens: 0,
     });
   });
 
@@ -342,6 +375,8 @@ describe('parsePhaseTokenSteps', () => {
       phase: 'review',
       input_tokens: 800,
       output_tokens: 300,
+      cache_creation_tokens: 0,
+      cache_read_tokens: 0,
     });
   });
 
@@ -368,10 +403,10 @@ describe('parsePhaseTokenSteps', () => {
     const result = parsePhaseTokenSteps(execOutput, reviewOutput);
     expect(result).toHaveLength(4);
     // Sorted: iter1-exec, iter1-review, iter2-exec, iter2-review
-    expect(result[0]).toEqual({ iteration: 1, phase: 'execution', input_tokens: 1000, output_tokens: 500 });
-    expect(result[1]).toEqual({ iteration: 1, phase: 'review', input_tokens: 600, output_tokens: 200 });
-    expect(result[2]).toEqual({ iteration: 2, phase: 'execution', input_tokens: 800, output_tokens: 400 });
-    expect(result[3]).toEqual({ iteration: 2, phase: 'review', input_tokens: 500, output_tokens: 150 });
+    expect(result[0]).toEqual({ iteration: 1, phase: 'execution', input_tokens: 1000, output_tokens: 500, cache_creation_tokens: 0, cache_read_tokens: 0 });
+    expect(result[1]).toEqual({ iteration: 1, phase: 'review', input_tokens: 600, output_tokens: 200, cache_creation_tokens: 0, cache_read_tokens: 0 });
+    expect(result[2]).toEqual({ iteration: 2, phase: 'execution', input_tokens: 800, output_tokens: 400, cache_creation_tokens: 0, cache_read_tokens: 0 });
+    expect(result[3]).toEqual({ iteration: 2, phase: 'review', input_tokens: 500, output_tokens: 150, cache_creation_tokens: 0, cache_read_tokens: 0 });
   });
 
   it('falls back to default phase and iteration 1 for legacy lines', () => {
@@ -379,8 +414,8 @@ describe('parsePhaseTokenSteps', () => {
     const reviewOutput = '{"in":600,"out":200}\n';
     const result = parsePhaseTokenSteps(execOutput, reviewOutput);
     expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ iteration: 1, phase: 'execution', input_tokens: 1000, output_tokens: 500 });
-    expect(result[1]).toEqual({ iteration: 1, phase: 'review', input_tokens: 600, output_tokens: 200 });
+    expect(result[0]).toEqual({ iteration: 1, phase: 'execution', input_tokens: 1000, output_tokens: 500, cache_creation_tokens: 0, cache_read_tokens: 0 });
+    expect(result[1]).toEqual({ iteration: 1, phase: 'review', input_tokens: 600, output_tokens: 200, cache_creation_tokens: 0, cache_read_tokens: 0 });
   });
 
   it('sorts by iteration then phase order (execution < review < verify)', () => {
@@ -462,6 +497,8 @@ describe('parsePhaseTokenSteps', () => {
       phase: 'execution',
       input_tokens: 2000,
       output_tokens: 0,
+      cache_creation_tokens: 0,
+      cache_read_tokens: 0,
     });
   });
 
@@ -488,8 +525,8 @@ describe('parsePhaseTokenSteps', () => {
     const reviewOutput = '{"in":800,"out":300,"iter":1,"phase":"review"}\n';
     const result = parsePhaseTokenSteps(execOutput, reviewOutput);
     expect(result).toHaveLength(2);
-    expect(result[0]).toEqual({ iteration: 1, phase: 'execution', input_tokens: 2500, output_tokens: 400 });
-    expect(result[1]).toEqual({ iteration: 1, phase: 'review', input_tokens: 800, output_tokens: 300 });
+    expect(result[0]).toEqual({ iteration: 1, phase: 'execution', input_tokens: 2500, output_tokens: 400, cache_creation_tokens: 0, cache_read_tokens: 0 });
+    expect(result[1]).toEqual({ iteration: 1, phase: 'review', input_tokens: 800, output_tokens: 300, cache_creation_tokens: 0, cache_read_tokens: 0 });
   });
 
   it('skips zero-token partial entries', () => {
@@ -502,6 +539,53 @@ describe('parsePhaseTokenSteps', () => {
     expect(result).toHaveLength(1);
     expect(result[0].input_tokens).toBe(500);
     expect(result[0].output_tokens).toBe(200);
+  });
+
+  it('parses cc and cr cache fields and sums them across API turns', () => {
+    const execOutput = [
+      '{"in":1000,"out":500,"cc":200,"cr":800,"iter":1,"phase":"execution"}',
+      '{"in":500,"out":200,"cc":100,"cr":300,"iter":1,"phase":"execution"}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    expect(result[0].input_tokens).toBe(1500);
+    expect(result[0].output_tokens).toBe(700);
+    expect(result[0].cache_creation_tokens).toBe(300);
+    expect(result[0].cache_read_tokens).toBe(1100);
+  });
+
+  it('tracks latest partial cc/cr per key — same pattern as input/output', () => {
+    // Multiple partials: only the last matters; result then supersedes it
+    const execOutput = [
+      '{"in":500,"out":0,"cc":100,"cr":200,"iter":1,"phase":"execution","partial":true}',
+      '{"in":500,"out":200,"cc":150,"cr":300,"iter":1,"phase":"execution","partial":true}',
+      '{"in":500,"out":200,"cc":150,"cr":300,"iter":1,"phase":"execution"}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    // Only the result entry counts — partial is reset when result arrives
+    expect(result[0].cache_creation_tokens).toBe(150);
+    expect(result[0].cache_read_tokens).toBe(300);
+  });
+
+  it('defaults cache fields to 0 when absent (legacy lines without cc/cr)', () => {
+    const execOutput = '{"in":1000,"out":500,"iter":1,"phase":"execution"}\n';
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    expect(result[0].cache_creation_tokens).toBe(0);
+    expect(result[0].cache_read_tokens).toBe(0);
+  });
+
+  it('adds latest partial cache fields to completed totals for multi-turn phases', () => {
+    // Turn 1 complete with cache, Turn 2 in progress (partial) with cache
+    const execOutput = [
+      '{"in":500,"out":200,"cc":100,"cr":400,"iter":1,"phase":"execution"}',
+      '{"in":800,"out":0,"cc":200,"cr":600,"iter":1,"phase":"execution","partial":true}',
+    ].join('\n');
+    const result = parsePhaseTokenSteps(execOutput, '');
+    expect(result).toHaveLength(1);
+    expect(result[0].cache_creation_tokens).toBe(300);
+    expect(result[0].cache_read_tokens).toBe(1000);
   });
 });
 
