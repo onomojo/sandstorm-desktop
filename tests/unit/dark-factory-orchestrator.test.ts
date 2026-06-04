@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { DarkFactoryOrchestrator } from '../../src/main/control-plane/dark-factory-orchestrator';
 
 // ---------------------------------------------------------------------------
@@ -15,6 +15,10 @@ vi.mock('../../src/main/control-plane/pr-creator', () => ({
   ),
   draftPullRequest: vi.fn(),
   createPullRequest: vi.fn(),
+}));
+
+vi.mock('../../src/main/control-plane/ticket-config', () => ({
+  fetchTicketWithConfig: vi.fn().mockResolvedValue(''),
 }));
 
 // execFile mock needs [util.promisify.custom] so promisify() resolves { stdout, stderr }
@@ -39,6 +43,7 @@ vi.mock('child_process', async () => {
 
 import { showNotification } from '../../src/main/tray';
 import { draftPullRequest, createPullRequest, workspacePathFor } from '../../src/main/control-plane/pr-creator';
+import { fetchTicketWithConfig } from '../../src/main/control-plane/ticket-config';
 
 const mockExecFile = mockExecFileInner;
 
@@ -48,6 +53,7 @@ function makeRegistry(overrides: Partial<{
   getProjectTicketConfig: (dir: string) => null;
   setBoardTicketColumn: () => void;
   listBoardTickets: (dir: string) => unknown[];
+  listProjects: () => { directory: string }[];
 }> = {}) {
   return {
     getDarkFactoryEnabled: vi.fn().mockReturnValue(false),
@@ -55,6 +61,7 @@ function makeRegistry(overrides: Partial<{
     getProjectTicketConfig: vi.fn().mockReturnValue(null),
     setBoardTicketColumn: vi.fn(),
     listBoardTickets: vi.fn().mockReturnValue([]),
+    listProjects: vi.fn().mockReturnValue([]),
     ...overrides,
   };
 }
@@ -506,6 +513,150 @@ describe('DarkFactoryOrchestrator', () => {
       await guardOrchestrator.handleDarkFactoryEnabled('/proj'); // second call: empty spec_ready
 
       // createStack only called once because second call found no spec_ready tickets
+      expect(stackManager.createStack).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // reconcileSpecReady — startup dispatch and periodic safety-net
+  // -------------------------------------------------------------------------
+  describe('reconcileSpecReady', () => {
+    function makeTicket(id: string, col: string = 'spec_ready') {
+      return { ticket_id: id, column: col, project_dir: '/proj', title: '', created_at: '2024-01-01T00:00:00', updated_at: '2024-01-01T00:00:00' };
+    }
+
+    let fastOrchestrator: DarkFactoryOrchestrator;
+
+    beforeEach(() => {
+      fastOrchestrator = new DarkFactoryOrchestrator(
+        registry as never,
+        stackManager as never,
+        agentBackend as never,
+        notifyUpdate,
+        600_000,
+        0,
+      );
+    });
+
+    afterEach(() => {
+      fastOrchestrator.destroy();
+    });
+
+    it('regression: dispatches a stranded spec_ready ticket with no existing stack on startup', async () => {
+      registry.getDarkFactoryEnabled.mockReturnValue(true);
+      registry.listBoardTickets.mockReturnValue([makeTicket('T-1')]);
+      registry.getStack.mockReturnValue(null); // no stack exists
+
+      await fastOrchestrator.reconcileSpecReady('/proj');
+
+      expect(stackManager.createStack).toHaveBeenCalledTimes(1);
+      expect(stackManager.createStack).toHaveBeenCalledWith(
+        expect.objectContaining({ ticket: 'T-1', projectDir: '/proj', gateApproved: true }),
+      );
+      expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', expect.any(String), 'in_stack');
+    });
+
+    it('dedup: skips a spec_ready ticket whose stack already exists in the registry', async () => {
+      registry.getDarkFactoryEnabled.mockReturnValue(true);
+      registry.listBoardTickets.mockReturnValue([makeTicket('T-1')]);
+      registry.getStack.mockReturnValue({ status: 'up' }); // stack already exists
+
+      await fastOrchestrator.reconcileSpecReady('/proj');
+
+      expect(stackManager.createStack).not.toHaveBeenCalled();
+    });
+
+    it('skips a project with Dark Factory disabled', async () => {
+      registry.getDarkFactoryEnabled.mockReturnValue(false);
+      registry.listBoardTickets.mockReturnValue([makeTicket('T-1')]);
+
+      await fastOrchestrator.reconcileSpecReady('/proj');
+
+      expect(stackManager.createStack).not.toHaveBeenCalled();
+    });
+
+    it('multi-project: only dispatches for Dark-Factory-enabled projects', async () => {
+      registry.getDarkFactoryEnabled.mockImplementation((dir: string) => dir === '/proj-a');
+      registry.listBoardTickets.mockImplementation((dir: string) => {
+        if (dir === '/proj-a') return [makeTicket('T-1')];
+        if (dir === '/proj-b') return [makeTicket('T-2')];
+        return [];
+      });
+      registry.getStack.mockReturnValue(null);
+      registry.listProjects.mockReturnValue([{ directory: '/proj-a' }, { directory: '/proj-b' }]);
+
+      await fastOrchestrator.reconcileSpecReady('/proj-a');
+      await fastOrchestrator.reconcileSpecReady('/proj-b');
+
+      expect(stackManager.createStack).toHaveBeenCalledTimes(1);
+      expect(stackManager.createStack).toHaveBeenCalledWith(
+        expect.objectContaining({ ticket: 'T-1', projectDir: '/proj-a' }),
+      );
+    });
+
+    it('periodic watcher: dispatches a ticket that appears in spec_ready between ticks', async () => {
+      vi.useFakeTimers();
+
+      const watcherOrchestrator = new DarkFactoryOrchestrator(
+        registry as never,
+        stackManager as never,
+        agentBackend as never,
+        notifyUpdate,
+        600_000,
+        0,
+        100, // 100ms watcher interval
+      );
+
+      registry.getDarkFactoryEnabled.mockReturnValue(true);
+      registry.listProjects.mockReturnValue([{ directory: '/proj' }]);
+      registry.getStack.mockReturnValue(null);
+      // No tickets initially
+      registry.listBoardTickets.mockReturnValue([]);
+
+      watcherOrchestrator.startPeriodicWatcher();
+
+      // Advance past first tick — nothing dispatched yet
+      await vi.advanceTimersByTimeAsync(110);
+      expect(stackManager.createStack).not.toHaveBeenCalled();
+
+      // Ticket appears in spec_ready
+      registry.listBoardTickets.mockReturnValue([makeTicket('T-1')]);
+
+      // Advance past second tick — ticket should be dispatched
+      await vi.advanceTimersByTimeAsync(110);
+      expect(stackManager.createStack).toHaveBeenCalledTimes(1);
+      expect(stackManager.createStack).toHaveBeenCalledWith(
+        expect.objectContaining({ ticket: 'T-1' }),
+      );
+
+      watcherOrchestrator.destroy();
+      vi.useRealTimers();
+    });
+
+    it('re-entrancy: concurrent reconcile calls do not double-dispatch the same ticket', async () => {
+      registry.getDarkFactoryEnabled.mockReturnValue(true);
+      registry.getStack.mockReturnValue(null);
+
+      let resolveStartStack!: () => void;
+      const startStackBlocker = new Promise<void>((resolve) => { resolveStartStack = resolve; });
+
+      // Make fetchTicketWithConfig hang so startStack is slow
+      registry.listBoardTickets.mockReturnValue([makeTicket('T-1')]);
+      registry.getProjectTicketConfig.mockReturnValue({ provider: 'test' } as never);
+
+      vi.mocked(fetchTicketWithConfig).mockImplementation(() => startStackBlocker.then(() => ''));
+
+      // Start first reconcile (won't complete until startStackBlocker resolves)
+      const first = fastOrchestrator.reconcileSpecReady('/proj');
+
+      // Second reconcile should be blocked by re-entrancy guard
+      const second = fastOrchestrator.reconcileSpecReady('/proj');
+
+      // Resolve the blocker so first call can finish
+      resolveStartStack();
+      await Promise.all([first, second]);
+
+      // Only one stack should have been created
       expect(stackManager.createStack).toHaveBeenCalledTimes(1);
     });
   });

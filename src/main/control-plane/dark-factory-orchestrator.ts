@@ -25,7 +25,13 @@ const STACK_READY_TIMEOUT_MS = 600_000;
 /** Default poll interval when waiting for a stack to become ready. */
 const STACK_READY_POLL_INTERVAL_MS = 1_000;
 
+/** How often the periodic safety-net watcher rescans for stranded spec_ready tickets (ms). */
+export const SPEC_READY_RECONCILE_INTERVAL_MS = 60_000;
+
 export class DarkFactoryOrchestrator {
+  private readonly _reconcileInProgress = new Set<string>();
+  private _watcherTimer: ReturnType<typeof setInterval> | null = null;
+
   constructor(
     private readonly registry: Registry,
     private readonly stackManager: StackManager,
@@ -33,6 +39,7 @@ export class DarkFactoryOrchestrator {
     private readonly notifyUpdate: () => void,
     private readonly stackReadyTimeoutMs: number = STACK_READY_TIMEOUT_MS,
     private readonly pollIntervalMs: number = STACK_READY_POLL_INTERVAL_MS,
+    private readonly reconcileIntervalMs: number = SPEC_READY_RECONCILE_INTERVAL_MS,
   ) {}
 
   // ---------------------------------------------------------------------------
@@ -71,6 +78,54 @@ export class DarkFactoryOrchestrator {
       }
 
       await this.awaitStackReady(stackName, this.stackReadyTimeoutMs);
+    }
+  }
+
+  /**
+   * Scans spec_ready tickets for a project and starts stacks for any that
+   * don't already have one. Safe to call concurrently: a per-project
+   * re-entrancy guard prevents overlapping passes from double-dispatching.
+   */
+  async reconcileSpecReady(projectDir: string): Promise<void> {
+    if (!this.registry.getDarkFactoryEnabled(projectDir)) return;
+    if (this._reconcileInProgress.has(projectDir)) return;
+    this._reconcileInProgress.add(projectDir);
+    try {
+      const tickets = this.registry.listBoardTickets(projectDir)
+        .filter((t) => t.column === 'spec_ready');
+
+      for (const ticket of tickets) {
+        const stackName = makeStackName(ticket.ticket_id);
+        if (!stackName) continue;
+        if (this.registry.getStack(stackName)) continue; // skip: stack already exists
+        try {
+          await this.startStack(ticket.ticket_id, projectDir);
+        } catch (err) {
+          console.warn(`[DarkFactory] reconcileSpecReady: startStack failed for ${ticket.ticket_id}:`, err);
+        }
+      }
+    } finally {
+      this._reconcileInProgress.delete(projectDir);
+    }
+  }
+
+  /** Starts the periodic safety-net watcher that rescans all enabled projects for stranded tickets. */
+  startPeriodicWatcher(): void {
+    if (this._watcherTimer !== null) return;
+    this._watcherTimer = setInterval(() => {
+      for (const project of this.registry.listProjects()) {
+        this.reconcileSpecReady(project.directory).catch((err) => {
+          console.warn('[DarkFactory] periodic reconcile failed for', project.directory, ':', err);
+        });
+      }
+    }, this.reconcileIntervalMs);
+  }
+
+  /** Clears the periodic watcher. Call on app quit. */
+  destroy(): void {
+    if (this._watcherTimer !== null) {
+      clearInterval(this._watcherTimer);
+      this._watcherTimer = null;
     }
   }
 

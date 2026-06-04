@@ -355,6 +355,7 @@ async function initializeApp(): Promise<void> {
     agentBackend,
     () => mainWindow?.webContents.send('stacks:updated'),
   );
+  darkFactoryOrchestrator.startPeriodicWatcher();
 
   // Listen for task events to send to renderer
   taskWatcher.on('task:completed', ({ stackId, task }) => {
@@ -420,6 +421,14 @@ app.whenReady().then(async () => {
     ).catch((err) => {
       console.warn('[StartupReconciler] Background reconciliation error:', err);
     });
+
+    // Dispatch any spec_ready tickets with no stack across all Dark-Factory-enabled
+    // projects. Catches tickets that were stranded before the last app restart.
+    for (const project of registry.listProjects()) {
+      darkFactoryOrchestrator.reconcileSpecReady(project.directory).catch((err) => {
+        console.warn('[DarkFactory] Startup reconcile failed for', project.directory, ':', err);
+      });
+    }
   });
 
   app.on('activate', () => {
@@ -446,6 +455,7 @@ app.on('before-quit', () => {
   agentBackend?.destroy();
   stackManager?.destroy();
   taskWatcher?.unwatchAll();
+  darkFactoryOrchestrator?.destroy();
   if (dockerRuntime instanceof DockerRuntime) {
     (dockerRuntime as DockerRuntime).destroy();
   }
