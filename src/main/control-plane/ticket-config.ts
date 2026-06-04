@@ -389,6 +389,57 @@ export async function jiraCloseTicket(
   }
 }
 
+/**
+ * Transition a Jira issue to its "Done" status via the transitions API (REST v2).
+ * Selection algorithm:
+ *   1. Prefer a transition whose target status name === 'Done' (case-insensitive).
+ *   2. Else first done-statusCategory transition not matching won't-do/cancel/reject.
+ *   3. Empty transitions list → treat as already Done (idempotent success).
+ *   4. No eligible transition found → throw so the Q5 retry+notify path handles it.
+ */
+export async function jiraTransitionToDone(
+  ticketId: string,
+  config: ProjectTicketConfig,
+): Promise<void> {
+  if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
+    throw new Error(
+      'Jira credentials are missing. Configure JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN in Project Settings.'
+    );
+  }
+  const base = config.jira_url.replace(/\/$/, '');
+  const auth = jiraAuth(config);
+  const raw = await jiraRequest({
+    url: `${base}/rest/api/2/issue/${ticketId}/transitions`,
+    method: 'GET',
+    auth,
+  });
+  const result = JSON.parse(raw) as {
+    transitions: { id: string; to: { name: string; statusCategory: { key: string } } }[];
+  };
+  const transitions = result.transitions ?? [];
+  // Empty list means no further transitions are available — issue is already Done.
+  if (transitions.length === 0) return;
+  const CANCEL = /won['']?t\s*do|cancel|reject/i;
+  let chosen = transitions.find((t) => t.to.name.toLowerCase() === 'done');
+  if (!chosen) {
+    chosen = transitions.find(
+      (t) => t.to.statusCategory.key === 'done' && !CANCEL.test(t.to.name),
+    );
+  }
+  if (!chosen) {
+    const names = transitions.map((t) => t.to.name).join(', ');
+    throw new Error(
+      `No eligible Done transition found for Jira issue ${ticketId}. Available: ${names}`,
+    );
+  }
+  await jiraRequest({
+    url: `${base}/rest/api/2/issue/${ticketId}/transitions`,
+    method: 'POST',
+    auth,
+    body: { transition: { id: chosen.id } },
+  });
+}
+
 export async function jiraCreateTicket(
   title: string,
   body: string,
@@ -479,6 +530,22 @@ export async function closeTicketWithConfig(
     return githubCloseTicket(ticketId, cwd);
   }
   return jiraCloseTicket(ticketId, config);
+}
+
+/**
+ * Mark a ticket as done after a merge — provider-neutral dispatch.
+ * GitHub → gh issue close (idempotent). Jira → transition to Done status.
+ * Does NOT archive; the discard/archive path uses closeTicketWithConfig.
+ */
+export async function markTicketDoneWithConfig(
+  ticketId: string,
+  config: ProjectTicketConfig,
+  cwd: string,
+): Promise<void> {
+  if (config.provider === 'github') {
+    return githubCloseTicket(ticketId, cwd);
+  }
+  return jiraTransitionToDone(ticketId, config);
 }
 
 export async function createTicketWithConfig(opts: {

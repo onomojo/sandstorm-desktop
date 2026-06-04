@@ -19,6 +19,18 @@ vi.mock('../../src/main/control-plane/pr-creator', () => ({
 
 vi.mock('../../src/main/control-plane/ticket-config', () => ({
   fetchTicketWithConfig: vi.fn().mockResolvedValue(''),
+  markTicketDoneWithConfig: vi.fn().mockResolvedValue(undefined),
+}));
+
+// Simulate retry without real delays — calls fn up to maxAttempts times synchronously.
+vi.mock('../../src/main/control-plane/retry-with-backoff', () => ({
+  withRetry: vi.fn(async (fn: () => Promise<unknown>, opts: { maxAttempts: number }) => {
+    let lastErr: unknown;
+    for (let i = 0; i < opts.maxAttempts; i++) {
+      try { return await fn(); } catch (err) { lastErr = err; }
+    }
+    throw lastErr;
+  }),
 }));
 
 // execFile mock needs [util.promisify.custom] so promisify() resolves { stdout, stderr }
@@ -43,9 +55,10 @@ vi.mock('child_process', async () => {
 
 import { showNotification } from '../../src/main/tray';
 import { draftPullRequest, createPullRequest, workspacePathFor } from '../../src/main/control-plane/pr-creator';
-import { fetchTicketWithConfig } from '../../src/main/control-plane/ticket-config';
+import { fetchTicketWithConfig, markTicketDoneWithConfig } from '../../src/main/control-plane/ticket-config';
 
 const mockExecFile = mockExecFileInner;
+const mockMarkTicketDoneWithConfig = vi.mocked(markTicketDoneWithConfig);
 
 function makeRegistry(overrides: Partial<{
   getDarkFactoryEnabled: (dir: string) => boolean;
@@ -310,6 +323,94 @@ describe('DarkFactoryOrchestrator', () => {
 
       // Already-merged is treated as success — card should advance
       expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', '/proj', 'merged');
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // completeMerge — mark-done on merge
+  // -------------------------------------------------------------------------
+  describe('completeMerge — mark ticket done after merge', () => {
+    function setupSuccessfulMerge() {
+      registry.getStack.mockReturnValue({ ticket: 'T-1', project_dir: '/proj' });
+      registry.getDarkFactoryEnabled.mockReturnValue(true);
+      mockExecFile.mockImplementation(
+        (_cmd: unknown, args: string[], _opts: unknown, cb: (...a: unknown[]) => void) => {
+          if ((args as string[]).includes('view')) {
+            cb(null, JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }), '');
+          } else {
+            cb(null, '', '');
+          }
+          return {} as never;
+        },
+      );
+    }
+
+    it('calls markTicketDoneWithConfig after column is set to merged', async () => {
+      setupSuccessfulMerge();
+      registry.getProjectTicketConfig.mockReturnValue({ provider: 'github' });
+      mockMarkTicketDoneWithConfig.mockResolvedValue(undefined);
+
+      orchestrator.handlePrCreated('stack-1', 99);
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', '/proj', 'merged');
+      expect(mockMarkTicketDoneWithConfig).toHaveBeenCalledWith(
+        'T-1',
+        { provider: 'github' },
+        expect.stringContaining('stack-1'),
+      );
+    });
+
+    it('skips mark-done when no ticket config is configured', async () => {
+      setupSuccessfulMerge();
+      registry.getProjectTicketConfig.mockReturnValue(null);
+
+      orchestrator.handlePrCreated('stack-1', 99);
+      await new Promise((r) => setTimeout(r, 50));
+
+      expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', '/proj', 'merged');
+      expect(mockMarkTicketDoneWithConfig).not.toHaveBeenCalled();
+    });
+
+    it('retries 3 times on persistent mark-done failure then calls showNotification', async () => {
+      setupSuccessfulMerge();
+      registry.getProjectTicketConfig.mockReturnValue({ provider: 'github' });
+      mockMarkTicketDoneWithConfig.mockRejectedValue(new Error('API down'));
+
+      orchestrator.handlePrCreated('stack-1', 99);
+      await new Promise((r) => setTimeout(r, 50));
+
+      // withRetry mock calls fn maxAttempts=3 times before giving up
+      expect(mockMarkTicketDoneWithConfig).toHaveBeenCalledTimes(3);
+      expect(vi.mocked(showNotification)).toHaveBeenCalledWith(
+        'Dark factory: ticket close failed',
+        expect.stringContaining('T-1'),
+      );
+    });
+
+    it('does NOT throw out of the merge flow when mark-done fails (Q5)', async () => {
+      setupSuccessfulMerge();
+      registry.getProjectTicketConfig.mockReturnValue({ provider: 'github' });
+      mockMarkTicketDoneWithConfig.mockRejectedValue(new Error('close failed'));
+
+      // This should resolve without throwing
+      orchestrator.handlePrCreated('stack-1', 99);
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Column was still set to merged — the merge flow was NOT undone
+      expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', '/proj', 'merged');
+    });
+
+    it('regression: completeMerge previously skipped closing the ticket (bug)', async () => {
+      setupSuccessfulMerge();
+      registry.getProjectTicketConfig.mockReturnValue({ provider: 'jira', jira_url: 'https://acme.atlassian.net', jira_username: 'u', jira_api_token: 't' });
+      mockMarkTicketDoneWithConfig.mockResolvedValue(undefined);
+
+      orchestrator.handlePrCreated('stack-1', 99);
+      await new Promise((r) => setTimeout(r, 50));
+
+      // Must have been called — this assertion fails against the old code that skipped it
+      expect(mockMarkTicketDoneWithConfig).toHaveBeenCalled();
     });
   });
 

@@ -217,6 +217,7 @@ export interface SandstormAPI {
       jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
     }>;
     close: (ticketId: string, projectDir: string) => Promise<void>;
+    markDone: (ticketId: string, projectDir: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   };
   ticketBoard: {
     setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
@@ -430,6 +431,8 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:testJiraConnection', params),
     close: (ticketId, projectDir) =>
       ipcRenderer.invoke('ticket:close', { ticketId, projectDir }),
+    markDone: (ticketId, projectDir) =>
+      ipcRenderer.invoke('ticket:mark-done', { ticketId, projectDir }),
   },
   ticketBoard: {
     setColumn: (ticketId, projectDir, column) =>

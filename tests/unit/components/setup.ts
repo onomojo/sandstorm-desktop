@@ -180,6 +180,7 @@ export function mockSandstormApi() {
         jql: { ok: true, count: 5 },
       }),
       close: vi.fn().mockResolvedValue(undefined),
+      markDone: vi.fn().mockResolvedValue({ ok: true }),
     },
     ticketBoard: {
       setColumn: vi.fn().mockResolvedValue(undefined),
