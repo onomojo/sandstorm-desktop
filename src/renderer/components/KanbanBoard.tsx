@@ -4,6 +4,14 @@ import { KanbanColumn } from '../types/kanban';
 import { TicketCard } from './TicketCard';
 import { RefinementIndicator } from './RefinementIndicator';
 
+export function matchesTicketQuery(ticket: TicketBoardEntry, query: string): boolean {
+  const normalized = query.trim().replace(/^#/, '').toLowerCase();
+  if (!normalized) return true;
+  if (ticket.ticket_id.toLowerCase().includes(normalized)) return true;
+  if (ticket.title && ticket.title.toLowerCase().includes(normalized)) return true;
+  return false;
+}
+
 const COLUMNS: { id: KanbanColumn; label: string; colorClass: string }[] = [
   { id: 'backlog', label: 'Backlog', colorClass: 'text-sandstorm-muted' },
   { id: 'refining', label: 'Refining', colorClass: 'text-sandstorm-state-refining' },
@@ -33,6 +41,8 @@ export function KanbanBoard() {
 
   const [activeTab, setActiveTab] = useState<BoardTab>('active');
   const [mergedMode, setMergedMode] = useState<MergedMode>('recent');
+  const [backlogQuery, setBacklogQuery] = useState('');
+  const [debouncedBacklogQuery, setDebouncedBacklogQuery] = useState('');
 
   const project = activeProject();
 
@@ -40,7 +50,16 @@ export function KanbanBoard() {
     if (project?.directory) {
       refreshBoardTickets(project.directory);
     }
+    setBacklogQuery('');
+    setDebouncedBacklogQuery('');
   }, [project?.directory, refreshBoardTickets]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedBacklogQuery(backlogQuery);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [backlogQuery]);
 
   const projectTickets = selectProjectTickets(boardTickets, project?.directory);
 
@@ -136,16 +155,23 @@ export function KanbanBoard() {
           >
             {COLUMNS.map((col) => {
               const isMerged = col.id === 'merged';
-              const allCards = isMerged
+              const isBacklog = col.id === 'backlog';
+              const sortedCards = isMerged
                 ? ticketsByColumn(col.id).slice().sort((a, b) => {
                     const dateCmp = b.updated_at.localeCompare(a.updated_at);
                     return dateCmp !== 0 ? dateCmp : a.ticket_id.localeCompare(b.ticket_id);
                   })
                 : ticketsByColumn(col.id);
-              const totalCount = allCards.length;
+              const filteredCards = isBacklog
+                ? sortedCards.filter((t) => matchesTicketQuery(t, debouncedBacklogQuery))
+                : sortedCards;
+              const totalCount = filteredCards.length;
               const cards = isMerged && mergedMode === 'recent'
-                ? allCards.slice(0, RECENT_MERGED_LIMIT)
-                : allCards;
+                ? filteredCards.slice(0, RECENT_MERGED_LIMIT)
+                : filteredCards;
+              const activeQuery = isBacklog
+                ? debouncedBacklogQuery.trim().replace(/^#/, '').trim()
+                : '';
               return (
                 <div
                   key={col.id}
@@ -189,17 +215,47 @@ export function KanbanBoard() {
                         </div>
                       )}
                       {totalCount > 0 && (
-                        <span className="text-xs text-sandstorm-muted font-mono">{totalCount}</span>
+                        <span className="text-xs text-sandstorm-muted font-mono" data-testid={isBacklog ? 'backlog-count-badge' : undefined}>{totalCount}</span>
                       )}
                     </div>
                   </div>
 
+                  {/* Backlog search input */}
+                  {col.id === 'backlog' && (
+                    <div className="relative px-1">
+                      <input
+                        type="text"
+                        value={backlogQuery}
+                        onChange={(e) => setBacklogQuery(e.target.value)}
+                        placeholder="Filter backlog…"
+                        className="w-full px-2 py-1 pr-6 text-xs bg-sandstorm-surface border border-sandstorm-border rounded text-sandstorm-text placeholder-sandstorm-muted/50 focus:outline-none focus:border-sandstorm-accent"
+                        data-testid="backlog-filter-input"
+                      />
+                      {backlogQuery && (
+                        <button
+                          onClick={() => setBacklogQuery('')}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-sandstorm-muted hover:text-sandstorm-text text-xs leading-none"
+                          data-testid="backlog-filter-clear"
+                          aria-label="Clear filter"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  )}
+
                   {/* Cards */}
                   <div className="flex flex-col gap-2 flex-1">
                     {cards.length === 0 ? (
-                      <div className="flex items-center justify-center h-16 text-xs text-sandstorm-muted/50 border border-dashed border-sandstorm-border rounded-lg">
-                        No cards
-                      </div>
+                      activeQuery ? (
+                        <div className="flex items-center justify-center h-16 text-xs text-sandstorm-muted/50 border border-dashed border-sandstorm-border rounded-lg" data-testid="backlog-no-match">
+                          No tickets match your search
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center h-16 text-xs text-sandstorm-muted/50 border border-dashed border-sandstorm-border rounded-lg">
+                          No cards
+                        </div>
+                      )
                     ) : (
                       cards.map((ticket) => (
                         <TicketCard

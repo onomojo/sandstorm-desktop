@@ -1,10 +1,10 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, waitFor, fireEvent } from '@testing-library/react';
-import { KanbanBoard } from '../../../src/renderer/components/KanbanBoard';
+import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { KanbanBoard, matchesTicketQuery } from '../../../src/renderer/components/KanbanBoard';
 import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
 
@@ -267,5 +267,200 @@ describe('KanbanBoard', () => {
     }
     expect(screen.queryByTestId('ticket-card-t11')).toBeNull();
     expect(screen.queryByTestId('ticket-card-t12')).toBeNull();
+  });
+
+  describe('backlog filter', () => {
+    const backlogTickets = [
+      { ticket_id: '501', project_dir: '/proj', column: 'backlog' as const, title: 'Add filter feature', updated_at: '' },
+      { ticket_id: '502', project_dir: '/proj', column: 'backlog' as const, title: 'Fix navbar bug', updated_at: '' },
+      { ticket_id: '503', project_dir: '/proj', column: 'backlog' as const, title: '', updated_at: '' },
+    ];
+
+    beforeEach(() => {
+      vi.useFakeTimers();
+      useAppStore.setState({ boardTickets: backlogTickets });
+    });
+
+    afterEach(() => {
+      vi.useRealTimers();
+    });
+
+    it('renders a search input scoped to the Backlog column', () => {
+      render(<KanbanBoard />);
+      expect(screen.getByTestId('backlog-filter-input')).toBeDefined();
+    });
+
+    it('does not render a search input in non-backlog columns', () => {
+      render(<KanbanBoard />);
+      const backlogCol = screen.getByTestId('kanban-column-backlog');
+      const refiningCol = screen.getByTestId('kanban-column-refining');
+      expect(backlogCol.querySelector('[data-testid="backlog-filter-input"]')).toBeTruthy();
+      expect(refiningCol.querySelector('input')).toBeNull();
+    });
+
+    it('filters by title substring (case-insensitive) after debounce', async () => {
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: 'FILTER' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      expect(screen.getByText('Add filter feature')).toBeDefined();
+      expect(screen.queryByText('Fix navbar bug')).toBeNull();
+    });
+
+    it('filters by ticket ID substring', async () => {
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: '502' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      expect(screen.getByTestId('ticket-card-502')).toBeDefined();
+      expect(screen.queryByTestId('ticket-card-501')).toBeNull();
+    });
+
+    it('strips leading # from query when matching by ID', async () => {
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: '#501' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      expect(screen.getByTestId('ticket-card-501')).toBeDefined();
+      expect(screen.queryByTestId('ticket-card-502')).toBeNull();
+    });
+
+    it('shows "No tickets match your search" when query matches nothing', async () => {
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: 'zzznomatch' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      expect(screen.getByTestId('backlog-no-match')).toBeDefined();
+      expect(screen.getByTestId('backlog-no-match').textContent).toBe('No tickets match your search');
+    });
+
+    it('clear button resets filter and restores full list', async () => {
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: 'filter' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      expect(screen.queryByTestId('ticket-card-502')).toBeNull();
+
+      const clearBtn = screen.getByTestId('backlog-filter-clear');
+      fireEvent.click(clearBtn);
+      act(() => { vi.advanceTimersByTime(200); });
+
+      expect(screen.getByTestId('ticket-card-501')).toBeDefined();
+      expect(screen.getByTestId('ticket-card-502')).toBeDefined();
+    });
+
+    it('restores full list when input is cleared to empty string', async () => {
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: 'filter' } });
+      act(() => { vi.advanceTimersByTime(200); });
+      expect(screen.queryByTestId('ticket-card-502')).toBeNull();
+
+      fireEvent.change(input, { target: { value: '' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      expect(screen.getByTestId('ticket-card-501')).toBeDefined();
+      expect(screen.getByTestId('ticket-card-502')).toBeDefined();
+    });
+
+    it('count badge reflects filtered count', async () => {
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: 'filter' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      const badge = screen.getByTestId('backlog-count-badge');
+      expect(badge.textContent).toBe('1');
+    });
+
+    it('other columns are unaffected by the backlog query', async () => {
+      useAppStore.setState({
+        boardTickets: [
+          ...backlogTickets,
+          { ticket_id: '600', project_dir: '/proj', column: 'refining' as const, title: 'Refining ticket filter', updated_at: '' },
+        ],
+      });
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: 'filter' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      const refiningCol = screen.getByTestId('kanban-column-refining');
+      expect(refiningCol.textContent).toContain('Refining ticket filter');
+    });
+
+    it('ticket with empty title matches by ID without throwing', async () => {
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: '503' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      expect(screen.getByTestId('ticket-card-503')).toBeDefined();
+    });
+
+    it('query of only # or whitespace shows all cards', async () => {
+      render(<KanbanBoard />);
+      const input = screen.getByTestId('backlog-filter-input');
+
+      fireEvent.change(input, { target: { value: '#' } });
+      act(() => { vi.advanceTimersByTime(200); });
+
+      expect(screen.getByTestId('ticket-card-501')).toBeDefined();
+      expect(screen.getByTestId('ticket-card-502')).toBeDefined();
+    });
+  });
+
+  describe('matchesTicketQuery', () => {
+    const ticket = { ticket_id: '501', title: 'Add filter feature', column: 'backlog' as const, project_dir: '/proj', updated_at: '' };
+
+    it('returns true for empty query', () => {
+      expect(matchesTicketQuery(ticket, '')).toBe(true);
+    });
+
+    it('matches by title substring case-insensitively', () => {
+      expect(matchesTicketQuery(ticket, 'FILTER')).toBe(true);
+      expect(matchesTicketQuery(ticket, 'filter')).toBe(true);
+    });
+
+    it('matches by ticket_id substring', () => {
+      expect(matchesTicketQuery(ticket, '501')).toBe(true);
+      expect(matchesTicketQuery(ticket, '50')).toBe(true);
+    });
+
+    it('strips leading # before matching', () => {
+      expect(matchesTicketQuery(ticket, '#501')).toBe(true);
+    });
+
+    it('trims whitespace before matching', () => {
+      expect(matchesTicketQuery(ticket, '  501  ')).toBe(true);
+    });
+
+    it('returns false when no match', () => {
+      expect(matchesTicketQuery(ticket, 'zzznomatch')).toBe(false);
+    });
+
+    it('handles empty title without throwing', () => {
+      const emptyTitle = { ...ticket, title: '' };
+      expect(matchesTicketQuery(emptyTitle, '501')).toBe(true);
+      expect(matchesTicketQuery(emptyTitle, 'zzz')).toBe(false);
+    });
+
+    it('returns true for # only (normalizes to empty → show all)', () => {
+      expect(matchesTicketQuery(ticket, '#')).toBe(true);
+    });
   });
 });
