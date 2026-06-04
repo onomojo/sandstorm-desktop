@@ -177,7 +177,7 @@ export function mockSandstormApi() {
       update: vi.fn().mockResolvedValue(undefined),
       testJiraConnection: vi.fn().mockResolvedValue({
         auth: { ok: true, displayName: 'Test User' },
-        jql: { ok: true, count: 5 },
+        jql: { ok: true, count: 5, hasMore: false },
       }),
       close: vi.fn().mockResolvedValue(undefined),
       markDone: vi.fn().mockResolvedValue({ ok: true }),

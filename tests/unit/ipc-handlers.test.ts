@@ -1662,7 +1662,7 @@ describe('IPC Handlers', () => {
     it('delegates to testJiraConnection and returns its result', async () => {
       const expected = {
         auth: { ok: true, displayName: 'Alice' },
-        jql: { ok: true, count: 7 },
+        jql: { ok: true, count: 7, hasMore: false },
       };
       mockTestJiraConnection.mockResolvedValueOnce(expected);
 

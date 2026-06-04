@@ -451,9 +451,17 @@ describe('jiraListTickets', () => {
   });
 
   it('returns ok:true with empty tickets array when JQL matches zero results', async () => {
-    mockJiraRequest(JSON.stringify({ total: 0, issues: [] }));
+    mockJiraRequest(JSON.stringify({ issues: [] }));
     const result = await jiraListTickets(JIRA_CONFIG);
     expect(result).toEqual({ ok: true, tickets: [] });
+  });
+
+  it('uses /rest/api/3/search/jql endpoint (not /rest/api/2/search)', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    await jiraListTickets(JIRA_CONFIG);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    expect(opts.path).toMatch(/^\/rest\/api\/3\/search\/jql/);
+    expect(opts.path).not.toMatch(/\/rest\/api\/2\/search/);
   });
 });
 
@@ -613,7 +621,7 @@ describe('testJiraConnection', () => {
       callCount++;
       const body = callCount === 1
         ? JSON.stringify({ displayName: 'Alice Smith' })
-        : JSON.stringify({ total: 3, issues: [{}, {}, {}] });
+        : JSON.stringify({ issues: [{}, {}, {}] });
       const mockResponse = {
         statusCode: 200,
         on: vi.fn((event: string, handler: Function) => {
@@ -639,6 +647,7 @@ describe('testJiraConnection', () => {
     expect(result.jql).not.toBeNull();
     if (result.jql && result.jql.ok) {
       expect(result.jql.count).toBe(3);
+      expect(result.jql.hasMore).toBe(false);
     }
   });
 
@@ -663,7 +672,7 @@ describe('testJiraConnection', () => {
       callCount++;
       const body = callCount === 1
         ? JSON.stringify({ displayName: 'Bob' })
-        : JSON.stringify({ total: 0, issues: [] });
+        : JSON.stringify({ issues: [] });
       const mockResponse = {
         statusCode: 200,
         on: vi.fn((event: string, handler: Function) => {
@@ -718,6 +727,95 @@ describe('testJiraConnection', () => {
     expect(result.jql).not.toBeNull();
     if (result.jql) {
       expect(result.jql.ok).toBe(false);
+    }
+  });
+
+  it('uses /rest/api/3/search/jql endpoint for JQL search (not /rest/api/2/search)', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Dave' })
+        : JSON.stringify({ issues: [] });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+    await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+    // Second call is the JQL search — check its path
+    const searchOpts = mockHttpsRequest.mock.calls[1][0] as { path: string };
+    expect(searchOpts.path).toMatch(/^\/rest\/api\/3\/search\/jql/);
+    expect(searchOpts.path).not.toMatch(/\/rest\/api\/2\/search/);
+  });
+
+  it('reports count from issues.length when response omits total', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Eve' })
+        : JSON.stringify({ issues: [{}, {}] }); // no total field
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+    expect(result.jql?.ok).toBe(true);
+    if (result.jql?.ok) {
+      expect(result.jql.count).toBe(2);
+      expect(result.jql.hasMore).toBe(false);
+    }
+  });
+
+  it('sets hasMore:true when response contains nextPageToken', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Frank' })
+        : JSON.stringify({ issues: new Array(100).fill({}), nextPageToken: 'abc123' });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+    expect(result.jql?.ok).toBe(true);
+    if (result.jql?.ok) {
+      expect(result.jql.count).toBe(100);
+      expect(result.jql.hasMore).toBe(true);
     }
   });
 

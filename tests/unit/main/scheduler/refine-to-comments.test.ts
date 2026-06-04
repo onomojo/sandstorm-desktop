@@ -1,6 +1,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import {
   runRefineToComments,
+  buildRefineToCommentsDeps,
   formatQuestionComment,
   isBotComment,
   getLastBotComment,
@@ -390,4 +391,71 @@ describe('runRefineToComments — error handling', () => {
     const result = await runRefineToComments('/proj', 'needs-spec', deps);
     expect(result).toEqual({ processed: 0, passed: 0, failed: 0 });
   });
+});
+
+// ── buildRefineToCommentsDeps reroute tests ──────────────────────────────────
+
+vi.mock('../../../../src/main/control-plane/ticket-config', () => ({
+  listTicketsWithConfig: vi.fn(),
+}));
+vi.mock('../../../../src/main/control-plane/ticket-comments', () => ({
+  listTickets: vi.fn(),
+  listTicketComments: vi.fn(),
+  postComment: vi.fn(),
+}));
+vi.mock('../../../../src/main/control-plane/ticket-labels', () => ({
+  addLabel: vi.fn(),
+  removeLabel: vi.fn(),
+}));
+
+import { listTicketsWithConfig } from '../../../../src/main/control-plane/ticket-config';
+import { listTickets as legacyListTickets } from '../../../../src/main/control-plane/ticket-comments';
+import type { ProjectTicketConfig } from '../../../../src/main/control-plane/registry';
+
+const JIRA_CONFIG: ProjectTicketConfig = {
+  provider: 'jira',
+  jira_url: 'https://acme.atlassian.net',
+  jira_username: 'user@acme.com',
+  jira_api_token: 'token123',
+};
+
+describe('buildRefineToCommentsDeps — provider reroute', () => {
+  const noopSpec = vi.fn().mockResolvedValue({ passed: true, questions: [], gateSummary: '', ticketUrl: null, cached: false });
+
+  it('listTickets resolves via listTicketsWithConfig, not list-tickets.sh', async () => {
+    vi.mocked(listTicketsWithConfig).mockResolvedValueOnce({
+      ok: true,
+      tickets: [{ id: 'ACME-1', title: 'T', author: 'acc-1' }],
+    });
+    const deps = buildRefineToCommentsDeps(noopSpec, noopSpec, () => JIRA_CONFIG);
+    const tickets = await deps.listTickets('needs-spec', '/proj');
+    expect(tickets).toEqual([{ id: 'ACME-1', title: 'T', author: 'acc-1' }]);
+    expect(legacyListTickets).not.toHaveBeenCalled();
+    expect(listTicketsWithConfig).toHaveBeenCalledWith(JIRA_CONFIG, '/proj', 'needs-spec');
+  });
+
+  it('listTickets throws when getConfig returns null, causing runRefineToComments to return empty', async () => {
+    const deps = buildRefineToCommentsDeps(noopSpec, noopSpec, () => null);
+    await expect(deps.listTickets('needs-spec', '/proj')).rejects.toThrow(/No ticket config/);
+  });
+
+  it('listTickets throws when listTicketsWithConfig returns ok:false, causing empty result in runRefineToComments', async () => {
+    vi.mocked(listTicketsWithConfig).mockResolvedValueOnce({
+      ok: false,
+      error: { reason: 'missing-creds' },
+    });
+    const deps = buildRefineToCommentsDeps(noopSpec, noopSpec, () => JIRA_CONFIG);
+    await expect(deps.listTickets('needs-spec', '/proj')).rejects.toThrow(/listTickets failed/);
+  });
+
+  it('runRefineToComments returns empty result when listTicketsWithConfig returns ok:false', async () => {
+    vi.mocked(listTicketsWithConfig).mockResolvedValueOnce({
+      ok: false,
+      error: { reason: 'missing-creds' },
+    });
+    const deps = buildRefineToCommentsDeps(noopSpec, noopSpec, () => JIRA_CONFIG);
+    const result = await runRefineToComments('/proj', 'needs-spec', deps);
+    expect(result).toEqual({ processed: 0, passed: 0, failed: 0 });
+  });
+
 });
