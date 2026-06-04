@@ -4,6 +4,14 @@ import { KanbanColumn } from '../types/kanban';
 import { TicketCard } from './TicketCard';
 import { RefinementIndicator } from './RefinementIndicator';
 
+export function matchesTicketQuery(ticket: TicketBoardEntry, query: string): boolean {
+  const normalized = query.trim().replace(/^#/, '').toLowerCase();
+  if (!normalized) return true;
+  if (ticket.ticket_id.toLowerCase().includes(normalized)) return true;
+  if (ticket.title && ticket.title.toLowerCase().includes(normalized)) return true;
+  return false;
+}
+
 const COLUMNS: { id: KanbanColumn; label: string; colorClass: string }[] = [
   { id: 'backlog', label: 'Backlog', colorClass: 'text-sandstorm-muted' },
   { id: 'refining', label: 'Refining', colorClass: 'text-sandstorm-state-refining' },
@@ -29,6 +37,8 @@ export function KanbanBoard() {
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<BoardTab>('active');
+  const [backlogQuery, setBacklogQuery] = useState('');
+  const [debouncedBacklogQuery, setDebouncedBacklogQuery] = useState('');
 
   const project = activeProject();
 
@@ -36,7 +46,16 @@ export function KanbanBoard() {
     if (project?.directory) {
       refreshBoardTickets(project.directory);
     }
+    setBacklogQuery('');
+    setDebouncedBacklogQuery('');
   }, [project?.directory, refreshBoardTickets]);
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedBacklogQuery(backlogQuery);
+    }, 200);
+    return () => clearTimeout(timer);
+  }, [backlogQuery]);
 
   const projectTickets = selectProjectTickets(boardTickets, project?.directory);
 
@@ -131,7 +150,13 @@ export function KanbanBoard() {
             data-testid="kanban-columns"
           >
             {COLUMNS.map((col) => {
-              const cards = ticketsByColumn(col.id);
+              const allCards = ticketsByColumn(col.id);
+              const cards = col.id === 'backlog'
+                ? allCards.filter((t) => matchesTicketQuery(t, debouncedBacklogQuery))
+                : allCards;
+              const activeQuery = col.id === 'backlog'
+                ? debouncedBacklogQuery.trim().replace(/^#/, '').trim()
+                : '';
               return (
                 <div
                   key={col.id}
@@ -145,16 +170,46 @@ export function KanbanBoard() {
                       {col.label}
                     </span>
                     {cards.length > 0 && (
-                      <span className="text-xs text-sandstorm-muted font-mono">{cards.length}</span>
+                      <span className="text-xs text-sandstorm-muted font-mono" data-testid={col.id === 'backlog' ? 'backlog-count-badge' : undefined}>{cards.length}</span>
                     )}
                   </div>
+
+                  {/* Backlog search input */}
+                  {col.id === 'backlog' && (
+                    <div className="relative px-1">
+                      <input
+                        type="text"
+                        value={backlogQuery}
+                        onChange={(e) => setBacklogQuery(e.target.value)}
+                        placeholder="Filter backlog…"
+                        className="w-full px-2 py-1 pr-6 text-xs bg-sandstorm-surface border border-sandstorm-border rounded text-sandstorm-text placeholder-sandstorm-muted/50 focus:outline-none focus:border-sandstorm-accent"
+                        data-testid="backlog-filter-input"
+                      />
+                      {backlogQuery && (
+                        <button
+                          onClick={() => setBacklogQuery('')}
+                          className="absolute right-2 top-1/2 -translate-y-1/2 text-sandstorm-muted hover:text-sandstorm-text text-xs leading-none"
+                          data-testid="backlog-filter-clear"
+                          aria-label="Clear filter"
+                        >
+                          ×
+                        </button>
+                      )}
+                    </div>
+                  )}
 
                   {/* Cards */}
                   <div className="flex flex-col gap-2 flex-1">
                     {cards.length === 0 ? (
-                      <div className="flex items-center justify-center h-16 text-xs text-sandstorm-muted/50 border border-dashed border-sandstorm-border rounded-lg">
-                        No cards
-                      </div>
+                      activeQuery ? (
+                        <div className="flex items-center justify-center h-16 text-xs text-sandstorm-muted/50 border border-dashed border-sandstorm-border rounded-lg" data-testid="backlog-no-match">
+                          No tickets match your search
+                        </div>
+                      ) : (
+                        <div className="flex items-center justify-center h-16 text-xs text-sandstorm-muted/50 border border-dashed border-sandstorm-border rounded-lg">
+                          No cards
+                        </div>
+                      )
                     ) : (
                       cards.map((ticket) => (
                         <TicketCard
