@@ -421,6 +421,10 @@ export class ClaudeBackend implements AgentBackend {
 
   // --- Ephemeral agent (one-shot Claude process) ---
 
+  getEphemeralTimingPath(): string {
+    return this.ephemeralTimingPath;
+  }
+
   /**
    * Spawn a one-shot Claude process that evaluates a prompt and returns the text result.
    * Uses -p (pipe/print) mode — no session persistence, no MCP tools.
@@ -431,6 +435,7 @@ export class ClaudeBackend implements AgentBackend {
     projectDir: string,
     timeoutMs = 300_000,
     onChunk?: (event: EphemeralStreamEvent) => void,
+    attribution?: { ticketId?: string; stage?: string },
   ): { promise: Promise<string>; cancel: () => void } {
     const claudeBin = getClaudeBin();
     const args = [
@@ -488,6 +493,8 @@ export class ClaudeBackend implements AgentBackend {
         turnCount,
         cancelled: isCancelled,
         ...(errorMessage != null ? { errorMessage } : {}),
+        ...(attribution?.ticketId != null ? { ticketId: attribution.ticketId } : {}),
+        ...(attribution?.stage != null ? { stage: attribution.stage } : {}),
       };
       appendEphemeralTiming(this.ephemeralTimingPath, record);
     };
@@ -585,8 +592,13 @@ export class ClaudeBackend implements AgentBackend {
     return { promise, cancel };
   }
 
-  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs = 300_000): Promise<string> {
-    return this.spawnEphemeralAgent(prompt, projectDir, timeoutMs).promise;
+  runEphemeralAgent(
+    prompt: string,
+    projectDir: string,
+    timeoutMs = 300_000,
+    attribution?: { ticketId?: string; stage?: string },
+  ): Promise<string> {
+    return this.spawnEphemeralAgent(prompt, projectDir, timeoutMs, undefined, attribution).promise;
   }
 
   /**

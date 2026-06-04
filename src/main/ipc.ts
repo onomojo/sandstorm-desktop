@@ -90,6 +90,7 @@ import { KANBAN_COLUMNS } from '../shared/kanban';
 import os from 'os';
 import { createUsageEngine, clearUsageCache } from './telemetry/usage-engine';
 import type { DateRange, ByTicketEntry } from './telemetry/usage-engine';
+import { readEphemeralTimingRecords } from './agent/ephemeral-timing';
 import { ORCHESTRATOR_TICKET_ID } from './telemetry/types';
 import { TicketRollupStore } from './telemetry/rollup-store';
 
@@ -823,7 +824,12 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   ipcMain.handle('stats:telemetry:byTicket', async (): Promise<ByTicketEntry[]> => {
-    return createUsageEngine(buildTelemetryRoots()).getByTicket();
+    const stepWeights = registry.getStepWeightsByTicket();
+    const allEphemeral = readEphemeralTimingRecords(agentBackend.getEphemeralTimingPath());
+    const ephemeralRecords = allEphemeral
+      .filter((r) => r.ticketId != null && r.stage != null)
+      .map((r) => ({ ticketId: r.ticketId!, stage: r.stage!, turnCount: r.turnCount }));
+    return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords).getByTicket();
   });
 
   ipcMain.handle('stats:telemetry:refresh', async () => {
@@ -1443,7 +1449,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       },
       {
         runEphemeral: (prompt, projectDir, timeoutMs) =>
-          agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs),
+          agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }),
         fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
       },
     );
@@ -1530,7 +1536,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         { stackId, workspace, ticket: stack.ticket },
         {
           runEphemeral: (prompt, projectDir, timeoutMs) =>
-            agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs),
+            agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }),
           fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
         },
       );

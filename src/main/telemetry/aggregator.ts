@@ -9,6 +9,22 @@ import { computeCost } from './pricing';
 import type { RawUsageEntry } from './parser';
 import type { DateRange, TokenCounts, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry } from './types';
 import { ORCHESTRATOR_TICKET_ID } from './types';
+import { computeLifecycleSplit } from './lifecycle-split';
+import type { LifecycleWeights } from './lifecycle-split';
+
+/** Per-ticket step weights read from task_token_steps (injected, electron-free). */
+export interface StepWeightRow {
+  ticket: string;
+  phase: string;  // 'execution' | 'review' are the only values written
+  totalTokens: number;
+}
+
+/** Per-run ephemeral weight record (from ephemeral-timing store, injected). */
+export interface EphemeralWeightRecord {
+  ticketId: string;
+  stage: string;  // 'refine' | 'spec' | 'pr'
+  turnCount: number;
+}
 
 function dateOf(isoTimestamp: string): string {
   return isoTimestamp.slice(0, 10); // YYYY-MM-DD
@@ -247,10 +263,15 @@ function readManifest(manifestPath: string): StackManifest | null {
  * The paired manifest is at stackRoot + '.manifest.json'.
  * Entries with no mapped ticket (host-root entries or missing manifest) roll up under
  * ORCHESTRATOR_TICKET_ID. A ticket worked across multiple stacks produces one row.
+ *
+ * stepWeights and ephemeralRecords are injected (read on the Electron side) so this
+ * function stays electron-free and unit-testable with plain arrays.
  */
 export function aggregateByTicket(
   entries: RawUsageEntry[],
-  stackRoots: string[]
+  stackRoots: string[],
+  stepWeights: StepWeightRow[] = [],
+  ephemeralRecords: EphemeralWeightRecord[] = [],
 ): ByTicketEntry[] {
   // Build stackId → ticket map from manifests
   const stackToTicket = new Map<string, string | null>();
@@ -289,6 +310,30 @@ export function aggregateByTicket(
     if (unpriced) bucket.unpriced = true;
   }
 
+  // Build per-ticket lifecycle weights from injected step + ephemeral data
+  const ticketWeights = new Map<string, LifecycleWeights>();
+
+  const getWeights = (ticketId: string): LifecycleWeights => {
+    let w = ticketWeights.get(ticketId);
+    if (!w) { w = {}; ticketWeights.set(ticketId, w); }
+    return w;
+  };
+
+  for (const row of stepWeights) {
+    if (row.phase !== 'execution' && row.phase !== 'review') continue;
+    const w = getWeights(row.ticket);
+    const stage = row.phase as 'execution' | 'review';
+    w[stage] = (w[stage] ?? 0) + row.totalTokens;
+  }
+
+  for (const rec of ephemeralRecords) {
+    if (!rec.ticketId || !rec.stage) continue;
+    if (rec.stage !== 'refine' && rec.stage !== 'spec' && rec.stage !== 'pr') continue;
+    const w = getWeights(rec.ticketId);
+    const stage = rec.stage as 'refine' | 'spec' | 'pr';
+    w[stage] = (w[stage] ?? 0) + rec.turnCount;
+  }
+
   return [...byTicket.entries()].map(([ticketId, data]) => {
     const { input, cacheRead } = data.tokens;
     const denom = input + cacheRead;
@@ -301,13 +346,15 @@ export function aggregateByTicket(
       if (output > maxOutput) { maxOutput = output; primaryModel = model; }
     }
 
+    const lifecycle = computeLifecycleSplit(data.cost, ticketWeights.get(ticketId) ?? {});
+
     return {
       ticketId,
       model: primaryModel,
       cost: data.cost,
       tokens: data.tokens,
       cacheHit,
-      lifecycle: null,
+      lifecycle,
       unpriced: data.unpriced,
     } satisfies ByTicketEntry;
   });

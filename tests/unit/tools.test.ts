@@ -188,7 +188,8 @@ describe('MCP tools', () => {
       expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
         expect.stringContaining('Fix bug'),
         '/proj',
-        1_800_000
+        1_800_000,
+        { ticketId: '42', stage: 'spec' }
       );
       expect(result.passed).toBe(true);
       expect(result.report).toContain('PASS');
@@ -560,7 +561,8 @@ describe('MCP tools', () => {
       expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
         expect.stringContaining('auth tokens expire silently'),
         '/proj',
-        1_800_000
+        1_800_000,
+        { ticketId: '42', stage: 'refine' }
       );
       expect(result.passed).toBe(true);
       expect(result.updatedBody).toContain('Better spec');

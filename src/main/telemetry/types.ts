@@ -31,15 +31,25 @@ export interface TelemetrySummary {
   skippedLines: number;           // malformed JSONL lines skipped across all files
 }
 
+/** Per-stage cost breakdown for a ticket (USD, estimated at list price). */
+export interface LifecycleCosts {
+  refine: number;
+  spec: number;
+  execution: number;
+  review: number;
+  verify: number;  // always 0 — verify runs tests/build, not LLM
+  pr: number;
+}
+
 /** Canonical per-ticket cost attribution derived from transcript files. */
 export interface ByTicketEntry {
-  ticketId: string;        // real ID, or '__orchestrator__' for unattributed/host spend
-  model: string | null;    // primary model (highest output tokens)
-  cost: number;            // estimated USD, from transcripts (authoritative)
-  tokens: TokenCounts;     // {input, output, cacheCreate, cacheRead, total}
-  cacheHit: number;        // cacheRead / (input + cacheRead) × 100; 0 when all-zero
-  lifecycle: null;         // pending sub-issue #468
-  unpriced: boolean;       // true when any entry used a model with no known price
+  ticketId: string;                  // real ID, or '__orchestrator__' for unattributed/host spend
+  model: string | null;              // primary model (highest output tokens)
+  cost: number;                      // estimated USD, from transcripts (authoritative)
+  tokens: TokenCounts;               // {input, output, cacheCreate, cacheRead, total}
+  cacheHit: number;                  // cacheRead / (input + cacheRead) × 100; 0 when all-zero
+  lifecycle: LifecycleCosts | null;  // null when no stage signal exists; sum equals cost
+  unpriced: boolean;                 // true when any entry used a model with no known price
 }
 
 export interface DailyEntry {
