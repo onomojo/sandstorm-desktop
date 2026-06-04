@@ -831,6 +831,7 @@ declare global {
           jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
         }>;
         close: (ticketId: string, projectDir: string) => Promise<void>;
+        markDone: (ticketId: string, projectDir: string) => Promise<{ ok: true } | { ok: false; error: string }>;
       };
       ticketBoard: {
         setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
@@ -1381,6 +1382,10 @@ export const useAppStore = create<AppState>((set, get) => ({
         }
       }
       await get().moveTicketColumn(ticketId, projectDir, 'merged');
+      const closeResult = await window.sandstorm.tickets.markDone(ticketId, projectDir);
+      if (!closeResult.ok) {
+        set({ moveTicketColumnError: `Merged ticket #${ticketId} but failed to close it: ${closeResult.error}` });
+      }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       set({ moveTicketColumnError: `Failed to merge ticket #${ticketId}: ${message}` });

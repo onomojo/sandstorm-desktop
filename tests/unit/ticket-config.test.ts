@@ -13,12 +13,14 @@ import {
   jiraCreateTicket,
   jiraListTickets,
   jiraCloseTicket,
+  jiraTransitionToDone,
   fetchTicketWithConfig,
   fetchRawBodyWithConfig,
   updateTicketWithConfig,
   createTicketWithConfig,
   listTicketsWithConfig,
   closeTicketWithConfig,
+  markTicketDoneWithConfig,
   testJiraConnection,
 } from '../../src/main/control-plane/ticket-config';
 import type { ProjectTicketConfig } from '../../src/main/control-plane/registry';
@@ -860,5 +862,131 @@ describe('closeTicketWithConfig', () => {
   it('rejects on JIRA archive failure', async () => {
     mockJiraRequest('Forbidden', 403);
     await expect(closeTicketWithConfig('ACME-42', JIRA_CONFIG, '/proj')).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// jiraTransitionToDone
+// ---------------------------------------------------------------------------
+
+describe('jiraTransitionToDone', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('throws when Jira credentials are missing', async () => {
+    const cfg: ProjectTicketConfig = { provider: 'jira' };
+    await expect(jiraTransitionToDone('ACME-1', cfg)).rejects.toThrow('Jira credentials are missing');
+  });
+
+  it('(a) prefers a transition whose target name is "Done" (case-insensitive)', async () => {
+    const mockReq = mockJiraRequest(JSON.stringify({
+      transitions: [
+        { id: '10', to: { name: "Won't Do", statusCategory: { key: 'done' } } },
+        { id: '20', to: { name: 'DONE', statusCategory: { key: 'done' } } },
+        { id: '30', to: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } },
+      ],
+    }));
+    await jiraTransitionToDone('ACME-1', JIRA_CONFIG);
+    const posted = mockReq.write.mock.calls[0]?.[0] as string;
+    expect(JSON.parse(posted)).toMatchObject({ transition: { id: '20' } });
+  });
+
+  it('(b) falls back to done-category transition excluding won\'t-do/cancel/reject', async () => {
+    const mockReq = mockJiraRequest(JSON.stringify({
+      transitions: [
+        { id: '10', to: { name: "Won't Do", statusCategory: { key: 'done' } } },
+        { id: '11', to: { name: 'Cancelled', statusCategory: { key: 'done' } } },
+        { id: '12', to: { name: 'Closed', statusCategory: { key: 'done' } } },
+      ],
+    }));
+    await jiraTransitionToDone('ACME-1', JIRA_CONFIG);
+    const posted = mockReq.write.mock.calls[0]?.[0] as string;
+    const body = JSON.parse(posted);
+    expect(body).toMatchObject({ transition: { id: '12' } });
+    expect(body.transition.id).not.toBe('10');
+    expect(body.transition.id).not.toBe('11');
+  });
+
+  it('(c) resolves successfully when transitions list is empty (issue already Done — idempotent)', async () => {
+    mockJiraRequest(JSON.stringify({ transitions: [] }));
+    await expect(jiraTransitionToDone('ACME-1', JIRA_CONFIG)).resolves.toBeUndefined();
+    expect(mockHttpsRequest).toHaveBeenCalledTimes(1); // only the GET, no POST
+  });
+
+  it('(e) throws gracefully when only Won\'t Do / Cancelled / Rejected transitions are available', async () => {
+    mockJiraRequest(JSON.stringify({
+      transitions: [
+        { id: '10', to: { name: "Won't Do", statusCategory: { key: 'done' } } },
+        { id: '11', to: { name: 'Cancelled', statusCategory: { key: 'done' } } },
+        { id: '12', to: { name: 'Rejected', statusCategory: { key: 'done' } } },
+      ],
+    }));
+    await expect(jiraTransitionToDone('ACME-1', JIRA_CONFIG)).rejects.toThrow(
+      'No eligible Done transition found',
+    );
+    expect(mockHttpsRequest).toHaveBeenCalledTimes(1); // no POST attempted
+  });
+
+  it('POSTs to /rest/api/2 transitions endpoint (not v3 archive)', async () => {
+    mockJiraRequest(JSON.stringify({
+      transitions: [{ id: '5', to: { name: 'Done', statusCategory: { key: 'done' } } }],
+    }));
+    await jiraTransitionToDone('ACME-1', JIRA_CONFIG);
+    const calls = mockHttpsRequest.mock.calls;
+    // Both GET and POST should use /rest/api/2/...
+    for (const call of calls) {
+      expect((call[0] as { path: string }).path).toContain('/rest/api/2/');
+      expect((call[0] as { path: string }).path).not.toContain('/rest/api/3/');
+      expect((call[0] as { path: string }).path).not.toContain('/archive');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// markTicketDoneWithConfig
+// ---------------------------------------------------------------------------
+
+describe('markTicketDoneWithConfig', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes GitHub → gh issue close (NOT archive)', async () => {
+    mockExecFileSuccess('');
+    await markTicketDoneWithConfig('42', GITHUB_CONFIG, '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'close', '42'],
+      expect.objectContaining({ cwd: '/proj' }),
+      expect.any(Function),
+    );
+    expect(mockHttpsRequest).not.toHaveBeenCalled();
+  });
+
+  it('routes Jira → jiraTransitionToDone (NOT jiraCloseTicket / archive)', async () => {
+    mockJiraRequest(JSON.stringify({
+      transitions: [{ id: '5', to: { name: 'Done', statusCategory: { key: 'done' } } }],
+    }));
+    await markTicketDoneWithConfig('ACME-1', JIRA_CONFIG, '/proj');
+    expect(mockExecFile).not.toHaveBeenCalled();
+    // Should NOT call the archive endpoint
+    const archiveCalls = mockHttpsRequest.mock.calls.filter(
+      (c) => (c[0] as { path: string }).path?.includes('/archive'),
+    );
+    expect(archiveCalls).toHaveLength(0);
+    // Should call the transitions endpoint
+    const transitionCalls = mockHttpsRequest.mock.calls.filter(
+      (c) => (c[0] as { path: string }).path?.includes('/transitions'),
+    );
+    expect(transitionCalls.length).toBeGreaterThan(0);
+  });
+
+  it('regression: merge path must close ticket (not skip as old code did)', async () => {
+    mockExecFileSuccess('');
+    // GitHub merge path — closing ticket must be called
+    await markTicketDoneWithConfig('42', GITHUB_CONFIG, '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'close', '42'],
+      expect.any(Object),
+      expect.any(Function),
+    );
   });
 });

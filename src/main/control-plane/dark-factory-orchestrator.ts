@@ -6,7 +6,8 @@ import { StackManager } from './stack-manager';
 import { AgentBackend } from '../agent';
 import { workspacePathFor } from './pr-creator';
 import { showNotification } from '../tray';
-import { fetchTicketWithConfig } from './ticket-config';
+import { fetchTicketWithConfig, markTicketDoneWithConfig } from './ticket-config';
+import { withRetry } from './retry-with-backoff';
 
 const execFileAsync = promisify(execFile);
 
@@ -389,5 +390,19 @@ export class DarkFactoryOrchestrator {
 
     this.registry.setBoardTicketColumn(ticketId, path.resolve(projectDir), 'merged');
     this.notifyUpdate();
+
+    const config = this.registry.getProjectTicketConfig(path.resolve(projectDir));
+    if (config && ticketId) {
+      const cwd = workspacePathFor(projectDir, stackId);
+      try {
+        await withRetry(() => markTicketDoneWithConfig(ticketId, config, cwd), {
+          maxAttempts: 3,
+          baseDelayMs: 1000,
+        });
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        showNotification('Dark factory: ticket close failed', `Ticket ${ticketId}: ${msg}`);
+      }
+    }
   }
 }
