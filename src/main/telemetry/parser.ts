@@ -14,6 +14,7 @@ export interface RawUsageEntry {
   output: number;
   cacheCreate: number;
   cacheRead: number;
+  stackId: string | null; // basename of stack root dir; null for host-root entries
 }
 
 export interface ParseResult {
@@ -22,7 +23,7 @@ export interface ParseResult {
 }
 
 /** Extract usage entry from a parsed JSON object, returning null if not a usage record. */
-function extractUsage(obj: Record<string, unknown>): RawUsageEntry | null {
+function extractUsage(obj: Record<string, unknown>, stackId: string | null): RawUsageEntry | null {
   const sessionId = obj.sessionId;
   const timestamp = obj.timestamp;
   if (typeof sessionId !== 'string' || typeof timestamp !== 'string') return null;
@@ -39,6 +40,7 @@ function extractUsage(obj: Record<string, unknown>): RawUsageEntry | null {
         output: typeof u.output_tokens === 'number' ? u.output_tokens : 0,
         cacheCreate: typeof u.cache_creation_input_tokens === 'number' ? u.cache_creation_input_tokens : 0,
         cacheRead: typeof u.cache_read_input_tokens === 'number' ? u.cache_read_input_tokens : 0,
+        stackId,
       };
     }
   }
@@ -57,6 +59,7 @@ function extractUsage(obj: Record<string, unknown>): RawUsageEntry | null {
           output: typeof u.output_tokens === 'number' ? u.output_tokens : 0,
           cacheCreate: typeof u.cache_creation_input_tokens === 'number' ? u.cache_creation_input_tokens : 0,
           cacheRead: typeof u.cache_read_input_tokens === 'number' ? u.cache_read_input_tokens : 0,
+          stackId,
         };
       }
     }
@@ -66,7 +69,7 @@ function extractUsage(obj: Record<string, unknown>): RawUsageEntry | null {
 }
 
 /** Parse a single JSONL file, returning entries and a count of malformed lines. */
-export function parseJSONLFile(filePath: string): ParseResult {
+export function parseJSONLFile(filePath: string, stackId: string | null = null): ParseResult {
   let content: string;
   try {
     content = fs.readFileSync(filePath, 'utf-8');
@@ -94,7 +97,7 @@ export function parseJSONLFile(filePath: string): ParseResult {
       continue;
     }
 
-    const entry = extractUsage(obj as Record<string, unknown>);
+    const entry = extractUsage(obj as Record<string, unknown>, stackId);
     if (entry) entries.push(entry);
     // non-usage lines (user messages, tool results, etc.) are silently ignored
   }
@@ -122,15 +125,45 @@ export function findJSONLFiles(dir: string): string[] {
 }
 
 /** Parse all JSONL files under a root directory. */
-export function parseTranscriptRoot(rootDir: string): ParseResult {
+export function parseTranscriptRoot(rootDir: string, stackId: string | null = null): ParseResult {
   const files = findJSONLFiles(rootDir);
   const allEntries: RawUsageEntry[] = [];
   let totalSkipped = 0;
 
   for (const file of files) {
-    const { entries, skippedLines } = parseJSONLFile(file);
+    const { entries, skippedLines } = parseJSONLFile(file, stackId);
     allEntries.push(...entries);
     totalSkipped += skippedLines;
+  }
+
+  return { entries: allEntries, skippedLines: totalSkipped };
+}
+
+/**
+ * Parse JSONL files from multiple roots with file-path-level deduplication.
+ * Roots ending with `/.claude/projects` are treated as the host root (stackId=null).
+ * All other roots get stackId=path.basename(root).
+ *
+ * Dedup is at file-path level: a file reachable under two roots is parsed once.
+ * Entry-level dedup is NOT performed — sessionId spans many entries.
+ */
+export function parseTranscriptRoots(roots: string[]): ParseResult {
+  const seenFiles = new Set<string>();
+  const allEntries: RawUsageEntry[] = [];
+  let totalSkipped = 0;
+
+  for (const root of roots) {
+    const stackId = root.endsWith('/.claude/projects') ? null : path.basename(root);
+    const files = findJSONLFiles(root);
+
+    for (const file of files) {
+      if (seenFiles.has(file)) continue;
+      seenFiles.add(file);
+
+      const { entries, skippedLines } = parseJSONLFile(file, stackId);
+      allEntries.push(...entries);
+      totalSkipped += skippedLines;
+    }
   }
 
   return { entries: allEntries, skippedLines: totalSkipped };

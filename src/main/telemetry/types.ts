@@ -47,6 +47,15 @@ export interface ByTicketEntry {
   unpriced: boolean;      // true when any task used a model with no known price
 }
 
+/** Per-ticket cost and token attribution derived from transcript files + stack manifests. */
+export interface TranscriptByTicketEntry {
+  ticket: string | null;  // ticket ID resolved from manifest; null for host-root and unmapped stacks
+  stackId: string | null; // originating stack ID; null for host-root entries
+  tokens: TokenCounts;
+  cost: number;
+  sessions: number;
+}
+
 export interface DailyEntry {
   date: string; // YYYY-MM-DD
   cost: number;

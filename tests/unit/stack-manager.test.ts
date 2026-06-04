@@ -302,6 +302,68 @@ describe('StackManager', () => {
         expect(updateCallback).toHaveBeenCalled();
       }, { timeout: 5000 });
     });
+
+    it('writes manifest sibling file with correct fields on createStack', () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      manager.createStack({
+        name: 'manifest-test',
+        projectDir: tmpDir,
+        ticket: 'PROJ-99',
+        runtime: 'docker',
+        gateApproved: true,
+      });
+
+      const manifestPath = path.join(tmpDir, '.sandstorm', 'usage', 'manifest-test.manifest.json');
+      expect(fs.existsSync(manifestPath)).toBe(true);
+
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      expect(manifest.stackId).toBe('manifest-test');
+      expect(manifest.ticket).toBe('PROJ-99');
+      expect(manifest.project).toBe(path.basename(tmpDir));
+      expect(typeof manifest.createdAt).toBe('string');
+      // createdAt should be a valid ISO 8601 timestamp
+      expect(new Date(manifest.createdAt).getTime()).toBeGreaterThan(0);
+    });
+
+    it('writes manifest with ticket=null for stacks without a ticket', () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      manager.createStack({
+        name: 'no-ticket-stack',
+        projectDir: tmpDir,
+        runtime: 'docker',
+      });
+
+      const manifestPath = path.join(tmpDir, '.sandstorm', 'usage', 'no-ticket-stack.manifest.json');
+      expect(fs.existsSync(manifestPath)).toBe(true);
+
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+      expect(manifest.ticket).toBeNull();
+    });
+
+    it('manifest is a sibling of usage/<stackId>/, not inside it', () => {
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
+
+      manager.createStack({
+        name: 'sibling-test',
+        projectDir: tmpDir,
+        runtime: 'docker',
+      });
+
+      const usageDir = path.join(tmpDir, '.sandstorm', 'usage');
+      const manifestPath = path.join(usageDir, 'sibling-test.manifest.json');
+      const transcriptDir = path.join(usageDir, 'sibling-test');
+
+      expect(fs.existsSync(manifestPath)).toBe(true);
+      // Manifest must be AT usage/sibling-test.manifest.json, not inside usage/sibling-test/
+      const manifestInsideDir = path.join(transcriptDir, 'sibling-test.manifest.json');
+      // transcriptDir may not exist yet (created by shell at compose up time), but if it did
+      // the manifest should not be there
+      if (fs.existsSync(transcriptDir)) {
+        expect(fs.existsSync(manifestInsideDir)).toBe(false);
+      }
+    });
   });
 
   describe('dispatchTask', () => {

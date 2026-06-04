@@ -12,28 +12,33 @@
  * Cost figures are "estimated (list price)" — not actual billed amounts.
  */
 
-import { parseTranscriptRoot } from './parser';
-import { aggregateSummary, aggregateDaily, aggregateByModel, aggregateSessions } from './aggregator';
-import type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry } from './types';
+import { parseTranscriptRoots } from './parser';
+import { aggregateSummary, aggregateDaily, aggregateByModel, aggregateSessions, aggregateByTicket } from './aggregator';
+import type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, TranscriptByTicketEntry } from './types';
 
-export type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry };
+export type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, TranscriptByTicketEntry };
 
 export interface UsageEngine {
   getSummary(range: DateRange): TelemetrySummary;
   getDaily(range: DateRange): DailyEntry[];
   getByModel(range: DateRange): ByModelEntry[];
   getSessions(range: DateRange): SessionEntry[];
+  getByTicket(): TranscriptByTicketEntry[];
 }
 
 /**
- * Create a usage engine that reads transcripts from the given root directory.
- * Typically called with `os.homedir() + '/.claude/projects'` for host telemetry.
+ * Create a usage engine that reads transcripts from the given root directories.
+ * Pass `[os.homedir() + '/.claude/projects', ...stackRoots]` for host + stack telemetry.
+ * Roots ending with `/.claude/projects` are the host root (stackId=null).
+ * All other roots are stack roots (stackId=basename of root dir).
  *
  * Returns zeroed shapes when no transcripts exist — never throws.
  */
-export function createUsageEngine(transcriptRoot: string): UsageEngine {
+export function createUsageEngine(roots: string[]): UsageEngine {
+  const stackRoots = roots.filter((r) => !r.endsWith('/.claude/projects'));
+
   function load() {
-    return parseTranscriptRoot(transcriptRoot);
+    return parseTranscriptRoots(roots);
   }
 
   return {
@@ -56,5 +61,11 @@ export function createUsageEngine(transcriptRoot: string): UsageEngine {
       const { entries } = load();
       return aggregateSessions(entries, range);
     },
+
+    getByTicket(): TranscriptByTicketEntry[] {
+      const { entries } = load();
+      return aggregateByTicket(entries, stackRoots);
+    },
   };
 }
+

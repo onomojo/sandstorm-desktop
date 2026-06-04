@@ -358,12 +358,38 @@ export class StackManager {
       runtime: opts.runtime,
     });
 
+    // Write the stackId→ticket manifest before launching the build so telemetry
+    // readers can resolve ticket attribution as soon as transcripts appear.
+    this.writeStackManifest(opts.name, opts.ticket ?? null, projectName, opts.projectDir);
+
     // Launch the heavy work in the background
     this.buildStackInBackground(opts, projectName).catch(() => {
       // Error already stored in registry by buildStackInBackground
     });
 
     return stack;
+  }
+
+  private writeStackManifest(
+    stackId: string,
+    ticket: string | null,
+    project: string,
+    projectDir: string
+  ): void {
+    try {
+      const usageDir = path.join(projectDir, '.sandstorm', 'usage');
+      fs.mkdirSync(usageDir, { recursive: true });
+      const manifestPath = path.join(usageDir, `${stackId}.manifest.json`);
+      const manifest = {
+        stackId,
+        ticket,
+        project,
+        createdAt: new Date().toISOString(),
+      };
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    } catch {
+      // Non-fatal — telemetry degrades to ticket=null for this stack
+    }
   }
 
   /**

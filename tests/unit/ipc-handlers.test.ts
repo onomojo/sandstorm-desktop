@@ -44,7 +44,7 @@ const {
   const mockLoadRefinements = vi.fn().mockReturnValue([]);
 
   const mockRegistry = {
-    listProjects: vi.fn(),
+    listProjects: vi.fn().mockReturnValue([]),
     addProject: vi.fn(),
     removeProject: vi.fn(),
     getProject: vi.fn(),
@@ -148,6 +148,7 @@ const {
     getDaily: vi.fn(),
     getByModel: vi.fn(),
     getSessions: vi.fn(),
+    getByTicket: vi.fn().mockReturnValue([]),
   };
 
   const mockRollupStoreInstance = {
@@ -674,25 +675,21 @@ describe('IPC Handlers', () => {
       expect(mockUsageEngine.getSessions).toHaveBeenCalledWith(range);
     });
 
-    it('stats:telemetry:byTicket delegates to rollupStore.getByTicket and returns the array', async () => {
+    it('stats:telemetry:byTicket delegates to usageEngine.getByTicket and returns the array', async () => {
       const entries = [
         {
-          ticketId: 'T-42',
-          title: 'Fix the bug',
-          column: 'merged',
-          model: 'claude-opus-4-5',
+          ticket: 'T-42',
+          stackId: 'stack-abc',
+          tokens: { input: 500, output: 200, cacheCreate: 0, cacheRead: 100, total: 800 },
           cost: 2.5,
-          tokens: { input: 500, output: 200, cacheRead: 100, cacheCreation: 50 },
-          cacheHit: 16.7,
-          lifecycle: null,
-          unpriced: false,
+          sessions: 1,
         },
       ];
-      mockRollupStoreInstance.getByTicket.mockReturnValueOnce(entries);
+      mockUsageEngine.getByTicket.mockReturnValueOnce(entries);
 
       const result = await invokeHandler('stats:telemetry:byTicket');
 
-      expect(mockRollupStoreInstance.getByTicket).toHaveBeenCalledOnce();
+      expect(mockUsageEngine.getByTicket).toHaveBeenCalledOnce();
       expect(result).toEqual(entries);
     });
 
@@ -983,6 +980,18 @@ describe('IPC Handlers', () => {
           expect(fs.existsSync(composePath)).toBe(true);
           const skipped = (result as { skippedFiles?: string[] }).skippedFiles ?? [];
           expect(skipped).not.toContain('docker-compose.yml');
+        });
+
+        it('no-service compose includes usage mount and does not mount over /home/claude/.claude', async () => {
+          const composePath = path.join(tmpDir, '.sandstorm', 'docker-compose.yml');
+
+          await runFallback(tmpDir);
+
+          expect(fs.existsSync(composePath)).toBe(true);
+          const content = fs.readFileSync(composePath, 'utf-8');
+          expect(content).toContain('${SANDSTORM_USAGE_DIR}/${SANDSTORM_STACK_ID}:/home/claude/.claude/projects');
+          // Must mount only the projects/ subpath, not the parent .claude dir
+          expect(content).not.toMatch(/\/home\/claude\/\.claude(?!\/projects)/);
         });
       });
     });

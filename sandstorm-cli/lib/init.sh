@@ -341,6 +341,7 @@ HEADER
     volumes:
       - \${SANDSTORM_WORKSPACE}:/app
       - \${SANDSTORM_CONTEXT}:/sandstorm-context:ro
+      - \${SANDSTORM_USAGE_DIR}/\${SANDSTORM_STACK_ID}:/home/claude/.claude/projects
       - /var/run/docker.sock:/var/run/docker.sock
     healthcheck:
       test: ["CMD", "test", "-f", "/tmp/.sandstorm-ready"]

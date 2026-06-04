@@ -391,6 +391,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
             '      - SANDSTORM_STACK_ID',
             '    volumes:',
             '      - ${SANDSTORM_WORKSPACE}:/app',
+            '      - ${SANDSTORM_USAGE_DIR}/${SANDSTORM_STACK_ID}:/home/claude/.claude/projects',
             '      - /var/run/docker.sock:/var/run/docker.sock',
             '    healthcheck:',
             '      test: ["CMD", "test", "-f", "/tmp/.sandstorm-ready"]',
@@ -763,10 +764,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Telemetry (host orchestrator usage + per-ticket attribution) ---
 
-  const hostEngine = createUsageEngine(
-    os.homedir() + '/.claude/projects'
-  );
-
   const rollupStore = new TicketRollupStore(registry.getDb());
 
   // Wire auto-invalidation hooks so the rollup cache stays fresh
@@ -776,8 +773,29 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   };
   stackManager.setOnTaskCompleted((stackId) => rollupStore.markStackDirty(stackId));
 
+  /** Build the set of transcript roots on each request: host root + all stack usage dirs. */
+  function buildTelemetryRoots(): string[] {
+    const hostRoot = os.homedir() + '/.claude/projects';
+    const stackRoots: string[] = [];
+    for (const project of registry.listProjects()) {
+      const usageDir = path.join(project.directory, '.sandstorm', 'usage');
+      try {
+        const entries = fs.readdirSync(usageDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory()) {
+            stackRoots.push(path.join(usageDir, entry.name));
+          }
+        }
+      } catch {
+        // usage dir doesn't exist yet — skip
+      }
+    }
+    return [hostRoot, ...stackRoots];
+  }
+
   ipcMain.handle('stats:telemetry:summary', async (_event, range: DateRange) => {
-    const summary = hostEngine.getSummary(range);
+    const engine = createUsageEngine(buildTelemetryRoots());
+    const summary = engine.getSummary(range);
     const shipped = rollupStore.ticketsShipped();
     const totalCost = rollupStore.totalTicketCost();
     return {
@@ -788,19 +806,19 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   ipcMain.handle('stats:telemetry:daily', async (_event, range: DateRange) => {
-    return hostEngine.getDaily(range);
+    return createUsageEngine(buildTelemetryRoots()).getDaily(range);
   });
 
   ipcMain.handle('stats:telemetry:byModel', async (_event, range: DateRange) => {
-    return hostEngine.getByModel(range);
+    return createUsageEngine(buildTelemetryRoots()).getByModel(range);
   });
 
   ipcMain.handle('stats:telemetry:session', async (_event, range: DateRange) => {
-    return hostEngine.getSessions(range);
+    return createUsageEngine(buildTelemetryRoots()).getSessions(range);
   });
 
   ipcMain.handle('stats:telemetry:byTicket', async () => {
-    return rollupStore.getByTicket();
+    return createUsageEngine(buildTelemetryRoots()).getByTicket();
   });
 
   ipcMain.handle('stats:telemetry:refresh', async () => {
