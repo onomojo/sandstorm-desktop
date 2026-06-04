@@ -1,8 +1,9 @@
 import Database from 'better-sqlite3';
 import { computeCost } from './pricing';
 import type { ByTicketEntry } from './types';
+import { ORCHESTRATOR_TICKET_ID } from './types';
 
-export const ORCHESTRATOR_TICKET_ID = '__orchestrator__';
+export { ORCHESTRATOR_TICKET_ID };
 
 interface TaskCostRow {
   ticket: string | null;
@@ -157,15 +158,14 @@ export function computeTicketRollups(db: Database.Database): ByTicketEntry[] {
 
     result.push({
       ticketId,
-      title: bucket.title,
-      column: bucket.column,
       model: primaryModel,
       cost: bucket.cost,
       tokens: {
         input: bucket.input,
         output: bucket.output,
+        cacheCreate: bucket.cacheCreation,
         cacheRead: bucket.cacheRead,
-        cacheCreation: bucket.cacheCreation,
+        total: bucket.input + bucket.output + bucket.cacheCreation + bucket.cacheRead,
       },
       cacheHit,
       lifecycle: null,

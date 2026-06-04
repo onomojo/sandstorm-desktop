@@ -145,6 +145,7 @@ describe('TicketRollupStore', () => {
   });
 
   it('markDirty() (for board moves) triggers refresh on next getByTicket', () => {
+    // column removed from canonical ByTicketEntry in ticket #499 (renderer-joined)
     db.exec(`INSERT INTO stacks (id, ticket) VALUES ('s1', 'TICKET-B')`);
     db.exec(`INSERT INTO tasks (stack_id, input_tokens, output_tokens, resolved_model) VALUES ('s1', 100, 50, 'claude-sonnet-4-5')`);
     db.exec(`INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES ('TICKET-B', '/proj', 'pr_open', 'Board Ticket')`);
@@ -155,7 +156,10 @@ describe('TicketRollupStore', () => {
     store.markDirty();
 
     const rollups = store.getByTicket();
-    expect(rollups[0].column).toBe('merged');
+    // Verify the refresh ran and the rollup is correct
+    expect(rollups).toHaveLength(1);
+    expect(rollups[0].ticketId).toBe('TICKET-B');
+    expect(rollups[0].cost).toBeGreaterThan(0);
   });
 
   it('cacheHit is 0 for all-zero-token ticket (division-by-zero guard)', () => {

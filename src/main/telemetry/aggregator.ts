@@ -7,7 +7,8 @@ import fs from 'fs';
 import path from 'path';
 import { computeCost } from './pricing';
 import type { RawUsageEntry } from './parser';
-import type { DateRange, TokenCounts, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, TranscriptByTicketEntry } from './types';
+import type { DateRange, TokenCounts, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry } from './types';
+import { ORCHESTRATOR_TICKET_ID } from './types';
 
 function dateOf(isoTimestamp: string): string {
   return isoTimestamp.slice(0, 10); // YYYY-MM-DD
@@ -244,56 +245,71 @@ function readManifest(manifestPath: string): StackManifest | null {
  * Aggregate entries by ticket, reading stack manifests to resolve stackId → ticket.
  * stackRoots are the stack-specific dirs (e.g. <project>/.sandstorm/usage/<stackId>).
  * The paired manifest is at stackRoot + '.manifest.json'.
- * Entries with no mapped ticket (host-root entries or missing manifest) fall into ticket=null.
+ * Entries with no mapped ticket (host-root entries or missing manifest) roll up under
+ * ORCHESTRATOR_TICKET_ID. A ticket worked across multiple stacks produces one row.
  */
 export function aggregateByTicket(
   entries: RawUsageEntry[],
   stackRoots: string[]
-): TranscriptByTicketEntry[] {
+): ByTicketEntry[] {
   // Build stackId → ticket map from manifests
   const stackToTicket = new Map<string, string | null>();
   for (const root of stackRoots) {
-    const manifestPath = root + '.manifest.json';
-    const manifest = readManifest(manifestPath);
+    const manifest = readManifest(root + '.manifest.json');
     if (manifest) {
       stackToTicket.set(manifest.stackId, manifest.ticket ?? null);
     }
   }
 
-  // Group entries by (ticket, stackId)
-  const byKey = new Map<string, {
-    ticket: string | null;
-    stackId: string | null;
+  // Group entries by ticket alone (multi-stack tickets aggregate into one row)
+  const byTicket = new Map<string, {
     tokens: TokenCounts;
-    sessions: Set<string>;
+    modelOutputs: Map<string, number>;
     cost: number;
+    unpriced: boolean;
   }>();
 
   for (const entry of entries) {
-    const ticket = entry.stackId != null ? (stackToTicket.get(entry.stackId) ?? null) : null;
-    const key = `${ticket ?? '__null__'}::${entry.stackId ?? '__null__'}`;
+    const rawTicket = entry.stackId != null ? (stackToTicket.get(entry.stackId) ?? null) : null;
+    const ticketId = rawTicket ?? ORCHESTRATOR_TICKET_ID;
 
-    if (!byKey.has(key)) {
-      byKey.set(key, { ticket, stackId: entry.stackId, tokens: zeroTokens(), sessions: new Set(), cost: 0 });
+    if (!byTicket.has(ticketId)) {
+      byTicket.set(ticketId, { tokens: zeroTokens(), modelOutputs: new Map(), cost: 0, unpriced: false });
     }
-    const bucket = byKey.get(key)!;
+    const bucket = byTicket.get(ticketId)!;
     addTokens(bucket.tokens, entry);
-    bucket.sessions.add(entry.sessionId);
-    const { cost } = computeCost(entry.model, {
+    bucket.modelOutputs.set(entry.model, (bucket.modelOutputs.get(entry.model) ?? 0) + entry.output);
+    const { cost, unpriced } = computeCost(entry.model, {
       input: entry.input,
       output: entry.output,
       cacheCreate: entry.cacheCreate,
       cacheRead: entry.cacheRead,
     });
     bucket.cost += cost;
+    if (unpriced) bucket.unpriced = true;
   }
 
-  return [...byKey.values()].map((data) => ({
-    ticket: data.ticket,
-    stackId: data.stackId,
-    tokens: data.tokens,
-    cost: data.cost,
-    sessions: data.sessions.size,
-  }));
+  return [...byTicket.entries()].map(([ticketId, data]) => {
+    const { input, cacheRead } = data.tokens;
+    const denom = input + cacheRead;
+    const cacheHit = denom > 0 ? (cacheRead / denom) * 100 : 0;
+
+    // Primary model = highest summed output tokens (first encountered on ties)
+    let primaryModel: string | null = null;
+    let maxOutput = -1;
+    for (const [model, output] of data.modelOutputs) {
+      if (output > maxOutput) { maxOutput = output; primaryModel = model; }
+    }
+
+    return {
+      ticketId,
+      model: primaryModel,
+      cost: data.cost,
+      tokens: data.tokens,
+      cacheHit,
+      lifecycle: null,
+      unpriced: data.unpriced,
+    } satisfies ByTicketEntry;
+  });
 }
 

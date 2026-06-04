@@ -234,6 +234,7 @@ vi.mock('os', async (importOriginal) => {
 
 vi.mock('../../src/main/telemetry/usage-engine', () => ({
   createUsageEngine: vi.fn(() => mockUsageEngine),
+  clearUsageCache: vi.fn(),
 }));
 
 vi.mock('../../src/main/telemetry/rollup-store', () => ({
@@ -301,6 +302,7 @@ vi.mock('../../src/main/control-plane/refinement-store', () => ({
 // Import after mocks
 // ---------------------------------------------------------------------------
 import { registerIpcHandlers } from '../../src/main/ipc';
+import { clearUsageCache } from '../../src/main/telemetry/usage-engine';
 import { dialog, BrowserWindow } from 'electron';
 import { execFile } from 'child_process';
 
@@ -678,11 +680,13 @@ describe('IPC Handlers', () => {
     it('stats:telemetry:byTicket delegates to usageEngine.getByTicket and returns the array', async () => {
       const entries = [
         {
-          ticket: 'T-42',
-          stackId: 'stack-abc',
-          tokens: { input: 500, output: 200, cacheCreate: 0, cacheRead: 100, total: 800 },
+          ticketId: 'T-42',
+          model: 'claude-sonnet-4-5',
           cost: 2.5,
-          sessions: 1,
+          tokens: { input: 500, output: 200, cacheCreate: 0, cacheRead: 100, total: 800 },
+          cacheHit: 16.666666666666668,
+          lifecycle: null,
+          unpriced: false,
         },
       ];
       mockUsageEngine.getByTicket.mockReturnValueOnce(entries);
@@ -697,6 +701,7 @@ describe('IPC Handlers', () => {
       const result = await invokeHandler('stats:telemetry:refresh');
 
       expect(mockRollupStoreInstance.refresh).toHaveBeenCalledOnce();
+      expect(vi.mocked(clearUsageCache)).toHaveBeenCalledOnce();
       expect(result).toEqual({ ok: true });
     });
   });

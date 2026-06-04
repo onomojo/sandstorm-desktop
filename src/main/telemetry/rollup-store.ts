@@ -58,15 +58,14 @@ export class TicketRollupStore {
       const cacheHit = denom > 0 ? (row.total_cache_read / denom) * 100 : 0;
       return {
         ticketId: row.ticket_id,
-        title: row.title,
-        column: row.column,
         model: row.primary_model,
         cost: row.total_cost,
         tokens: {
           input: row.total_input_tokens,
           output: row.total_output_tokens,
+          cacheCreate: row.total_cache_creation,
           cacheRead: row.total_cache_read,
-          cacheCreation: row.total_cache_creation,
+          total: row.total_input_tokens + row.total_output_tokens + row.total_cache_creation + row.total_cache_read,
         },
         cacheHit,
         lifecycle: null,
@@ -93,13 +92,13 @@ export class TicketRollupStore {
       for (const entry of entries) {
         upsert.run(
           entry.ticketId,
-          entry.title,
-          entry.column,
+          entry.ticketId, // title: no longer in ByTicketEntry; use ticketId as fallback
+          null,           // column: no longer in ByTicketEntry
           entry.cost,
           entry.tokens.input,
           entry.tokens.output,
           entry.tokens.cacheRead,
-          entry.tokens.cacheCreation,
+          entry.tokens.cacheCreate,
           entry.model,
           entry.unpriced ? 1 : 0
         );
@@ -183,9 +182,9 @@ export class TicketRollupStore {
     this.db.transaction(() => {
       for (const entry of affected) {
         upsert.run(
-          entry.ticketId, entry.title, entry.column, entry.cost,
+          entry.ticketId, entry.ticketId, null, entry.cost,
           entry.tokens.input, entry.tokens.output,
-          entry.tokens.cacheRead, entry.tokens.cacheCreation,
+          entry.tokens.cacheRead, entry.tokens.cacheCreate,
           entry.model, entry.unpriced ? 1 : 0
         );
       }
