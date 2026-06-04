@@ -15,7 +15,10 @@
 import fs from 'fs';
 import { parseTranscriptRoots, findJSONLFiles, type ParseResult } from './parser';
 import { aggregateSummary, aggregateDaily, aggregateByModel, aggregateSessions, aggregateByTicket } from './aggregator';
+import type { StepWeightRow, EphemeralWeightRecord } from './aggregator';
 import type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry } from './types';
+
+export type { StepWeightRow, EphemeralWeightRecord };
 
 export type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry };
 
@@ -84,9 +87,16 @@ function loadCached(roots: string[]): ParseResult {
  * Roots ending with `/.claude/projects` are the host root (stackId=null).
  * All other roots are stack roots (stackId=basename of root dir).
  *
+ * stepWeights and ephemeralRecords are injected from the Electron side (SQLite + file-store)
+ * so the pure aggregation logic stays electron-free. Pass undefined to omit lifecycle data.
+ *
  * Returns zeroed shapes when no transcripts exist — never throws.
  */
-export function createUsageEngine(roots: string[]): UsageEngine {
+export function createUsageEngine(
+  roots: string[],
+  stepWeights?: StepWeightRow[],
+  ephemeralRecords?: EphemeralWeightRecord[],
+): UsageEngine {
   const stackRoots = roots.filter((r) => !r.endsWith('/.claude/projects'));
 
   return {
@@ -112,7 +122,7 @@ export function createUsageEngine(roots: string[]): UsageEngine {
 
     getByTicket(): ByTicketEntry[] {
       const { entries } = loadCached(roots);
-      return aggregateByTicket(entries, stackRoots);
+      return aggregateByTicket(entries, stackRoots, stepWeights, ephemeralRecords);
     },
   };
 }

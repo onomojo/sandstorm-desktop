@@ -20,7 +20,7 @@
  *   }
  */
 
-import { appendFileSync } from 'fs';
+import { appendFileSync, readFileSync } from 'fs';
 
 export interface EphemeralTimingRecord {
   ts: string;
@@ -33,6 +33,8 @@ export interface EphemeralTimingRecord {
   turnCount: number;
   cancelled: boolean;
   errorMessage?: string;
+  ticketId?: string;  // optional attribution for lifecycle tracking
+  stage?: string;     // optional stage label: 'refine' | 'spec' | 'pr'
 }
 
 export function appendEphemeralTiming(filePath: string, record: EphemeralTimingRecord): void {
@@ -40,5 +42,24 @@ export function appendEphemeralTiming(filePath: string, record: EphemeralTimingR
     appendFileSync(filePath, JSON.stringify(record) + '\n');
   } catch {
     // Best effort — swallow write failures
+  }
+}
+
+/** Read all timing records from the JSONL store. Returns [] on missing/malformed file. */
+export function readEphemeralTimingRecords(filePath: string): EphemeralTimingRecord[] {
+  try {
+    const raw = readFileSync(filePath, 'utf-8');
+    const records: EphemeralTimingRecord[] = [];
+    for (const line of raw.split('\n')) {
+      if (!line.trim()) continue;
+      try {
+        records.push(JSON.parse(line) as EphemeralTimingRecord);
+      } catch {
+        // Skip malformed lines
+      }
+    }
+    return records;
+  } catch {
+    return [];
   }
 }

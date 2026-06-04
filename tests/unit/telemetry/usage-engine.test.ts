@@ -12,7 +12,7 @@ import {
   aggregateSessions,
   aggregateByTicket,
 } from '../../../src/main/telemetry/aggregator';
-import { createUsageEngine, clearUsageCache } from '../../../src/main/telemetry/usage-engine';
+import { createUsageEngine, clearUsageCache, type StepWeightRow, type EphemeralWeightRecord } from '../../../src/main/telemetry/usage-engine';
 import { ORCHESTRATOR_TICKET_ID } from '../../../src/main/telemetry/types';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures');
@@ -1006,5 +1006,110 @@ describe('summary costPerTicket source', () => {
     expect(orchEntry).toBeDefined();
     expect(orchEntry!.cost).toBeGreaterThan(0);
     expect(nonOrchCost).toBeLessThan(nonOrchCost + orchEntry!.cost);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Q2 plumbing — injected stepWeights / ephemeralRecords reach aggregateByTicket
+// ---------------------------------------------------------------------------
+
+describe('createUsageEngine — injected weights produce non-null lifecycle (Q2 plumbing)', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telemetry-q2-'));
+    clearUsageCache();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearUsageCache();
+  });
+
+  function writeManifest(stackRoot: string, stackId: string, ticket: string) {
+    fs.writeFileSync(stackRoot + '.manifest.json', JSON.stringify({
+      stackId, ticket, project: 'p', createdAt: '2024-01-01T00:00:00.000Z',
+    }));
+  }
+
+  function writeTranscript(stackRoot: string, sessionId: string) {
+    const entry = JSON.stringify({
+      type: 'assistant',
+      message: { role: 'assistant', model: 'claude-sonnet-4-5', usage: { input_tokens: 100, output_tokens: 50 } },
+      timestamp: '2024-03-01T10:00:00.000Z',
+      sessionId,
+    });
+    fs.writeFileSync(path.join(stackRoot, 'usage.jsonl'), entry + '\n');
+  }
+
+  it('injected stepWeights produce non-null lifecycle for matching ticket', () => {
+    const stackRoot = path.join(tmpDir, 'stack-q2');
+    fs.mkdirSync(stackRoot);
+    writeManifest(stackRoot, 'stack-q2', 'TICKET-Q2');
+    writeTranscript(stackRoot, 'sess-q2');
+
+    const stepWeights: StepWeightRow[] = [
+      { ticket: 'TICKET-Q2', phase: 'execution', totalTokens: 3000 },
+      { ticket: 'TICKET-Q2', phase: 'review', totalTokens: 1000 },
+    ];
+
+    const engine = createUsageEngine([stackRoot], stepWeights, []);
+    const rows = engine.getByTicket();
+
+    const row = rows.find((r) => r.ticketId === 'TICKET-Q2');
+    expect(row).toBeDefined();
+    expect(row!.lifecycle).not.toBeNull();
+    expect(row!.lifecycle!.execution).toBeGreaterThan(0);
+    expect(row!.lifecycle!.review).toBeGreaterThan(0);
+    expect(row!.lifecycle!.verify).toBe(0);
+  });
+
+  it('injected ephemeralRecords produce non-null lifecycle for matching ticket', () => {
+    const stackRoot = path.join(tmpDir, 'stack-eph');
+    fs.mkdirSync(stackRoot);
+    writeManifest(stackRoot, 'stack-eph', 'TICKET-EPH');
+    writeTranscript(stackRoot, 'sess-eph');
+
+    const ephemeralRecords: EphemeralWeightRecord[] = [
+      { ticketId: 'TICKET-EPH', stage: 'spec', turnCount: 5 },
+      { ticketId: 'TICKET-EPH', stage: 'pr', turnCount: 2 },
+    ];
+
+    const engine = createUsageEngine([stackRoot], [], ephemeralRecords);
+    const rows = engine.getByTicket();
+
+    const row = rows.find((r) => r.ticketId === 'TICKET-EPH');
+    expect(row).toBeDefined();
+    expect(row!.lifecycle).not.toBeNull();
+    expect(row!.lifecycle!.spec).toBeGreaterThan(0);
+    expect(row!.lifecycle!.pr).toBeGreaterThan(0);
+  });
+
+  it('injected step + ephemeral weights both reach aggregateByTicket and sum to cost', () => {
+    const stackRoot = path.join(tmpDir, 'stack-both');
+    fs.mkdirSync(stackRoot);
+    writeManifest(stackRoot, 'stack-both', 'TICKET-BOTH');
+    writeTranscript(stackRoot, 'sess-both');
+
+    const stepWeights: StepWeightRow[] = [
+      { ticket: 'TICKET-BOTH', phase: 'execution', totalTokens: 6000 },
+      { ticket: 'TICKET-BOTH', phase: 'review', totalTokens: 2000 },
+    ];
+    const ephemeralRecords: EphemeralWeightRecord[] = [
+      { ticketId: 'TICKET-BOTH', stage: 'refine', turnCount: 3 },
+      { ticketId: 'TICKET-BOTH', stage: 'spec', turnCount: 4 },
+      { ticketId: 'TICKET-BOTH', stage: 'pr', turnCount: 2 },
+    ];
+
+    const engine = createUsageEngine([stackRoot], stepWeights, ephemeralRecords);
+    const rows = engine.getByTicket();
+
+    const row = rows.find((r) => r.ticketId === 'TICKET-BOTH');
+    expect(row).toBeDefined();
+    expect(row!.lifecycle).not.toBeNull();
+
+    const lc = row!.lifecycle!;
+    const lifecycleSum = lc.refine + lc.spec + lc.execution + lc.review + lc.verify + lc.pr;
+    expect(Math.abs(lifecycleSum - row!.cost)).toBeLessThan(1e-6);
   });
 });

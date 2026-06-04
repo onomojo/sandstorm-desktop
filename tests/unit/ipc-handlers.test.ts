@@ -59,6 +59,7 @@ const {
     getDarkFactoryEnabled: vi.fn().mockReturnValue(false),
     setDarkFactoryEnabled: vi.fn(),
     getDb: vi.fn().mockReturnValue({}),
+    getStepWeightsByTicket: vi.fn().mockReturnValue([]),
   };
 
   const mockStackManager = {
@@ -107,6 +108,7 @@ const {
     getAuthStatus: vi.fn(),
     login: vi.fn(),
     syncCredentials: vi.fn(),
+    getEphemeralTimingPath: vi.fn().mockReturnValue('/tmp/mock-ephemeral-timing.jsonl'),
   };
 
   const mockDockerConnectionManager = {
@@ -235,6 +237,11 @@ vi.mock('os', async (importOriginal) => {
 vi.mock('../../src/main/telemetry/usage-engine', () => ({
   createUsageEngine: vi.fn(() => mockUsageEngine),
   clearUsageCache: vi.fn(),
+}));
+
+vi.mock('../../src/main/agent/ephemeral-timing', () => ({
+  appendEphemeralTiming: vi.fn(),
+  readEphemeralTimingRecords: vi.fn().mockReturnValue([]),
 }));
 
 vi.mock('../../src/main/telemetry/rollup-store', () => ({

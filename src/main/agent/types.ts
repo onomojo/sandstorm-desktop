@@ -112,8 +112,16 @@ export interface AgentBackend {
 
   // --- Ephemeral agents ---
 
+  /** Path to the JSON Lines file where ephemeral timing records are written */
+  getEphemeralTimingPath(): string;
+
   /** Spawn a one-shot agent process that evaluates a prompt and returns the text result */
-  runEphemeralAgent(prompt: string, projectDir: string, timeoutMs?: number): Promise<string>;
+  runEphemeralAgent(
+    prompt: string,
+    projectDir: string,
+    timeoutMs?: number,
+    attribution?: { ticketId?: string; stage?: string },
+  ): Promise<string>;
 
   /** Spawn a cancellable one-shot agent process; returns a promise and a cancel function */
   spawnEphemeralAgent(
@@ -121,6 +129,7 @@ export interface AgentBackend {
     projectDir: string,
     timeoutMs?: number,
     onChunk?: (event: EphemeralStreamEvent) => void,
+    attribution?: { ticketId?: string; stage?: string },
   ): { promise: Promise<string>; cancel: () => void };
 
   /**

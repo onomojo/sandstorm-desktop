@@ -326,7 +326,7 @@ async function handleSpecCheck(
   const { ctx } = res;
 
   const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS);
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' });
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
   return {
@@ -524,13 +524,13 @@ async function handleSpecRefine(
 
   if (!userAnswers) {
     const prompt = buildSpecRefineInitialPrompt(ctx.gate, ctx.ticketBody);
-    const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS);
+    const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' });
     const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
     return { passed, report: result };
   }
 
   const prompt = buildSpecRefineAnswerPrompt(ctx.gate, ctx.ticketBody, userAnswers);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS);
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' });
   return applySpecRefineResult(ticketId, projectDir, result, true);
 }
 
@@ -556,7 +556,7 @@ export function spawnSpecCheck(
     if (cancelled) throw new Error('Cancelled');
 
     const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody);
-    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk);
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' });
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
 
@@ -651,7 +651,7 @@ export function spawnSpecRefine(
       // No pooled session (timed out, app restarted, etc.) — fall back to a
       // cold ephemeral so the user's answers still produce a result.
       const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(
-        answerPrompt, projectDir, 0, onChunk,
+        answerPrompt, projectDir, 0, onChunk, { ticketId, stage: 'refine' },
       );
       activeDispose = epCancel;
       if (cancelled) { epCancel(); throw new Error('Cancelled'); }

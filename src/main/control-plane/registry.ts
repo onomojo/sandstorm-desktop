@@ -922,6 +922,22 @@ export class Registry {
   }
 
   /**
+   * Return per-ticket, per-phase token weight totals for lifecycle cost splitting.
+   * Joins task_token_steps → tasks → stacks to resolve the ticket for each step.
+   * Only rows where stacks.ticket IS NOT NULL are included (excludes ad-hoc stacks).
+   */
+  getStepWeightsByTicket(): { ticket: string; phase: string; totalTokens: number }[] {
+    return this.db.prepare(`
+      SELECT s.ticket, tts.phase, SUM(tts.input_tokens + tts.output_tokens) AS totalTokens
+      FROM task_token_steps tts
+      JOIN tasks t ON t.id = tts.task_id
+      JOIN stacks s ON s.id = t.stack_id
+      WHERE s.ticket IS NOT NULL
+      GROUP BY s.ticket, tts.phase
+    `).all() as { ticket: string; phase: string; totalTokens: number }[];
+  }
+
+  /**
    * Validate that per-step token sums match phase totals and grand total.
    * Returns validation result with computed sums.
    */
