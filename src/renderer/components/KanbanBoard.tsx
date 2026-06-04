@@ -13,7 +13,10 @@ const COLUMNS: { id: KanbanColumn; label: string; colorClass: string }[] = [
   { id: 'merged', label: 'Merged', colorClass: 'text-sandstorm-state-merged' },
 ];
 
+const RECENT_MERGED_LIMIT = 10;
+
 type BoardTab = 'active' | 'history';
+type MergedMode = 'recent' | 'all';
 
 export function KanbanBoard() {
   const {
@@ -29,6 +32,7 @@ export function KanbanBoard() {
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<BoardTab>('active');
+  const [mergedMode, setMergedMode] = useState<MergedMode>('recent');
 
   const project = activeProject();
 
@@ -131,7 +135,17 @@ export function KanbanBoard() {
             data-testid="kanban-columns"
           >
             {COLUMNS.map((col) => {
-              const cards = ticketsByColumn(col.id);
+              const isMerged = col.id === 'merged';
+              const allCards = isMerged
+                ? ticketsByColumn(col.id).slice().sort((a, b) => {
+                    const dateCmp = b.updated_at.localeCompare(a.updated_at);
+                    return dateCmp !== 0 ? dateCmp : a.ticket_id.localeCompare(b.ticket_id);
+                  })
+                : ticketsByColumn(col.id);
+              const totalCount = allCards.length;
+              const cards = isMerged && mergedMode === 'recent'
+                ? allCards.slice(0, RECENT_MERGED_LIMIT)
+                : allCards;
               return (
                 <div
                   key={col.id}
@@ -144,9 +158,40 @@ export function KanbanBoard() {
                     <span className={`text-xs font-semibold uppercase tracking-wide ${col.colorClass}`}>
                       {col.label}
                     </span>
-                    {cards.length > 0 && (
-                      <span className="text-xs text-sandstorm-muted font-mono">{cards.length}</span>
-                    )}
+                    <div className="flex items-center gap-1.5">
+                      {isMerged && (
+                        <div
+                          className="flex items-center rounded overflow-hidden border border-sandstorm-border"
+                          data-testid="merged-mode-toggle"
+                        >
+                          <button
+                            onClick={() => setMergedMode('recent')}
+                            className={`text-xs px-1.5 py-0.5 transition-colors ${
+                              mergedMode === 'recent'
+                                ? 'bg-sandstorm-surface text-sandstorm-text'
+                                : 'text-sandstorm-muted hover:text-sandstorm-text'
+                            }`}
+                            data-testid="merged-mode-recent"
+                          >
+                            Recent
+                          </button>
+                          <button
+                            onClick={() => setMergedMode('all')}
+                            className={`text-xs px-1.5 py-0.5 border-l border-sandstorm-border transition-colors ${
+                              mergedMode === 'all'
+                                ? 'bg-sandstorm-surface text-sandstorm-text'
+                                : 'text-sandstorm-muted hover:text-sandstorm-text'
+                            }`}
+                            data-testid="merged-mode-all"
+                          >
+                            All
+                          </button>
+                        </div>
+                      )}
+                      {totalCount > 0 && (
+                        <span className="text-xs text-sandstorm-muted font-mono">{totalCount}</span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Cards */}
