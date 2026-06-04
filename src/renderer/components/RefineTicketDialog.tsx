@@ -233,8 +233,7 @@ export function RefineTicketDialog() {
         gateApproved: true,
       });
       // Advance the kanban column to in_stack now that the stack exists.
-      // Parallel to the card-based path (openNewStackDialogForTicket); without this,
-      // tickets started from the Refine dialog stayed in spec_ready / backlog (#388).
+      // Without this, tickets started from the Refine dialog stayed in spec_ready / backlog (#388).
       await moveTicketColumn(session.ticketId, projectDir, 'in_stack');
       await refreshStacks();
       // Clean up session after stack created

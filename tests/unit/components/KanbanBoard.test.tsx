@@ -37,6 +37,11 @@ describe('KanbanBoard', () => {
     expect(screen.getByText('proj')).toBeDefined();
   });
 
+  it('does not render the new-stack-btn in the header', () => {
+    render(<KanbanBoard />);
+    expect(screen.queryByTestId('new-stack-btn')).toBeNull();
+  });
+
   it('shows "No cards" placeholder in empty columns', () => {
     render(<KanbanBoard />);
     const noCells = screen.getAllByText('No cards');

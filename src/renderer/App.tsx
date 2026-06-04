@@ -1,7 +1,6 @@
 import React, { useEffect } from 'react';
 import { useAppStore, ThresholdLevel } from './store';
 import { StackDetail } from './components/StackDetail';
-import { NewStackDialog } from './components/NewStackDialog';
 import { RefineTicketDialog } from './components/RefineTicketDialog';
 import { CreateTicketDialog } from './components/CreateTicketDialog';
 import { EditTicketDialog } from './components/EditTicketDialog';
@@ -27,7 +26,6 @@ const ACTIVITY_REPORT_THROTTLE = 10_000;
 export default function App() {
   const {
     selectedStackId,
-    showNewStackDialog,
     showRefineTicketDialog,
     showCreateTicketDialog,
     showEditTicketDialog,
@@ -270,7 +268,6 @@ export default function App() {
       )}
 
       {/* Dialogs */}
-      {showNewStackDialog && <NewStackDialog />}
       {showRefineTicketDialog && <RefineTicketDialog />}
       {showCreateTicketDialog && <CreateTicketDialog />}
       {showEditTicketDialog && <EditTicketDialog />}
