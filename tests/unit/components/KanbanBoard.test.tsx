@@ -143,6 +143,132 @@ describe('KanbanBoard', () => {
     });
   });
 
+  // #502: All/Recent toggle in Merged column header
+  it('renders merged-mode-toggle in merged column with Recent as default (#502)', () => {
+    render(<KanbanBoard />);
+    const mergedCol = screen.getByTestId('kanban-column-merged');
+    const toggle = mergedCol.querySelector('[data-testid="merged-mode-toggle"]');
+    expect(toggle).not.toBeNull();
+    expect(screen.getByTestId('merged-mode-recent')).toBeDefined();
+    expect(screen.getByTestId('merged-mode-all')).toBeDefined();
+  });
+
+  it('renders exactly 10 cards in Recent mode when >10 merged tickets (#502)', () => {
+    useAppStore.setState({
+      boardTickets: Array.from({ length: 12 }, (_, i) => ({
+        ticket_id: `m${i + 1}`,
+        project_dir: '/proj',
+        column: 'merged' as const,
+        title: `Merged ${i + 1}`,
+        updated_at: `2023-01-${String(i + 1).padStart(2, '0')}`,
+      })),
+    });
+    render(<KanbanBoard />);
+    const mergedCol = screen.getByTestId('kanban-column-merged');
+    const cards = mergedCol.querySelectorAll('[data-testid^="ticket-card-"]');
+    expect(cards.length).toBe(10);
+  });
+
+  it('renders the 10 highest updated_at tickets in Recent mode, not the oldest (#502)', () => {
+    useAppStore.setState({
+      boardTickets: Array.from({ length: 12 }, (_, i) => ({
+        ticket_id: `m${i + 1}`,
+        project_dir: '/proj',
+        column: 'merged' as const,
+        title: `Merged ${i + 1}`,
+        updated_at: `2023-01-${String(i + 1).padStart(2, '0')}`,
+      })),
+    });
+    render(<KanbanBoard />);
+    // Tickets 3–12 have the 10 highest updated_at values and should render
+    for (let i = 3; i <= 12; i++) {
+      expect(screen.getByTestId(`ticket-card-m${i}`)).toBeDefined();
+    }
+    // Tickets 1 and 2 are the oldest and must NOT render
+    expect(screen.queryByTestId('ticket-card-m1')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-m2')).toBeNull();
+  });
+
+  it('renders all merged tickets when switching to All mode (#502)', () => {
+    useAppStore.setState({
+      boardTickets: Array.from({ length: 12 }, (_, i) => ({
+        ticket_id: `m${i + 1}`,
+        project_dir: '/proj',
+        column: 'merged' as const,
+        title: `Merged ${i + 1}`,
+        updated_at: `2023-01-${String(i + 1).padStart(2, '0')}`,
+      })),
+    });
+    render(<KanbanBoard />);
+    fireEvent.click(screen.getByTestId('merged-mode-all'));
+    const mergedCol = screen.getByTestId('kanban-column-merged');
+    const cards = mergedCol.querySelectorAll('[data-testid^="ticket-card-"]');
+    expect(cards.length).toBe(12);
+  });
+
+  it('count badge shows total merged count even when Recent mode shows fewer (#502)', () => {
+    useAppStore.setState({
+      boardTickets: Array.from({ length: 12 }, (_, i) => ({
+        ticket_id: `m${i + 1}`,
+        project_dir: '/proj',
+        column: 'merged' as const,
+        title: `Merged ${i + 1}`,
+        updated_at: `2023-01-${String(i + 1).padStart(2, '0')}`,
+      })),
+    });
+    render(<KanbanBoard />);
+    const mergedCol = screen.getByTestId('kanban-column-merged');
+    expect(mergedCol.textContent).toContain('12');
+  });
+
+  it('toggle renders and both modes show same cards when ≤10 merged tickets (#502)', () => {
+    useAppStore.setState({
+      boardTickets: Array.from({ length: 5 }, (_, i) => ({
+        ticket_id: `m${i + 1}`,
+        project_dir: '/proj',
+        column: 'merged' as const,
+        title: `Merged ${i + 1}`,
+        updated_at: `2023-01-${String(i + 1).padStart(2, '0')}`,
+      })),
+    });
+    render(<KanbanBoard />);
+    expect(screen.getByTestId('merged-mode-toggle')).toBeDefined();
+    const mergedCol = screen.getByTestId('kanban-column-merged');
+    expect(mergedCol.querySelectorAll('[data-testid^="ticket-card-"]').length).toBe(5);
+    fireEvent.click(screen.getByTestId('merged-mode-all'));
+    expect(mergedCol.querySelectorAll('[data-testid^="ticket-card-"]').length).toBe(5);
+  });
+
+  it('merged-mode-toggle does not appear in non-merged columns (#502)', () => {
+    render(<KanbanBoard />);
+    const nonMergedCols = ['backlog', 'refining', 'spec_ready', 'in_stack', 'pr_open'];
+    for (const colId of nonMergedCols) {
+      const col = screen.getByTestId(`kanban-column-${colId}`);
+      expect(col.querySelector('[data-testid="merged-mode-toggle"]')).toBeNull();
+    }
+  });
+
+  it('sort is deterministic for equal updated_at, tie-breaking by ticket_id ascending (#502)', () => {
+    useAppStore.setState({
+      boardTickets: Array.from({ length: 12 }, (_, i) => ({
+        ticket_id: `t${String(i + 1).padStart(2, '0')}`,
+        project_dir: '/proj',
+        column: 'merged' as const,
+        title: `Ticket ${i + 1}`,
+        updated_at: '2023-06-01',
+      })),
+    });
+    render(<KanbanBoard />);
+    const mergedCol = screen.getByTestId('kanban-column-merged');
+    expect(mergedCol.querySelectorAll('[data-testid^="ticket-card-"]').length).toBe(10);
+    // Tie-break is ticket_id ascending: t01–t10 render, t11 and t12 do not
+    for (let i = 1; i <= 10; i++) {
+      expect(screen.getByTestId(`ticket-card-t${String(i).padStart(2, '0')}`)).toBeDefined();
+    }
+    expect(screen.queryByTestId('ticket-card-t11')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-t12')).toBeNull();
+  });
+
   describe('backlog filter', () => {
     const backlogTickets = [
       { ticket_id: '501', project_dir: '/proj', column: 'backlog' as const, title: 'Add filter feature', updated_at: '' },

@@ -21,7 +21,10 @@ const COLUMNS: { id: KanbanColumn; label: string; colorClass: string }[] = [
   { id: 'merged', label: 'Merged', colorClass: 'text-sandstorm-state-merged' },
 ];
 
+const RECENT_MERGED_LIMIT = 10;
+
 type BoardTab = 'active' | 'history';
+type MergedMode = 'recent' | 'all';
 
 export function KanbanBoard() {
   const {
@@ -37,6 +40,7 @@ export function KanbanBoard() {
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<BoardTab>('active');
+  const [mergedMode, setMergedMode] = useState<MergedMode>('recent');
   const [backlogQuery, setBacklogQuery] = useState('');
   const [debouncedBacklogQuery, setDebouncedBacklogQuery] = useState('');
 
@@ -150,11 +154,22 @@ export function KanbanBoard() {
             data-testid="kanban-columns"
           >
             {COLUMNS.map((col) => {
-              const allCards = ticketsByColumn(col.id);
-              const cards = col.id === 'backlog'
-                ? allCards.filter((t) => matchesTicketQuery(t, debouncedBacklogQuery))
-                : allCards;
-              const activeQuery = col.id === 'backlog'
+              const isMerged = col.id === 'merged';
+              const isBacklog = col.id === 'backlog';
+              const sortedCards = isMerged
+                ? ticketsByColumn(col.id).slice().sort((a, b) => {
+                    const dateCmp = b.updated_at.localeCompare(a.updated_at);
+                    return dateCmp !== 0 ? dateCmp : a.ticket_id.localeCompare(b.ticket_id);
+                  })
+                : ticketsByColumn(col.id);
+              const filteredCards = isBacklog
+                ? sortedCards.filter((t) => matchesTicketQuery(t, debouncedBacklogQuery))
+                : sortedCards;
+              const totalCount = filteredCards.length;
+              const cards = isMerged && mergedMode === 'recent'
+                ? filteredCards.slice(0, RECENT_MERGED_LIMIT)
+                : filteredCards;
+              const activeQuery = isBacklog
                 ? debouncedBacklogQuery.trim().replace(/^#/, '').trim()
                 : '';
               return (
@@ -169,9 +184,40 @@ export function KanbanBoard() {
                     <span className={`text-xs font-semibold uppercase tracking-wide ${col.colorClass}`}>
                       {col.label}
                     </span>
-                    {cards.length > 0 && (
-                      <span className="text-xs text-sandstorm-muted font-mono" data-testid={col.id === 'backlog' ? 'backlog-count-badge' : undefined}>{cards.length}</span>
-                    )}
+                    <div className="flex items-center gap-1.5">
+                      {isMerged && (
+                        <div
+                          className="flex items-center rounded overflow-hidden border border-sandstorm-border"
+                          data-testid="merged-mode-toggle"
+                        >
+                          <button
+                            onClick={() => setMergedMode('recent')}
+                            className={`text-xs px-1.5 py-0.5 transition-colors ${
+                              mergedMode === 'recent'
+                                ? 'bg-sandstorm-surface text-sandstorm-text'
+                                : 'text-sandstorm-muted hover:text-sandstorm-text'
+                            }`}
+                            data-testid="merged-mode-recent"
+                          >
+                            Recent
+                          </button>
+                          <button
+                            onClick={() => setMergedMode('all')}
+                            className={`text-xs px-1.5 py-0.5 border-l border-sandstorm-border transition-colors ${
+                              mergedMode === 'all'
+                                ? 'bg-sandstorm-surface text-sandstorm-text'
+                                : 'text-sandstorm-muted hover:text-sandstorm-text'
+                            }`}
+                            data-testid="merged-mode-all"
+                          >
+                            All
+                          </button>
+                        </div>
+                      )}
+                      {totalCount > 0 && (
+                        <span className="text-xs text-sandstorm-muted font-mono" data-testid={isBacklog ? 'backlog-count-badge' : undefined}>{totalCount}</span>
+                      )}
+                    </div>
                   </div>
 
                   {/* Backlog search input */}
