@@ -105,7 +105,7 @@ export function ModelSettingsModal() {
   type TestConnState = 'idle' | 'testing' | 'success-with-count' | 'auth-fail' | 'jql-empty';
   interface TestConnResult {
     auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
-    jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+    jql: { ok: true; count: number; hasMore: boolean } | { ok: false; status?: number; message: string } | null;
   }
   const [testConnState, setTestConnState] = useState<TestConnState>('idle');
   const [testConnResult, setTestConnResult] = useState<TestConnResult | null>(null);
@@ -574,7 +574,7 @@ export function ModelSettingsModal() {
                             <p className="text-[11px] text-sandstorm-muted" data-testid="jira-test-jql-ok">
                               {testConnResult.jql.count === 0
                                 ? '⚠ JQL returned 0 tickets — filter may be excluding everything'
-                                : `✓ JQL returned ${testConnResult.jql.count} ticket${testConnResult.jql.count === 1 ? '' : 's'}`}
+                                : `✓ JQL returned ${testConnResult.jql.hasMore ? '100+' : testConnResult.jql.count} ticket${testConnResult.jql.hasMore || testConnResult.jql.count !== 1 ? 's' : ''}`}
                             </p>
                           ) : (
                             <p className="text-[11px] text-red-400" data-testid="jira-test-jql-fail">

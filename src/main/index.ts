@@ -303,6 +303,7 @@ async function initializeApp(): Promise<void> {
             const deps = buildRefineToCommentsDeps(
               (ticketId, projectDir) => runSpecCheck(ticketId, projectDir, specDeps),
               (ticketId, projectDir, userAnswers) => runSpecRefine(ticketId, projectDir, userAnswers, specDeps),
+              (projectDir) => registry.getProjectTicketConfig(projectDir),
             );
             const label = schedule.action.ticketLabel ?? 'needs-spec';
             const result = await runRefineToComments(project.directory, label, deps);

@@ -219,7 +219,7 @@ describe('ModelSettingsModal', () => {
         });
 
         // Resolve to avoid dangling promise
-        resolve!({ auth: { ok: true, displayName: 'X' }, jql: { ok: true, count: 1 } });
+        resolve!({ auth: { ok: true, displayName: 'X' }, jql: { ok: true, count: 1, hasMore: false } });
       });
 
       it('button is disabled when required creds are empty', () => {
@@ -231,7 +231,7 @@ describe('ModelSettingsModal', () => {
       it('shows success-with-count state after successful connection', async () => {
         api.tickets.testJiraConnection.mockResolvedValueOnce({
           auth: { ok: true, displayName: 'Alice Smith' },
-          jql: { ok: true, count: 5 },
+          jql: { ok: true, count: 5, hasMore: false },
         });
         fireEvent.click(screen.getByTestId('jira-test-connection'));
         await waitFor(() => {
@@ -258,7 +258,7 @@ describe('ModelSettingsModal', () => {
       it('shows jql-empty hint when auth passes but JQL returns 0', async () => {
         api.tickets.testJiraConnection.mockResolvedValueOnce({
           auth: { ok: true, displayName: 'Bob' },
-          jql: { ok: true, count: 0 },
+          jql: { ok: true, count: 0, hasMore: false },
         });
         fireEvent.click(screen.getByTestId('jira-test-connection'));
         await waitFor(() => {
@@ -277,6 +277,18 @@ describe('ModelSettingsModal', () => {
           expect(screen.getByTestId('jira-test-auth-ok')).toBeDefined();
           expect(screen.getByTestId('jira-test-jql-fail')).toBeDefined();
         });
+      });
+
+      it('shows "100+" when hasMore is true', async () => {
+        api.tickets.testJiraConnection.mockResolvedValueOnce({
+          auth: { ok: true, displayName: 'Dave' },
+          jql: { ok: true, count: 100, hasMore: true },
+        });
+        fireEvent.click(screen.getByTestId('jira-test-connection'));
+        await waitFor(() => {
+          expect(screen.getByTestId('jira-test-jql-ok')).toBeDefined();
+        });
+        expect(screen.getByTestId('jira-test-jql-ok').textContent).toContain('100+');
       });
     });
   });
