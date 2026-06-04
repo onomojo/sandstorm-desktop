@@ -14,6 +14,7 @@ import { ModelSettingsModal } from './components/ModelSettings';
 import { StaleWorkspaces } from './components/StaleWorkspaces';
 import { LeftRail } from './components/LeftRail';
 import { KanbanBoard } from './components/KanbanBoard';
+import { TelemetryView } from './components/TelemetryView';
 
 /** Polling interval when Docker is connected (ms) */
 const STACK_POLL_INTERVAL = 3000;
@@ -27,6 +28,7 @@ const ACTIVITY_REPORT_THROTTLE = 10_000;
 export default function App() {
   const {
     selectedStackId,
+    mainView,
     showNewStackDialog,
     showRefineTicketDialog,
     showCreateTicketDialog,
@@ -251,6 +253,8 @@ export default function App() {
               stackId={selectedStackId}
               onBack={() => selectStack(null)}
             />
+          ) : mainView === 'telemetry' ? (
+            <TelemetryView />
           ) : (
             <KanbanBoard />
           )}
