@@ -259,6 +259,11 @@ describe('compose-generator', () => {
       expect(yaml).toContain('  claude:');
       expect(yaml).toContain('    image: sandstorm-test-project-claude');
       expect(yaml).toContain('      - ${SANDSTORM_WORKSPACE}:/app');
+      // Usage transcript mount
+      expect(yaml).toContain('      - ${SANDSTORM_USAGE_DIR}/${SANDSTORM_STACK_ID}:/home/claude/.claude/projects');
+      // Must NOT mount the entire .claude dir — only the projects subpath
+      expect(yaml).not.toContain(':/home/claude/.claude\n');
+      expect(yaml).not.toContain(':/home/claude/.claude ');
     });
 
     it('includes network overrides when named networks exist', () => {

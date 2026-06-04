@@ -215,9 +215,15 @@ run_compose() {
   local context_dir="$PROJECT_ROOT/.sandstorm/context"
   mkdir -p "$context_dir"
 
+  # Ensure per-stack usage dir exists so the transcript mount can bind
+  local usage_dir="$PROJECT_ROOT/.sandstorm/usage"
+  mkdir -p "$usage_dir/$STACK_ID"
+  chmod 777 "$usage_dir/$STACK_ID"
+
   SANDSTORM_DIR="$SANDSTORM_DIR" \
   SANDSTORM_WORKSPACE="$WORKSPACE" \
   SANDSTORM_CONTEXT="$context_dir" \
+  SANDSTORM_USAGE_DIR="$usage_dir" \
   SANDSTORM_PROJECT="$COMPOSE_PROJECT" \
   SANDSTORM_STACK_ID="$STACK_ID" \
   GIT_USER_NAME="$GIT_AUTHOR_NAME" \

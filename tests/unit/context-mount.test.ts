@@ -45,12 +45,18 @@ describe('context mount in generated docker-compose.yml', () => {
       }
     }
 
-    // Should have 3 volume entries: workspace, context, docker socket
+    // Should have 4 volume entries: workspace, context, usage dir, docker socket
     const volumeEntries = volumeLines.filter((l) => l.startsWith('- '));
-    expect(volumeEntries).toHaveLength(3);
+    expect(volumeEntries).toHaveLength(4);
     expect(volumeEntries[0]).toContain('SANDSTORM_WORKSPACE');
     expect(volumeEntries[1]).toContain('SANDSTORM_CONTEXT');
-    expect(volumeEntries[2]).toContain('docker.sock');
+    expect(volumeEntries[2]).toContain('SANDSTORM_USAGE_DIR');
+    expect(volumeEntries[3]).toContain('docker.sock');
+
+    // Full path assertion: usage dir mounts only into /home/claude/.claude/projects
+    expect(initScript).toContain('\\${SANDSTORM_USAGE_DIR}/\\${SANDSTORM_STACK_ID}:/home/claude/.claude/projects');
+    // Negative assertion: no volume mounts over the bare .claude directory
+    expect(initScript).not.toMatch(/\/home\/claude\/\.claude(?!\/projects)/);
   });
 });
 

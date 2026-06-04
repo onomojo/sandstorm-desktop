@@ -3,13 +3,14 @@ import fs from 'fs';
 import path from 'path';
 import os from 'os';
 
-import { parseJSONLFile, findJSONLFiles, parseTranscriptRoot } from '../../../src/main/telemetry/parser';
+import { parseJSONLFile, findJSONLFiles, parseTranscriptRoot, parseTranscriptRoots } from '../../../src/main/telemetry/parser';
 import { computeCost } from '../../../src/main/telemetry/pricing';
 import {
   aggregateSummary,
   aggregateDaily,
   aggregateByModel,
   aggregateSessions,
+  aggregateByTicket,
 } from '../../../src/main/telemetry/aggregator';
 import { createUsageEngine } from '../../../src/main/telemetry/usage-engine';
 
@@ -363,7 +364,7 @@ describe('aggregateSessions', () => {
 
 describe('createUsageEngine', () => {
   it('returns zeroed summary when root directory does not exist', () => {
-    const engine = createUsageEngine('/nonexistent/path');
+    const engine = createUsageEngine(['/nonexistent/path']);
     const summary = engine.getSummary({ since: '2024-01-01', until: '2024-12-31' });
     expect(summary.tokens.total).toBe(0);
     expect(summary.sessions).toBe(0);
@@ -372,7 +373,7 @@ describe('createUsageEngine', () => {
   });
 
   it('returns empty arrays for daily/byModel/session when root does not exist', () => {
-    const engine = createUsageEngine('/nonexistent/path');
+    const engine = createUsageEngine(['/nonexistent/path']);
     const range = { since: '2024-01-01', until: '2024-12-31' };
     expect(engine.getDaily(range)).toHaveLength(0);
     expect(engine.getByModel(range)).toHaveLength(0);
@@ -380,10 +381,273 @@ describe('createUsageEngine', () => {
   });
 
   it('reads from fixture directory end-to-end', () => {
-    const engine = createUsageEngine(FIXTURES);
+    const engine = createUsageEngine([FIXTURES]);
     const range = { since: '2024-01-01', until: '2024-12-31' };
     const summary = engine.getSummary(range);
     expect(summary.sessions).toBeGreaterThan(0);
     expect(summary.tokens.input).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// parseTranscriptRoots — multi-root union + dedup
+// ---------------------------------------------------------------------------
+
+describe('parseTranscriptRoots', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telemetry-roots-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  it('merges entries from two disjoint roots', () => {
+    const rootA = path.join(tmpDir, 'rootA');
+    const rootB = path.join(tmpDir, 'rootB');
+    fs.mkdirSync(rootA);
+    fs.mkdirSync(rootB);
+
+    const entryA = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant', model: 'claude-sonnet-4-5',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+      timestamp: '2024-03-01T10:00:00.000Z',
+      sessionId: 'sess-ra',
+    });
+    const entryB = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant', model: 'claude-sonnet-4-5',
+        usage: { input_tokens: 20, output_tokens: 8 },
+      },
+      timestamp: '2024-03-01T11:00:00.000Z',
+      sessionId: 'sess-rb',
+    });
+    fs.writeFileSync(path.join(rootA, 'a.jsonl'), entryA + '\n');
+    fs.writeFileSync(path.join(rootB, 'b.jsonl'), entryB + '\n');
+
+    const { entries } = parseTranscriptRoots([rootA, rootB]);
+    const sids = entries.map((e) => e.sessionId);
+    expect(sids).toContain('sess-ra');
+    expect(sids).toContain('sess-rb');
+    expect(entries).toHaveLength(2);
+  });
+
+  it('deduplicates at file-path level — a file under two roots is parsed once', () => {
+    const rootA = path.join(tmpDir, 'rootA');
+    fs.mkdirSync(rootA);
+
+    const entry = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant', model: 'claude-sonnet-4-5',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+      timestamp: '2024-03-01T10:00:00.000Z',
+      sessionId: 'sess-dup',
+    });
+    fs.writeFileSync(path.join(rootA, 'dup.jsonl'), entry + '\n');
+
+    // Pass the same root twice — should not parse the file twice
+    const { entries } = parseTranscriptRoots([rootA, rootA]);
+    const dupEntries = entries.filter((e) => e.sessionId === 'sess-dup');
+    expect(dupEntries).toHaveLength(1);
+  });
+
+  it('does NOT collapse entries sharing a sessionId across roots', () => {
+    const rootA = path.join(tmpDir, 'rootA');
+    const rootB = path.join(tmpDir, 'rootB');
+    fs.mkdirSync(rootA);
+    fs.mkdirSync(rootB);
+
+    const makeEntry = (ts: string) => JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant', model: 'claude-sonnet-4-5',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+      timestamp: ts,
+      sessionId: 'shared-session',
+    });
+    fs.writeFileSync(path.join(rootA, 'fa.jsonl'), makeEntry('2024-03-01T10:00:00.000Z') + '\n');
+    fs.writeFileSync(path.join(rootB, 'fb.jsonl'), makeEntry('2024-03-01T11:00:00.000Z') + '\n');
+
+    const { entries } = parseTranscriptRoots([rootA, rootB]);
+    const shared = entries.filter((e) => e.sessionId === 'shared-session');
+    // Both entries should be present — dedup is at file-path level, not sessionId level
+    expect(shared).toHaveLength(2);
+  });
+
+  it('sets stackId=null for host root (path ending with /.claude/projects)', () => {
+    const hostRoot = path.join(tmpDir, '.claude', 'projects');
+    fs.mkdirSync(hostRoot, { recursive: true });
+    const entry = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant', model: 'claude-sonnet-4-5',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+      timestamp: '2024-03-01T10:00:00.000Z',
+      sessionId: 'sess-host',
+    });
+    fs.writeFileSync(path.join(hostRoot, 'host.jsonl'), entry + '\n');
+
+    const { entries } = parseTranscriptRoots([hostRoot]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].stackId).toBeNull();
+  });
+
+  it('sets stackId=basename for non-host roots', () => {
+    const stackRoot = path.join(tmpDir, 'my-stack-123');
+    fs.mkdirSync(stackRoot);
+    const entry = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant', model: 'claude-sonnet-4-5',
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+      timestamp: '2024-03-01T10:00:00.000Z',
+      sessionId: 'sess-stack',
+    });
+    fs.writeFileSync(path.join(stackRoot, 'stack.jsonl'), entry + '\n');
+
+    const { entries } = parseTranscriptRoots([stackRoot]);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].stackId).toBe('my-stack-123');
+  });
+
+  it('directory-only filter: manifest JSON files next to stack dirs are not treated as roots', () => {
+    // Simulate usage/ dir containing: <stackId>/ dir + <stackId>.manifest.json file
+    const usageDir = path.join(tmpDir, 'usage');
+    const stackDir = path.join(usageDir, 'stack-abc');
+    fs.mkdirSync(stackDir, { recursive: true });
+    fs.writeFileSync(path.join(usageDir, 'stack-abc.manifest.json'), JSON.stringify({ stackId: 'stack-abc' }));
+
+    const entry = JSON.stringify({
+      type: 'assistant',
+      message: {
+        role: 'assistant', model: 'claude-sonnet-4-5',
+        usage: { input_tokens: 5, output_tokens: 2 },
+      },
+      timestamp: '2024-03-01T10:00:00.000Z',
+      sessionId: 'sess-abc',
+    });
+    fs.writeFileSync(path.join(stackDir, 'abc.jsonl'), entry + '\n');
+
+    // Filter directories only from usageDir — manifest file must be excluded
+    const stackRoots = fs.readdirSync(usageDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory())
+      .map((e) => path.join(usageDir, e.name));
+
+    expect(stackRoots).toHaveLength(1);
+    expect(stackRoots[0]).toBe(stackDir);
+
+    const { entries } = parseTranscriptRoots(stackRoots);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].stackId).toBe('stack-abc'); // basename = stackId, not 'stack-abc.manifest.json'
+  });
+});
+
+// ---------------------------------------------------------------------------
+// aggregateByTicket — manifest contract
+// ---------------------------------------------------------------------------
+
+describe('aggregateByTicket', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telemetry-byticket-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeEntry(sessionId: string, stackId: string | null, input = 100, output = 50) {
+    return { sessionId, model: 'claude-sonnet-4-5', timestamp: '2024-03-01T10:00:00.000Z', input, output, cacheCreate: 0, cacheRead: 0, stackId };
+  }
+
+  it('resolves stackId to ticket via manifest', () => {
+    const stackRoot = path.join(tmpDir, 'stack-1');
+    fs.mkdirSync(stackRoot);
+    fs.writeFileSync(stackRoot + '.manifest.json', JSON.stringify({
+      stackId: 'stack-1', ticket: 'PROJ-42', project: 'myproj', createdAt: '2024-03-01T00:00:00.000Z',
+    }));
+
+    const entries = [makeEntry('sess-a', 'stack-1')];
+    const result = aggregateByTicket(entries, [stackRoot]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].ticket).toBe('PROJ-42');
+    expect(result[0].stackId).toBe('stack-1');
+    expect(result[0].sessions).toBe(1);
+  });
+
+  it('host-root entries (stackId=null) fall into ticket=null bucket', () => {
+    const entries = [makeEntry('sess-host', null)];
+    const result = aggregateByTicket(entries, []);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].ticket).toBeNull();
+    expect(result[0].stackId).toBeNull();
+  });
+
+  it('unmapped stack (no manifest) falls into ticket=null bucket', () => {
+    const stackRoot = path.join(tmpDir, 'no-manifest-stack');
+    fs.mkdirSync(stackRoot);
+    // No manifest file written
+
+    const entries = [makeEntry('sess-x', 'no-manifest-stack')];
+    const result = aggregateByTicket(entries, [stackRoot]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].ticket).toBeNull();
+  });
+
+  it('malformed manifest degrades to ticket=null without throwing', () => {
+    const stackRoot = path.join(tmpDir, 'bad-manifest-stack');
+    fs.mkdirSync(stackRoot);
+    fs.writeFileSync(stackRoot + '.manifest.json', 'not valid json {{{');
+
+    const entries = [makeEntry('sess-y', 'bad-manifest-stack')];
+    expect(() => aggregateByTicket(entries, [stackRoot])).not.toThrow();
+    const result = aggregateByTicket(entries, [stackRoot]);
+    expect(result[0].ticket).toBeNull();
+  });
+
+  it('manifest with ticket=null maps to null bucket', () => {
+    const stackRoot = path.join(tmpDir, 'no-ticket-stack');
+    fs.mkdirSync(stackRoot);
+    fs.writeFileSync(stackRoot + '.manifest.json', JSON.stringify({
+      stackId: 'no-ticket-stack', ticket: null, project: 'myproj', createdAt: '2024-03-01T00:00:00.000Z',
+    }));
+
+    const entries = [makeEntry('sess-z', 'no-ticket-stack')];
+    const result = aggregateByTicket(entries, [stackRoot]);
+    expect(result[0].ticket).toBeNull();
+  });
+
+  it('accumulates tokens and cost per bucket', () => {
+    const stackRoot = path.join(tmpDir, 'cost-stack');
+    fs.mkdirSync(stackRoot);
+    fs.writeFileSync(stackRoot + '.manifest.json', JSON.stringify({
+      stackId: 'cost-stack', ticket: 'T-1', project: 'p', createdAt: '2024-01-01T00:00:00.000Z',
+    }));
+
+    const entries = [
+      makeEntry('s1', 'cost-stack', 100, 50),
+      makeEntry('s2', 'cost-stack', 200, 100),
+    ];
+    const result = aggregateByTicket(entries, [stackRoot]);
+    expect(result).toHaveLength(1);
+    expect(result[0].tokens.input).toBe(300);
+    expect(result[0].tokens.output).toBe(150);
+    expect(result[0].sessions).toBe(2);
+    expect(result[0].cost).toBeGreaterThan(0);
   });
 });

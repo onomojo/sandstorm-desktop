@@ -3,9 +3,11 @@
  * Accepts parsed RawUsageEntry arrays and produces the shapes consumed by IPC handlers.
  */
 
+import fs from 'fs';
+import path from 'path';
 import { computeCost } from './pricing';
 import type { RawUsageEntry } from './parser';
-import type { DateRange, TokenCounts, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry } from './types';
+import type { DateRange, TokenCounts, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, TranscriptByTicketEntry } from './types';
 
 function dateOf(isoTimestamp: string): string {
   return isoTimestamp.slice(0, 10); // YYYY-MM-DD
@@ -218,3 +220,80 @@ export function aggregateSessions(entries: RawUsageEntry[], range: DateRange): S
     })
     .sort((a, b) => b.start.localeCompare(a.start));
 }
+
+interface StackManifest {
+  stackId: string;
+  ticket: string | null;
+  project: string;
+  createdAt: string;
+}
+
+function readManifest(manifestPath: string): StackManifest | null {
+  try {
+    const raw = fs.readFileSync(manifestPath, 'utf-8');
+    const parsed = JSON.parse(raw);
+    if (typeof parsed !== 'object' || parsed === null) return null;
+    if (typeof parsed.stackId !== 'string') return null;
+    return parsed as StackManifest;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Aggregate entries by ticket, reading stack manifests to resolve stackId → ticket.
+ * stackRoots are the stack-specific dirs (e.g. <project>/.sandstorm/usage/<stackId>).
+ * The paired manifest is at stackRoot + '.manifest.json'.
+ * Entries with no mapped ticket (host-root entries or missing manifest) fall into ticket=null.
+ */
+export function aggregateByTicket(
+  entries: RawUsageEntry[],
+  stackRoots: string[]
+): TranscriptByTicketEntry[] {
+  // Build stackId → ticket map from manifests
+  const stackToTicket = new Map<string, string | null>();
+  for (const root of stackRoots) {
+    const manifestPath = root + '.manifest.json';
+    const manifest = readManifest(manifestPath);
+    if (manifest) {
+      stackToTicket.set(manifest.stackId, manifest.ticket ?? null);
+    }
+  }
+
+  // Group entries by (ticket, stackId)
+  const byKey = new Map<string, {
+    ticket: string | null;
+    stackId: string | null;
+    tokens: TokenCounts;
+    sessions: Set<string>;
+    cost: number;
+  }>();
+
+  for (const entry of entries) {
+    const ticket = entry.stackId != null ? (stackToTicket.get(entry.stackId) ?? null) : null;
+    const key = `${ticket ?? '__null__'}::${entry.stackId ?? '__null__'}`;
+
+    if (!byKey.has(key)) {
+      byKey.set(key, { ticket, stackId: entry.stackId, tokens: zeroTokens(), sessions: new Set(), cost: 0 });
+    }
+    const bucket = byKey.get(key)!;
+    addTokens(bucket.tokens, entry);
+    bucket.sessions.add(entry.sessionId);
+    const { cost } = computeCost(entry.model, {
+      input: entry.input,
+      output: entry.output,
+      cacheCreate: entry.cacheCreate,
+      cacheRead: entry.cacheRead,
+    });
+    bucket.cost += cost;
+  }
+
+  return [...byKey.values()].map((data) => ({
+    ticket: data.ticket,
+    stackId: data.stackId,
+    tokens: data.tokens,
+    cost: data.cost,
+    sessions: data.sessions.size,
+  }));
+}
+

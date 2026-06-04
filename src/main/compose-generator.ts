@@ -255,6 +255,7 @@ export function generateComposeYaml(analysis: ComposeAnalysis): string {
   lines.push('    volumes:');
   lines.push('      - ${SANDSTORM_WORKSPACE}:/app');
   lines.push('      - ${SANDSTORM_CONTEXT}:/sandstorm-context:ro');
+  lines.push('      - ${SANDSTORM_USAGE_DIR}/${SANDSTORM_STACK_ID}:/home/claude/.claude/projects');
   lines.push('      - /var/run/docker.sock:/var/run/docker.sock');
   lines.push('    healthcheck:');
   lines.push('      test: ["CMD", "test", "-f", "/tmp/.sandstorm-ready"]');
