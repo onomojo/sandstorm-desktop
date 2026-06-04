@@ -12,19 +12,71 @@
  * Cost figures are "estimated (list price)" — not actual billed amounts.
  */
 
-import { parseTranscriptRoots } from './parser';
+import fs from 'fs';
+import { parseTranscriptRoots, findJSONLFiles, type ParseResult } from './parser';
 import { aggregateSummary, aggregateDaily, aggregateByModel, aggregateSessions, aggregateByTicket } from './aggregator';
-import type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, TranscriptByTicketEntry } from './types';
+import type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry } from './types';
 
-export type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, TranscriptByTicketEntry };
+export type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry };
 
 export interface UsageEngine {
   getSummary(range: DateRange): TelemetrySummary;
   getDaily(range: DateRange): DailyEntry[];
   getByModel(range: DateRange): ByModelEntry[];
   getSessions(range: DateRange): SessionEntry[];
-  getByTicket(): TranscriptByTicketEntry[];
+  getByTicket(): ByTicketEntry[];
 }
+
+// ---------------------------------------------------------------------------
+// Module-scoped parse cache
+//
+// Shared across all engine instances so multiple IPC calls in the same page
+// load hit the cache rather than re-parsing all JSONL files.
+// Cache key = sorted root list + per-file (mtime, size) for each .jsonl file.
+// A file addition, removal, or modification triggers a miss and full re-parse.
+// ---------------------------------------------------------------------------
+
+interface ParseCache {
+  key: string;
+  result: ParseResult;
+}
+
+let _parseCache: ParseCache | null = null;
+
+export function clearUsageCache(): void {
+  _parseCache = null;
+}
+
+function buildCacheKey(roots: string[]): string {
+  const sortedRoots = [...roots].sort();
+  const parts: string[] = [...sortedRoots];
+  for (const root of sortedRoots) {
+    const files = findJSONLFiles(root).sort();
+    for (const file of files) {
+      try {
+        const stat = fs.statSync(file);
+        parts.push(`${file}:${stat.mtimeMs}:${stat.size}`);
+      } catch {
+        parts.push(`${file}:missing`);
+      }
+    }
+  }
+  return parts.join('\0');
+}
+
+function loadCached(roots: string[]): ParseResult {
+  const key = buildCacheKey(roots);
+  if (_parseCache !== null && _parseCache.key === key) {
+    return _parseCache.result;
+  }
+  const result = parseTranscriptRoots(roots);
+  _parseCache = { key, result };
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// Engine factory
+// ---------------------------------------------------------------------------
 
 /**
  * Create a usage engine that reads transcripts from the given root directories.
@@ -37,35 +89,30 @@ export interface UsageEngine {
 export function createUsageEngine(roots: string[]): UsageEngine {
   const stackRoots = roots.filter((r) => !r.endsWith('/.claude/projects'));
 
-  function load() {
-    return parseTranscriptRoots(roots);
-  }
-
   return {
     getSummary(range: DateRange): TelemetrySummary {
-      const { entries, skippedLines } = load();
+      const { entries, skippedLines } = loadCached(roots);
       return aggregateSummary(entries, range, skippedLines);
     },
 
     getDaily(range: DateRange): DailyEntry[] {
-      const { entries } = load();
+      const { entries } = loadCached(roots);
       return aggregateDaily(entries, range);
     },
 
     getByModel(range: DateRange): ByModelEntry[] {
-      const { entries } = load();
+      const { entries } = loadCached(roots);
       return aggregateByModel(entries, range);
     },
 
     getSessions(range: DateRange): SessionEntry[] {
-      const { entries } = load();
+      const { entries } = loadCached(roots);
       return aggregateSessions(entries, range);
     },
 
-    getByTicket(): TranscriptByTicketEntry[] {
-      const { entries } = load();
+    getByTicket(): ByTicketEntry[] {
+      const { entries } = loadCached(roots);
       return aggregateByTicket(entries, stackRoots);
     },
   };
 }
-

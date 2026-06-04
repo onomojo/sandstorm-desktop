@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -12,7 +12,8 @@ import {
   aggregateSessions,
   aggregateByTicket,
 } from '../../../src/main/telemetry/aggregator';
-import { createUsageEngine } from '../../../src/main/telemetry/usage-engine';
+import { createUsageEngine, clearUsageCache } from '../../../src/main/telemetry/usage-engine';
+import { ORCHESTRATOR_TICKET_ID } from '../../../src/main/telemetry/types';
 
 const FIXTURES = path.resolve(__dirname, 'fixtures');
 
@@ -583,21 +584,18 @@ describe('aggregateByTicket', () => {
     const result = aggregateByTicket(entries, [stackRoot]);
 
     expect(result).toHaveLength(1);
-    expect(result[0].ticket).toBe('PROJ-42');
-    expect(result[0].stackId).toBe('stack-1');
-    expect(result[0].sessions).toBe(1);
+    expect(result[0].ticketId).toBe('PROJ-42');
   });
 
-  it('host-root entries (stackId=null) fall into ticket=null bucket', () => {
+  it('host-root entries (stackId=null) roll up under orchestrator sentinel', () => {
     const entries = [makeEntry('sess-host', null)];
     const result = aggregateByTicket(entries, []);
 
     expect(result).toHaveLength(1);
-    expect(result[0].ticket).toBeNull();
-    expect(result[0].stackId).toBeNull();
+    expect(result[0].ticketId).toBe(ORCHESTRATOR_TICKET_ID);
   });
 
-  it('unmapped stack (no manifest) falls into ticket=null bucket', () => {
+  it('unmapped stack (no manifest) rolls up under orchestrator sentinel', () => {
     const stackRoot = path.join(tmpDir, 'no-manifest-stack');
     fs.mkdirSync(stackRoot);
     // No manifest file written
@@ -606,10 +604,10 @@ describe('aggregateByTicket', () => {
     const result = aggregateByTicket(entries, [stackRoot]);
 
     expect(result).toHaveLength(1);
-    expect(result[0].ticket).toBeNull();
+    expect(result[0].ticketId).toBe(ORCHESTRATOR_TICKET_ID);
   });
 
-  it('malformed manifest degrades to ticket=null without throwing', () => {
+  it('malformed manifest degrades to orchestrator bucket without throwing', () => {
     const stackRoot = path.join(tmpDir, 'bad-manifest-stack');
     fs.mkdirSync(stackRoot);
     fs.writeFileSync(stackRoot + '.manifest.json', 'not valid json {{{');
@@ -617,10 +615,10 @@ describe('aggregateByTicket', () => {
     const entries = [makeEntry('sess-y', 'bad-manifest-stack')];
     expect(() => aggregateByTicket(entries, [stackRoot])).not.toThrow();
     const result = aggregateByTicket(entries, [stackRoot]);
-    expect(result[0].ticket).toBeNull();
+    expect(result[0].ticketId).toBe(ORCHESTRATOR_TICKET_ID);
   });
 
-  it('manifest with ticket=null maps to null bucket', () => {
+  it('manifest with ticket=null rolls up under orchestrator sentinel', () => {
     const stackRoot = path.join(tmpDir, 'no-ticket-stack');
     fs.mkdirSync(stackRoot);
     fs.writeFileSync(stackRoot + '.manifest.json', JSON.stringify({
@@ -629,7 +627,7 @@ describe('aggregateByTicket', () => {
 
     const entries = [makeEntry('sess-z', 'no-ticket-stack')];
     const result = aggregateByTicket(entries, [stackRoot]);
-    expect(result[0].ticket).toBeNull();
+    expect(result[0].ticketId).toBe(ORCHESTRATOR_TICKET_ID);
   });
 
   it('accumulates tokens and cost per bucket', () => {
@@ -645,9 +643,368 @@ describe('aggregateByTicket', () => {
     ];
     const result = aggregateByTicket(entries, [stackRoot]);
     expect(result).toHaveLength(1);
+    expect(result[0].ticketId).toBe('T-1');
     expect(result[0].tokens.input).toBe(300);
     expect(result[0].tokens.output).toBe(150);
-    expect(result[0].sessions).toBe(2);
     expect(result[0].cost).toBeGreaterThan(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// aggregateByTicket — new canonical shape (ticket 499)
+// ---------------------------------------------------------------------------
+
+describe('aggregateByTicket — canonical shape', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telemetry-canonical-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  });
+
+  function makeEntry(sessionId: string, stackId: string | null, model = 'claude-sonnet-4-5', input = 100, output = 50, cacheRead = 0) {
+    return { sessionId, model, timestamp: '2024-03-01T10:00:00.000Z', input, output, cacheCreate: 0, cacheRead, stackId };
+  }
+
+  function makeManifest(dir: string, stackId: string, ticket: string | null) {
+    fs.writeFileSync(dir + '.manifest.json', JSON.stringify({
+      stackId, ticket, project: 'p', createdAt: '2024-01-01T00:00:00.000Z',
+    }));
+  }
+
+  it('multi-stack-per-ticket → one row with summed tokens and cost', () => {
+    const stackA = path.join(tmpDir, 'stack-a');
+    const stackB = path.join(tmpDir, 'stack-b');
+    fs.mkdirSync(stackA);
+    fs.mkdirSync(stackB);
+    makeManifest(stackA, 'stack-a', 'TICKET-1');
+    makeManifest(stackB, 'stack-b', 'TICKET-1');
+
+    const entries = [
+      makeEntry('s1', 'stack-a', 'claude-sonnet-4-5', 100, 50),
+      makeEntry('s2', 'stack-b', 'claude-sonnet-4-5', 200, 80),
+    ];
+    const result = aggregateByTicket(entries, [stackA, stackB]);
+
+    expect(result).toHaveLength(1);
+    expect(result[0].ticketId).toBe('TICKET-1');
+    expect(result[0].tokens.input).toBe(300);
+    expect(result[0].tokens.output).toBe(130);
+    expect(result[0].cost).toBeGreaterThan(0);
+  });
+
+  it('emits the model with highest output tokens as primary model', () => {
+    const stackRoot = path.join(tmpDir, 'stack-model');
+    fs.mkdirSync(stackRoot);
+    makeManifest(stackRoot, 'stack-model', 'TICKET-2');
+
+    const entries = [
+      makeEntry('s1', 'stack-model', 'claude-sonnet-4-5', 100, 30),   // 30 output
+      makeEntry('s2', 'stack-model', 'claude-opus-4-5', 100, 200),     // 200 output — winner
+    ];
+    const result = aggregateByTicket(entries, [stackRoot]);
+    expect(result[0].model).toBe('claude-opus-4-5');
+  });
+
+  it('cacheHit = cacheRead / (input + cacheRead) × 100', () => {
+    const stackRoot = path.join(tmpDir, 'stack-cache');
+    fs.mkdirSync(stackRoot);
+    makeManifest(stackRoot, 'stack-cache', 'TICKET-3');
+
+    // input=100, cacheRead=400 → cacheHit = 400/500 × 100 = 80%
+    const entries = [{ sessionId: 's1', model: 'claude-sonnet-4-5', timestamp: '2024-03-01T10:00:00.000Z', input: 100, output: 50, cacheCreate: 0, cacheRead: 400, stackId: 'stack-cache' }];
+    const result = aggregateByTicket(entries, [stackRoot]);
+    expect(result[0].cacheHit).toBeCloseTo(80, 3);
+  });
+
+  it('cacheHit = 0 when input and cacheRead are both zero', () => {
+    const stackRoot = path.join(tmpDir, 'stack-nocache');
+    fs.mkdirSync(stackRoot);
+    makeManifest(stackRoot, 'stack-nocache', 'TICKET-4');
+
+    const entries = [makeEntry('s1', 'stack-nocache', 'claude-sonnet-4-5', 0, 50, 0)];
+    const result = aggregateByTicket(entries, [stackRoot]);
+    expect(result[0].cacheHit).toBe(0);
+  });
+
+  it('unpriced=true when any entry uses an unknown model', () => {
+    const stackRoot = path.join(tmpDir, 'stack-unpriced');
+    fs.mkdirSync(stackRoot);
+    makeManifest(stackRoot, 'stack-unpriced', 'TICKET-5');
+
+    const entries = [
+      makeEntry('s1', 'stack-unpriced', 'claude-sonnet-4-5', 100, 50),
+      makeEntry('s2', 'stack-unpriced', 'unknown-future-model-xyz', 100, 50),
+    ];
+    const result = aggregateByTicket(entries, [stackRoot]);
+    expect(result[0].unpriced).toBe(true);
+  });
+
+  it('unpriced=false when all entries use priced models', () => {
+    const stackRoot = path.join(tmpDir, 'stack-priced');
+    fs.mkdirSync(stackRoot);
+    makeManifest(stackRoot, 'stack-priced', 'TICKET-6');
+
+    const entries = [makeEntry('s1', 'stack-priced', 'claude-sonnet-4-5', 100, 50)];
+    const result = aggregateByTicket(entries, [stackRoot]);
+    expect(result[0].unpriced).toBe(false);
+  });
+
+  it('orchestrator bucket: host-root entries roll up under __orchestrator__', () => {
+    // stackId=null → no manifest lookup → orchestrator
+    const entries = [makeEntry('s1', null)];
+    const result = aggregateByTicket(entries, []);
+    expect(result).toHaveLength(1);
+    expect(result[0].ticketId).toBe(ORCHESTRATOR_TICKET_ID);
+  });
+
+  it('contract: emitted row has exactly the canonical field set', () => {
+    const stackRoot = path.join(tmpDir, 'stack-contract');
+    fs.mkdirSync(stackRoot);
+    makeManifest(stackRoot, 'stack-contract', 'CONTRACT-1');
+
+    const entries = [makeEntry('s1', 'stack-contract')];
+    const result = aggregateByTicket(entries, [stackRoot]);
+
+    expect(result).toHaveLength(1);
+    const row = result[0];
+    expect(Object.keys(row).sort()).toEqual(
+      ['cacheHit', 'cost', 'lifecycle', 'model', 'ticketId', 'tokens', 'unpriced'].sort()
+    );
+    expect(Object.keys(row.tokens).sort()).toEqual(
+      ['cacheCreate', 'cacheRead', 'input', 'output', 'total'].sort()
+    );
+    expect(row.lifecycle).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// getByTicket — contract test via UsageEngine (implementation-independent)
+// ---------------------------------------------------------------------------
+
+describe('UsageEngine.getByTicket contract', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telemetry-contract-'));
+    clearUsageCache();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearUsageCache();
+  });
+
+  it('getByTicket rows satisfy the canonical field contract', () => {
+    const stackRoot = path.join(tmpDir, 'stack-1');
+    fs.mkdirSync(stackRoot);
+    fs.writeFileSync(stackRoot + '.manifest.json', JSON.stringify({
+      stackId: 'stack-1', ticket: 'T-99', project: 'p', createdAt: '2024-01-01T00:00:00.000Z',
+    }));
+    const entry = JSON.stringify({
+      type: 'assistant',
+      message: { role: 'assistant', model: 'claude-sonnet-4-5', usage: { input_tokens: 100, output_tokens: 50 } },
+      timestamp: '2024-03-01T10:00:00.000Z',
+      sessionId: 'sess-contract',
+    });
+    fs.writeFileSync(path.join(stackRoot, 'usage.jsonl'), entry + '\n');
+
+    const engine = createUsageEngine([stackRoot]);
+    const rows = engine.getByTicket();
+
+    expect(rows.length).toBeGreaterThan(0);
+    for (const row of rows) {
+      expect(Object.keys(row).sort()).toEqual(
+        ['cacheHit', 'cost', 'lifecycle', 'model', 'ticketId', 'tokens', 'unpriced'].sort()
+      );
+      expect(Object.keys(row.tokens).sort()).toEqual(
+        ['cacheCreate', 'cacheRead', 'input', 'output', 'total'].sort()
+      );
+      expect(typeof row.ticketId).toBe('string');
+      expect(row.lifecycle).toBeNull();
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Parse cache
+// ---------------------------------------------------------------------------
+
+describe('parse cache', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telemetry-cache-'));
+    clearUsageCache();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearUsageCache();
+    vi.restoreAllMocks();
+  });
+
+  function writeJsonl(dir: string, filename: string, sessionId: string): string {
+    const filePath = path.join(dir, filename);
+    const entry = JSON.stringify({
+      type: 'assistant',
+      message: { role: 'assistant', model: 'claude-sonnet-4-5', usage: { input_tokens: 10, output_tokens: 5 } },
+      timestamp: '2024-03-01T10:00:00.000Z',
+      sessionId,
+    });
+    fs.writeFileSync(filePath, entry + '\n');
+    return filePath;
+  }
+
+  it('second call with same files does not re-read JSONL files', () => {
+    const stackDir = path.join(tmpDir, 'stack-c');
+    fs.mkdirSync(stackDir);
+    writeJsonl(stackDir, 'usage.jsonl', 'sess-c1');
+
+    const engine = createUsageEngine([stackDir]);
+    engine.getByTicket(); // first call — parses
+
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    engine.getByTicket(); // second call — cache hit
+
+    const jsonlReads = readSpy.mock.calls.filter((c) => String(c[0]).endsWith('.jsonl'));
+    expect(jsonlReads).toHaveLength(0);
+  });
+
+  it('re-parses when a file mtime changes', () => {
+    const stackDir = path.join(tmpDir, 'stack-m');
+    fs.mkdirSync(stackDir);
+    const filePath = writeJsonl(stackDir, 'usage.jsonl', 'sess-m1');
+
+    const engine = createUsageEngine([stackDir]);
+    engine.getByTicket(); // prime cache
+
+    const futureTime = new Date(Date.now() + 10_000);
+    fs.utimesSync(filePath, futureTime, futureTime);
+
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    engine.getByTicket(); // mtime changed — cache miss
+
+    const jsonlReads = readSpy.mock.calls.filter((c) => String(c[0]).endsWith('.jsonl'));
+    expect(jsonlReads.length).toBeGreaterThan(0);
+  });
+
+  it('re-parses when a new JSONL file is added', () => {
+    const stackDir = path.join(tmpDir, 'stack-n');
+    fs.mkdirSync(stackDir);
+    writeJsonl(stackDir, 'usage.jsonl', 'sess-n1');
+
+    const engine = createUsageEngine([stackDir]);
+    engine.getByTicket(); // prime cache
+
+    // Add a new file — cache key changes
+    writeJsonl(stackDir, 'usage2.jsonl', 'sess-n2');
+
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    engine.getByTicket();
+
+    const jsonlReads = readSpy.mock.calls.filter((c) => String(c[0]).endsWith('.jsonl'));
+    expect(jsonlReads.length).toBeGreaterThan(0);
+  });
+
+  it('clearUsageCache forces re-parse on next call', () => {
+    const stackDir = path.join(tmpDir, 'stack-cl');
+    fs.mkdirSync(stackDir);
+    writeJsonl(stackDir, 'usage.jsonl', 'sess-cl1');
+
+    const engine = createUsageEngine([stackDir]);
+    engine.getByTicket(); // prime cache
+
+    clearUsageCache();
+
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    engine.getByTicket(); // cache cleared — must re-parse
+
+    const jsonlReads = readSpy.mock.calls.filter((c) => String(c[0]).endsWith('.jsonl'));
+    expect(jsonlReads.length).toBeGreaterThan(0);
+  });
+
+  it('multiple engine instances share the cache', () => {
+    const stackDir = path.join(tmpDir, 'stack-shared');
+    fs.mkdirSync(stackDir);
+    writeJsonl(stackDir, 'usage.jsonl', 'sess-sh1');
+
+    const engine1 = createUsageEngine([stackDir]);
+    engine1.getByTicket(); // prime cache with engine1
+
+    const readSpy = vi.spyOn(fs, 'readFileSync');
+    const engine2 = createUsageEngine([stackDir]);
+    engine2.getByTicket(); // engine2 should hit the shared cache
+
+    const jsonlReads = readSpy.mock.calls.filter((c) => String(c[0]).endsWith('.jsonl'));
+    expect(jsonlReads).toHaveLength(0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// summary costPerTicket — transcript-authoritative source
+// ---------------------------------------------------------------------------
+
+describe('summary costPerTicket source', () => {
+  let tmpDir: string;
+
+  beforeEach(() => {
+    tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'telemetry-summary-'));
+    clearUsageCache();
+  });
+
+  afterEach(() => {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    clearUsageCache();
+  });
+
+  it('non-orchestrator cost sum from getByTicket matches expected independent computation', () => {
+    const stackA = path.join(tmpDir, 'stack-a');
+    const stackB = path.join(tmpDir, 'stack-b');
+    const orchestratorDir = path.join(tmpDir, '.claude', 'projects');
+    fs.mkdirSync(stackA);
+    fs.mkdirSync(stackB);
+    fs.mkdirSync(orchestratorDir, { recursive: true });
+
+    const writeManifest = (dir: string, stackId: string, ticket: string) => {
+      fs.writeFileSync(dir + '.manifest.json', JSON.stringify({ stackId, ticket, project: 'p', createdAt: '2024-01-01T00:00:00.000Z' }));
+    };
+    writeManifest(stackA, 'stack-a', 'T-1');
+    writeManifest(stackB, 'stack-b', 'T-2');
+
+    const makeEntry = (model: string, input: number, output: number) => JSON.stringify({
+      type: 'assistant',
+      message: { role: 'assistant', model, usage: { input_tokens: input, output_tokens: output } },
+      timestamp: '2024-03-01T10:00:00.000Z',
+      sessionId: `sess-${Math.random()}`,
+    });
+
+    // stack-a: ticket T-1
+    fs.writeFileSync(path.join(stackA, 'a.jsonl'), makeEntry('claude-sonnet-4-5', 1_000_000, 500_000) + '\n');
+    // stack-b: ticket T-2
+    fs.writeFileSync(path.join(stackB, 'b.jsonl'), makeEntry('claude-sonnet-4-5', 500_000, 250_000) + '\n');
+    // orchestrator (host-root)
+    fs.writeFileSync(path.join(orchestratorDir, 'host.jsonl'), makeEntry('claude-sonnet-4-5', 100_000, 50_000) + '\n');
+
+    const engine = createUsageEngine([orchestratorDir, stackA, stackB]);
+    const byTicket = engine.getByTicket();
+
+    const nonOrchCost = byTicket
+      .filter((e) => e.ticketId !== ORCHESTRATOR_TICKET_ID)
+      .reduce((sum, e) => sum + e.cost, 0);
+
+    // Independently compute expected: sonnet pricing = $3/M input, $15/M output
+    const expectedT1 = (1_000_000 * 3 + 500_000 * 15) / 1_000_000; // $10.5
+    const expectedT2 = (500_000 * 3 + 250_000 * 15) / 1_000_000;   // $5.25
+    expect(nonOrchCost).toBeCloseTo(expectedT1 + expectedT2, 2);
+
+    // Orchestrator cost must NOT be included
+    const orchEntry = byTicket.find((e) => e.ticketId === ORCHESTRATOR_TICKET_ID);
+    expect(orchEntry).toBeDefined();
+    expect(orchEntry!.cost).toBeGreaterThan(0);
+    expect(nonOrchCost).toBeLessThan(nonOrchCost + orchEntry!.cost);
   });
 });

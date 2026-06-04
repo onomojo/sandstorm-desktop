@@ -88,8 +88,9 @@ import { listTicketComments, postComment } from './control-plane/ticket-comments
 import { getLatestUserAnswers, ANSWER_COMMENT_MARKER } from './scheduler/refine-to-comments';
 import { KANBAN_COLUMNS } from '../shared/kanban';
 import os from 'os';
-import { createUsageEngine } from './telemetry/usage-engine';
-import type { DateRange } from './telemetry/usage-engine';
+import { createUsageEngine, clearUsageCache } from './telemetry/usage-engine';
+import type { DateRange, ByTicketEntry } from './telemetry/usage-engine';
+import { ORCHESTRATOR_TICKET_ID } from './telemetry/types';
 import { TicketRollupStore } from './telemetry/rollup-store';
 
 // Set __sandstorm at module-load time so app.evaluate() works immediately
@@ -797,7 +798,11 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     const engine = createUsageEngine(buildTelemetryRoots());
     const summary = engine.getSummary(range);
     const shipped = rollupStore.ticketsShipped();
-    const totalCost = rollupStore.totalTicketCost();
+    // Numerator: lifetime sum of per-ticket transcript cost excluding orchestrator bucket
+    const allByTicket = engine.getByTicket();
+    const totalCost = allByTicket
+      .filter((e) => e.ticketId !== ORCHESTRATOR_TICKET_ID)
+      .reduce((sum, e) => sum + e.cost, 0);
     return {
       ...summary,
       ticketsShipped: shipped,
@@ -817,11 +822,12 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return createUsageEngine(buildTelemetryRoots()).getSessions(range);
   });
 
-  ipcMain.handle('stats:telemetry:byTicket', async () => {
+  ipcMain.handle('stats:telemetry:byTicket', async (): Promise<ByTicketEntry[]> => {
     return createUsageEngine(buildTelemetryRoots()).getByTicket();
   });
 
   ipcMain.handle('stats:telemetry:refresh', async () => {
+    clearUsageCache();
     rollupStore.refresh();
     return { ok: true };
   });

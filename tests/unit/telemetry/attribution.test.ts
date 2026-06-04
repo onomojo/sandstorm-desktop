@@ -66,8 +66,7 @@ describe('computeTicketRollups', () => {
     const rollups = computeTicketRollups(db);
     expect(rollups).toHaveLength(1);
     expect(rollups[0].ticketId).toBe(ORCHESTRATOR_TICKET_ID);
-    expect(rollups[0].title).toBe('Orchestrator / ad-hoc');
-    expect(rollups[0].column).toBeNull();
+    // title/column removed from canonical ByTicketEntry in ticket #499 (renderer-joined)
   });
 
   it('attributes post-teardown tasks from stack_history.task_history', () => {
@@ -135,13 +134,15 @@ describe('computeTicketRollups', () => {
     expect(rollups[0].model).toBe('claude-sonnet-4-5');
   });
 
-  it('enriches title and column from ticket_board', () => {
+  it('returns correct rollup when ticket_board row exists for ticket', () => {
+    // title/column removed from canonical ByTicketEntry in ticket #499 (renderer-joined)
     db.exec(`INSERT INTO stacks (id, ticket) VALUES ('s1', 'TICKET-7')`);
     db.exec(`INSERT INTO tasks (stack_id, input_tokens, output_tokens, resolved_model) VALUES ('s1', 100, 50, 'claude-sonnet-4-5')`);
     db.exec(`INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES ('TICKET-7', '/proj', 'pr_open', 'My Feature')`);
     const rollups = computeTicketRollups(db);
-    expect(rollups[0].title).toBe('My Feature');
-    expect(rollups[0].column).toBe('pr_open');
+    expect(rollups).toHaveLength(1);
+    expect(rollups[0].ticketId).toBe('TICKET-7');
+    expect(rollups[0].cost).toBeGreaterThan(0);
   });
 
   it('places orchestrator bucket last in sorted output', () => {

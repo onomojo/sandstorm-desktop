@@ -1,5 +1,7 @@
 /** All costs are estimated at list price (not actual billed amount). */
 
+export const ORCHESTRATOR_TICKET_ID = '__orchestrator__';
+
 export interface DateRange {
   since: string; // YYYY-MM-DD, inclusive
   until: string; // YYYY-MM-DD, inclusive
@@ -29,31 +31,15 @@ export interface TelemetrySummary {
   skippedLines: number;           // malformed JSONL lines skipped across all files
 }
 
-/** Per-ticket cost and token attribution derived from tasks/stacks token columns. */
+/** Canonical per-ticket cost attribution derived from transcript files. */
 export interface ByTicketEntry {
-  ticketId: string;       // ticket ID, or '__orchestrator__' for tasks with no ticket
-  title: string;          // ticket title from ticket_board, or ticketId as fallback
-  column: string | null;  // current kanban column; null for orchestrator bucket
-  model: string | null;   // primary model (highest output tokens across all tasks)
-  cost: number;           // estimated USD cost across all tasks for this ticket
-  tokens: {
-    input: number;
-    output: number;
-    cacheRead: number;
-    cacheCreation: number;
-  };
-  cacheHit: number;       // cache_read / (input + cache_read) × 100; 0 when all-zero
-  lifecycle: null;        // pending sub-issue 4
-  unpriced: boolean;      // true when any task used a model with no known price
-}
-
-/** Per-ticket cost and token attribution derived from transcript files + stack manifests. */
-export interface TranscriptByTicketEntry {
-  ticket: string | null;  // ticket ID resolved from manifest; null for host-root and unmapped stacks
-  stackId: string | null; // originating stack ID; null for host-root entries
-  tokens: TokenCounts;
-  cost: number;
-  sessions: number;
+  ticketId: string;        // real ID, or '__orchestrator__' for unattributed/host spend
+  model: string | null;    // primary model (highest output tokens)
+  cost: number;            // estimated USD, from transcripts (authoritative)
+  tokens: TokenCounts;     // {input, output, cacheCreate, cacheRead, total}
+  cacheHit: number;        // cacheRead / (input + cacheRead) × 100; 0 when all-zero
+  lifecycle: null;         // pending sub-issue #468
+  unpriced: boolean;       // true when any entry used a model with no known price
 }
 
 export interface DailyEntry {
