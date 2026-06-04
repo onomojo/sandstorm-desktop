@@ -196,6 +196,24 @@ export function mockSandstormApi() {
       getEnabled: vi.fn().mockResolvedValue(false),
       setEnabled: vi.fn().mockResolvedValue(undefined),
     },
+    telemetry: {
+      summary: vi.fn().mockResolvedValue({
+        monthCost: 0,
+        prevMonthCost: 0,
+        tokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
+        cacheHitPct: 0,
+        sessions: 0,
+        ticketsShipped: null,
+        costPerTicket: null,
+        unpricedModels: [],
+        skippedLines: 0,
+      }),
+      daily: vi.fn().mockResolvedValue([]),
+      byModel: vi.fn().mockResolvedValue([]),
+      session: vi.fn().mockResolvedValue([]),
+      byTicket: vi.fn().mockResolvedValue([]),
+      refresh: vi.fn().mockResolvedValue({ ok: true }),
+    },
     on: vi.fn().mockReturnValue(() => {}),
   };
 

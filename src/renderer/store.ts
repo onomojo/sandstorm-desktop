@@ -2,6 +2,14 @@ import { create } from 'zustand';
 import { KANBAN_COLUMNS } from './types/kanban';
 import type { KanbanColumn } from './types/kanban';
 import { suggestStackName } from './lib/stack-name';
+import type {
+  TelemetrySummary,
+  DailyEntry,
+  ByModelEntry,
+  ByTicketEntry,
+  SessionEntry,
+  DateRange,
+} from '@main/telemetry/types';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -628,6 +636,22 @@ interface AppState {
   filteredStacks: () => Stack[];
   filteredStackHistory: () => StackHistoryRecord[];
   activeProject: () => Project | undefined;
+
+  // View navigation
+  mainView: 'board' | 'telemetry';
+  setMainView: (view: 'board' | 'telemetry') => void;
+
+  // Telemetry slice
+  telemetryRange: '7d' | '30d' | '90d' | 'all';
+  telemetrySummary: TelemetrySummary | null;
+  telemetryDaily: DailyEntry[];
+  telemetryByModel: ByModelEntry[];
+  telemetryByTicket: ByTicketEntry[];
+  telemetryLoading: boolean;
+  telemetryError: string | null;
+  setTelemetryRange: (range: '7d' | '30d' | '90d' | 'all') => void;
+  fetchTelemetry: () => Promise<void>;
+  refreshTelemetry: () => Promise<void>;
 }
 
 declare global {
@@ -833,41 +857,12 @@ declare global {
         setEnabled: (projectDir: string, enabled: boolean) => Promise<void>;
       };
       telemetry: {
-        summary: (range: { since: string; until: string }) => Promise<{
-          monthCost: number;
-          prevMonthCost: number;
-          tokens: { input: number; output: number; cacheCreate: number; cacheRead: number; total: number };
-          cacheHitPct: number;
-          sessions: number;
-          ticketsShipped: null;
-          costPerTicket: null;
-          unpricedModels: string[];
-          skippedLines: number;
-        }>;
-        daily: (range: { since: string; until: string }) => Promise<Array<{
-          date: string;
-          cost: number;
-          tokens: { input: number; output: number; cacheCreate: number; cacheRead: number };
-          byModel: Record<string, number>;
-        }>>;
-        byModel: (range: { since: string; until: string }) => Promise<Array<{
-          model: string;
-          cost: number;
-          tokens: { input: number; output: number; cacheCreate: number; cacheRead: number; total: number };
-          sessions: number;
-          unpriced: boolean;
-        }>>;
-        session: (range: { since: string; until: string }) => Promise<Array<{
-          sid: string;
-          ticket: null;
-          stack: null;
-          model: string;
-          start: string;
-          durMin: number;
-          tokens: { input: number; output: number; cacheCreate: number; cacheRead: number; total: number };
-          cost: number;
-          turns: number;
-        }>>;
+        summary: (range: DateRange) => Promise<TelemetrySummary>;
+        daily: (range: DateRange) => Promise<DailyEntry[]>;
+        byModel: (range: DateRange) => Promise<ByModelEntry[]>;
+        session: (range: DateRange) => Promise<SessionEntry[]>;
+        byTicket: () => Promise<ByTicketEntry[]>;
+        refresh: () => Promise<{ ok: true }>;
       };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
     };
@@ -911,6 +906,19 @@ export interface RefinementSession {
   /** Live streamed output from the ephemeral gate subprocess while running. */
   streamingOutput?: string;
 }
+
+function getDateRange(range: '7d' | '30d' | '90d' | 'all'): DateRange {
+  const today = new Date();
+  const until = today.toISOString().slice(0, 10);
+  if (range === 'all') return { since: '1970-01-01', until };
+  const days = range === '7d' ? 7 : range === '30d' ? 30 : 90;
+  const since = new Date(today);
+  since.setDate(since.getDate() - days);
+  return { since: since.toISOString().slice(0, 10), until };
+}
+
+// Monotonic counter to discard stale responses when range chips are toggled rapidly
+let _telemetryFetchSeq = 0;
 
 export const useAppStore = create<AppState>((set, get) => ({
   // Projects
@@ -1840,6 +1848,57 @@ export const useAppStore = create<AppState>((set, get) => ({
     } catch {
       // Account usage refresh failure is non-fatal
     }
+  },
+
+  // View navigation
+  mainView: 'board',
+  setMainView: (view) => set({ mainView: view }),
+
+  // Telemetry slice
+  telemetryRange: '30d',
+  telemetrySummary: null,
+  telemetryDaily: [],
+  telemetryByModel: [],
+  telemetryByTicket: [],
+  telemetryLoading: false,
+  telemetryError: null,
+
+  setTelemetryRange: (range) => {
+    set({ telemetryRange: range });
+    void get().fetchTelemetry();
+  },
+
+  fetchTelemetry: async () => {
+    const seq = ++_telemetryFetchSeq;
+    const range = getDateRange(get().telemetryRange);
+    set({ telemetryLoading: true, telemetryError: null });
+    try {
+      const [summary, daily, byModel, byTicket] = await Promise.all([
+        window.sandstorm.telemetry.summary(range),
+        window.sandstorm.telemetry.daily(range),
+        window.sandstorm.telemetry.byModel(range),
+        window.sandstorm.telemetry.byTicket(),
+      ]);
+      if (seq !== _telemetryFetchSeq) return;
+      set({
+        telemetrySummary: summary,
+        telemetryDaily: daily,
+        telemetryByModel: byModel,
+        telemetryByTicket: byTicket,
+        telemetryLoading: false,
+      });
+    } catch (err) {
+      if (seq !== _telemetryFetchSeq) return;
+      set({
+        telemetryLoading: false,
+        telemetryError: err instanceof Error ? err.message : String(err),
+      });
+    }
+  },
+
+  refreshTelemetry: async () => {
+    await window.sandstorm.telemetry.refresh();
+    await get().fetchTelemetry();
   },
 
   // Derived
