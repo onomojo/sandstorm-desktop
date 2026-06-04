@@ -46,6 +46,16 @@
   background: transparent;
 }
 
+/* Kanban board scrollbar — wider for easier grabbing (issue #487) */
+[data-testid="kanban-columns"]::-webkit-scrollbar {
+  width: 16px;
+  height: 16px;
+}
+
+[data-testid="kanban-columns"]::-webkit-scrollbar-thumb {
+  border-radius: 8px;
+}
+
 /* Electron drag region */
 .titlebar-drag {
   -webkit-app-region: drag;
