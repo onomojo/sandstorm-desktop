@@ -1,0 +1,768 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sandstorm Desktop · telemetry architecture</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
+
+  <style>
+    :root {
+      --c-bg: #ffffff;
+      --c-fg: #0f172a;
+      --c-muted: #475569;
+      --c-rule: #e2e8f0;
+      --c-soft: #f8fafc;
+
+      /* component palette — one hue per layer (shared with architecture.html) */
+      --c-renderer: #2563eb;  --c-renderer-bg: #dbeafe;   /* React + Zustand UI       */
+      --c-main:     #7c3aed;  --c-main-bg:     #ede9fe;   /* Electron main / adapter  */
+      --c-agent:    #e11d48;  --c-agent-bg:    #ffe4e6;   /* agent backend / Claudes  */
+      --c-control:  #d97706;  --c-control-bg:  #fef3c7;   /* ccusage engine           */
+      --c-sched:    #16a34a;  --c-sched-bg:    #dcfce7;   /* scheduler                */
+      --c-runtime:  #0d9488;  --c-runtime-bg:  #ccfbf1;   /* container runtime/stacks */
+      --c-data:     #0891b2;  --c-data-bg:     #cffafe;   /* transcripts / persistence */
+      --c-ext:      #475569;  --c-ext-bg:      #e2e8f0;   /* external systems / host  */
+      --c-smell:    #ea580c;  --c-smell-bg:    #ffedd5;   /* retire / tech debt       */
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0; padding: 0;
+      background: var(--c-bg);
+      color: var(--c-fg);
+      font-family: "Inter", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      font-size: 16px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    main { max-width: 1180px; margin: 48px auto 96px; padding: 0 32px; }
+
+    .doc-eyebrow {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 12px; font-weight: 500; letter-spacing: 0.12em;
+      text-transform: uppercase; color: var(--c-muted); margin: 0 0 8px;
+    }
+    h1 { font-weight: 700; font-size: 36px; letter-spacing: -0.02em; margin: 0 0 8px; }
+    .doc-subtitle { color: var(--c-muted); font-size: 17px; margin: 0 0 32px; max-width: 800px; }
+    h2 {
+      display: flex; align-items: baseline; gap: 12px;
+      font-weight: 600; font-size: 22px; letter-spacing: -0.01em;
+      margin: 64px 0 6px; padding-top: 32px; border-top: 1px solid var(--c-rule);
+    }
+    h2 .num { font-family: "JetBrains Mono", monospace; font-weight: 500; color: var(--c-muted); font-size: 14px; }
+    h2 + .section-blurb { color: var(--c-muted); font-size: 15px; margin: 0 0 24px; max-width: 840px; }
+    h3 { font-size: 15px; font-weight: 600; margin: 28px 0 8px; color: var(--c-fg); }
+    h4 { font-size: 14px; font-weight: 600; margin: 22px 0 6px; color: var(--c-fg); }
+    p { margin: 8px 0 14px; max-width: 840px; }
+    p, li { font-size: 15px; }
+    ul, ol { max-width: 840px; }
+    em { color: var(--c-fg); }
+
+    code {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      background: var(--c-soft); padding: 1px 6px; border-radius: 4px;
+      font-size: 13px; color: #334155;
+    }
+
+    .figure {
+      margin: 16px 0 8px; border: 1px solid var(--c-rule); border-radius: 14px;
+      background: var(--c-bg); overflow: hidden; box-shadow: 0 1px 3px rgba(15,23,42,.04);
+    }
+    .figure-toolbar {
+      display: flex; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--c-rule);
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      font-size: 13px; align-items: center; flex-wrap: wrap;
+    }
+    .figure-toolbar .label {
+      font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--c-muted);
+      letter-spacing: 0.08em; text-transform: uppercase; margin-right: 12px;
+    }
+    .figure-toolbar button {
+      background: #fff; border: 1px solid var(--c-rule); border-radius: 6px; padding: 5px 10px;
+      font-family: inherit; font-size: 12px; font-weight: 500; cursor: pointer; color: var(--c-fg); transition: all .15s;
+    }
+    .figure-toolbar button:hover { background: var(--c-soft); border-color: #cbd5e1; }
+    .figure-toolbar button:active { transform: translateY(1px); }
+    .figure-toolbar .spacer { flex: 1; }
+    .figure-toolbar .hint { color: var(--c-muted); font-size: 11px; font-style: italic; }
+    .figure-viewport {
+      height: 600px; width: 100%; position: relative; overflow: hidden;
+      background: radial-gradient(circle at 20px 20px, #e2e8f0 1px, transparent 1px), var(--c-soft);
+      background-size: 24px 24px; cursor: grab; user-select: none;
+    }
+    .figure-viewport.is-grabbing { cursor: grabbing; }
+    .figure-viewport .hand-frame { margin: 0; padding: 0; background: transparent; width: 100%; height: 100%; display: flex; align-items: center; justify-content: center; }
+    .figure-viewport .hand-frame svg { display: block; flex-shrink: 0; transform-origin: center center; will-change: transform; }
+    .arch-source { margin: 16px 0 8px; border: 1px solid var(--c-rule); border-radius: 8px; background: var(--c-soft); padding: 12px 16px 14px; }
+    .arch-source > summary { cursor: pointer; font-weight: 600; font-size: 14px; color: var(--c-fg); list-style: revert; }
+    .arch-source[open] > summary { margin-bottom: 10px; }
+    .arch-source pre { margin: 0; font-family: "JetBrains Mono", ui-monospace, monospace; font-size: 12.5px; line-height: 1.55; white-space: pre-wrap; color: var(--c-fg); }
+    .figure-caption { padding: 10px 16px; font-size: 12px; color: var(--c-muted); background: var(--c-soft); border-top: 1px solid var(--c-rule); font-style: italic; }
+    .figure:fullscreen { display: flex; flex-direction: column; width: 100vw; height: 100vh; margin: 0; padding: 0; background: var(--c-bg); border: none; border-radius: 0; }
+    .figure:fullscreen .figure-toolbar, .figure:fullscreen .figure-caption { flex-shrink: 0; }
+    .figure:fullscreen .figure-viewport { flex: 1 1 auto; height: auto; min-height: 0; width: 100%; }
+
+    .callout { background: linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%); border: 1px solid #fde68a; border-radius: 12px; padding: 18px 22px; margin: 24px 0 16px; font-size: 14px; color: #78350f; }
+    .callout strong { color: #7c2d12; }
+    .callout.smell { background: linear-gradient(180deg, #fff7ed 0%, #ffedd5 100%); border-color: #fdba74; color: #7c2d12; }
+    .callout.good { background: linear-gradient(180deg, #f0fdf4 0%, #dcfce7 100%); border-color: #86efac; color: #14532d; }
+    .callout.good strong { color: #166534; }
+
+    .legend { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; margin: 24px 0 8px; }
+    .legend .item { display: flex; align-items: center; gap: 10px; padding: 10px 12px; border: 1px solid var(--c-rule); border-radius: 8px; background: #fff; font-size: 13px; }
+    .swatch { width: 16px; height: 16px; border-radius: 4px; border: 2px solid; flex-shrink: 0; }
+    .sw-renderer { background: var(--c-renderer-bg); border-color: var(--c-renderer); }
+    .sw-main     { background: var(--c-main-bg);     border-color: var(--c-main); }
+    .sw-agent    { background: var(--c-agent-bg);    border-color: var(--c-agent); }
+    .sw-control  { background: var(--c-control-bg);  border-color: var(--c-control); }
+    .sw-runtime  { background: var(--c-runtime-bg);  border-color: var(--c-runtime); }
+    .sw-data     { background: var(--c-data-bg);     border-color: var(--c-data); }
+    .sw-ext      { background: var(--c-ext-bg);      border-color: var(--c-ext); }
+    .sw-smell    { background: var(--c-smell-bg);    border-color: var(--c-smell); border-style: dashed; }
+
+    dl.glossary { display: grid; grid-template-columns: 240px 1fr; column-gap: 24px; row-gap: 14px; margin: 16px 0 0; max-width: 980px; }
+    dl.glossary dt { font-weight: 600; color: var(--c-fg); font-size: 14px; font-family: "JetBrains Mono", ui-monospace, monospace; }
+    dl.glossary dd { margin: 0; color: var(--c-muted); font-size: 14px; }
+
+    table.smell-table { border-collapse: collapse; width: 100%; max-width: 1000px; margin: 16px 0; font-size: 13.5px; }
+    table.smell-table th, table.smell-table td { border: 1px solid var(--c-rule); padding: 8px 12px; text-align: left; vertical-align: top; }
+    table.smell-table th { background: var(--c-soft); font-weight: 600; }
+    table.smell-table td code { font-size: 12px; }
+    .sev { font-weight: 600; white-space: nowrap; }
+    .sev-high { color: #b91c1c; } .sev-med { color: #c2410c; } .sev-low { color: #a16207; }
+    .keep { color: #166534; font-weight: 600; }
+
+    .footnote { color: var(--c-muted); font-size: 13px; margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--c-rule); }
+    .topnav { font-size: 13px; margin: 0 0 28px; }
+    .topnav a { color: var(--c-renderer); text-decoration: none; font-weight: 500; }
+    .topnav a:hover { text-decoration: underline; }
+
+    @media (max-width: 760px) {
+      dl.glossary { grid-template-columns: 1fr; }
+      dl.glossary dt { margin-top: 8px; }
+      h1 { font-size: 28px; }
+      .figure-viewport { height: 460px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="doc-eyebrow">sandstorm desktop · telemetry &amp; observability</p>
+    <h1>Token usage, made measurable</h1>
+    <p class="doc-subtitle">
+      How Sandstorm Desktop should measure and surface <strong>token usage and estimated cost</strong> —
+      for the <em>outer</em> orchestrator and every <em>inner</em>-Claude stack — and what existing,
+      half-built telemetry to retire to get there. § 1 frames the problem; § 2 picks an engine;
+      § 3 solves the one genuinely hard part (reading stack transcripts without disturbing the stack);
+      § 4 lays out the pipeline; § 5–6 cover the data and the cleanup; § 7–9 are options, phasing, and
+      open questions. Companion: the UI explorations in <a href="telemetry-mockups/index.html">telemetry-mockups/</a>.
+    </p>
+
+    <p class="topnav">⟵ <a href="telemetry-mockups/index.html">UI mockups</a> &nbsp;·&nbsp; <a href="architecture.html">system architecture</a></p>
+
+    <div class="callout">
+      <strong>How to read this file.</strong> Same conventions as <code>architecture.html</code>: each diagram
+      has a toolbar — <em>+ / −</em> zoom, <em>Reset</em> re-fits, <em>Fullscreen</em>, <em>⬇ PNG</em>.
+      Drag to pan, scroll to zoom. Every diagram is paired with a
+      <code>&lt;details class="arch-source"&gt;</code> plain-text block — that text is the source of truth.
+      This is a <strong>proposal for review</strong>, not a description of shipped code; file paths and line
+      refs reflect an investigation on 2026-06-02 and should be confirmed during implementation.
+    </div>
+
+    <div class="legend" aria-label="Color key">
+      <div class="item"><span class="swatch sw-data"></span><span><strong>Transcripts</strong> — Claude session <code>*.jsonl</code></span></div>
+      <div class="item"><span class="swatch sw-control"></span><span><strong>ccusage</strong> — read/cost engine</span></div>
+      <div class="item"><span class="swatch sw-main"></span><span><strong>Telemetry adapter</strong> — main process</span></div>
+      <div class="item"><span class="swatch sw-agent"></span><span><strong>Inner/outer Claude</strong></span></div>
+      <div class="item"><span class="swatch sw-runtime"></span><span><strong>Stacks / runtime</strong> — Docker</span></div>
+      <div class="item"><span class="swatch sw-renderer"></span><span><strong>Renderer</strong> — Telemetry &amp; board views</span></div>
+      <div class="item"><span class="swatch sw-ext"></span><span><strong>Host</strong> — desktop app machine</span></div>
+      <div class="item"><span class="swatch sw-smell"></span><span><strong>Retire</strong> — dead telemetry, see § 6</span></div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 1</span> The problem</h2>
+    <p class="section-blurb">
+      We lost token-usage visibility in the Kanban migration, and the telemetry we <em>did</em> have never
+      worked reliably — the tree carries four-plus overlapping, mostly-broken attempts (§ 6). Meanwhile the
+      ecosystem already solved this: Claude Code writes a complete, per-message usage record to local JSONL
+      transcripts, and off-the-shelf tools read those to produce exactly the breakdowns we want.
+    </p>
+
+    <p><strong>Thesis.</strong> Stop hand-rolling telemetry. Adopt a proven reader as the aggregation engine,
+    solve the one problem that is genuinely ours — getting inner-stack transcripts where we can read them and
+    attributing them to tickets — and delete the rest.</p>
+
+    <h3>Goals</h3>
+    <ul>
+      <li>Month / 30-day / 7-day <strong>cost and token</strong> totals, trending.</li>
+      <li><strong>Daily</strong> time series — the "how much did I spend each day" graph.</li>
+      <li><strong>Per-ticket</strong> cost (the headline ask) and <strong>per-model</strong> cost.</li>
+      <li>Input / output / <strong>cache-create</strong> / <strong>cache-read</strong> breakdown.</li>
+      <li>Drill into an <strong>individual session</strong>.</li>
+      <li>Attribute <strong>inner-stack</strong> usage, not just the outer orchestrator.</li>
+    </ul>
+    <h3>Non-goals (v1)</h3>
+    <ul>
+      <li>Real-time per-token meters — we already have a live session counter.</li>
+      <li>Hard budget caps / enforcement — a fast-follow once the data is trusted.</li>
+      <li>Replacing the <code>/usage</code> session-limit meter on day one (it can coexist — § 6).</li>
+    </ul>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 2</span> Tool landscape</h2>
+    <p class="section-blurb">
+      The brief described a CLI that breaks down a month of usage with per-session drill-down. That is almost
+      certainly <strong>ccusage</strong> — and it ships a library API, so we embed it rather than scrape stdout.
+    </p>
+
+    <table class="smell-table">
+      <thead><tr><th>Tool</th><th>What it is</th><th>Fit</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><strong>ccusage</strong><br><code>ryoppippi/ccusage</code></td>
+          <td>Local CLI <em>and library</em>. Reads <code>~/.claude/projects/**/*.jsonl</code>. Daily / weekly /
+            monthly / <strong>session</strong> / 5-hour-block reports. Separates cache-create vs cache-read.
+            Estimates USD from bundled pricing (offline). Groups by project. JS API:
+            <code>loadDailyUsageData()</code>, <code>loadSessionData()</code>, …</td>
+          <td><span class="keep">Recommended engine.</span> Library mode = embed, don't shell out.</td>
+        </tr>
+        <tr>
+          <td><code>better-ccusage</code></td>
+          <td>Community fork of ccusage.</td>
+          <td>Fallback if upstream stalls.</td>
+        </tr>
+        <tr>
+          <td><code>claude-code-usage-analyzer</code></td>
+          <td>Wraps ccusage + LiteLLM pricing for deeper cost analysis.</td>
+          <td>Inspiration for cost modeling; heavier dependency.</td>
+        </tr>
+        <tr>
+          <td>Hand-rolled <code>token-telemetry.ts</code></td>
+          <td>Our own per-turn JSONL writer, opt-in via env var.</td>
+          <td><span class="sev sev-high">Retire</span> (§ 6).</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <p><strong>Why ccusage as a library, not a CLI subprocess:</strong> no PTY/stdout parsing (the exact
+    fragility that sank <code>account-usage.ts</code>); typed results we can cache and join to our own
+    ticket/stack tables; the community-trusted pricing source so we don't maintain a price list; offline,
+    nothing leaves the machine.</p>
+
+    <div class="callout smell">
+      <strong>External-contract risk.</strong> Pin the ccusage version and treat the JSONL transcript schema
+      as an external contract — Claude Code's format can change. A thin adapter in
+      <code>src/main/telemetry/</code> isolates that risk.
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 3</span> The one hard problem: reading inner-stack transcripts</h2>
+    <p class="section-blurb">
+      The outer orchestrator runs on the host, so its transcripts already sit in the host
+      <code>~/.claude/projects/</code> that ccusage reads natively. <strong>Inner Claude runs in a Docker
+      container</strong>, and today its <code>~/.claude</code> is not visible to the host. The trick is to
+      expose only the <em>output</em> transcripts — never the container's config.
+    </p>
+
+    <p>From the current runtime setup (confirm during implementation): the stack's Claude home is
+    <code>/home/claude/.claude/</code>; volume mounts today are the workspace, read-only context, and the
+    docker socket — <em>not</em> the Claude home; and the entrypoint <strong>writes inner guidance into
+    <code>/home/claude/.claude/CLAUDE.md</code></strong>. That guidance is load-bearing — stacks work because
+    of it.</p>
+
+    <h3>Decision — mount only the <code>projects/</code> subdirectory, read back to the host</h3>
+
+    <figure class="figure" data-figure="mount">
+      <div class="figure-toolbar">
+        <span class="label">§ 3 · Mount only ~/.claude/projects/ — leave the rest of .claude inside the container</span>
+        <button data-action="zoom-out">−</button>
+        <button data-action="zoom-in">+</button>
+        <button data-action="reset">Reset</button>
+        <button data-action="fullscreen">⤢ Fullscreen</button>
+        <span class="spacer"></span>
+        <span class="hint">drag to pan · scroll to zoom</span>
+        <button data-action="download">⬇ PNG</button>
+      </div>
+      <div class="figure-viewport">
+        <div class="hand-frame">
+          <svg viewBox="0 0 1200 580" xmlns="http://www.w3.org/2000/svg" role="img"
+               aria-label="Mount model. Inside an inner-Claude Docker stack: the inner Claude container writes session transcripts; the container's ~/.claude config (CLAUDE.md inner guidance, settings, MCP) stays in the container, untouched; only ~/.claude/projects (the jsonl transcripts) is bind-mounted out to a per-stack host directory. On the host, that per-stack usage dir plus the host's own ~/.claude/projects are both read by ccusage, which produces tokens and estimated cost.">
+            <defs>
+              <marker id="t-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+              <marker id="t-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0891b2"/></marker>
+            </defs>
+            <style>
+              .t { font-family: "Inter", system-ui, sans-serif; }
+              .lbl  { font-size: 13px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
+              .sub  { font-size: 10.5px; font-weight: 400; text-anchor: middle; dominant-baseline: middle; fill: #475569; }
+              .clbl { font-size: 14px; font-weight: 700; text-anchor: middle; }
+              .elbl { font-size: 11px; fill: #155e75; paint-order: stroke; stroke: #fff; stroke-width: 4px; text-anchor: middle; font-weight: 600; }
+            </style>
+
+            <!-- Stack cluster -->
+            <rect x="40" y="74" width="486" height="452" rx="14" fill="#ccfbf1" fill-opacity="0.3" stroke="#0d9488" stroke-width="1.5"/>
+            <text x="283" y="104" class="t clbl" fill="#134e4a">📦 Inner-Claude stack — Docker container</text>
+
+            <rect x="72" y="122" width="422" height="64" rx="8" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.6"/>
+            <text x="283" y="146" class="t lbl" fill="#9f1239">🤖 inner Claude</text>
+            <text x="283" y="166" class="t sub">task-runner.sh · dual-loop · writes session transcripts</text>
+
+            <!-- config box: stays -->
+            <rect x="72" y="208" width="200" height="150" rx="8" fill="#e2e8f0" stroke="#475569" stroke-width="1.6"/>
+            <text x="172" y="232" class="t lbl" fill="#1e293b">🔒 ~/.claude/</text>
+            <text x="172" y="256" class="t sub">CLAUDE.md</text>
+            <text x="172" y="272" class="t sub">(inner guidance)</text>
+            <text x="172" y="294" class="t sub">settings · MCP config</text>
+            <text x="172" y="332" class="t sub" font-style="italic" fill="#475569">stays in the container</text>
+
+            <!-- projects box: mounted -->
+            <rect x="294" y="208" width="200" height="150" rx="8" fill="#cffafe" stroke="#0891b2" stroke-width="2.4"/>
+            <text x="394" y="232" class="t lbl" fill="#155e75">~/.claude/projects/</text>
+            <text x="394" y="256" class="t sub">*.jsonl transcripts</text>
+            <text x="394" y="274" class="t sub">per-message usage:</text>
+            <text x="394" y="290" class="t sub">in · out · cache · model</text>
+            <text x="394" y="332" class="t sub" fill="#0891b2" font-weight="600">▶ bind-mounted out</text>
+
+            <!-- warning -->
+            <rect x="72" y="378" width="422" height="48" rx="8" fill="#ffedd5" stroke="#ea580c" stroke-width="1.4" stroke-dasharray="5 3"/>
+            <text x="283" y="397" class="t sub" fill="#7c2d12" font-weight="600">★ Do NOT mount over ~/.claude — the entrypoint writes CLAUDE.md here.</text>
+            <text x="283" y="413" class="t sub" fill="#7c2d12">Mount only the projects/ subdirectory. Stacks keep working unchanged.</text>
+
+            <!-- mount arrow -->
+            <path d="M 494 283 C 600 283 614 168 718 168" fill="none" stroke="#0891b2" stroke-width="1.8" marker-end="url(#t-data)"/>
+            <text x="606" y="210" class="t elbl">bind-mount → host</text>
+
+            <!-- Host cluster -->
+            <rect x="718" y="74" width="444" height="452" rx="14" fill="#e2e8f0" fill-opacity="0.4" stroke="#475569" stroke-width="1.5"/>
+            <text x="940" y="104" class="t clbl" fill="#1e293b">🖥 Host — Sandstorm Desktop</text>
+
+            <rect x="750" y="124" width="380" height="80" rx="8" fill="#cffafe" stroke="#0891b2" stroke-width="1.6"/>
+            <text x="940" y="150" class="t lbl" fill="#155e75">$SANDSTORM_USAGE_DIR / &lt;stackId&gt; /</text>
+            <text x="940" y="172" class="t sub">mounted stack transcripts</text>
+            <text x="940" y="188" class="t sub">· persist past teardown</text>
+
+            <rect x="750" y="224" width="380" height="72" rx="8" fill="#cffafe" stroke="#0891b2" stroke-width="1.6"/>
+            <text x="940" y="250" class="t lbl" fill="#155e75">~/.claude/projects  (host)</text>
+            <text x="940" y="272" class="t sub">outer-Claude / orchestrator sessions</text>
+
+            <rect x="750" y="334" width="380" height="106" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="2.2"/>
+            <text x="940" y="360" class="t lbl" fill="#78350f">📊 ccusage (library)</text>
+            <text x="940" y="382" class="t sub">reads every transcript root</text>
+            <text x="940" y="400" class="t sub">→ tokens + estimated USD cost</text>
+            <text x="940" y="418" class="t sub">daily · monthly · session · model</text>
+
+            <path d="M 900 204 L 900 332" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#t-m)"/>
+            <path d="M 980 296 L 980 332" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#t-m)"/>
+          </svg>
+        </div>
+      </div>
+      <details class="arch-source">
+        <summary>Source of truth — § 3 mount model (plain text)</summary>
+        <pre>STACK (Docker container)
+  inner Claude — task-runner.sh, dual-loop, writes session transcripts
+  ~/.claude/            ← STAYS in container (CLAUDE.md inner guidance, settings, MCP)
+  ~/.claude/projects/   ← *.jsonl transcripts (per-message: in/out/cache/model)
+                          bind-mounted OUT, read-back to host
+
+  compose (per stack), conceptual:
+    volumes:
+      - ${SANDSTORM_WORKSPACE}:/app
+      - ${SANDSTORM_CONTEXT}:/sandstorm-context:ro
+      - ${SANDSTORM_USAGE_DIR}/${STACK_ID}:/home/claude/.claude/projects   # NEW
+
+HOST (Sandstorm Desktop)
+  $SANDSTORM_USAGE_DIR/<stackId>/   mounted stack transcripts (survive teardown)
+  ~/.claude/projects   (host)       outer-Claude / orchestrator sessions
+        both roots ─▶ ccusage (library) ─▶ tokens + estimated USD cost
+
+★ Never mount over ~/.claude — the entrypoint writes CLAUDE.md there (load-bearing).
+  Mount ONLY the projects/ subdirectory.</pre>
+      </details>
+      <div class="figure-caption">Only the transcript output leaves the container; the container keeps full ownership of its <code>.claude</code> config. Transcripts on a host path outside the workspace also survive teardown — fixing today's "usage evaporates on teardown" gap.</div>
+    </figure>
+
+    <p><strong>Alternatives considered</strong> (§ 7): <code>docker cp</code> on task completion (an export step that
+    can miss in-progress data); or keep the in-container <code>token-counter.sh</code> and persist only totals
+    (loses the per-session granularity we want). Sub-decision to confirm: bind-mount vs named volume, plus the
+    uid/permission model so the container writes and the host reads.</p>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 4</span> Recommended architecture</h2>
+    <p class="section-blurb">
+      ccusage reads every transcript root (host + mounted stacks); a thin telemetry adapter attributes each
+      session to a ticket and caches rollups in SQLite; IPC feeds the renderer. All new code is host-side and
+      sits behind a small interface — honoring the pluggable-agent-backend rule (ccusage is Claude-shaped; a
+      future backend supplies its own usage adapter).
+    </p>
+
+    <figure class="figure" data-figure="pipeline">
+      <div class="figure-toolbar">
+        <span class="label">§ 4 · Ingestion → attribution → rollup → IPC → views</span>
+        <button data-action="zoom-out">−</button>
+        <button data-action="zoom-in">+</button>
+        <button data-action="reset">Reset</button>
+        <button data-action="fullscreen">⤢ Fullscreen</button>
+        <span class="spacer"></span>
+        <span class="hint">drag to pan · scroll to zoom</span>
+        <button data-action="download">⬇ PNG</button>
+      </div>
+      <div class="figure-viewport">
+        <div class="hand-frame">
+          <svg viewBox="0 0 1320 540" xmlns="http://www.w3.org/2000/svg" role="img"
+               aria-label="Pipeline. Transcript roots (host plus mounted stack dirs) feed the ccusage library, which also uses bundled pricing. ccusage feeds the telemetry adapter in src/main/telemetry: a usage-engine wraps ccusage, an attribution module joins session ids to stacks and tickets using the SQLite registry (tasks.session_id, stacks.ticket), and a rollup-store caches daily, per-ticket and per-model rollups in SQLite. The adapter exposes stats:telemetry IPC channels to the renderer, which renders the Telemetry dashboards and the board-integration surfaces.">
+            <defs>
+              <marker id="p-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+            </defs>
+            <style>
+              .t { font-family: "Inter", system-ui, sans-serif; }
+              .lbl  { font-size: 13px; font-weight: 600; text-anchor: middle; dominant-baseline: middle; }
+              .sub  { font-size: 10px; font-weight: 400; text-anchor: middle; dominant-baseline: middle; fill: #475569; }
+              .clbl { font-size: 13px; font-weight: 700; text-anchor: middle; }
+              .mono { font-family: "JetBrains Mono", monospace; }
+            </style>
+
+            <!-- 1. transcript roots -->
+            <rect x="32" y="196" width="190" height="140" rx="12" fill="#cffafe" stroke="#0891b2" stroke-width="1.6"/>
+            <text x="127" y="222" class="t clbl" fill="#155e75">Transcript roots</text>
+            <text x="127" y="252" class="t sub mono">~/.claude/projects</text>
+            <text x="127" y="270" class="t sub">(host orchestrator)</text>
+            <text x="127" y="292" class="t sub mono">+ stack usage dirs</text>
+            <text x="127" y="310" class="t sub">*.jsonl</text>
+
+            <!-- pricing -->
+            <rect x="262" y="96" width="170" height="64" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.4" stroke-dasharray="5 3"/>
+            <text x="347" y="122" class="t lbl" fill="#78350f">💲 bundled pricing</text>
+            <text x="347" y="142" class="t sub">offline cost estimate</text>
+
+            <!-- 2. ccusage -->
+            <rect x="262" y="200" width="170" height="132" rx="12" fill="#fef3c7" stroke="#d97706" stroke-width="2.2"/>
+            <text x="347" y="232" class="t clbl" fill="#78350f">📊 ccusage</text>
+            <text x="347" y="254" class="t sub">(library)</text>
+            <text x="347" y="278" class="t sub">loadDailyUsageData()</text>
+            <text x="347" y="294" class="t sub">loadSessionData()</text>
+            <text x="347" y="314" class="t sub">→ normalized usage</text>
+
+            <!-- 3. adapter cluster -->
+            <rect x="476" y="92" width="372" height="384" rx="14" fill="#ede9fe" fill-opacity="0.4" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="662" y="120" class="t clbl" fill="#5b21b6">🧩 src/main/telemetry/  (adapter)</text>
+
+            <rect x="500" y="140" width="324" height="56" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="662" y="162" class="t lbl mono" fill="#5b21b6">usage-engine.ts</text>
+            <text x="662" y="180" class="t sub">runs ccusage over all roots</text>
+
+            <rect x="500" y="212" width="324" height="74" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="662" y="234" class="t lbl mono" fill="#5b21b6">attribution.ts</text>
+            <text x="662" y="252" class="t sub">session_id → stack → ticket</text>
+            <text x="662" y="270" class="t sub">(no ticket ⇒ orchestrator / ad-hoc)</text>
+
+            <rect x="500" y="302" width="324" height="58" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+            <text x="662" y="324" class="t lbl mono" fill="#5b21b6">rollup-store.ts</text>
+            <text x="662" y="342" class="t sub">SQLite cache — daily · ticket · model · history</text>
+
+            <!-- registry feeding attribution -->
+            <rect x="500" y="392" width="324" height="60" rx="8" fill="#cffafe" stroke="#0891b2" stroke-width="1.4" stroke-dasharray="5 3"/>
+            <text x="662" y="414" class="t lbl" fill="#155e75">🗄 Registry (SQLite)</text>
+            <text x="662" y="434" class="t sub mono">tasks.session_id · stacks.ticket · project_dir</text>
+
+            <!-- 4. IPC -->
+            <rect x="900" y="206" width="118" height="120" rx="12" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.6"/>
+            <text x="959" y="248" class="t lbl" fill="#5b21b6">IPC</text>
+            <text x="959" y="270" class="t sub mono">stats:</text>
+            <text x="959" y="284" class="t sub mono">telemetry:*</text>
+
+            <!-- 5. renderer -->
+            <rect x="1070" y="92" width="218" height="384" rx="14" fill="#dbeafe" fill-opacity="0.4" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="1179" y="120" class="t clbl" fill="#1e3a8a">🖥 Renderer</text>
+
+            <rect x="1094" y="160" width="170" height="92" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="1179" y="190" class="t lbl" fill="#1e3a8a">Telemetry view</text>
+            <text x="1179" y="212" class="t sub">dedicated screen</text>
+            <text x="1179" y="228" class="t sub">dashboards 01–05</text>
+
+            <rect x="1094" y="276" width="170" height="92" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+            <text x="1179" y="306" class="t lbl" fill="#1e3a8a">Board surfaces</text>
+            <text x="1179" y="328" class="t sub">badges · rail · strip</text>
+            <text x="1179" y="344" class="t sub">heatmap · expand · 06–10</text>
+
+            <!-- flow arrows -->
+            <path d="M 222 266 L 260 266" fill="none" stroke="#64748b" stroke-width="1.6" marker-end="url(#p-m)"/>
+            <path d="M 347 160 L 347 198" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#p-m)"/>
+            <path d="M 432 266 L 498 168" fill="none" stroke="#64748b" stroke-width="1.6" marker-end="url(#p-m)"/>
+            <path d="M 662 392 L 662 290" fill="none" stroke="#64748b" stroke-width="1.5" marker-end="url(#p-m)"/>
+            <path d="M 848 266 L 898 266" fill="none" stroke="#64748b" stroke-width="1.6" marker-end="url(#p-m)"/>
+            <path d="M 1018 266 L 1068 232" fill="none" stroke="#64748b" stroke-width="1.6" marker-end="url(#p-m)"/>
+          </svg>
+        </div>
+      </div>
+      <details class="arch-source">
+        <summary>Source of truth — § 4 pipeline (plain text)</summary>
+        <pre>Transcript roots ──▶ ccusage (library) ──▶ telemetry adapter ──▶ IPC ──▶ Renderer
+  host ~/.claude/projects        ▲                src/main/telemetry/      stats:    Telemetry view
+  + mounted stack usage dirs     │                 • usage-engine.ts       telemetry  (dashboards 01–05)
+  *.jsonl                  bundled pricing          • attribution.ts        :*        Board surfaces
+                           (offline cost)            session_id→stack→ticket           (06–10)
+                                                    • rollup-store.ts (SQLite cache)
+                                                          ▲
+                                          Registry (SQLite): tasks.session_id,
+                                          stacks.ticket, project_dir
+
+New code (all host-side, behind a telemetry interface):
+  src/main/telemetry/usage-engine.ts     wraps ccusage library calls
+  src/main/telemetry/attribution.ts      session → ticket joins
+  src/main/telemetry/rollup-store.ts     SQLite rollup cache + queries
+  IPC: stats:telemetry:summary|daily|byTicket|byModel|session
+  compose change: mount projects/ per stack (§ 3)</pre>
+      </details>
+      <div class="figure-caption">ccusage stays the source of truth; the rollup cache exists so the dashboard is instant and history persists past teardown. Re-derive on demand.</div>
+    </figure>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 5</span> Data dimensions the UI needs</h2>
+    <p class="section-blurb">Every dimension the mockups draw, mapped to its source. Only one — the dual-loop phase split — is genuinely first-party.</p>
+    <table class="smell-table">
+      <thead><tr><th>Dimension</th><th>Source</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Cost + tokens / <strong>day</strong></td><td>ccusage daily</td><td>the daily graph</td></tr>
+        <tr><td>Cost + tokens / <strong>month</strong>, vs previous</td><td>ccusage monthly</td><td>KPI deltas</td></tr>
+        <tr><td>Cost / <strong>ticket</strong></td><td>ccusage session × attribution</td><td>the headline ask</td></tr>
+        <tr><td>Cost / <strong>model</strong></td><td>ccusage (per-model)</td><td>Opus / Sonnet / Haiku split</td></tr>
+        <tr><td><strong>input / output / cache-create / cache-read</strong></td><td>ccusage (native)</td><td>the token mix</td></tr>
+        <tr><td>Per-<strong>session</strong> drill-down</td><td>ccusage session</td><td>the ledger view</td></tr>
+        <tr><td><strong>execution / review / verify</strong> phase split</td><td>our <code>task_token_steps</code> (finish wiring)</td><td>optional; enriches per-ticket</td></tr>
+        <tr><td>Outer vs inner</td><td>attribution (ticket = null ⇒ outer)</td><td>the split view</td></tr>
+      </tbody>
+    </table>
+    <p>Phase-level usage is the one thing ccusage can't know — it's our dual-loop concept. We already have a
+    <code>task_token_steps</code> table for it that is <strong>never populated</strong> (§ 6); finishing that
+    write path is the only first-party telemetry worth keeping.</p>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 6</span> Cleanup — what to retire</h2>
+    <p class="section-blurb">
+      Investigation found overlapping, mostly-dead usage code. Proposed disposition below (confirm line refs
+      during implementation). Net: delete two dead systems, finish or drop one half-built table, add one mount
+      and one persistence path — the surface area <strong>shrinks</strong>.
+    </p>
+    <table class="smell-table">
+      <thead><tr><th>Code</th><th>Current state</th><th>Disposition</th></tr></thead>
+      <tbody>
+        <tr><td><code>src/main/agent/token-telemetry.ts</code></td><td>Per-turn JSONL writer, opt-in via <code>SANDSTORM_TOKEN_TELEMETRY=1</code>, no UI — dead by default</td><td><span class="sev sev-high">Remove.</span> ccusage supersedes it.</td></tr>
+        <tr><td><code>src/main/control-plane/account-usage.ts</code></td><td>Spawns <code>claude</code> in a PTY, sends <code>/usage</code>, <em>parses TUI text</em> for the session-limit meter</td><td><span class="keep">Keep for now</span> — powers the limit modals; isolate, revisit once ccusage is trusted. (Parsing is the fragility we're escaping.)</td></tr>
+        <tr><td><code>tasks.session_id</code> column</td><td>Populated</td><td><span class="keep">Keep &amp; lean on it</span> — the attribution key.</td></tr>
+        <tr><td><code>task_token_steps</code> table (per-iteration / phase)</td><td>Schema exists (v10), <strong>never written</strong></td><td><span class="sev sev-med">Decide:</span> wire the writer (enables phase split, § 5) <em>or</em> drop it. Don't leave it half-built.</td></tr>
+        <tr><td><code>stack_history</code> token fields</td><td>History archived <strong>without</strong> token totals</td><td><span class="sev sev-med">Add cost/token columns</span> — or rely on persisted transcripts (§ 3) + rollup cache.</td></tr>
+        <tr><td><code>stacks.total_*_tokens</code> / <code>tasks.*_tokens</code> (v3/v7)</td><td>Partially populated, parallel to the above</td><td><span class="sev sev-low">Consolidate</span> — let the rollup cache be the one read path.</td></tr>
+        <tr><td>In-container <code>token-counter.sh</code> → <code>/tmp/claude-tokens-*</code></td><td>Extracts counts in-container, <strong>not persisted</strong></td><td><span class="sev sev-high">Remove</span> once <code>projects/</code> is mounted — transcripts carry richer data.</td></tr>
+        <tr><td><code>raw-request-capture.ts</code>, <code>ephemeral-timing.ts</code></td><td>Separate experimental opt-in systems</td><td>Out of scope; leave or remove independently.</td></tr>
+      </tbody>
+    </table>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 7</span> Options &amp; trade-offs</h2>
+    <p class="section-blurb">Four shapes considered. The recommendation is effectively <strong>D</strong> — ccusage for the bulk, plus our phase writer as the one first-party enrichment.</p>
+
+    <h4>A · ccusage library + mount <code>projects/</code> &nbsp;<span class="keep">(recommended core)</span></h4>
+    <p>➕ Proven engine, cost included, no parsing, persists past teardown, least new code.
+       ➖ External JSONL-schema dependency (mitigated by an adapter + pinned version); one compose change per stack.</p>
+    <h4>B · ccusage CLI via <code>docker cp</code> on task end</h4>
+    <p>➕ No long-lived mount. ➖ Export can miss in-progress/aborted sessions; subprocess + JSON plumbing; nothing during a running task.</p>
+    <h4>C · First-party pipeline (finish our own SQLite telemetry)</h4>
+    <p>➕ Full control, no external dep, phase-aware natively. ➖ We re-implement pricing and aggregation — the exact work that has failed repeatedly here; most maintenance for least differentiation.</p>
+    <h4>D · Hybrid &nbsp;<span class="keep">(the recommendation)</span></h4>
+    <p>ccusage for cost/usage + our <code>task_token_steps</code> for the phase split. ➕ Best data — ccusage's rigor plus our dual-loop dimension. ➖ Two sources to reconcile.</p>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 8</span> Rough phasing</h2>
+    <p class="section-blurb">Each phase is independently shippable and reviewable.</p>
+    <ol>
+      <li><strong>Ingest the host (orchestrator) only.</strong> Add ccusage + adapter + <code>stats:telemetry:*</code> IPC. Ship the Telemetry view (mockup 01) reading real host data. No compose changes — immediate value, low risk.</li>
+      <li><strong>Attribute + persist.</strong> Join sessions → tickets; add the SQLite rollup cache. Light up per-ticket / per-model (mockups 02, 04, 05).</li>
+      <li><strong>Reach into stacks.</strong> Mount <code>projects/</code> per stack (§ 3); union the roots. Inner-stack and per-ticket numbers become real and survive teardown.</li>
+      <li><strong>Board integrations.</strong> Add the chosen board surface(s) from 06–10.</li>
+      <li><strong>Cleanup.</strong> Remove dead telemetry (§ 6); decide <code>task_token_steps</code>; settle the <code>/usage</code> meter's future.</li>
+    </ol>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 9</span> Open questions</h2>
+    <ul>
+      <li>ccusage multi-root discovery: a native flag vs adapter-side glob + merge?</li>
+      <li>Mount mechanism: bind-mount vs named volume; uid / permission model.</li>
+      <li>Keep <code>task_token_steps</code> (phase split) or cut it? — drives whether we touch the dual-loop runner.</li>
+      <li>Does the existing <code>/usage</code> session-limit meter stay, or fold into the new telemetry once trusted?</li>
+      <li>Cost display: list price only, or account for plan/subscription? (ccusage estimates list price — fine for trend; label it "estimated".)</li>
+    </ul>
+
+    <h2><span class="num">§ —</span> Glossary</h2>
+    <dl class="glossary">
+      <dt>ccusage</dt><dd>Local CLI + library that reads Claude session transcripts and reports usage and estimated cost by day/month/session/model. The proposed read &amp; cost engine.</dd>
+      <dt>Transcript</dt><dd>The per-session <code>*.jsonl</code> Claude Code writes under <code>~/.claude/projects/&lt;project&gt;/&lt;session&gt;.jsonl</code> — one line per message, with token usage.</dd>
+      <dt>Attribution</dt><dd>Mapping a session's usage to a ticket, via <code>tasks.session_id</code> (preferred) or the stack's mounted usage dir; null ticket ⇒ outer/orchestrator.</dd>
+      <dt>Rollup cache</dt><dd>SQLite-stored pre-aggregated daily / per-ticket / per-model totals so the dashboard is instant and history outlives a torn-down stack.</dd>
+      <dt>Phase split</dt><dd>Execution / review / verify cost breakdown from the dual-loop — first-party, via <code>task_token_steps</code>. Not knowable to ccusage.</dd>
+      <dt>cache-create / cache-read</dt><dd>Prompt-cache write vs hit tokens, priced and counted separately. Cache-read dominates the mix.</dd>
+    </dl>
+
+    <p class="footnote">
+      Hand-authored inline SVG; no external diagram renderer. Each figure is paired with a
+      <code>&lt;details class="arch-source"&gt;</code> structured-text block — that text is the source of truth;
+      keep both in sync when editing a diagram. This file is a <em>proposal</em> (drafted 2026-06-02), not a
+      description of shipped code; § 6 line refs come from a code investigation and should be confirmed before
+      relying on them. Visual UI explorations: <a href="telemetry-mockups/index.html">telemetry-mockups/</a>.
+    </p>
+  </main>
+
+  <script type="module">
+    // All diagrams are hand-authored inline SVG. Wire pan/zoom/fullscreen/PNG per figure.
+    await new Promise((r) => requestAnimationFrame(r));
+    await new Promise((r) => requestAnimationFrame(r));
+
+    document.querySelectorAll(".figure").forEach((fig, idx) => {
+      const svg = fig.querySelector(".figure-viewport svg");
+      const viewport = fig.querySelector(".figure-viewport");
+      const toolbar = fig.querySelector(".figure-toolbar");
+      if (!svg || !viewport || !toolbar) return;
+
+      const vb = svg.viewBox.baseVal;
+      const naturalW = (vb && vb.width)  || svg.getBoundingClientRect().width  || 800;
+      const naturalH = (vb && vb.height) || svg.getBoundingClientRect().height || 600;
+
+      svg.removeAttribute("width");
+      svg.removeAttribute("height");
+      svg.removeAttribute("style");
+      svg.style.cssText =
+        "display:block;width:" + naturalW + "px;height:" + naturalH + "px;" +
+        "transform-origin:center center;will-change:transform";
+      svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+      const ZMIN = 0.05, ZMAX = 16;
+      let zoom = 1, tx = 0, ty = 0;
+
+      const applyTransform = () => {
+        svg.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
+      };
+      const fit = () => {
+        const vpW = viewport.clientWidth  || viewport.getBoundingClientRect().width;
+        const vpH = viewport.clientHeight || viewport.getBoundingClientRect().height;
+        const fitZoom = Math.min(vpW / naturalW, vpH / naturalH) * 0.94;
+        zoom = Math.max(ZMIN, Math.min(ZMAX, fitZoom));
+        tx = 0; ty = 0; applyTransform();
+      };
+      const setZoom = (next, anchor) => {
+        const old = zoom;
+        const z = Math.max(ZMIN, Math.min(ZMAX, next));
+        if (z === old) return;
+        const rect = viewport.getBoundingClientRect();
+        const ax = anchor ? (anchor.clientX - rect.left - rect.width  / 2) : 0;
+        const ay = anchor ? (anchor.clientY - rect.top  - rect.height / 2) : 0;
+        const ratio = z / old;
+        tx = ax - (ax - tx) * ratio;
+        ty = ay - (ay - ty) * ratio;
+        zoom = z; applyTransform();
+      };
+
+      requestAnimationFrame(() => requestAnimationFrame(fit));
+
+      const figLabel = fig.dataset.figure || `fig-${idx + 1}`;
+      toolbar.querySelector('[data-action="zoom-in"]').onclick  = () => setZoom(zoom * 1.3);
+      toolbar.querySelector('[data-action="zoom-out"]').onclick = () => setZoom(zoom / 1.3);
+      toolbar.querySelector('[data-action="reset"]').onclick    = fit;
+      toolbar.querySelector('[data-action="fullscreen"]').onclick = async () => {
+        if (document.fullscreenElement === fig) {
+          await document.exitFullscreen();
+        } else {
+          await fig.requestFullscreen();
+          setTimeout(fit, 80);
+        }
+      };
+      toolbar.querySelector('[data-action="download"]').onclick =
+        () => downloadPNG(svg, `sandstorm-telemetry-${figLabel}.png`);
+
+      fig.addEventListener("fullscreenchange", () => setTimeout(fit, 50));
+
+      let dragging = false, dragOrigin = null;
+      viewport.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        dragOrigin = { x: e.clientX, y: e.clientY, tx, ty };
+        viewport.classList.add("is-grabbing");
+        e.preventDefault();
+      });
+      window.addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        tx = dragOrigin.tx + (e.clientX - dragOrigin.x);
+        ty = dragOrigin.ty + (e.clientY - dragOrigin.y);
+        applyTransform();
+      });
+      const stopDrag = () => {
+        if (!dragging) return;
+        dragging = false;
+        viewport.classList.remove("is-grabbing");
+      };
+      window.addEventListener("mouseup", stopDrag);
+      window.addEventListener("blur", stopDrag);
+
+      viewport.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+        setZoom(zoom * factor, { clientX: e.clientX, clientY: e.clientY });
+      }, { passive: false });
+    });
+
+    function downloadPNG(svgEl, filename) {
+      const clone = svgEl.cloneNode(true);
+      clone.removeAttribute("style");
+      const vb = svgEl.viewBox.baseVal;
+      const w = vb && vb.width ? vb.width : svgEl.getBoundingClientRect().width;
+      const h = vb && vb.height ? vb.height : svgEl.getBoundingClientRect().height;
+      clone.setAttribute("width", w);
+      clone.setAttribute("height", h);
+      clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+
+      const xml = new XMLSerializer().serializeToString(clone);
+      const b64 = btoa(unescape(encodeURIComponent(xml)));
+      const url = `data:image/svg+xml;base64,${b64}`;
+
+      const img = new Image();
+      img.onload = () => {
+        const scale = 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = w * scale;
+        canvas.height = h * scale;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((blob) => {
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(a.href);
+        }, "image/png");
+      };
+      img.onerror = (e) => console.error("[telemetry] PNG export failed", e);
+      img.src = url;
+    }
+
+    document.addEventListener("keydown", (e) => {
+      const fig = document.fullscreenElement;
+      if (!fig || !fig.classList.contains("figure")) return;
+      const btn = (action) => fig.querySelector(`[data-action="${action}"]`);
+      if (e.key === "+" || e.key === "=") btn("zoom-in")?.click();
+      else if (e.key === "-" || e.key === "_") btn("zoom-out")?.click();
+      else if (e.key === "0" || e.key.toLowerCase() === "r") btn("reset")?.click();
+    });
+  </script>
+</body>
+</html>

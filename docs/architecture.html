@@ -1,0 +1,2032 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Sandstorm Desktop · architecture</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap"
+    rel="stylesheet"
+  />
+
+  <style>
+    :root {
+      --c-bg: #ffffff;
+      --c-fg: #0f172a;
+      --c-muted: #475569;
+      --c-rule: #e2e8f0;
+      --c-soft: #f8fafc;
+
+      /* component palette — one hue per architectural layer */
+      --c-renderer: #2563eb;  --c-renderer-bg: #dbeafe;   /* React + Zustand UI       */
+      --c-main:     #7c3aed;  --c-main-bg:     #ede9fe;   /* Electron main / IPC      */
+      --c-agent:    #e11d48;  --c-agent-bg:    #ffe4e6;   /* agent backend / Claudes  */
+      --c-control:  #d97706;  --c-control-bg:  #fef3c7;   /* control-plane primitives */
+      --c-sched:    #16a34a;  --c-sched-bg:    #dcfce7;   /* scheduler                */
+      --c-runtime:  #0d9488;  --c-runtime-bg:  #ccfbf1;   /* container runtime/stacks */
+      --c-data:     #0891b2;  --c-data-bg:     #cffafe;   /* persistence              */
+      --c-ext:      #475569;  --c-ext-bg:      #e2e8f0;   /* external systems / user  */
+      --c-smell:    #ea580c;  --c-smell-bg:    #ffedd5;   /* tech debt / cruft        */
+    }
+
+    * { box-sizing: border-box; }
+    html, body {
+      margin: 0;
+      padding: 0;
+      background: var(--c-bg);
+      color: var(--c-fg);
+      font-family: "Inter", -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+      font-size: 16px;
+      line-height: 1.55;
+      -webkit-font-smoothing: antialiased;
+    }
+    main {
+      max-width: 1180px;
+      margin: 48px auto 96px;
+      padding: 0 32px;
+    }
+
+    .doc-eyebrow {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 12px;
+      font-weight: 500;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      color: var(--c-muted);
+      margin: 0 0 8px;
+    }
+    h1 {
+      font-weight: 700;
+      font-size: 36px;
+      letter-spacing: -0.02em;
+      margin: 0 0 8px;
+    }
+    .doc-subtitle {
+      color: var(--c-muted);
+      font-size: 17px;
+      margin: 0 0 32px;
+      max-width: 760px;
+    }
+    h2 {
+      display: flex;
+      align-items: baseline;
+      gap: 12px;
+      font-weight: 600;
+      font-size: 22px;
+      letter-spacing: -0.01em;
+      margin: 64px 0 6px;
+      padding-top: 32px;
+      border-top: 1px solid var(--c-rule);
+    }
+    h2 .num {
+      font-family: "JetBrains Mono", monospace;
+      font-weight: 500;
+      color: var(--c-muted);
+      font-size: 14px;
+    }
+    h2 + .section-blurb {
+      color: var(--c-muted);
+      font-size: 15px;
+      margin: 0 0 24px;
+      max-width: 820px;
+    }
+    h3 {
+      font-size: 15px;
+      font-weight: 600;
+      margin: 28px 0 8px;
+      color: var(--c-fg);
+    }
+    h4 {
+      font-size: 14px;
+      font-weight: 600;
+      margin: 22px 0 6px;
+      color: var(--c-fg);
+    }
+    p { margin: 8px 0 14px; max-width: 820px; }
+    p, li { font-size: 15px; }
+    ul, ol { max-width: 820px; }
+
+    code {
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      background: var(--c-soft);
+      padding: 1px 6px;
+      border-radius: 4px;
+      font-size: 13px;
+      color: #334155;
+    }
+
+    .figure {
+      margin: 16px 0 8px;
+      border: 1px solid var(--c-rule);
+      border-radius: 14px;
+      background: var(--c-bg);
+      overflow: hidden;
+      box-shadow: 0 1px 3px rgba(15, 23, 42, 0.04);
+    }
+    .figure-toolbar {
+      display: flex;
+      gap: 6px;
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--c-rule);
+      background: linear-gradient(180deg, #ffffff 0%, #f8fafc 100%);
+      font-size: 13px;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .figure-toolbar .label {
+      font-family: "JetBrains Mono", monospace;
+      font-size: 11px;
+      color: var(--c-muted);
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-right: 12px;
+    }
+    .figure-toolbar button {
+      background: #ffffff;
+      border: 1px solid var(--c-rule);
+      border-radius: 6px;
+      padding: 5px 10px;
+      font-family: inherit;
+      font-size: 12px;
+      font-weight: 500;
+      cursor: pointer;
+      color: var(--c-fg);
+      transition: all 0.15s;
+    }
+    .figure-toolbar button:hover {
+      background: var(--c-soft);
+      border-color: #cbd5e1;
+    }
+    .figure-toolbar button:active { transform: translateY(1px); }
+    .figure-toolbar .spacer { flex: 1; }
+    .figure-toolbar .hint {
+      color: var(--c-muted);
+      font-size: 11px;
+      font-style: italic;
+    }
+    .figure-viewport {
+      height: 640px;
+      width: 100%;
+      position: relative;
+      overflow: hidden;
+      background:
+        radial-gradient(circle at 20px 20px, #e2e8f0 1px, transparent 1px),
+        var(--c-soft);
+      background-size: 24px 24px;
+      cursor: grab;
+      user-select: none;
+    }
+    .figure-viewport.is-grabbing { cursor: grabbing; }
+    .figure-viewport .hand-frame {
+      margin: 0; padding: 0; background: transparent;
+      width: 100%; height: 100%;
+      display: flex; align-items: center; justify-content: center;
+    }
+    .figure-viewport .hand-frame svg {
+      display: block;
+      flex-shrink: 0;
+      transform-origin: center center;
+      will-change: transform;
+    }
+
+    .arch-source {
+      margin: 16px 0 8px;
+      border: 1px solid var(--c-rule);
+      border-radius: 8px;
+      background: var(--c-soft);
+      padding: 12px 16px 14px;
+    }
+    .arch-source > summary {
+      cursor: pointer;
+      font-weight: 600;
+      font-size: 14px;
+      color: var(--c-fg);
+      list-style: revert;
+    }
+    .arch-source[open] > summary { margin-bottom: 10px; }
+    .arch-source pre {
+      margin: 0;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+      font-size: 12.5px;
+      line-height: 1.55;
+      white-space: pre-wrap;
+      color: var(--c-fg);
+    }
+    .figure-caption {
+      padding: 10px 16px;
+      font-size: 12px;
+      color: var(--c-muted);
+      background: var(--c-soft);
+      border-top: 1px solid var(--c-rule);
+      font-style: italic;
+    }
+    .figure:fullscreen {
+      display: flex; flex-direction: column;
+      width: 100vw; height: 100vh; margin: 0; padding: 0;
+      background: var(--c-bg); border: none; border-radius: 0;
+    }
+    .figure:fullscreen .figure-toolbar,
+    .figure:fullscreen .figure-caption { flex-shrink: 0; }
+    .figure:fullscreen .figure-viewport {
+      flex: 1 1 auto; height: auto; min-height: 0; width: 100%;
+    }
+
+    .callout {
+      background: linear-gradient(180deg, #fffbeb 0%, #fef3c7 100%);
+      border: 1px solid #fde68a;
+      border-radius: 12px;
+      padding: 18px 22px;
+      margin: 24px 0 16px;
+      font-size: 14px;
+      color: #78350f;
+    }
+    .callout strong { color: #7c2d12; }
+    .callout.smell {
+      background: linear-gradient(180deg, #fff7ed 0%, #ffedd5 100%);
+      border-color: #fdba74;
+      color: #7c2d12;
+    }
+
+    .legend {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
+      gap: 10px;
+      margin: 24px 0 8px;
+    }
+    .legend .item {
+      display: flex; align-items: center; gap: 10px;
+      padding: 10px 12px;
+      border: 1px solid var(--c-rule);
+      border-radius: 8px;
+      background: #fff;
+      font-size: 13px;
+    }
+    .swatch {
+      width: 16px; height: 16px; border-radius: 4px;
+      border: 2px solid; flex-shrink: 0;
+    }
+    .sw-renderer { background: var(--c-renderer-bg); border-color: var(--c-renderer); }
+    .sw-main     { background: var(--c-main-bg);     border-color: var(--c-main); }
+    .sw-agent    { background: var(--c-agent-bg);    border-color: var(--c-agent); }
+    .sw-control  { background: var(--c-control-bg);  border-color: var(--c-control); }
+    .sw-sched    { background: var(--c-sched-bg);    border-color: var(--c-sched); }
+    .sw-runtime  { background: var(--c-runtime-bg);  border-color: var(--c-runtime); }
+    .sw-data     { background: var(--c-data-bg);     border-color: var(--c-data); }
+    .sw-ext      { background: var(--c-ext-bg);      border-color: var(--c-ext); }
+    .sw-smell    { background: var(--c-smell-bg);    border-color: var(--c-smell); border-style: dashed; }
+
+    dl.glossary {
+      display: grid;
+      grid-template-columns: 240px 1fr;
+      column-gap: 24px;
+      row-gap: 14px;
+      margin: 16px 0 0;
+      max-width: 980px;
+    }
+    dl.glossary dt {
+      font-weight: 600; color: var(--c-fg); font-size: 14px;
+      font-family: "JetBrains Mono", ui-monospace, monospace;
+    }
+    dl.glossary dd { margin: 0; color: var(--c-muted); font-size: 14px; }
+
+    table.smell-table {
+      border-collapse: collapse;
+      width: 100%;
+      max-width: 980px;
+      margin: 16px 0;
+      font-size: 13.5px;
+    }
+    table.smell-table th, table.smell-table td {
+      border: 1px solid var(--c-rule);
+      padding: 8px 12px;
+      text-align: left;
+      vertical-align: top;
+    }
+    table.smell-table th {
+      background: var(--c-soft);
+      font-weight: 600;
+    }
+    table.smell-table td code { font-size: 12px; }
+    .sev { font-weight: 600; white-space: nowrap; }
+    .sev-high { color: #b91c1c; }
+    .sev-med  { color: #c2410c; }
+    .sev-low  { color: #a16207; }
+
+    .footnote {
+      color: var(--c-muted);
+      font-size: 13px;
+      margin-top: 40px;
+      padding-top: 24px;
+      border-top: 1px solid var(--c-rule);
+    }
+
+    @media (max-width: 760px) {
+      dl.glossary { grid-template-columns: 1fr; }
+      dl.glossary dt { margin-top: 8px; }
+      h1 { font-size: 28px; }
+      .figure-viewport { height: 480px; }
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <p class="doc-eyebrow">sandstorm desktop · system architecture</p>
+    <h1>How Sandstorm Desktop fits together</h1>
+    <p class="doc-subtitle">
+      A working map of the app as it exists today — an Electron control plane that creates
+      isolated Docker "stacks", drives an <em>inner</em> Claude agent inside each one, and is
+      itself orchestrated by an <em>outer</em> Claude. § 1 gives the macro shape; the sections
+      after that open up each layer — the two-Claude boundary, the stack lifecycle, the
+      deterministic workflow plane &amp; scheduler, the renderer, and persistence. The final
+      section is an honest <strong>architecture review</strong>: the god files, dead code, and
+      half-migrated seams that have accumulated as this evolved.
+    </p>
+
+    <div class="callout">
+      <strong>How to read this file.</strong> Each diagram has a toolbar: <em>+ / −</em> zoom,
+      <em>Reset</em> re-fits, <em>Fullscreen</em> takes over the tab, <em>⬇ PNG</em> exports a
+      static image. Drag inside a diagram to pan, scroll/pinch to zoom. Every diagram is paired
+      with a <code>&lt;details class="arch-source"&gt;</code> block holding the same structure as
+      <strong>plain text</strong> — that block is the source of truth. If you are an agent trying
+      to understand the system, read the arch-source text first, then glance at the SVG.
+      Keep the two in sync when you change a diagram. File paths are relative to the repo root
+      unless noted.
+    </div>
+
+    <div class="legend" aria-label="Color key">
+      <div class="item"><span class="swatch sw-renderer"></span><span><strong>Renderer</strong> — React + Zustand UI</span></div>
+      <div class="item"><span class="swatch sw-main"></span><span><strong>Main / IPC</strong> — Electron main process</span></div>
+      <div class="item"><span class="swatch sw-agent"></span><span><strong>Agent backend</strong> — outer/inner Claude</span></div>
+      <div class="item"><span class="swatch sw-control"></span><span><strong>Control plane</strong> — deterministic primitives</span></div>
+      <div class="item"><span class="swatch sw-sched"></span><span><strong>Scheduler</strong> — cron-driven</span></div>
+      <div class="item"><span class="swatch sw-runtime"></span><span><strong>Runtime / stacks</strong> — Docker/Podman</span></div>
+      <div class="item"><span class="swatch sw-data"></span><span><strong>Persistence</strong> — SQLite + files</span></div>
+      <div class="item"><span class="swatch sw-ext"></span><span><strong>External</strong> — APIs, daemon, user</span></div>
+      <div class="item"><span class="swatch sw-smell"></span><span><strong>Tech debt</strong> — see § 7</span></div>
+    </div>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 1</span> The macro architecture</h2>
+    <p class="section-blurb">
+      Sandstorm Desktop is a three-process Electron app (<strong>renderer</strong> ·
+      <strong>preload</strong> · <strong>main</strong>) wrapped around a container runtime. The
+      renderer is a thin React view over a Zustand store; the main process owns <em>all</em>
+      durable state and every privileged operation, exposed to the renderer through a single typed
+      preload bridge (<code>window.sandstorm</code>). The main process drives Docker/Podman to
+      stand up <strong>stacks</strong> — each stack is the project's own
+      <code>docker-compose</code> services plus one extra <code>claude</code> container running an
+      <em>inner</em> Claude agent. A separate <em>outer</em> Claude subprocess orchestrates the
+      whole thing. There are therefore <strong>two distinct Claude roles</strong> (see § 2), which
+      is the single most important idea in this codebase.
+    </p>
+
+    <figure class="figure" data-figure="macro">
+      <div class="figure-toolbar">
+        <span class="label">§ 1 · Renderer → Main → Runtime → Stacks, with the two Claudes</span>
+        <button data-action="zoom-out">−</button>
+        <button data-action="zoom-in">+</button>
+        <button data-action="reset">Reset</button>
+        <button data-action="fullscreen">⤢ Fullscreen</button>
+        <span class="spacer"></span>
+        <span class="hint">drag to pan · scroll to zoom</span>
+        <button data-action="download">⬇ PNG</button>
+      </div>
+      <div class="figure-viewport">
+        <div class="hand-frame">
+          <svg viewBox="0 0 1460 860" xmlns="http://www.w3.org/2000/svg" role="img"
+               aria-label="Macro architecture. User interacts with the React/Zustand renderer. The renderer calls the main process only through the window.sandstorm preload bridge. The main process holds IPC handlers, the agent backend, the control plane, the scheduler, and a SQLite registry. The agent backend spawns the outer Claude subprocess which calls the Anthropic API and calls back into a bridge server for tools. The control plane drives the container runtime (Docker/Podman) which runs stacks; each stack is the project services plus an inner Claude container that also calls the Anthropic API. The control plane talks to GitHub/Jira. The scheduler is woken by OS cron over a unix socket.">
+            <defs>
+              <marker id="a-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+              <marker id="a-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#e11d48"/></marker>
+              <marker id="a-ext" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/></marker>
+            </defs>
+            <style>
+              .t { font-family: "Inter", system-ui, sans-serif; }
+              .lbl  { font-size: 13px; font-weight: 500; text-anchor: middle; dominant-baseline: middle; }
+              .sub  { font-size: 10px; font-weight: 400; text-anchor: middle; dominant-baseline: middle; fill: #475569; }
+              .clbl { font-size: 13px; font-weight: 600; text-anchor: middle; }
+              .e    { fill: none; stroke: #64748b; stroke-width: 1.5; }
+              .e-d  { stroke-dasharray: 5 4; }
+              .e-agent { fill: none; stroke: #e11d48; stroke-width: 1.8; }
+              .e-ext   { fill: none; stroke: #475569; stroke-width: 1.4; stroke-dasharray: 5 4; }
+              .elbl { font-size: 11px; fill: #334155; paint-order: stroke; stroke: #fff; stroke-width: 4px; text-anchor: middle; }
+            </style>
+
+            <!-- User -->
+            <g class="t">
+              <ellipse cx="58" cy="430" rx="44" ry="22" fill="#e2e8f0" stroke="#475569" stroke-width="1.5"/>
+              <text x="58" y="434" class="lbl" fill="#0f172a">👤 User</text>
+            </g>
+
+            <!-- Renderer cluster -->
+            <g class="t">
+              <rect x="128" y="300" width="230" height="260" rx="14" fill="#dbeafe" fill-opacity="0.35" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="243" y="326" class="clbl" fill="#1e3a8a">🖥 Renderer (React)</text>
+              <rect x="152" y="346" width="182" height="44" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="243" y="364" class="lbl" fill="#1e3a8a">UI components</text>
+              <text x="243" y="379" class="sub">Kanban · StackDetail · …</text>
+              <rect x="152" y="406" width="182" height="44" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="243" y="424" class="lbl" fill="#1e3a8a">Zustand store</text>
+              <text x="243" y="439" class="sub">store.ts — all UI state</text>
+              <rect x="152" y="466" width="182" height="44" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="243" y="484" class="lbl" fill="#1e3a8a">agentStreamService</text>
+              <text x="243" y="499" class="sub">persistent listeners</text>
+            </g>
+
+            <!-- Preload bridge -->
+            <g class="t">
+              <rect x="386" y="360" width="70" height="150" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="421" y="430" class="lbl" fill="#5b21b6" transform="rotate(-90 421 430)">preload bridge</text>
+              <text x="438" y="430" class="sub" transform="rotate(-90 438 430)">window.sandstorm</text>
+            </g>
+
+            <!-- Main process cluster -->
+            <g class="t">
+              <rect x="486" y="150" width="320" height="560" rx="14" fill="#ede9fe" fill-opacity="0.32" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="646" y="176" class="clbl" fill="#5b21b6">⚙ Main process (Electron)</text>
+
+              <rect x="512" y="196" width="268" height="44" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="646" y="214" class="lbl" fill="#5b21b6">IPC handlers — ipc.ts</text>
+              <text x="646" y="229" class="sub">~75 channels · registerIpcHandlers()</text>
+
+              <!-- agent backend -->
+              <rect x="512" y="256" width="268" height="58" rx="8" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.6"/>
+              <text x="646" y="276" class="lbl" fill="#9f1239">🤖 Agent backend</text>
+              <text x="646" y="292" class="sub">ClaudeBackend — outer chat session,</text>
+              <text x="646" y="305" class="sub">ephemeral agents, bridge server, auth</text>
+
+              <!-- control plane -->
+              <rect x="512" y="330" width="268" height="58" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+              <text x="646" y="350" class="lbl" fill="#78350f">🧩 Control plane</text>
+              <text x="646" y="366" class="sub">StackManager · TaskWatcher · PR/ticket</text>
+              <text x="646" y="379" class="sub">deterministic primitives</text>
+
+              <!-- scheduler -->
+              <rect x="512" y="404" width="268" height="50" rx="8" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+              <text x="646" y="422" class="lbl" fill="#166534">⏰ Scheduler</text>
+              <text x="646" y="438" class="sub">cron → socket → deterministic dispatch</text>
+
+              <!-- session monitor -->
+              <rect x="512" y="470" width="268" height="46" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="646" y="488" class="lbl" fill="#5b21b6">SessionMonitor · tray</text>
+              <text x="646" y="503" class="sub">token-quota polling, auto-halt</text>
+
+              <!-- registry -->
+              <rect x="512" y="532" width="268" height="56" rx="8" fill="#cffafe" stroke="#0891b2" stroke-width="1.6"/>
+              <text x="646" y="552" class="lbl" fill="#155e75">🗄 Registry (SQLite)</text>
+              <text x="646" y="568" class="sub">~/.sandstorm.db — stacks, tasks,</text>
+              <text x="646" y="581" class="sub">tokens, projects, board, settings</text>
+
+              <rect x="512" y="606" width="268" height="40" rx="8" fill="#cffafe" stroke="#0891b2" stroke-width="1.4" stroke-dasharray="5 3"/>
+              <text x="646" y="626" class="lbl" fill="#155e75">file stores</text>
+              <text x="646" y="640" class="sub">schedules.json · refinements.json · *.jsonl</text>
+            </g>
+
+            <!-- Container runtime -->
+            <g class="t">
+              <rect x="846" y="360" width="180" height="150" rx="12" fill="#ccfbf1" fill-opacity="0.4" stroke="#0d9488" stroke-width="1.5"/>
+              <text x="936" y="386" class="clbl" fill="#134e4a">🐳 Runtime</text>
+              <rect x="868" y="402" width="136" height="42" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+              <text x="936" y="420" class="lbl" fill="#134e4a">DockerRuntime</text>
+              <text x="936" y="434" class="sub">dockerode</text>
+              <rect x="868" y="456" width="136" height="42" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+              <text x="936" y="474" class="lbl" fill="#134e4a">PodmanRuntime</text>
+              <text x="936" y="488" class="sub">CLI wrapper</text>
+            </g>
+
+            <!-- Stacks cluster -->
+            <g class="t">
+              <rect x="1066" y="250" width="290" height="360" rx="14" fill="#ccfbf1" fill-opacity="0.32" stroke="#0d9488" stroke-width="1.5"/>
+              <text x="1211" y="276" class="clbl" fill="#134e4a">📦 Stacks (per task)</text>
+
+              <rect x="1090" y="296" width="242" height="44" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.5"/>
+              <text x="1211" y="314" class="lbl" fill="#134e4a">project service containers</text>
+              <text x="1211" y="329" class="sub">postgres · redis · … (unmodified)</text>
+
+              <rect x="1090" y="352" width="242" height="74" rx="8" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.6"/>
+              <text x="1211" y="372" class="lbl" fill="#9f1239">🤖 inner Claude container</text>
+              <text x="1211" y="389" class="sub">task-runner.sh · dual-loop</text>
+              <text x="1211" y="403" class="sub">workspace clone at /app</text>
+              <text x="1211" y="417" class="sub">Docker-in-Docker socket</text>
+
+              <rect x="1090" y="440" width="242" height="40" rx="8" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.4" stroke-dasharray="5 3"/>
+              <text x="1211" y="460" class="lbl" fill="#134e4a">socat port proxies</text>
+              <text x="1211" y="474" class="sub">on-demand host-port exposure</text>
+
+              <text x="1211" y="512" class="sub">status/tokens via files in /tmp,</text>
+              <text x="1211" y="527" class="sub">read by exec + log streaming</text>
+            </g>
+
+            <!-- External systems (top band) -->
+            <g class="t">
+              <rect x="486" y="40" width="200" height="56" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="1.4"/>
+              <text x="586" y="60" class="lbl" fill="#1e293b">☁ Anthropic API</text>
+              <text x="586" y="76" class="sub">claude CLI subprocesses</text>
+
+              <rect x="706" y="40" width="180" height="56" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="1.4"/>
+              <text x="796" y="60" class="lbl" fill="#1e293b">🐙 GitHub / Jira</text>
+              <text x="796" y="76" class="sub">gh CLI · REST</text>
+
+              <rect x="906" y="40" width="170" height="56" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="1.4"/>
+              <text x="991" y="60" class="lbl" fill="#1e293b">🐳 Docker daemon</text>
+              <text x="991" y="76" class="sub">/var/run/docker.sock</text>
+
+              <rect x="1096" y="40" width="170" height="56" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="1.4"/>
+              <text x="1181" y="60" class="lbl" fill="#1e293b">⏱ OS cron</text>
+              <text x="1181" y="76" class="sub">crontab + wrapper.sh</text>
+            </g>
+
+            <!-- Edges -->
+            <g class="t">
+              <!-- user ↔ renderer -->
+              <path class="e" d="M 102 422 C 116 400, 124 392, 150 388" marker-end="url(#a-m)"/>
+              <text x="120" y="372" class="elbl">interacts</text>
+
+              <!-- renderer ↔ preload -->
+              <path class="e" d="M 358 420 L 386 420" marker-end="url(#a-m)"/>
+              <path class="e" d="M 386 450 L 358 450" marker-end="url(#a-m)"/>
+              <text x="372" y="406" class="elbl">invoke</text>
+              <text x="372" y="470" class="elbl">events</text>
+
+              <!-- preload ↔ ipc -->
+              <path class="e" d="M 456 435 C 478 380, 480 300, 512 218" marker-end="url(#a-m)"/>
+              <text x="474" y="300" class="elbl">IPC</text>
+
+              <!-- agent backend → Anthropic (outer) -->
+              <path class="e-agent" d="M 646 256 C 646 180, 600 130, 586 96" marker-end="url(#a-agent)"/>
+              <text x="556" y="170" class="elbl">outer Claude</text>
+
+              <!-- control plane → runtime -->
+              <path class="e" d="M 780 360 C 818 380, 824 410, 846 420" marker-end="url(#a-m)"/>
+              <text x="822" y="372" class="elbl">compose / exec</text>
+
+              <!-- runtime → stacks -->
+              <path class="e" d="M 1026 420 L 1066 410" marker-end="url(#a-m)"/>
+              <text x="1046" y="400" class="elbl">runs</text>
+
+              <!-- control plane → GitHub/Jira -->
+              <path class="e-ext" d="M 780 348 C 840 250, 770 140, 796 96" marker-end="url(#a-ext)"/>
+              <text x="876" y="210" class="elbl">tickets / PRs</text>
+
+              <!-- control plane → docker daemon -->
+              <path class="e-ext" d="M 936 360 C 960 250, 980 150, 991 96" marker-end="url(#a-ext)"/>
+
+              <!-- inner Claude → Anthropic -->
+              <path class="e-agent e-d" d="M 1211 352 C 1211 150, 640 150, 586 96" marker-end="url(#a-agent)"/>
+              <text x="940" y="138" class="elbl">inner Claude</text>
+
+              <!-- OS cron → scheduler (socket) -->
+              <path class="e-ext" d="M 1181 96 C 1181 300, 900 430, 780 430" marker-end="url(#a-ext)"/>
+              <text x="980" y="320" class="elbl">unix socket wakes scheduler</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <figcaption class="figure-caption">
+        § 1: The renderer reaches the main process only through <code>window.sandstorm</code>. The
+        main process owns state (SQLite registry + file stores) and every privileged action. The
+        agent backend runs the <em>outer</em> Claude; the control plane drives the runtime to run
+        stacks, each containing an <em>inner</em> Claude. Both Claudes are separate
+        <code>claude</code> CLI subprocesses that call the Anthropic API.
+      </figcaption>
+    </figure>
+
+    <details class="arch-source">
+      <summary>Structure (text) — read this first</summary>
+<pre>
+Macro flow LR:  User → Renderer → [preload bridge] → Main process → Runtime → Stacks
+External (top band): Anthropic API · GitHub/Jira · Docker daemon · OS cron
+
+THREE ELECTRON PROCESSES
+  renderer (src/renderer/**)   React 18 + Tailwind + Zustand. Pure view layer.
+  preload  (src/preload/index.ts)  contextBridge → window.sandstorm. The ONLY
+           channel between renderer and main. ~25 namespaces, each a thin
+           ipcRenderer.invoke / .on wrapper.
+  main     (src/main/**)       Owns all durable state + privileged ops.
+           Entry: src/main/index.ts builds global singletons in order:
+             DockerRuntime, PodmanRuntime, Registry, PortAllocator, PortProxy,
+             TaskWatcher, StackManager, ClaudeBackend (agentBackend),
+             SessionMonitor, SchedulerSocketServer.
+           Build output: dist/main/index.cjs (electron-vite). package.json
+           "main" = dist/main/index.cjs.
+
+MAIN-PROCESS SUBSYSTEMS (violet cluster)
+  IPC handlers      src/main/ipc.ts — ~75 ipcMain.handle channels (one god file)
+  Agent backend     src/main/agent/** — the outer Claude (see § 2)
+  Control plane     src/main/control-plane/** — deterministic primitives (see § 3, § 4)
+  Scheduler         src/main/scheduler/** — cron-driven automation (see § 4)
+  SessionMonitor    src/main/control-plane/session-monitor.ts — token-quota guard
+  Registry          src/main/control-plane/registry.ts — better-sqlite3, ~/.sandstorm.db
+  File stores       schedules.json (per project), refinements.json, *.jsonl telemetry
+
+THE TWO CLAUDES (rose) — the defining concept, detailed in § 2
+  OUTER Claude  orchestrator. A persistent `claude` subprocess spawned by
+                ClaudeBackend in the MAIN process. Manages stacks via tools.
+                NEVER edits app source itself.
+  INNER Claude  worker. A `claude` process INSIDE each stack's claude container.
+                All src/**, tests/**, package.json changes happen here.
+  Both are separate subprocesses; both hit the Anthropic API independently.
+
+RUNTIME + STACKS (teal)
+  ContainerRuntime interface (src/main/runtime/types.ts) with two impls:
+    DockerRuntime (dockerode) + DockerConnectionManager health/backoff
+    PodmanRuntime (spawns podman / podman-compose CLI)
+  A STACK = the project's own docker-compose services (unmodified) + one extra
+  `claude` container. Generated override compose lives at .sandstorm/docker-compose.yml.
+  Host ports are exposed ON DEMAND via socat proxy containers (not static maps).
+  Stack ↔ main communication: runtime.exec() reads status/token files under
+  /tmp in the container; runtime.logs() streams output.
+
+EXTERNAL (slate, dashed edges)
+  Anthropic API   — every claude subprocess (outer + inner + ephemeral)
+  GitHub / Jira   — control plane fetches/creates tickets, opens PRs
+  Docker daemon   — dockerode + the inner container's mounted docker.sock (DinD)
+  OS cron         — fires a wrapper script that pings a unix socket to wake the
+                    scheduler (see § 4)
+
+KEY INVARIANTS
+  - Renderer never touches Docker, the filesystem, or Claude directly. Everything
+    is an IPC call through window.sandstorm.
+  - Main process is the single source of truth. Renderer caches + subscribes.
+  - Outer Claude orchestrates; inner Claude implements. The boundary is a hard
+    rule (CLAUDE.md "Outer Claude vs Inner Claude").
+  - Scheduled/automated work must NOT route through the outer-Claude chat session
+    (see § 4). It uses deterministic primitives + bounded ephemeral agents only.
+
+COLOR LEGEND
+  renderer (blue) · main/IPC (violet) · agent backend (rose) · control plane (amber)
+  scheduler (green) · runtime/stacks (teal) · persistence (cyan) · external (slate)
+</pre>
+    </details>
+
+    <h4>The shape in one paragraph</h4>
+    <p>
+      User clicks something in React → a Zustand action calls
+      <code>window.sandstorm.&lt;ns&gt;.&lt;method&gt;()</code> → the preload bridge forwards it over
+      <code>ipcRenderer.invoke</code> → an <code>ipcMain.handle</code> in <code>ipc.ts</code> calls a
+      control-plane module → that module drives the container runtime and/or records state in the
+      SQLite registry → results flow back as the IPC return value, while longer-lived progress is
+      pushed to the renderer as <code>webContents.send</code> events that the store subscribes to.
+      The outer Claude rides the same IPC surface (the <em>Ask Claude</em> chat), but is itself a
+      subprocess that calls back <em>into</em> the main process through a small HTTP
+      <strong>bridge server</strong> to invoke the same primitives.
+    </p>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 2</span> The two Claudes — the orchestration boundary</h2>
+    <p class="section-blurb">
+      The single most important rule in the system: there are <strong>two Claude roles</strong>,
+      and they never cross. <strong>Outer Claude</strong> is the orchestrator — a persistent
+      <code>claude</code> subprocess spawned by <code>ClaudeBackend</code> in the main process. It
+      manages stacks, dispatches work, and reads results, but <em>never edits application code</em>.
+      <strong>Inner Claude</strong> is the worker — a <code>claude</code> process running inside a
+      stack's container, where every change to <code>src/**</code>, <code>tests/**</code>, and
+      <code>package.json</code> happens. Around these sit <strong>ephemeral</strong> agents:
+      short-lived, stateless one-shot subprocesses for bounded jobs (PR drafting, spec-gate
+      checks) that contribute to neither chat session.
+    </p>
+
+    <figure class="figure" data-figure="claudes">
+      <div class="figure-toolbar">
+        <span class="label">§ 2 · Outer orchestrator · inner worker · ephemeral agents</span>
+        <button data-action="zoom-out">−</button>
+        <button data-action="zoom-in">+</button>
+        <button data-action="reset">Reset</button>
+        <button data-action="fullscreen">⤢ Fullscreen</button>
+        <span class="spacer"></span>
+        <span class="hint">drag to pan · scroll to zoom</span>
+        <button data-action="download">⬇ PNG</button>
+      </div>
+      <div class="figure-viewport">
+        <div class="hand-frame">
+          <svg viewBox="0 0 1320 820" xmlns="http://www.w3.org/2000/svg" role="img"
+               aria-label="The two Claudes. ClaudeBackend in the main process spawns the outer Claude as a persistent stream-json subprocess and runs a bridge HTTP server. The outer Claude calls the bridge to invoke tools which run control-plane primitives. dispatch_task starts the inner Claude inside a stack container via the runtime; the inner Claude runs the dual-loop and writes status files. TaskWatcher polls those files. Ephemeral agents are separate one-shot subprocesses.">
+            <defs>
+              <marker id="c-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+              <marker id="c-agent" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#e11d48"/></marker>
+              <marker id="c-tool" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/></marker>
+            </defs>
+            <style>
+              .t { font-family: "Inter", system-ui, sans-serif; }
+              .lbl  { font-size: 13px; font-weight: 500; text-anchor: middle; dominant-baseline: middle; }
+              .sub  { font-size: 10px; font-weight: 400; text-anchor: middle; dominant-baseline: middle; fill: #475569; }
+              .clbl { font-size: 13px; font-weight: 600; text-anchor: middle; }
+              .e    { fill: none; stroke: #64748b; stroke-width: 1.5; }
+              .e-agent { fill: none; stroke: #e11d48; stroke-width: 1.8; }
+              .e-tool  { fill: none; stroke: #d97706; stroke-width: 1.8; stroke-dasharray: 6 4; }
+              .elbl { font-size: 11px; fill: #334155; paint-order: stroke; stroke: #fff; stroke-width: 4px; text-anchor: middle; }
+            </style>
+
+            <g class="t">
+              <rect x="40" y="90" width="170" height="56" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="125" y="110" class="lbl" fill="#1e3a8a">Ask Claude (UI)</text>
+              <text x="125" y="126" class="sub">AgentSession · AskClaudeModal</text>
+            </g>
+
+            <g class="t">
+              <rect x="40" y="200" width="430" height="430" rx="14" fill="#ede9fe" fill-opacity="0.3" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="255" y="226" class="clbl" fill="#5b21b6">⚙ Main process · ClaudeBackend (claude-backend.ts)</text>
+
+              <rect x="66" y="252" width="240" height="86" rx="8" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.7"/>
+              <text x="186" y="272" class="lbl" fill="#9f1239">🤖 OUTER Claude</text>
+              <text x="186" y="288" class="sub">persistent `claude --print`</text>
+              <text x="186" y="302" class="sub">stream-json · one per tabId</text>
+              <text x="186" y="316" class="sub">tools: Bash·Read·Grep·Glob·Skill</text>
+              <text x="186" y="329" class="sub">system prompt: SANDSTORM_OUTER.md</text>
+
+              <rect x="330" y="252" width="116" height="86" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="388" y="280" class="lbl" fill="#5b21b6">bridge</text>
+              <text x="388" y="296" class="sub">HTTP server</text>
+              <text x="388" y="310" class="sub">token-auth</text>
+              <text x="388" y="324" class="sub">/tool-call</text>
+
+              <rect x="66" y="360" width="380" height="56" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+              <text x="256" y="380" class="lbl" fill="#78350f">handleToolCall() — claude/tools.ts</text>
+              <text x="256" y="396" class="sub">create_stack · dispatch_task · get_diff · push_stack · spec_check …</text>
+
+              <rect x="66" y="438" width="380" height="50" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.4"/>
+              <text x="256" y="458" class="lbl" fill="#78350f">control-plane primitives</text>
+              <text x="256" y="473" class="sub">StackManager · pr-creator · ticket-spec · scheduler</text>
+
+              <rect x="66" y="510" width="380" height="96" rx="8" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.4" stroke-dasharray="6 4"/>
+              <text x="256" y="530" class="lbl" fill="#9f1239">⚡ Ephemeral agents (no chat session)</text>
+              <text x="256" y="548" class="sub">runEphemeralAgent — one-shot `claude -p`</text>
+              <text x="256" y="563" class="sub">spawnEphemeralSession — warm multi-turn, scoped</text>
+              <text x="256" y="580" class="sub">used by: spec_check · spec_refine · PR title/body draft</text>
+              <text x="256" y="595" class="sub">bounded timeout · NEVER touches outer token counter</text>
+            </g>
+
+            <g class="t">
+              <rect x="540" y="90" width="180" height="56" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="1.4"/>
+              <text x="630" y="110" class="lbl" fill="#1e293b">☁ Anthropic API</text>
+              <text x="630" y="126" class="sub">all three call here</text>
+            </g>
+
+            <g class="t">
+              <rect x="780" y="230" width="500" height="380" rx="14" fill="#ccfbf1" fill-opacity="0.32" stroke="#0d9488" stroke-width="1.5"/>
+              <text x="1030" y="256" class="clbl" fill="#134e4a">📦 Stack container (one per task)</text>
+
+              <rect x="806" y="284" width="448" height="80" rx="8" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.7"/>
+              <text x="1030" y="306" class="lbl" fill="#9f1239">🤖 INNER Claude — task-runner.sh</text>
+              <text x="1030" y="323" class="sub">system prompt: SANDSTORM_INNER.md · full tools (Edit/Write/…)</text>
+              <text x="1030" y="338" class="sub">edits the workspace clone at /app</text>
+              <text x="1030" y="352" class="sub">all src/** · tests/** · package.json changes happen HERE</text>
+
+              <rect x="806" y="384" width="448" height="120" rx="8" fill="#cffafe" stroke="#0891b2" stroke-width="1.4"/>
+              <text x="1030" y="404" class="lbl" fill="#155e75">dual-loop workflow (CLAUDE.md)</text>
+              <rect x="828" y="418" width="124" height="40" rx="6" fill="#fff" stroke="#0891b2" stroke-width="1.2"/>
+              <text x="890" y="434" class="lbl" fill="#155e75">execute</text>
+              <text x="890" y="448" class="sub">write code</text>
+              <rect x="968" y="418" width="124" height="40" rx="6" fill="#fff" stroke="#0891b2" stroke-width="1.2"/>
+              <text x="1030" y="434" class="lbl" fill="#155e75">review</text>
+              <text x="1030" y="448" class="sub">fresh ctx</text>
+              <rect x="1108" y="418" width="124" height="40" rx="6" fill="#fff" stroke="#0891b2" stroke-width="1.2"/>
+              <text x="1170" y="434" class="lbl" fill="#155e75">verify</text>
+              <text x="1170" y="448" class="sub">test·build</text>
+              <text x="1030" y="478" class="sub">inner ⇄ review loop, then verify; max 5×5 iterations</text>
+              <text x="1030" y="492" class="sub">writes /tmp/claude-task.status · -tokens-* · -phase-timing</text>
+
+              <rect x="806" y="524" width="448" height="62" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+              <text x="1030" y="544" class="lbl" fill="#78350f">TaskWatcher (main) polls status files</text>
+              <text x="1030" y="560" class="sub">runtime.exec(cat /tmp/claude-task.status) every ~2s</text>
+              <text x="1030" y="575" class="sub">emits task:completed / task:failed / task:workflow-progress</text>
+            </g>
+
+            <g class="t">
+              <path class="e" d="M 125 146 C 125 180, 150 220, 170 252" marker-end="url(#c-m)"/>
+              <text x="96" y="200" class="elbl">agent:send</text>
+              <path class="e-agent" d="M 280 252 C 360 180, 520 140, 540 120" marker-end="url(#c-agent)"/>
+              <text x="430" y="180" class="elbl">prompt ↑ / tokens ↓</text>
+              <path class="e-tool" d="M 306 295 L 330 295" marker-end="url(#c-tool)"/>
+              <path class="e-tool" d="M 388 338 L 320 360" marker-end="url(#c-tool)"/>
+              <text x="392" y="352" class="elbl">tool</text>
+              <path class="e" d="M 256 416 L 256 438" marker-end="url(#c-m)"/>
+              <path class="e-agent" d="M 180 488 L 180 510" marker-end="url(#c-agent)"/>
+              <text x="150" y="502" class="elbl">spawn</text>
+              <path class="e-agent" d="M 446 540 C 600 540, 624 200, 630 146" marker-end="url(#c-agent)"/>
+              <path class="e-agent" d="M 446 384 C 600 360, 700 330, 806 320" marker-end="url(#c-agent)"/>
+              <text x="640" y="330" class="elbl">dispatch_task → start inner Claude</text>
+              <path class="e-agent" d="M 1030 284 C 1030 180, 720 150, 720 146" marker-end="url(#c-agent)"/>
+              <path class="e" d="M 806 552 C 560 640, 470 540, 446 470" marker-end="url(#c-m)"/>
+              <text x="610" y="612" class="elbl">status / diff / tokens ← (read back)</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <figcaption class="figure-caption">
+        § 2: The outer Claude calls the bridge HTTP server to invoke tools; <code>dispatch_task</code>
+        starts the inner Claude inside a stack, which runs the dual-loop and writes status files that
+        TaskWatcher polls. Ephemeral agents are one-shot subprocesses for bounded jobs. All three
+        roles call the Anthropic API independently and track tokens separately.
+      </figcaption>
+    </figure>
+
+    <details class="arch-source">
+      <summary>Structure (text) — read this first</summary>
+<pre>
+THREE WAYS CLAUDE RUNS IN THIS APP
+
+1. OUTER CLAUDE — the orchestrator (rose, in main process)
+   Owner:   ClaudeBackend in src/main/agent/claude-backend.ts (~1365 lines)
+   Shape:   one persistent `claude --print --input-format stream-json
+            --output-format stream-json` subprocess PER renderer tab (tabId).
+            Stays alive across messages; full ChatMessage[] history kept in memory.
+   Prompt:  --system-prompt-file SANDSTORM_OUTER.md  (NOT the project CLAUDE.md;
+            CLAUDE_CODE_DISABLE_CLAUDE_MDS=1 suppresses that to save tokens)
+   Tools:   restricted allowlist — Bash, Read, Grep, Glob, Skill
+            (src/main/agent/tools-allowlist.ts). Edit/Write/Agent/WebFetch DENIED
+            so the schemas don't bloat every request, and so it cannot edit code.
+   Skills:  sandstorm skill + per-project skills enumerated into the prompt
+            (skill-enumeration.ts) and loaded via --plugin-dir.
+   API:     calls api.anthropic.com directly. Per-tab token counter
+            (OuterClaudeSessionTokens) tracked from stream-json "result" events,
+            reset on "New Session". Optional raw-request-capture proxy + JSONL telemetry.
+
+   THE BRIDGE (how outer Claude invokes app primitives):
+     ClaudeBackend.startBridgeServer() → small token-authed HTTP server.
+     Skill scripts (run by the outer Claude's Bash tool) POST {name, input} to
+     http://127.0.0.1:&lt;port&gt;/tool-call with X-Auth-Token header.
+     → handleToolCall(name, input) in src/main/claude/tools.ts dispatches to
+       control-plane primitives. Tools: create_stack, list_stacks, dispatch_task,
+       get_diff, push_stack, get_task_status, get_task_output, teardown_stack,
+       get_logs, set_pr, spec_check, spec_refine, schedule_{create,list,update,delete}.
+     This is why outer Claude never needs Edit/Write: it acts only through tools.
+
+2. INNER CLAUDE — the worker (rose, in a stack container)
+   Started by: dispatch_task → StackManager.dispatchTask() → `sandstorm task` CLI
+               → docker exec → task-runner.sh inside the stack's `claude` container.
+   Prompt:  SANDSTORM_INNER.md (sandstorm-cli/docker/). FULL tool set (Edit/Write/…).
+   Scope:   edits the git workspace clone mounted at /app. ALL src/**, tests/**,
+            package.json changes happen here — never in the outer process.
+   Workflow: the dual-loop in CLAUDE.md — execute ⇄ review (fresh context) up to 5×,
+            then verify (tests/types/build/package); outer loop up to 5×.
+   Output:  writes status/metrics to files in /tmp inside the container:
+            claude-task.status, claude-task.exit, claude-tokens-{execution,review},
+            claude-task.{review-iterations,verify-retries}, claude-phase-timing.txt,
+            claude-{review-verdict,verify-output}-*.txt, claude-execution-summary.txt.
+   Watched by: TaskWatcher (src/main/control-plane/task-watcher.ts) — polls those
+            files via runtime.exec every ~2s (backoff on error; token poll throttled
+            to 5s), parses with token-parser.ts, emits task:* events to the renderer.
+
+3. EPHEMERAL AGENTS — bounded one-shots (rose dashed, in main process)
+   API:  agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs)
+         → one-shot `claude -p ... --output-format stream-json`. No history, dies
+         after one result. spawnEphemeralSession() keeps a warm subprocess for a
+         few scoped turns (spec_refine: check → answer-follow-ups).
+   Uses: spec-quality-gate evaluation, spec refinement, PR title/body drafting.
+   Rule: ephemeral calls DO NOT add to the outer session, DO NOT accumulate state,
+         and DO NOT count toward the outer-Claude token counter. They are the
+         sanctioned way for automation to use an LLM without a chat session (see § 4).
+
+WHY THE SEPARATION MATTERS
+  - Cost/isolation: the outer session would balloon if it also did the coding.
+    Pushing implementation into a fresh inner context per task bounds the blast radius.
+  - Safety: the orchestrator literally cannot edit code (no Edit/Write tool), so a
+    confused outer turn can't corrupt the repo — it can only dispatch.
+  - Determinism: automation needs LLM calls that don't mutate a long-lived session.
+    Ephemeral agents fill that role; the chat session is reserved for interactive use.
+
+HARD RULES (from CLAUDE.md)
+  - Outer Claude may modify only CLAUDE.md, .claude/, .sandstorm/, memory files.
+  - Anything touching src/**, tests/**, package.json MUST go through a stack.
+  - Scheduled/automated paths MUST NOT call agentBackend.sendMessage/getHistory.
+</pre>
+    </details>
+
+    <h4>Why this is the most important diagram in the doc</h4>
+    <p>
+      Almost every confusing thing in the codebase resolves once you hold the two-Claude split in
+      mind. "Why does the orchestrator have a bridge HTTP server?" — so the outer subprocess can
+      call back into the app. "Why are there three token counters?" — outer session, inner task,
+      and ephemeral are genuinely three different LLM contexts. "Why can't the outer Claude just
+      fix this bug?" — it has no <code>Edit</code> tool by design; it must dispatch to a stack.
+      When you extend the system, the first question to ask is <em>which Claude does this belong
+      to</em>.
+    </p>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 3</span> The stack lifecycle</h2>
+    <p class="section-blurb">
+      A <strong>stack</strong> is the unit of isolated work: one Docker Compose project per task,
+      built from the project's own <code>docker-compose.yml</code> plus a generated override and an
+      added <code>claude</code> container. The lifecycle —
+      <em>create → build → dispatch → watch → diff → push → (teardown)</em> — is owned by
+      <code>StackManager</code> (the largest file in the codebase, ~1660 lines), recorded in the
+      SQLite <code>Registry</code>, and observed by <code>TaskWatcher</code>. The actual Docker
+      work is delegated to the bundled shell CLI (<code>sandstorm-cli/</code>) and the
+      <code>ContainerRuntime</code> abstraction.
+    </p>
+
+    <figure class="figure" data-figure="lifecycle">
+      <div class="figure-toolbar">
+        <span class="label">§ 3 · create → build → dispatch → watch → diff → push</span>
+        <button data-action="zoom-out">−</button>
+        <button data-action="zoom-in">+</button>
+        <button data-action="reset">Reset</button>
+        <button data-action="fullscreen">⤢ Fullscreen</button>
+        <span class="spacer"></span>
+        <span class="hint">drag to pan · scroll to zoom</span>
+        <button data-action="download">⬇ PNG</button>
+      </div>
+      <div class="figure-viewport">
+        <div class="hand-frame">
+          <svg viewBox="0 0 1340 760" xmlns="http://www.w3.org/2000/svg" role="img"
+               aria-label="Stack lifecycle. StackManager.createStack records the stack in the registry then builds it in the background by running the sandstorm CLI which generates the override compose and runs composeUp via the runtime. dispatchTask optionally enforces the spec gate, fetches ticket context, runs the task in the claude container, and registers a TaskWatcher that polls status files and emits events. getDiff and pushStack/PR-creator finish the work. Teardown archives to history and releases ports.">
+            <defs>
+              <marker id="l-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+              <marker id="l-data" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#0891b2"/></marker>
+            </defs>
+            <style>
+              .t { font-family: "Inter", system-ui, sans-serif; }
+              .lbl  { font-size: 12.5px; font-weight: 500; text-anchor: middle; dominant-baseline: middle; }
+              .sub  { font-size: 10px; font-weight: 400; text-anchor: middle; dominant-baseline: middle; fill: #475569; }
+              .clbl { font-size: 13px; font-weight: 600; text-anchor: middle; }
+              .e    { fill: none; stroke: #64748b; stroke-width: 1.6; }
+              .e-data { fill: none; stroke: #0891b2; stroke-width: 1.5; stroke-dasharray: 5 4; }
+              .elbl { font-size: 10.5px; fill: #334155; paint-order: stroke; stroke: #fff; stroke-width: 4px; text-anchor: middle; }
+            </style>
+
+            <!-- StackManager lane label -->
+            <rect x="30" y="56" width="1280" height="2" fill="#e2e8f0"/>
+            <text x="40" y="44" class="t" font-size="11" font-weight="600" fill="#78350f">CONTROL PLANE · StackManager (stack-manager.ts) + Registry (cyan) + TaskWatcher</text>
+
+            <!-- step 1 create -->
+            <g class="t">
+              <rect x="40" y="90" width="180" height="74" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+              <text x="130" y="116" class="lbl" fill="#78350f">1 · createStack()</text>
+              <text x="130" y="132" class="sub">CreateStackOpts</text>
+              <text x="130" y="146" class="sub">resolves model, branch</text>
+            </g>
+
+            <!-- registry -->
+            <g class="t">
+              <rect x="40" y="210" width="180" height="56" rx="10" fill="#cffafe" stroke="#0891b2" stroke-width="1.6"/>
+              <text x="130" y="232" class="lbl" fill="#155e75">Registry.createStack</text>
+              <text x="130" y="248" class="sub">row in stacks table</text>
+            </g>
+
+            <!-- step 2 build (background) -->
+            <g class="t">
+              <rect x="270" y="90" width="210" height="100" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+              <text x="375" y="114" class="lbl" fill="#78350f">2 · build in background</text>
+              <text x="375" y="130" class="sub">runCli(['up', id, --ticket, --branch])</text>
+              <text x="375" y="144" class="sub">compose-generator →</text>
+              <text x="375" y="158" class="sub">.sandstorm/docker-compose.yml</text>
+              <text x="375" y="174" class="sub">runtime.composeUp()</text>
+            </g>
+
+            <!-- runtime + containers -->
+            <g class="t">
+              <rect x="270" y="220" width="210" height="120" rx="10" fill="#ccfbf1" stroke="#0d9488" stroke-width="1.6"/>
+              <text x="375" y="242" class="lbl" fill="#134e4a">stack containers</text>
+              <text x="375" y="258" class="sub">project services (unmodified)</text>
+              <text x="375" y="274" class="sub">+ claude container</text>
+              <text x="375" y="290" class="sub">workspace = git clone of branch</text>
+              <text x="375" y="306" class="sub">healthcheck: /tmp/.sandstorm-ready</text>
+              <text x="375" y="322" class="sub">ports: on-demand socat proxy</text>
+            </g>
+
+            <!-- step 3 dispatch -->
+            <g class="t">
+              <rect x="530" y="90" width="220" height="130" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+              <text x="640" y="112" class="lbl" fill="#78350f">3 · dispatchTask()</text>
+              <text x="640" y="130" class="sub">enforceSpecGate (if ticket ref</text>
+              <text x="640" y="143" class="sub">&amp; not yet spec-ready)</text>
+              <text x="640" y="159" class="sub">fetchTicketWithConfig → prepend</text>
+              <text x="640" y="175" class="sub">waitForClaudeReady</text>
+              <text x="640" y="191" class="sub">runCli(['task', id, --model, prompt])</text>
+              <text x="640" y="207" class="sub">resume via --resume &lt;session_id&gt;</text>
+            </g>
+
+            <!-- inner claude work -->
+            <g class="t">
+              <rect x="530" y="250" width="220" height="70" rx="10" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.6"/>
+              <text x="640" y="272" class="lbl" fill="#9f1239">inner Claude dual-loop</text>
+              <text x="640" y="288" class="sub">(see § 2) writes /tmp status</text>
+              <text x="640" y="303" class="sub">+ token + phase files</text>
+            </g>
+
+            <!-- step 4 watch -->
+            <g class="t">
+              <rect x="800" y="90" width="220" height="130" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+              <text x="910" y="112" class="lbl" fill="#78350f">4 · TaskWatcher</text>
+              <text x="910" y="130" class="sub">poll status every ~2s (backoff)</text>
+              <text x="910" y="146" class="sub">stale-poll guard: ignore</text>
+              <text x="910" y="160" class="sub">"completed" until a "running"</text>
+              <text x="910" y="176" class="sub">token poll throttled 5s</text>
+              <text x="910" y="192" class="sub">on done: parse tokens/iterations,</text>
+              <text x="910" y="208" class="sub">Registry.completeTask</text>
+            </g>
+
+            <!-- events to renderer -->
+            <g class="t">
+              <rect x="800" y="250" width="220" height="70" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="910" y="272" class="lbl" fill="#1e3a8a">events → renderer</text>
+              <text x="910" y="288" class="sub">task:completed / failed</text>
+              <text x="910" y="303" class="sub">task:workflow-progress · output</text>
+            </g>
+
+            <!-- step 5 diff/push -->
+            <g class="t">
+              <rect x="1070" y="90" width="230" height="130" rx="10" fill="#fef3c7" stroke="#d97706" stroke-width="1.6"/>
+              <text x="1185" y="112" class="lbl" fill="#78350f">5 · finish</text>
+              <text x="1185" y="130" class="sub">getDiff → git diff in workspace</text>
+              <text x="1185" y="146" class="sub">pushStack → sandstorm push</text>
+              <text x="1185" y="162" class="sub">pr-creator: draft (ephemeral)</text>
+              <text x="1185" y="178" class="sub">→ git push → gh pr create</text>
+              <text x="1185" y="194" class="sub">retry on branch clash (-vN)</text>
+              <text x="1185" y="210" class="sub">Registry.setPullRequest</text>
+            </g>
+
+            <!-- teardown -->
+            <g class="t">
+              <rect x="1070" y="250" width="230" height="90" rx="10" fill="#ffedd5" stroke="#ea580c" stroke-width="1.5" stroke-dasharray="6 4"/>
+              <text x="1185" y="272" class="lbl" fill="#7c2d12">teardown (explicit only)</text>
+              <text x="1185" y="288" class="sub">archive → stack_history</text>
+              <text x="1185" y="303" class="sub">release ports, remove proxies</text>
+              <text x="1185" y="319" class="sub">NEVER automatic (hard rule)</text>
+            </g>
+
+            <!-- edges -->
+            <g class="t">
+              <path class="e-data" d="M 130 164 L 130 210" marker-end="url(#l-data)"/>
+              <path class="e" d="M 220 120 L 270 120" marker-end="url(#l-m)"/>
+              <path class="e" d="M 375 190 L 375 220" marker-end="url(#l-m)"/>
+              <path class="e" d="M 480 140 L 530 140" marker-end="url(#l-m)"/>
+              <path class="e" d="M 640 220 L 640 250" marker-end="url(#l-m)"/>
+              <path class="e" d="M 750 160 L 800 160" marker-end="url(#l-m)"/>
+              <path class="e" d="M 750 285 C 775 285, 780 200, 800 180" marker-end="url(#l-m)"/>
+              <text x="775" y="240" class="elbl">reads /tmp via exec</text>
+              <path class="e" d="M 910 220 L 910 250" marker-end="url(#l-m)"/>
+              <path class="e" d="M 1020 150 L 1070 150" marker-end="url(#l-m)"/>
+              <path class="e-data" d="M 910 208 C 990 208, 1010 250, 1010 250" marker-end="url(#l-data)"/>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <figcaption class="figure-caption">
+        § 3: <code>createStack</code> records state then builds in the background; <code>dispatchTask</code>
+        gates, fetches ticket context, and runs the inner Claude; <code>TaskWatcher</code> polls the
+        container's status files and emits events; <code>getDiff</code>/<code>pushStack</code> +
+        <code>pr-creator</code> finish. Teardown is explicit-only and archives to history.
+      </figcaption>
+    </figure>
+
+    <details class="arch-source">
+      <summary>Structure (text) — read this first</summary>
+<pre>
+A STACK = one docker-compose project per task.
+  Name: sandstorm-&lt;PROJECT&gt;-&lt;STACK_ID&gt;. Containers = the project's own services
+  (verbatim, ports stripped) + one `claude` container. Override compose generated
+  at .sandstorm/docker-compose.yml by compose-generator.ts (regex parse, no YAML lib).
+  Network names isolated per stack via network-migration.ts.
+
+LIFECYCLE STAGES (all owned by StackManager, stack-manager.ts ~1660 lines)
+
+1. createStack(opts)            [control plane]
+   - resolve model (project override > global > "auto"→undefined)
+   - Registry.createStack() writes the row
+   - returns immediately; build runs in background (UI never blocks)
+
+2. build (background)
+   - runCli(['up', id, --ticket, --branch]) — shells the bundled sandstorm CLI
+     (sandstorm-cli/bin/sandstorm → lib/stack.sh)
+   - clone workspace (lib/clone.sh): existing branch → shallow clone; new branch →
+     clone default then checkout -b. Workspace lives at
+     &lt;projectDir&gt;/.sandstorm/workspaces/&lt;stackId&gt;/
+   - compose-generator builds the override; runtime.composeUp() starts containers
+   - claude container signals readiness via /tmp/.sandstorm-ready
+   - on error → Registry.updateStackStatus('failed', error)
+
+3. dispatchTask(stackId, prompt)
+   - enforceSpecGate(): if prompt references a ticket (ticket-fetcher.referencesTicket)
+     and the ticket isn't already spec-ready, run the spec quality gate first
+   - fetchTicketWithConfig(): prepend the ticket body to the prompt (built-in
+     GitHub via gh / Jira via REST — ticket-config.ts)
+   - findClaudeContainer + waitForClaudeReady (pgrep / ready file)
+   - runCli(['task', id, --model, prompt]) → docker exec → task-runner.sh
+   - resume path: --resume &lt;session_id&gt; continues an interrupted task
+   - registers a TaskWatcher; one retry after 10s if first dispatch fails
+
+4. TaskWatcher (task-watcher.ts, EventEmitter, ~700 lines)
+   - polls /tmp/claude-task.status via runtime.exec every ~2s (exp backoff to 30s)
+   - STALE-POLL GUARD: ignores "completed" until at least one "running" seen
+     (defends against a crashed/instant task runner — see project memory on false
+     "failed" status)
+   - throttles token polling to 5s while "running"
+   - on completion reads exit code, token files, review-iterations, verify-retries,
+     phase timing, verdict/summary files; parses via token-parser.ts
+   - Registry.completeTask{,NeedsHuman,VerifyBlockedEnvironmental}
+   - emits task:started / task:completed / task:failed / task:output /
+     task:workflow-progress → forwarded to renderer by index.ts
+
+5. finish
+   - getDiff(): git diff inside the workspace (capped to MCP byte limits)
+   - pushStack(): `sandstorm push` (commit + push from the workspace — never raw git
+     in the container per project memory)
+   - pr-creator.ts: draftPullRequest() uses an EPHEMERAL agent for title/body, then
+     createPullRequest() loops (≤5 attempts) git push → gh pr create, bumping to a
+     -vN branch on clash; records {url, number} in the registry
+
+teardown (teardownStack) — EXPLICIT USER ACTION ONLY (hard rule, CLAUDE.md +
+   memory). Archives task_history to stack_history, releases ports, removes socat
+   proxies. NEVER inferred, never automatic, never "to make room".
+
+PERSISTENCE TOUCHPOINTS (cyan)
+   stacks, tasks, task_token_steps, ports, stack_history tables — all in
+   ~/.sandstorm.db (Registry, better-sqlite3, WAL, migrations v1..v16).
+
+SUPPORTING PIECES
+   PortAllocator (port-allocator.ts)  — finds free host ports 10000–19999
+   PortProxy (port-proxy.ts)          — alpine/socat proxy container per exposed port
+   SessionMonitor (session-monitor.ts) — token-quota guard; can pause/resume stacks
+   account-usage.ts                   — PTY-drives `claude /usage` to read quota
+
+KNOWN SMELLS (see § 7): stack-manager.ts is a god file (~1660 lines) mixing
+   lifecycle + observability (metrics/tokens/logs) + stale-workspace cleanup.
+   PORT_MAP parsing is duplicated across discoverServicePorts/discoverKnownPorts.
+</pre>
+    </details>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 4</span> The deterministic workflow plane &amp; scheduler</h2>
+    <p class="section-blurb">
+      A founding principle (CLAUDE.md, "Deterministic workflow philosophy"): recurring or
+      automatable work must <strong>never</strong> route through the outer-Claude chat session,
+      because that session accumulates context — and tokens — across turns. So every routine
+      workflow is a <strong>deterministic primitive</strong> that both a UI button and a schedule
+      can call: a provider-neutral shell script, or an IPC handler over a control-plane module
+      (which may make a <em>bounded ephemeral</em> LLM call). The scheduler then wires OS cron to
+      those same primitives through a unix socket — never to the chat.
+    </p>
+
+    <figure class="figure" data-figure="scheduler">
+      <div class="figure-toolbar">
+        <span class="label">§ 4 · buttons + cron → same deterministic primitives</span>
+        <button data-action="zoom-out">−</button>
+        <button data-action="zoom-in">+</button>
+        <button data-action="reset">Reset</button>
+        <button data-action="fullscreen">⤢ Fullscreen</button>
+        <span class="spacer"></span>
+        <span class="hint">drag to pan · scroll to zoom</span>
+        <button data-action="download">⬇ PNG</button>
+      </div>
+      <div class="figure-viewport">
+        <div class="hand-frame">
+          <svg viewBox="0 0 1320 720" xmlns="http://www.w3.org/2000/svg" role="img"
+               aria-label="Deterministic plane. A UI button and OS cron both reach the same deterministic primitives. OS cron runs a wrapper shell script that sends a JSON request over a unix socket to the SchedulerSocketServer, which calls handleScheduledDispatch in index.ts. That routes by action kind to run-script or refine-to-comments, which use control-plane modules and bounded ephemeral agents. The button path goes through IPC to the same modules. Neither path calls the outer-Claude chat session.">
+            <defs>
+              <marker id="s-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+              <marker id="s-sched" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#16a34a"/></marker>
+              <marker id="s-no" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#dc2626"/></marker>
+            </defs>
+            <style>
+              .t { font-family: "Inter", system-ui, sans-serif; }
+              .lbl  { font-size: 12.5px; font-weight: 500; text-anchor: middle; dominant-baseline: middle; }
+              .sub  { font-size: 10px; font-weight: 400; text-anchor: middle; dominant-baseline: middle; fill: #475569; }
+              .clbl { font-size: 13px; font-weight: 600; text-anchor: middle; }
+              .e    { fill: none; stroke: #64748b; stroke-width: 1.6; }
+              .e-sched { fill: none; stroke: #16a34a; stroke-width: 1.8; }
+              .e-no { fill: none; stroke: #dc2626; stroke-width: 1.8; stroke-dasharray: 4 4; }
+              .elbl { font-size: 10.5px; fill: #334155; paint-order: stroke; stroke: #fff; stroke-width: 4px; text-anchor: middle; }
+            </style>
+
+            <!-- Button path -->
+            <g class="t">
+              <rect x="40" y="80" width="170" height="56" rx="10" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="125" y="100" class="lbl" fill="#1e3a8a">UI button</text>
+              <text x="125" y="116" class="sub">CreatePRDialog · Refine · …</text>
+            </g>
+            <g class="t">
+              <rect x="40" y="180" width="170" height="50" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="125" y="200" class="lbl" fill="#5b21b6">IPC handler</text>
+              <text x="125" y="215" class="sub">ipc.ts</text>
+            </g>
+
+            <!-- OS cron path -->
+            <g class="t">
+              <rect x="40" y="330" width="170" height="56" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="1.4"/>
+              <text x="125" y="350" class="lbl" fill="#1e293b">⏱ OS cron</text>
+              <text x="125" y="366" class="sub">crontab (managed block)</text>
+            </g>
+            <g class="t">
+              <rect x="40" y="420" width="170" height="64" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+              <text x="125" y="440" class="lbl" fill="#166534">wrapper.sh</text>
+              <text x="125" y="456" class="sub">sandstorm-scheduled-run.sh</text>
+              <text x="125" y="470" class="sub">nc -U / python3 fallback</text>
+            </g>
+            <g class="t">
+              <rect x="270" y="420" width="180" height="64" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+              <text x="360" y="440" class="lbl" fill="#166534">unix socket</text>
+              <text x="360" y="456" class="sub">~/.sandstorm/</text>
+              <text x="360" y="470" class="sub">orchestrator.sock</text>
+            </g>
+            <g class="t">
+              <rect x="500" y="410" width="210" height="84" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+              <text x="605" y="432" class="lbl" fill="#166534">SchedulerSocketServer</text>
+              <text x="605" y="448" class="sub">socket-server.ts</text>
+              <text x="605" y="464" class="sub">→ handleScheduledDispatch</text>
+              <text x="605" y="479" class="sub">(index.ts) · rate-limit, dedup</text>
+            </g>
+
+            <!-- dispatch router -->
+            <g class="t">
+              <rect x="500" y="250" width="210" height="120" rx="10" fill="#dcfce7" stroke="#16a34a" stroke-width="1.6"/>
+              <text x="605" y="272" class="lbl" fill="#166534">route by action.kind</text>
+              <text x="605" y="290" class="sub">ScheduleAction (types.ts)</text>
+              <rect x="520" y="302" width="170" height="26" rx="5" fill="#fff" stroke="#16a34a" stroke-width="1.1"/>
+              <text x="605" y="315" class="sub" fill="#166534">run-script {scriptName}</text>
+              <rect x="520" y="334" width="170" height="26" rx="5" fill="#fff" stroke="#16a34a" stroke-width="1.1"/>
+              <text x="605" y="347" class="sub" fill="#166534">refine-to-comments {label}</text>
+            </g>
+
+            <!-- primitives -->
+            <g class="t">
+              <rect x="780" y="150" width="250" height="120" rx="12" fill="#fef3c7" fill-opacity="0.6" stroke="#d97706" stroke-width="1.6"/>
+              <text x="905" y="172" class="clbl" fill="#78350f">🧩 deterministic primitives</text>
+              <text x="905" y="192" class="sub">control-plane modules + scripts</text>
+              <rect x="800" y="202" width="210" height="24" rx="5" fill="#fff" stroke="#d97706" stroke-width="1.1"/>
+              <text x="905" y="214" class="sub" fill="#78350f">runScheduledScript (script-runner)</text>
+              <rect x="800" y="232" width="210" height="24" rx="5" fill="#fff" stroke="#d97706" stroke-width="1.1"/>
+              <text x="905" y="244" class="sub" fill="#78350f">runRefineToComments → ticket-spec</text>
+            </g>
+
+            <!-- ephemeral -->
+            <g class="t">
+              <rect x="780" y="300" width="250" height="70" rx="10" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.4" stroke-dasharray="6 4"/>
+              <text x="905" y="322" class="lbl" fill="#9f1239">⚡ bounded ephemeral agent</text>
+              <text x="905" y="338" class="sub">runEphemeralAgent — spec check/refine</text>
+              <text x="905" y="353" class="sub">single subprocess, explicit timeout</text>
+            </g>
+
+            <!-- external targets -->
+            <g class="t">
+              <rect x="1090" y="150" width="180" height="120" rx="10" fill="#e2e8f0" stroke="#475569" stroke-width="1.4"/>
+              <text x="1180" y="172" class="lbl" fill="#1e293b">🐙 GitHub / Jira</text>
+              <text x="1180" y="190" class="sub">tickets, labels, comments</text>
+              <text x="1180" y="208" class="sub">built-in: gh / REST (ticket-config)</text>
+              <text x="1180" y="228" class="sub">comments/labels: shell scripts</text>
+              <text x="1180" y="244" class="sub">(.sandstorm/scripts/*.sh —</text>
+              <text x="1180" y="258" class="sub">often ABSENT → broken, see § 7)</text>
+            </g>
+
+            <!-- FORBIDDEN: chat -->
+            <g class="t">
+              <rect x="500" y="560" width="270" height="64" rx="10" fill="#ffe4e6" stroke="#e11d48" stroke-width="1.5"/>
+              <text x="635" y="582" class="lbl" fill="#9f1239">outer-Claude chat session</text>
+              <text x="635" y="598" class="sub">agentBackend.sendMessage / getHistory</text>
+              <text x="635" y="613" class="sub">accumulates context + tokens</text>
+            </g>
+
+            <!-- edges -->
+            <g class="t">
+              <path class="e" d="M 125 136 L 125 180" marker-end="url(#s-m)"/>
+              <path class="e" d="M 210 200 C 360 200, 420 260, 500 290" marker-end="url(#s-m)"/>
+              <text x="360" y="232" class="elbl">same primitives</text>
+              <path class="e-sched" d="M 125 386 L 125 420" marker-end="url(#s-sched)"/>
+              <path class="e-sched" d="M 210 452 L 270 452" marker-end="url(#s-sched)"/>
+              <text x="240" y="442" class="elbl">JSON</text>
+              <path class="e-sched" d="M 450 452 L 500 452" marker-end="url(#s-sched)"/>
+              <path class="e-sched" d="M 605 410 L 605 370" marker-end="url(#s-sched)"/>
+              <path class="e" d="M 710 300 C 750 290, 760 240, 780 224" marker-end="url(#s-m)"/>
+              <path class="e" d="M 905 270 L 905 300" marker-end="url(#s-m)"/>
+              <path class="e" d="M 1010 210 L 1090 210" marker-end="url(#s-m)"/>
+              <!-- forbidden -->
+              <path class="e-no" d="M 605 494 L 620 560" marker-end="url(#s-no)"/>
+              <text x="690" y="528" class="elbl" fill="#b91c1c">NEVER</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <figcaption class="figure-caption">
+        § 4: Both a UI button and OS cron reach the same deterministic primitives. Cron runs a
+        wrapper script that pings a unix socket; the dispatch handler routes by
+        <code>action.kind</code> to <code>run-script</code> or <code>refine-to-comments</code>,
+        which use control-plane modules and bounded ephemeral agents. The dashed red edge — routing
+        a schedule to the chat session — is the forbidden path.
+      </figcaption>
+    </figure>
+
+    <details class="arch-source">
+      <summary>Structure (text) — read this first</summary>
+<pre>
+THE PRINCIPLE (CLAUDE.md "Deterministic workflow philosophy")
+  Routine/automatable work (refine, start, make-PR, push, schedule fires) MUST NOT
+  go through the outer-Claude chat session. The chat is reserved for novel/interactive
+  work. Every recurring workflow is one of:
+    1. a provider-neutral shell script (.sandstorm/scripts/&lt;name&gt;.sh), OR
+    2. an IPC handler over a control-plane module (may make a BOUNDED ephemeral
+       LLM call via agentBackend.runEphemeralAgent), OR
+    3. a scheduler action kind whose dispatch routes to (1) or (2).
+  Result: a button and the scheduler both call the SAME primitive. Schedulability
+  comes for free once the deterministic path exists.
+
+TICKET PROVIDER LAYER (control-plane/ticket-*.ts)
+  Built-in + synchronous (ticket-config.ts):
+    githubFetch/Update/List/CreateTicket   — via `gh` CLI
+    jiraFetch/Update/List/CreateTicket     — via REST API v2 (basic auth)
+    fetch/list/update/createTicketWithConfig — dispatch by config.provider
+  Config: per-project, stored in registry project_ticket_config (provider, jira_*,
+    ticket_prefix). Set in UI (projectTicketConfig IPC).
+  Thin re-export shims: ticket-provider/lister/creator/updater/fetcher.ts (1–6 lines
+    each) — public import surfaces only.
+  STILL SCRIPT-BASED (and usually broken — see § 7):
+    ticket-comments.ts → .sandstorm/scripts/{list-comments,post-comment,list-tickets}.sh
+    ticket-labels.ts   → .sandstorm/scripts/{add-label,remove-label}.sh
+    These hard-error if the per-project scripts are missing/non-executable. The
+    GitHub/Jira built-ins for comments/labels exist conceptually but are NOT wired
+    into these modules. This is a half-finished migration.
+
+SPEC QUALITY GATE (the bounded-LLM primitive)
+  spec-quality-gate.ts + control-plane/ticket-spec.ts:
+    runSpecCheck()  — fetch ticket, check cache (spec-ready:sha-&lt;hash&gt; GitHub label),
+                      else call deps.runCheck() (an EPHEMERAL agent) for a PASS/FAIL
+                      verdict + questions. On PASS, mark the label.
+    runSpecRefine() — take user answers, call deps.runRefine() (ephemeral) to rewrite
+                      the ticket body, re-hash, re-gate.
+  Async variants stream progress to the renderer (refinement:* events). In-flight
+  sessions persisted to ~/.sandstorm/refinements.json (refinement-store.ts) so they
+  survive restart.
+
+THE SCHEDULER (src/main/scheduler/**, ~1500 lines, well-modularized)
+  Storage:  .sandstorm/schedules.json per project (schedule-service.ts). A Schedule
+            carries a structured ScheduleAction, NEVER a freeform prompt (legacy
+            prompt field is dropped on load).
+  Action kinds (types.ts):
+    run-script {scriptName}        → runScheduledScript (script-runner.ts): spawn
+                                      .sandstorm/scripts/scheduled/&lt;name&gt;.sh, path-
+                                      traversal-checked, 30-min timeout, stdout lines
+                                      parsed for optional JSON directives (registry
+                                      currently empty — escape hatch for the future)
+    refine-to-comments {label?}    → runRefineToComments (refine-to-comments.ts): a
+                                      comment-driven state machine — first fire posts
+                                      spec-gate questions as a bot comment; later fires
+                                      read the user's reply, refine, and on PASS swap
+                                      the label to spec-ready. Uses ephemeral spec
+                                      check/refine, injected as deps.
+  Built-in action templates: built-in-actions.ts (UI wizard).
+
+  FIRE PATH (OS cron → app, no daemon polling inside the app):
+    cron line → wrapper.sh (resources/bin/sandstorm-scheduled-run.sh; installed to a
+       stable path by wrapper-installer.ts, referenced from the managed crontab block
+       written by crontab-writer.ts)
+    → wrapper builds {type, version, projectDir, scheduleId, firedAt} JSON
+    → sends over ~/.sandstorm/orchestrator.sock (nc -U, python3 fallback)
+    → SchedulerSocketServer (socket-server.ts) parses, calls the injected
+       DispatchHandler = handleScheduledDispatch (index.ts)
+    → handler: resolve project + schedule, check SessionMonitor rate-limit/halt,
+       dedup in-flight, route by action.kind, respond with a typed
+       ScheduledDispatchResponse (ok | reason), emit schedule:dispatched to renderer
+  The request carries only IDENTIFIERS — the app looks up the ScheduleAction locally.
+  No prompt ever crosses the socket.
+
+  Cron utilities: shared/cron-utils.ts (validate + humanize, safe in both processes),
+    scheduler/cron-validator.ts (re-export + 7-day nextFireTime), renderer/utils/
+    cronNextFire.ts (1-year next-fire + relative formatting). Two next-fire impls — a
+    minor duplication (see § 7).
+
+VERIFIED INVARIANT
+  No file under src/main/scheduler/** calls agentBackend.sendMessage or getHistory.
+  The only chat-API reference is a doc comment in refine-to-comments.ts. Automation
+  paths are grepped for these as a gate.
+</pre>
+    </details>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 5</span> The renderer — state &amp; data flow</h2>
+    <p class="section-blurb">
+      The renderer is deliberately thin: React components are mostly pure views over a single
+      Zustand store (<code>store.ts</code>, ~1380 lines). All mutations flow through store actions
+      that call <code>window.sandstorm.*</code> and write the response back into the store. State
+      arrives two ways — <strong>polling</strong> (stacks every 3 s, metrics every 15 s) and
+      <strong>events</strong> (<code>task:*</code>, <code>session:*</code>, <code>refinement:*</code>,
+      <code>agent:*</code>) pushed from main. A dedicated <code>agentStreamService</code> keeps the
+      outer-Claude stream listeners alive even when the chat component unmounts.
+    </p>
+
+    <figure class="figure" data-figure="renderer">
+      <div class="figure-toolbar">
+        <span class="label">§ 5 · components → store → bridge → main, and back</span>
+        <button data-action="zoom-out">−</button>
+        <button data-action="zoom-in">+</button>
+        <button data-action="reset">Reset</button>
+        <button data-action="fullscreen">⤢ Fullscreen</button>
+        <span class="spacer"></span>
+        <span class="hint">drag to pan · scroll to zoom</span>
+        <button data-action="download">⬇ PNG</button>
+      </div>
+      <div class="figure-viewport">
+        <div class="hand-frame">
+          <svg viewBox="0 0 1300 700" xmlns="http://www.w3.org/2000/svg" role="img"
+               aria-label="Renderer data flow. Components read from the Zustand store and call store actions. Actions call window.sandstorm methods over ipcRenderer.invoke to ipcMain handlers, which call control-plane modules and return values written back to the store. Separately, main pushes events via webContents.send; App.tsx and agentStreamService subscribe and update the store. Polling timers also refresh the store. Components re-render from store state.">
+            <defs>
+              <marker id="r-m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/></marker>
+              <marker id="r-evt" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#2563eb"/></marker>
+            </defs>
+            <style>
+              .t { font-family: "Inter", system-ui, sans-serif; }
+              .lbl  { font-size: 12.5px; font-weight: 500; text-anchor: middle; dominant-baseline: middle; }
+              .sub  { font-size: 10px; font-weight: 400; text-anchor: middle; dominant-baseline: middle; fill: #475569; }
+              .clbl { font-size: 13px; font-weight: 600; text-anchor: middle; }
+              .e    { fill: none; stroke: #64748b; stroke-width: 1.6; }
+              .e-evt { fill: none; stroke: #2563eb; stroke-width: 1.6; stroke-dasharray: 5 4; }
+              .elbl { font-size: 10.5px; fill: #334155; paint-order: stroke; stroke: #fff; stroke-width: 4px; text-anchor: middle; }
+            </style>
+
+            <!-- renderer cluster -->
+            <g class="t">
+              <rect x="40" y="60" width="430" height="560" rx="14" fill="#dbeafe" fill-opacity="0.28" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="255" y="86" class="clbl" fill="#1e3a8a">🖥 Renderer process</text>
+
+              <rect x="66" y="110" width="380" height="86" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="256" y="132" class="lbl" fill="#1e3a8a">Components (pure views)</text>
+              <text x="256" y="150" class="sub">App · ProjectTabs · KanbanBoard · StackDetail</text>
+              <text x="256" y="164" class="sub">Dashboard · AgentSession · dialogs/modals</text>
+              <text x="256" y="180" class="sub">read store state · call store actions</text>
+
+              <rect x="66" y="230" width="380" height="120" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.7"/>
+              <text x="256" y="252" class="lbl" fill="#1e3a8a">Zustand store — store.ts (~1380 lines)</text>
+              <text x="256" y="270" class="sub">stacks · stackHistory · boardTickets · projects</text>
+              <text x="256" y="285" class="sub">agentSessions[tabId] · outerClaudeTokens[tabId]</text>
+              <text x="256" y="300" class="sub">sessionMonitorState · schedules · metrics</text>
+              <text x="256" y="316" class="sub">actions: refreshX() · moveTicketColumn() (optimistic)</text>
+              <text x="256" y="331" class="sub">single source of truth for the UI</text>
+
+              <rect x="66" y="384" width="380" height="70" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.5"/>
+              <text x="256" y="406" class="lbl" fill="#1e3a8a">agentStreamService.ts</text>
+              <text x="256" y="422" class="sub">persistent agent:* listeners per tabId,</text>
+              <text x="256" y="437" class="sub">survive component unmount → write to store</text>
+
+              <rect x="66" y="486" width="380" height="62" rx="8" fill="#dbeafe" stroke="#2563eb" stroke-width="1.4" stroke-dasharray="5 3"/>
+              <text x="256" y="508" class="lbl" fill="#1e3a8a">polling timers (App.tsx)</text>
+              <text x="256" y="524" class="sub">refreshStacks 3s · refreshMetrics 15s</text>
+              <text x="256" y="539" class="sub">faster when Docker connected</text>
+            </g>
+
+            <!-- preload -->
+            <g class="t">
+              <rect x="510" y="240" width="120" height="160" rx="10" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="570" y="312" class="lbl" fill="#5b21b6" transform="rotate(-90 570 312)">window.sandstorm</text>
+              <text x="588" y="312" class="sub" transform="rotate(-90 588 312)">preload/index.ts</text>
+            </g>
+
+            <!-- main -->
+            <g class="t">
+              <rect x="680" y="120" width="320" height="430" rx="14" fill="#ede9fe" fill-opacity="0.3" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="840" y="146" class="clbl" fill="#5b21b6">⚙ Main process</text>
+
+              <rect x="704" y="170" width="272" height="60" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="840" y="192" class="lbl" fill="#5b21b6">ipcMain.handle (ipc.ts)</text>
+              <text x="840" y="208" class="sub">~75 channels → control-plane</text>
+              <text x="840" y="222" class="sub">returns value → store</text>
+
+              <rect x="704" y="252" width="272" height="60" rx="8" fill="#fef3c7" stroke="#d97706" stroke-width="1.5"/>
+              <text x="840" y="274" class="lbl" fill="#78350f">control-plane + agent backend</text>
+              <text x="840" y="290" class="sub">StackManager · TaskWatcher ·</text>
+              <text x="840" y="304" class="sub">SessionMonitor · ClaudeBackend</text>
+
+              <rect x="704" y="340" width="272" height="80" rx="8" fill="#ede9fe" stroke="#7c3aed" stroke-width="1.5"/>
+              <text x="840" y="362" class="lbl" fill="#5b21b6">webContents.send (events)</text>
+              <text x="840" y="380" class="sub">task:completed/failed/output/progress</text>
+              <text x="840" y="395" class="sub">session:* · refinement:* · stacks:updated</text>
+              <text x="840" y="410" class="sub">agent:output/done/token-usage:&lt;tabId&gt;</text>
+
+              <rect x="704" y="446" width="272" height="60" rx="8" fill="#cffafe" stroke="#0891b2" stroke-width="1.5"/>
+              <text x="840" y="468" class="lbl" fill="#155e75">Registry + runtime + APIs</text>
+              <text x="840" y="484" class="sub">SQLite · Docker · GitHub/Jira</text>
+              <text x="840" y="498" class="sub">(see § 1, § 3, § 6)</text>
+            </g>
+
+            <!-- edges -->
+            <g class="t">
+              <!-- component → store -->
+              <path class="e" d="M 256 196 L 256 230" marker-end="url(#r-m)"/>
+              <text x="320" y="216" class="elbl">call action</text>
+              <!-- store → preload -->
+              <path class="e" d="M 446 290 C 480 290, 490 300, 510 305" marker-end="url(#r-m)"/>
+              <text x="478" y="276" class="elbl">invoke</text>
+              <!-- preload → ipc -->
+              <path class="e" d="M 630 290 C 660 250, 670 210, 704 200" marker-end="url(#r-m)"/>
+              <!-- ipc → control plane -->
+              <path class="e" d="M 840 230 L 840 252" marker-end="url(#r-m)"/>
+              <!-- return value back to store -->
+              <path class="e" d="M 704 215 C 600 215, 540 240, 446 262" marker-end="url(#r-m)"/>
+              <text x="560" y="208" class="elbl">return → store</text>
+              <!-- control plane → events -->
+              <path class="e" d="M 840 312 L 840 340" marker-end="url(#r-m)"/>
+              <!-- events → store/agentStreamService -->
+              <path class="e-evt" d="M 704 392 C 560 470, 470 440, 446 418" marker-end="url(#r-evt)"/>
+              <text x="580" y="452" class="elbl" fill="#1e3a8a">events → store</text>
+              <!-- store → components (re-render) -->
+              <path class="e" d="M 200 230 L 200 196" marker-end="url(#r-m)"/>
+              <text x="170" y="216" class="elbl">subscribe</text>
+            </g>
+          </svg>
+        </div>
+      </div>
+      <figcaption class="figure-caption">
+        § 5: One-way data flow. Components call store actions → <code>window.sandstorm</code> →
+        <code>ipcMain.handle</code> → control plane; the return value lands back in the store.
+        Long-lived progress comes as <code>webContents.send</code> events that <code>App.tsx</code>
+        and <code>agentStreamService</code> fold into the store. Components only ever read store state.
+      </figcaption>
+    </figure>
+
+    <details class="arch-source">
+      <summary>Structure (text) — read this first</summary>
+<pre>
+RENDERER = React 18 + Tailwind + Zustand. Thin view layer; main owns truth.
+
+THE STORE (src/renderer/store.ts, ~1380 lines — a god store, see § 7)
+  Holds ALL UI state in one Zustand object. Categories:
+    projects / activeProjectId (null = "All" tab) + derived filteredStacks()
+    stacks / stackHistory / selectedStackId / stackMetrics / workflowProgress
+    boardTickets (+ optimistic move state) / refinementSessions
+    agentSessions[tabId] {messages, streamingContent, isLoading, isQueued}
+    outerClaudeTokens[tabId] (4 tiers: warn 100k / danger 150k / crit 200k / block 250k)
+    globalTokenUsage / rateLimitState / accountUsage / sessionMonitorState
+    schedules / cronHealthy / globalModelSettings / dockerConnected
+    a dozen dialog-visibility flags
+  Actions are async refreshers (refreshStacks, refreshMetrics, refreshBoardTickets,
+    refreshSchedules, refreshSessionState, refreshTokenUsage, …) plus optimistic
+    mutators (moveTicketColumn with rollback + a SEPARATE moveTicketColumnError so a
+    failed move doesn't get lost in the generic error banner).
+
+COMPONENT TREE (high level)
+  App.tsx — banners (docker/session) + ProjectTabs + LeftRail + main content + modals
+    main content: selectedStackId ? StackDetail : KanbanBoard
+    (Dashboard.tsx is a 933-line table view, currently secondary to KanbanBoard)
+  LeftRail — project picker, live/PR counts, schedules, "Ask Claude" button
+  KanbanBoard — columns backlog/refining/spec_ready/in_stack/pr_open/merged;
+    cards optimistically move columns, persisted via ticketBoard.setColumn
+  Modals/dialogs rendered at App root: NewStack, RefineTicket, CreateTicket,
+    StartTicket, CreatePR, OpenProject, ModelSettings, Migration, ComposeSetup,
+    NewSchedule, SessionWarning/TokenLimit, OrchestratorOverLimit, AskClaude
+
+IPC SURFACE (window.sandstorm, declared in preload/index.ts)
+  ~25 namespaces, each thin ipcRenderer wrappers:
+    projects, stacks, tasks, diff, push, ports, logs, stats, runtime, agent,
+    context, specGate, reviewPrompt, modelSettings, projectTicketConfig, session,
+    schedules, auth, docker, tickets, ticketBoard, pr  +  on(channel, cb)
+
+TWO STATE-IN PATHS
+  1. PULL (polling): App.tsx setInterval → refreshStacks (3s), refreshMetrics (15s),
+     more on demand. Interval shortens when dockerConnected.
+  2. PUSH (events): window.sandstorm.on(channel, cb) for task:*, session:*,
+     refinement:*, stacks:updated, docker:connected/disconnected, scheduler:cronHealth,
+     and per-tab agent:* (output/done/error/queued/token-usage/user-message).
+  Both paths funnel into the SAME store, so components have one place to read.
+
+agentStreamService.ts — solves "user switches tab mid-stream, AgentSession unmounts,
+  listeners tear down, chunks lost". Registers agent:* listeners ONCE per tabId in a
+  module-level registry that writes straight to the store and never unregisters. On
+  agent:done it fetches authoritative history via agent.history(tabId). The component
+  is then a pure reflection of store state and can remount freely.
+
+PATTERNS / SMELLS (see § 7)
+  + clean one-way flow; optimistic-with-rollback; stream resilience
+  - god store (1380 lines); god components (Dashboard 933, StackDetail 619,
+    ModelSettings 530, RefineTicketDialog 519)
+  - IPC calls scattered directly in components (no client/service layer); only 4
+    thin hooks exist (useStacks, useTaskOutput, useServiceHealth, useResizableColumns)
+  - __useAppStore exposed for Playwright seeding (pragmatic, unconventional)
+</pre>
+    </details>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 6</span> Persistence — where state actually lives</h2>
+    <p class="section-blurb">
+      State is split between one SQLite database (the authoritative store), a handful of JSON
+      files, append-only telemetry logs, and ephemeral files inside each container. Knowing which
+      is which matters: the registry is durable and migrated; the JSON files are convenience
+      stores; the container <code>/tmp</code> files are the contract between inner Claude and
+      <code>TaskWatcher</code> and vanish on teardown.
+    </p>
+
+    <details class="arch-source" open>
+      <summary>Where each kind of state lives</summary>
+<pre>
+1. SQLite — the authoritative store        (control-plane/registry.ts, better-sqlite3)
+   File: ~/.sandstorm.db   (WAL mode; schema migrations v1 → v16)
+   Tables:
+     stacks                — id, project, project_dir, status, ticket, branch, pr_*,
+                             runtime, total_*_tokens, rate_limit_reset_at, timestamps
+     tasks                 — stack_id, prompt, model, status, exit_code, session_id,
+                             *_tokens, review_iterations, verify_retries, phase timing
+     task_token_steps      — per-iteration/phase input/output tokens
+     ports                 — stack_id, service, host_port, container_port, proxy_id
+     projects              — id, name, directory, added_at
+     stack_history         — archived stacks (final_status, task_history JSON, duration)
+     model_settings        — "global" | "project:&lt;dir&gt;" → inner_model, outer_model
+     project_ticket_config — provider, jira_*, ticket_prefix
+     session_monitor_settings — thresholds + auto-halt config
+     ticket_board          — ticket_id, project_dir, column, title (Kanban state)
+   This is the ONLY authoritative store. Everything else is derived or convenience.
+
+2. JSON convenience files (per project or per user)
+   .sandstorm/schedules.json   — Schedule[] with structured actions (schedule-service.ts)
+   .sandstorm/config           — PROJECT_NAME, COMPOSE_FILE, PORT_MAP, TICKET_PREFIX
+   .sandstorm/docker-compose.yml — generated override compose (compose-generator.ts)
+   ~/.sandstorm/refinements.json — in-flight spec-refinement sessions (survive restart)
+
+3. Append-only telemetry (opt-in, in app data dir)
+   *-token-telemetry.jsonl     — per-turn outer-Claude token + tool-call byte sizes
+   *-ephemeral-timing.jsonl    — ephemeral subprocess spawn/first-chunk/close timing
+   raw-api-capture/**          — full request bodies when SANDSTORM_RAW_REQUEST_CAPTURE=1
+
+4. Ephemeral container files (the inner-Claude ↔ TaskWatcher contract)
+   Inside each stack's claude container, under /tmp:
+     claude-task.status / .exit / .log
+     claude-tokens-{execution,review}        (line-delimited JSON, partial + result)
+     claude-task.{review-iterations,verify-retries}
+     claude-phase-timing.txt
+     claude-{review-verdict,verify-output}-*.txt · claude-execution-summary.txt
+     .sandstorm-ready  (healthcheck signal)
+   Read by runtime.exec; parsed by token-parser.ts. GONE on teardown — TaskWatcher
+   calls capturePartialMetadata() before container removal to salvage what it can.
+
+5. Scheduler OS-level state (outside the app)
+   crontab managed block (# BEGIN/END sandstorm) — crontab-writer.ts
+   ~/.../bin/sandstorm-scheduled-run.sh — installed wrapper (wrapper-installer.ts)
+   ~/.sandstorm/orchestrator.sock — unix socket the wrapper pings
+   ~/.sandstorm/logs/scheduled-runs.log — wrapper-side dispatch log
+</pre>
+    </details>
+    <p>
+      The practical upshot: if you want to know "what is the system's truth right now", read
+      <code>~/.sandstorm.db</code>. If a stack's task metadata looks wrong, suspect the
+      <code>/tmp</code> file parsing in <code>token-parser.ts</code> / <code>task-watcher.ts</code>,
+      not the database. And because container files vanish on teardown, <strong>tearing down a
+      stack destroys its only copy of unpushed work</strong> — which is exactly why teardown is a
+      hard, explicit-only operation (§ 3).
+    </p>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ 7</span> Architecture review — the mess, honestly</h2>
+    <p class="section-blurb">
+      This app has clearly evolved fast, and it shows. The bones are sound — the two-Claude split,
+      the deterministic plane, the single SQLite truth, the runtime abstraction are all genuinely
+      good decisions. But there's real accumulated debt: a few god files, a half-finished migration
+      that leaves broken features, duplicated logic, and dead artifacts. None of this is fatal;
+      all of it is worth a future agent's attention. Severity is a rough call on
+      <em>impact × likelihood of biting you</em>.
+    </p>
+
+    <div class="callout smell">
+      <strong>How to use this section.</strong> Each row is a discrete, actionable cleanup. If you
+      pick one up, it is almost certainly application code (<code>src/**</code>) — so per the
+      orchestration rules it goes <em>through a stack</em>, with tests. The highest-leverage items
+      are the two correctness ones (broken ticket comments/labels, and the false-failed status
+      guard) and decomposing the three god files.
+    </div>
+
+    <h3>Correctness &amp; half-finished work</h3>
+    <table class="smell-table">
+      <thead><tr><th>Severity</th><th>Issue</th><th>Where</th><th>What &amp; why</th></tr></thead>
+      <tbody>
+        <tr>
+          <td class="sev sev-high">high</td>
+          <td>Ticket comments/labels shell out to absent scripts</td>
+          <td><code>control-plane/ticket-comments.ts</code>, <code>ticket-labels.ts</code></td>
+          <td>Ticket <em>fetch/create/update</em> migrated to built-in GitHub/Jira providers
+              (<code>ticket-config.ts</code>), but comments and labels still exec
+              <code>.sandstorm/scripts/{post-comment,add-label,…}.sh</code>, which most projects
+              don't have. They hard-error on missing/non-executable scripts. The
+              <code>refine-to-comments</code> scheduler action depends on these, so that whole
+              automation is likely broken in practice. Finish the migration: add built-in
+              comment/label ops to the provider layer.</td>
+        </tr>
+        <tr>
+          <td class="sev sev-high">high</td>
+          <td>False "failed" status from a fast/crashed task runner</td>
+          <td><code>control-plane/task-watcher.ts</code></td>
+          <td>A known issue (project memory): stacks can show "failed" when stderr carries build
+              output or the runner exits oddly. There's a stale-poll guard (ignore "completed"
+              until a "running" is seen), but the failure-classification path is still fragile.
+              Worth hardening with explicit exit-code + status-file precedence.</td>
+        </tr>
+        <tr>
+          <td class="sev sev-med">med</td>
+          <td>Ephemeral gate dependency interface is opaque</td>
+          <td><code>control-plane/ticket-spec.ts</code></td>
+          <td><code>runCheck</code>/<code>runRefine</code> are injected callables with no documented
+              contract; a reader can't tell from the module what shape the ephemeral agent must
+              return. Type the dependency explicitly.</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <h3>God files (do too much, hard to change safely)</h3>
+    <table class="smell-table">
+      <thead><tr><th>Severity</th><th>File</th><th>Lines</th><th>Tangle &amp; suggested split</th></tr></thead>
+      <tbody>
+        <tr><td class="sev sev-high">high</td><td><code>control-plane/stack-manager.ts</code></td><td>~1660</td>
+          <td>Lifecycle + observability (metrics/tokens/logs) + stale-workspace cleanup +
+              pause/resume. Extract <code>WorkspaceManager</code> and <code>StackObservability</code>;
+              keep lifecycle core.</td></tr>
+        <tr><td class="sev sev-high">high</td><td><code>renderer/store.ts</code></td><td>~1380</td>
+          <td>All UI state + all IPC calls + all selectors in one Zustand object. Split into domain
+              slices (stacks, kanban, agent, session, schedules).</td></tr>
+        <tr><td class="sev sev-med">med</td><td><code>main/ipc.ts</code></td><td>~1326</td>
+          <td>~75 handlers in one file, no grouping. Split into <code>ipc/{projects,stacks,tickets,
+              scheduler,agent}.ts</code> registered from one entry.</td></tr>
+        <tr><td class="sev sev-med">med</td><td><code>control-plane/registry.ts</code></td><td>~1271</td>
+          <td>Schema + migrations + CRUD for every entity. Consider per-entity DAOs over a shared
+              connection, or at least separate the migration ladder.</td></tr>
+        <tr><td class="sev sev-med">med</td><td><code>agent/claude-backend.ts</code></td><td>~1365</td>
+          <td>Session mgmt + subprocess + bridge server + auth + telemetry + ephemeral spawning.
+              Extract <code>BridgeServer</code>, <code>AuthHandler</code>, and an ephemeral-spawn
+              module.</td></tr>
+        <tr><td class="sev sev-low">low</td><td><code>renderer/components/Dashboard.tsx</code></td><td>~933</td>
+          <td>Table + filtering + history + metadata + resizable columns. Note it's currently
+              secondary to <code>KanbanBoard</code> — verify it's still reachable before investing.</td></tr>
+      </tbody>
+    </table>
+
+    <h3>Duplication &amp; inconsistency</h3>
+    <table class="smell-table">
+      <thead><tr><th>Severity</th><th>Issue</th><th>Where</th></tr></thead>
+      <tbody>
+        <tr><td class="sev sev-med">med</td><td>Two next-fire cron implementations that can disagree (7-day vs 1-year horizon)</td>
+          <td><code>scheduler/cron-validator.ts</code> <code>nextFireTime</code> vs <code>renderer/utils/cronNextFire.ts</code></td></tr>
+        <tr><td class="sev sev-low">low</td><td>PORT_MAP parsed in multiple places with different methods</td>
+          <td><code>stack-manager.ts</code> <code>discoverServicePorts</code> / <code>discoverKnownPorts</code> (centralize in <code>compose-generator.ts</code>)</td></tr>
+        <tr><td class="sev sev-low">low</td><td>Ticket fetch has two entry points</td>
+          <td><code>ticket-config.fetchTicketWithConfig</code> vs <code>ticket-spec.fetchTicketForRenderer</code></td></tr>
+        <tr><td class="sev sev-low">low</td><td>Token tracking scattered (outer session, inner task, per-task steps) with no aggregator</td>
+          <td><code>claude-backend.ts</code> · <code>registry.ts</code> · <code>token-parser.ts</code></td></tr>
+        <tr><td class="sev sev-low">low</td><td>IPC calls made directly in components instead of a service/hook layer</td>
+          <td>throughout <code>renderer/components/**</code></td></tr>
+      </tbody>
+    </table>
+
+    <h3>What's actually good (don't "fix" these)</h3>
+    <ul>
+      <li><strong>The two-Claude boundary</strong> (§ 2) — a strong, safety-bearing separation. The
+        outer Claude's lack of an <code>Edit</code> tool is a feature, not an omission.</li>
+      <li><strong>The deterministic workflow plane</strong> (§ 4) — "button and schedule call the
+        same primitive" is the right shape, and the no-chat-in-automation invariant is enforced by grep.</li>
+      <li><strong>Single SQLite source of truth</strong> with transactional token updates and a real
+        migration ladder.</li>
+      <li><strong>The runtime abstraction</strong> — Docker/Podman behind one interface, with a
+        dedicated connection-health manager and backoff for Docker.</li>
+      <li><strong>On-demand socat port proxies</strong> instead of static host-port maps — clean
+        isolation without rewriting the user's compose.</li>
+      <li><strong>Stream-resilience in the renderer</strong> (<code>agentStreamService</code>) and
+        optimistic-with-rollback Kanban moves — thoughtful UX engineering.</li>
+    </ul>
+
+    <!-- ════════════════════════════════════════════════════════════ -->
+    <h2><span class="num">§ G</span> Glossary</h2>
+    <p class="section-blurb">Every named box mapped to a file path or a one-line definition.</p>
+
+    <dl class="glossary">
+      <dt>Outer Claude</dt>
+      <dd>The orchestrator. A persistent <code>claude</code> subprocess in the main process,
+        spawned by <code>ClaudeBackend</code> (<code>src/main/agent/claude-backend.ts</code>).
+        Restricted tools, no <code>Edit</code>/<code>Write</code>. Acts via the bridge. See § 2.</dd>
+
+      <dt>Inner Claude</dt>
+      <dd>The worker. A <code>claude</code> process inside a stack's <code>claude</code> container,
+        driven by <code>task-runner.sh</code> with full tools. Edits the workspace clone. All
+        <code>src/**</code> changes happen here. See § 2.</dd>
+
+      <dt>Ephemeral agent</dt>
+      <dd>A one-shot/short-lived <code>claude</code> subprocess for bounded jobs (spec gate, PR
+        draft). <code>runEphemeralAgent</code> / <code>spawnEphemeralSession</code>. No chat
+        session, no token-counter contribution. See § 2.</dd>
+
+      <dt>Bridge server</dt>
+      <dd>Token-authed HTTP server inside <code>ClaudeBackend</code>. Outer-Claude skill scripts
+        POST <code>{name,input}</code> to <code>/tool-call</code> → <code>handleToolCall</code>
+        (<code>src/main/claude/tools.ts</code>). See § 2.</dd>
+
+      <dt>Stack</dt>
+      <dd>One Docker Compose project per task: the project's services + a <code>claude</code>
+        container. Created/managed by <code>StackManager</code>
+        (<code>src/main/control-plane/stack-manager.ts</code>). See § 3.</dd>
+
+      <dt>StackManager</dt>
+      <dd>Owns the stack lifecycle (create/build/dispatch/diff/push/teardown). Largest file in the
+        repo (~1660 lines). <code>src/main/control-plane/stack-manager.ts</code>.</dd>
+
+      <dt>TaskWatcher</dt>
+      <dd>EventEmitter that polls a stack container's <code>/tmp</code> status/token files and emits
+        <code>task:*</code> events. <code>src/main/control-plane/task-watcher.ts</code>.</dd>
+
+      <dt>Registry</dt>
+      <dd>The SQLite store (<code>better-sqlite3</code>, <code>~/.sandstorm.db</code>). The single
+        source of truth. <code>src/main/control-plane/registry.ts</code>. See § 6.</dd>
+
+      <dt>Control plane</dt>
+      <dd>The deterministic primitives that buttons and schedules both compose
+        (<code>src/main/control-plane/**</code>): stack-manager, ticket-*, pr-creator, ticket-spec,
+        port-*, session-monitor. See § 3, § 4.</dd>
+
+      <dt>ContainerRuntime</dt>
+      <dd>Interface (<code>src/main/runtime/types.ts</code>) with <code>DockerRuntime</code>
+        (dockerode + <code>DockerConnectionManager</code>) and <code>PodmanRuntime</code> (CLI).</dd>
+
+      <dt>compose-generator</dt>
+      <dd>Generates the per-stack override <code>.sandstorm/docker-compose.yml</code> from the
+        project compose (regex parse, no YAML lib). <code>src/main/compose-generator.ts</code>.</dd>
+
+      <dt>PortProxy</dt>
+      <dd>Creates an <code>alpine/socat</code> proxy container to expose a stack service on a host
+        port, on demand. <code>src/main/control-plane/port-proxy.ts</code>.</dd>
+
+      <dt>Scheduler</dt>
+      <dd>Cron-driven automation (<code>src/main/scheduler/**</code>). OS cron → wrapper script →
+        unix socket → <code>handleScheduledDispatch</code> → action kind. See § 4.</dd>
+
+      <dt>ScheduleAction</dt>
+      <dd>Structured, prompt-free action carried by a schedule: <code>run-script</code> or
+        <code>refine-to-comments</code>. <code>src/main/scheduler/types.ts</code>.</dd>
+
+      <dt>Spec quality gate</dt>
+      <dd>A bounded ephemeral-LLM check that a ticket is implementation-ready (PASS/FAIL + questions);
+        cached via a <code>spec-ready</code> label. <code>src/main/spec-quality-gate.ts</code> +
+        <code>control-plane/ticket-spec.ts</code>.</dd>
+
+      <dt>SessionMonitor</dt>
+      <dd>Polls Claude account usage, fires threshold events, and can auto-halt/resume stacks at
+        the token limit. <code>src/main/control-plane/session-monitor.ts</code>.</dd>
+
+      <dt>window.sandstorm</dt>
+      <dd>The preload bridge — the only channel between renderer and main
+        (<code>src/preload/index.ts</code>). ~25 namespaces of <code>ipcRenderer</code> wrappers.</dd>
+
+      <dt>Zustand store</dt>
+      <dd>The renderer's single state object (<code>src/renderer/store.ts</code>, ~1380 lines).
+        Components read it; actions mutate it via IPC. See § 5.</dd>
+
+      <dt>agentStreamService</dt>
+      <dd>Persistent per-tab <code>agent:*</code> stream listeners that survive component unmount
+        and write to the store. <code>src/renderer/agentStreamService.ts</code>.</dd>
+
+      <dt>sandstorm-cli</dt>
+      <dd>The bundled shell CLI + inner Docker image + skills + provider templates
+        (<code>sandstorm-cli/</code>), copied into the app as <code>extraResources</code>. Runs
+        <code>init</code>, stack ops, and the inner task-runner.</dd>
+    </dl>
+
+    <p class="footnote">
+      Hand-authored inline SVG; no external diagram renderer. Each figure is paired with a
+      <code>&lt;details class="arch-source"&gt;</code> structured-text block — that text is the
+      source of truth, keep both in sync when editing a diagram. This file describes the
+      architecture <em>as it exists</em> (verified against the source on 2026-05-31), warts
+      included; § 7 is the to-do list, not a description of a finished system. When a box names a
+      file, confirm the path still exists before relying on it — this app moves fast.
+    </p>
+  </main>
+
+  <script type="module">
+    // All diagrams are hand-authored inline SVG. Wire pan/zoom/fullscreen/PNG per figure.
+    await new Promise((r) => requestAnimationFrame(r));
+    await new Promise((r) => requestAnimationFrame(r));
+
+    document.querySelectorAll(".figure").forEach((fig, idx) => {
+      const svg = fig.querySelector(".figure-viewport svg");
+      const viewport = fig.querySelector(".figure-viewport");
+      const toolbar = fig.querySelector(".figure-toolbar");
+      if (!svg || !viewport || !toolbar) return;
+
+      const vb = svg.viewBox.baseVal;
+      const naturalW = (vb && vb.width)  || svg.getBoundingClientRect().width  || 800;
+      const naturalH = (vb && vb.height) || svg.getBoundingClientRect().height || 600;
+
+      svg.removeAttribute("width");
+      svg.removeAttribute("height");
+      svg.removeAttribute("style");
+      svg.style.cssText =
+        "display:block;width:" + naturalW + "px;height:" + naturalH + "px;" +
+        "transform-origin:center center;will-change:transform";
+      svg.setAttribute("preserveAspectRatio", "xMidYMid meet");
+
+      const ZMIN = 0.05, ZMAX = 16;
+      let zoom = 1, tx = 0, ty = 0;
+
+      const applyTransform = () => {
+        svg.style.transform = "translate(" + tx + "px," + ty + "px) scale(" + zoom + ")";
+      };
+      const fit = () => {
+        const vpW = viewport.clientWidth  || viewport.getBoundingClientRect().width;
+        const vpH = viewport.clientHeight || viewport.getBoundingClientRect().height;
+        const fitZoom = Math.min(vpW / naturalW, vpH / naturalH) * 0.94;
+        zoom = Math.max(ZMIN, Math.min(ZMAX, fitZoom));
+        tx = 0; ty = 0; applyTransform();
+      };
+      const setZoom = (next, anchor) => {
+        const old = zoom;
+        const z = Math.max(ZMIN, Math.min(ZMAX, next));
+        if (z === old) return;
+        const rect = viewport.getBoundingClientRect();
+        const ax = anchor ? (anchor.clientX - rect.left - rect.width  / 2) : 0;
+        const ay = anchor ? (anchor.clientY - rect.top  - rect.height / 2) : 0;
+        const ratio = z / old;
+        tx = ax - (ax - tx) * ratio;
+        ty = ay - (ay - ty) * ratio;
+        zoom = z; applyTransform();
+      };
+
+      requestAnimationFrame(() => requestAnimationFrame(fit));
+
+      const figLabel = fig.dataset.figure || `fig-${idx + 1}`;
+      toolbar.querySelector('[data-action="zoom-in"]').onclick  = () => setZoom(zoom * 1.3);
+      toolbar.querySelector('[data-action="zoom-out"]').onclick = () => setZoom(zoom / 1.3);
+      toolbar.querySelector('[data-action="reset"]').onclick    = fit;
+      toolbar.querySelector('[data-action="fullscreen"]').onclick = async () => {
+        if (document.fullscreenElement === fig) {
+          await document.exitFullscreen();
+        } else {
+          await fig.requestFullscreen();
+          setTimeout(fit, 80);
+        }
+      };
+      toolbar.querySelector('[data-action="download"]').onclick =
+        () => downloadPNG(svg, `sandstorm-architecture-${figLabel}.png`);
+
+      fig.addEventListener("fullscreenchange", () => setTimeout(fit, 50));
+
+      let dragging = false, dragOrigin = null;
+      viewport.addEventListener("mousedown", (e) => {
+        if (e.button !== 0) return;
+        dragging = true;
+        dragOrigin = { x: e.clientX, y: e.clientY, tx, ty };
+        viewport.classList.add("is-grabbing");
+        e.preventDefault();
+      });
+      window.addEventListener("mousemove", (e) => {
+        if (!dragging) return;
+        tx = dragOrigin.tx + (e.clientX - dragOrigin.x);
+        ty = dragOrigin.ty + (e.clientY - dragOrigin.y);
+        applyTransform();
+      });
+      const stopDrag = () => {
+        if (!dragging) return;
+        dragging = false;
+        viewport.classList.remove("is-grabbing");
+      };
+      window.addEventListener("mouseup", stopDrag);
+      window.addEventListener("blur", stopDrag);
+
+      viewport.addEventListener("wheel", (e) => {
+        e.preventDefault();
+        const factor = e.deltaY < 0 ? 1.12 : 1 / 1.12;
+        setZoom(zoom * factor, { clientX: e.clientX, clientY: e.clientY });
+      }, { passive: false });
+    });
+
+    function downloadPNG(svgEl, filename) {
+      const clone = svgEl.cloneNode(true);
+      clone.removeAttribute("style");
+      const vb = svgEl.viewBox.baseVal;
+      const w = vb && vb.width ? vb.width : svgEl.getBoundingClientRect().width;
+      const h = vb && vb.height ? vb.height : svgEl.getBoundingClientRect().height;
+      clone.setAttribute("width", w);
+      clone.setAttribute("height", h);
+      clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
+
+      const xml = new XMLSerializer().serializeToString(clone);
+      const b64 = btoa(unescape(encodeURIComponent(xml)));
+      const url = `data:image/svg+xml;base64,${b64}`;
+
+      const img = new Image();
+      img.onload = () => {
+        const scale = 2;
+        const canvas = document.createElement("canvas");
+        canvas.width = w * scale;
+        canvas.height = h * scale;
+        const ctx = canvas.getContext("2d");
+        ctx.fillStyle = "#ffffff";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0);
+        canvas.toBlob((blob) => {
+          const a = document.createElement("a");
+          a.href = URL.createObjectURL(blob);
+          a.download = filename;
+          document.body.appendChild(a);
+          a.click();
+          document.body.removeChild(a);
+          URL.revokeObjectURL(a.href);
+        }, "image/png");
+      };
+      img.onerror = (e) => console.error("[arch] PNG export failed", e);
+      img.src = url;
+    }
+
+    document.addEventListener("keydown", (e) => {
+      const fig = document.fullscreenElement;
+      if (!fig || !fig.classList.contains("figure")) return;
+      const btn = (action) => fig.querySelector(`[data-action="${action}"]`);
+      if (e.key === "+" || e.key === "=") btn("zoom-in")?.click();
+      else if (e.key === "-" || e.key === "_") btn("zoom-out")?.click();
+      else if (e.key === "0" || e.key.toLowerCase() === "r") btn("reset")?.click();
+    });
+  </script>
+</body>
+</html>
