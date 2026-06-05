@@ -429,6 +429,21 @@ describe('KanbanBoard', () => {
     });
   });
 
+  // =========================================================================
+  // #510 — RefinementIndicator removal
+  // =========================================================================
+  it('does not render refinement-indicator pill even when refinementSessions has running sessions (#510)', () => {
+    useAppStore.setState({
+      refinementSessions: [
+        { id: 'sess-1', ticketId: '1', projectDir: '/proj', status: 'running', phase: 'check', startedAt: 0 },
+        { id: 'sess-2', ticketId: '2', projectDir: '/proj', status: 'ready', phase: 'check', startedAt: 0, result: { passed: false, questions: [{ id: 'q1', question: 'Q?', options: [] }], gateSummary: '', ticketUrl: null, cached: false } },
+      ],
+    } as any);
+    render(<KanbanBoard />);
+    expect(screen.queryByTestId('refinement-indicator')).toBeNull();
+    expect(screen.queryByTestId('refinement-indicator-pill')).toBeNull();
+  });
+
   describe('matchesTicketQuery', () => {
     const ticket = { ticket_id: '501', title: 'Add filter feature', column: 'backlog' as const, project_dir: '/proj', updated_at: '' };
 

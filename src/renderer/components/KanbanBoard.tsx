@@ -2,7 +2,6 @@ import React, { useEffect, useState } from 'react';
 import { useAppStore, selectProjectTickets, TicketBoardEntry } from '../store';
 import { KanbanColumn } from '../types/kanban';
 import { TicketCard } from './TicketCard';
-import { RefinementIndicator } from './RefinementIndicator';
 
 export function matchesTicketQuery(ticket: TicketBoardEntry, query: string): boolean {
   const normalized = query.trim().replace(/^#/, '').toLowerCase();
@@ -120,10 +119,6 @@ export function KanbanBoard() {
           )}
         </div>
 
-        {/* Right side controls */}
-        <div className="flex items-center gap-2">
-          <RefinementIndicator />
-        </div>
       </div>
 
       {/* Board content */}

@@ -2067,68 +2067,51 @@ describe('IPC Handlers', () => {
   });
 
   // =========================================================================
-  // tickets:discardRefinement
+  // #510 regression — completion handler is always reached (no discard path)
   // =========================================================================
-  describe('tickets:discardRefinement', () => {
-    beforeEach(() => {
+  describe('tickets:specCheckAsync completion — regression for #510', () => {
+    it('completion handler reaches persistRefinement(ready) when no discard clears activeRefinements', async () => {
+      // Arrange: a spec-check that will resolve
+      let resolveFn!: (v: Record<string, unknown>) => void;
       mockSpawnSpecCheck.mockReturnValue({
-        promise: new Promise<Record<string, unknown>>(() => {}),
-        cancel: vi.fn(),
-      });
-    });
-
-    it('removes the activeRefinements entry and calls deleteRefinement', async () => {
-      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-D1', '/tmp/proj-d') as { sessionId: string };
-      mockDeleteRefinement.mockClear();
-
-      await invokeHandler('tickets:discardRefinement', sessionId);
-
-      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
-
-      // The session should no longer appear in listRefinements
-      const list = await invokeHandler('tickets:listRefinements') as unknown[];
-      expect(list.find((s: unknown) => (s as { id: string }).id === sessionId)).toBeUndefined();
-    });
-
-    it('does NOT call entry.cancel for a running session', async () => {
-      const cancelSpy = vi.fn();
-      mockSpawnSpecCheck.mockReturnValue({
-        promise: new Promise<Record<string, unknown>>(() => {}),
-        cancel: cancelSpy,
-      });
-
-      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-D2', '/tmp/proj-d2') as { sessionId: string };
-
-      await invokeHandler('tickets:discardRefinement', sessionId);
-
-      expect(cancelSpy).not.toHaveBeenCalled();
-    });
-
-    it('is a no-op for an unknown session id', async () => {
-      mockDeleteRefinement.mockClear();
-      await invokeHandler('tickets:discardRefinement', 'no-such-id');
-      expect(mockDeleteRefinement).not.toHaveBeenCalled();
-    });
-
-    it('removes an errored (terminal-state) session — regression for original bug', async () => {
-      // Register a session and let it error out
-      let rejectFn!: (err: Error) => void;
-      mockSpawnSpecCheck.mockReturnValue({
-        promise: new Promise<Record<string, unknown>>((_resolve, reject) => {
-          rejectFn = reject;
-        }),
+        promise: new Promise<Record<string, unknown>>((r) => { resolveFn = r; }),
         cancel: vi.fn(),
       });
 
-      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-D3', '/tmp/proj-d3') as { sessionId: string };
-      rejectFn(new Error('gate failed'));
-      // Allow the rejection handler to settle
+      // readTicketUrl calls execFileAsync (promisify(execFile)) once.
+      // Make it fail immediately so the catch block returns '' and the
+      // completion handler continues synchronously.
+      const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
+      mockExecFile.mockImplementationOnce(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(new Error('mock-exec-fail'), '', '');
+        },
+      );
+
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'TICKET-510', '/tmp/proj510') as { sessionId: string };
+      mockPersistRefinement.mockClear();
+
+      // Act: let the subprocess complete with passed=false so markSpecReady
+      // (which also calls execFile) is skipped — only readTicketUrl runs.
+      // No discard has removed the entry, so the completion handler runs to completion.
+      resolveFn({ passed: false, report: '' });
+      // Flush the microtask/macrotask queue so the async completion chain settles
       await new Promise((r) => setTimeout(r, 0));
 
-      mockDeleteRefinement.mockClear();
-      await invokeHandler('tickets:discardRefinement', sessionId);
+      // Assert: persistRefinement was called with a 'ready' session, proving
+      // the 'if (!entry) return' early-out was NOT taken (the core #510 regression)
+      const readyCall = mockPersistRefinement.mock.calls.find(
+        (call) => (call[0] as { status: string }).status === 'ready',
+      );
+      expect(readyCall).toBeDefined();
+      expect((readyCall![0] as { id: string }).id).toBe(sessionId);
+    });
 
-      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
+    it('tickets:discardRefinement is NOT registered as an IPC handler (#510)', () => {
+      // The discard path was the root cause of #510 — removing it from the IPC
+      // surface is the fix. This assertion replaces the old registration check
+      // that expected it to be present.
+      expect(registeredHandlers['tickets:discardRefinement']).toBeUndefined();
     });
   });
 
@@ -2224,7 +2207,6 @@ describe('IPC Handlers', () => {
       'tickets:retryRefinementAsync',
       'tickets:postAnswers',
       'tickets:cancelRefinement',
-      'tickets:discardRefinement',
       'tickets:listRefinements',
       'tickets:create',
       'tickets:fetchRaw',
