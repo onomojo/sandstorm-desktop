@@ -47,6 +47,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
   const [showEarlyDiscardDialog, setShowEarlyDiscardDialog] = useState(false);
+  const [showMoveToBacklogDialog, setShowMoveToBacklogDialog] = useState(false);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
@@ -123,6 +124,15 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
       removeRefinementSession(refinementSession.id);
     }
     void discardStack(ticket.ticket_id, ticket.project_dir, 'close');
+  };
+
+  const handleMoveToBacklog = async () => {
+    setShowMoveToBacklogDialog(false);
+    if (refinementSession) {
+      await window.sandstorm.tickets.cancelRefinement(refinementSession.id).catch(() => {});
+      removeRefinementSession(refinementSession.id);
+    }
+    void moveTicketColumn(ticket.ticket_id, ticket.project_dir, 'backlog');
   };
 
   const isEarlyColumn = ticket.column === 'backlog' || ticket.column === 'refining' || ticket.column === 'spec_ready';
@@ -270,6 +280,13 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               Answer
             </button>
           )}
+          <button
+            onClick={() => setShowMoveToBacklogDialog(true)}
+            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-surface-hover text-sandstorm-muted border border-sandstorm-border hover:border-sandstorm-accent/30 hover:text-sandstorm-text transition-colors font-medium"
+            data-testid={`ticket-card-move-to-backlog-${ticket.ticket_id}`}
+          >
+            Move to backlog
+          </button>
           {discardErrorBlock}
         </div>
       )}
@@ -424,6 +441,17 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           confirmLabel="Discard ticket"
           onConfirm={() => void handleEarlyDiscardConfirm()}
           onCancel={() => setShowEarlyDiscardDialog(false)}
+        />
+      )}
+
+      {showMoveToBacklogDialog && (
+        <ConfirmDialog
+          title="Move ticket back to backlog?"
+          body="This discards the current refinement session and moves the ticket back to the backlog. Answers you already submitted and any title/body edits are kept on the ticket — only the in-progress refinement session is lost."
+          confirmLabel="Move to backlog"
+          onConfirm={() => void handleMoveToBacklog()}
+          onCancel={() => setShowMoveToBacklogDialog(false)}
+          data-testid={`move-to-backlog-dialog-${ticket.ticket_id}`}
         />
       )}
 
