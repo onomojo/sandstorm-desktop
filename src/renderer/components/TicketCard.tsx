@@ -179,6 +179,12 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     (refinementSession.status === 'ready' && !!refinementSession.result?.error)
   )) || !!refineStartError;
 
+  const refineErrorMessage =
+    refinementSession?.error ??
+    refinementSession?.result?.error ??
+    refineStartError ??
+    'Refinement failed';
+
   return (
     <div
       className={`bg-sandstorm-surface border border-sandstorm-border rounded-lg p-3 flex flex-col gap-2 shadow-card ${ticket.column === 'merged' ? 'opacity-40' : ''}`}
@@ -234,10 +240,11 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           {/* Error badge for clear visual indication of failure */}
           {showErrorState && (
             <span
-              className="text-xs text-red-400"
+              className="text-xs text-red-400 truncate block max-w-full"
               data-testid={`ticket-card-error-badge-${ticket.ticket_id}`}
+              title={refineErrorMessage}
             >
-              Refinement failed
+              {refineErrorMessage}
             </span>
           )}
           {/* No session, not in-flight, no error: offer to start refinement */}
