@@ -1332,6 +1332,56 @@ describe('TicketCard', () => {
   });
 
   // =========================================================================
+  // #525 — Discard icon-only, accessibility, and error-block tests
+  // =========================================================================
+
+  it('discard icon has aria-label="Discard" on backlog column', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-discard-42');
+    expect(btn.getAttribute('aria-label')).toBe('Discard');
+  });
+
+  it('discard icon has aria-label="Discard" on in_stack column', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-discard-42');
+    expect(btn.getAttribute('aria-label')).toBe('Discard');
+  });
+
+  it('backlog: discard control does not render visible "Discard" text', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    // The word "Discard" must not appear as visible text in the card
+    expect(screen.queryByText('Discard')).toBeNull();
+  });
+
+  it('in_stack: discard control does not render visible "Discard" text', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.queryByText('Discard')).toBeNull();
+  });
+
+  it('getByLabelText("Discard") resolves to the same element as getByTestId for backlog', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    expect(screen.getByLabelText('Discard')).toBe(screen.getByTestId('ticket-card-discard-42'));
+  });
+
+  it('backlog: discard error block still renders in card body when discardErrors is set', () => {
+    useAppStore.setState({ discardErrors: { '42|/proj': 'Something went wrong' } } as any);
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    expect(screen.getByText('Something went wrong')).toBeDefined();
+  });
+
+  it('in_stack: discard error block still renders in card body when discardErrors is set', () => {
+    useAppStore.setState({ discardErrors: { '42|/proj': 'Stack removal failed' } } as any);
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.getByText('Stack removal failed')).toBeDefined();
+  });
+
+  it('pr_open: discard error block still renders in card body when discardErrors is set', () => {
+    useAppStore.setState({ discardErrors: { '42|/proj': 'PR discard error' } } as any);
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    expect(screen.getByText('PR discard error')).toBeDefined();
+  });
+
+  // =========================================================================
   // #510 — gap-question Answer path survives RefinementIndicator removal
   // =========================================================================
 
@@ -1358,6 +1408,99 @@ describe('TicketCard', () => {
     expect(useAppStore.getState().currentRefinementSessionId).toBe('sess-510-answer');
     // No discard-related IPC is ever called when the Answer button is clicked
     expect(api.tickets.cancelRefinement).not.toHaveBeenCalled();
+  });
+
+  // =========================================================================
+  // #524 — Move to backlog from refining
+  // =========================================================================
+
+  it('refining: shows Move to backlog button distinct from Discard button', () => {
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.getByTestId('ticket-card-move-to-backlog-42')).toBeDefined();
+    expect(screen.getByTestId('ticket-card-discard-42')).toBeDefined();
+  });
+
+  it('refining: clicking Move to backlog opens dialog without calling cancelRefinement or moveTicketColumn', async () => {
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-move-to-backlog-42'));
+    expect(screen.getByTestId('move-to-backlog-dialog-42')).toBeDefined();
+    await act(async () => {});
+    expect(api.tickets.cancelRefinement).not.toHaveBeenCalled();
+    expect(api.ticketBoard.setColumn).not.toHaveBeenCalled();
+  });
+
+  it('refining: confirming Move to backlog with running session calls cancelRefinement, removeRefinementSession, then moveTicketColumn(backlog) in order', async () => {
+    const callOrder: string[] = [];
+    const removeSpy = vi.fn().mockImplementation(() => { callOrder.push('remove'); });
+    api.tickets.cancelRefinement.mockImplementation(async () => { callOrder.push('cancel'); });
+    api.ticketBoard.setColumn.mockImplementation(async () => { callOrder.push('setColumn'); });
+
+    useAppStore.setState({
+      removeRefinementSession: removeSpy,
+      boardTickets: [makeTicket('refining') as any],
+      refinementSessions: [{
+        id: 'sess-move',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'running',
+        phase: 'check',
+        startedAt: 0,
+      }],
+    } as any);
+
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-move-to-backlog-42'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'backlog'));
+    expect(api.tickets.cancelRefinement).toHaveBeenCalledWith('sess-move');
+    expect(removeSpy).toHaveBeenCalledWith('sess-move');
+    expect(callOrder).toEqual(['cancel', 'remove', 'setColumn']);
+    expect(api.tickets.close).not.toHaveBeenCalled();
+    expect(api.ticketBoard.delete).not.toHaveBeenCalled();
+  });
+
+  it('refining: confirming Move to backlog with no session skips cancelRefinement and calls moveTicketColumn(backlog)', async () => {
+    useAppStore.setState({
+      boardTickets: [makeTicket('refining') as any],
+      refinementSessions: [],
+    } as any);
+
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-move-to-backlog-42'));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+      await Promise.resolve();
+    });
+
+    await waitFor(() => expect(api.ticketBoard.setColumn).toHaveBeenCalledWith('42', PROJECT_DIR, 'backlog'));
+    expect(api.tickets.cancelRefinement).not.toHaveBeenCalled();
+  });
+
+  it('refining: cancelling Move to backlog dialog calls neither cancelRefinement nor moveTicketColumn', async () => {
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-move-to-backlog-42'));
+    expect(screen.getByTestId('move-to-backlog-dialog-42')).toBeDefined();
+    fireEvent.click(screen.getByTestId('confirm-dialog-cancel'));
+    expect(screen.queryByTestId('move-to-backlog-dialog-42')).toBeNull();
+    await act(async () => {});
+    expect(api.tickets.cancelRefinement).not.toHaveBeenCalled();
+    expect(api.ticketBoard.setColumn).not.toHaveBeenCalled();
+  });
+
+  it('refining: Discard button still opens close-ticket dialog after adding Move to backlog (regression)', async () => {
+    const discardSpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ discardStack: discardSpy, refinementSessions: [] } as any);
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-discard-42'));
+    expect(screen.queryByTestId('move-to-backlog-dialog-42')).toBeNull();
+    fireEvent.click(screen.getByTestId('confirm-dialog-confirm'));
+    await waitFor(() => expect(discardSpy).toHaveBeenCalledWith('42', PROJECT_DIR, 'close'));
   });
 
   it('refining: running session — no session-destructive IPC call is made (#510)', () => {

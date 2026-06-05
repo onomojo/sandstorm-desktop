@@ -47,6 +47,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
 
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
   const [showEarlyDiscardDialog, setShowEarlyDiscardDialog] = useState(false);
+  const [showMoveToBacklogDialog, setShowMoveToBacklogDialog] = useState(false);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
@@ -125,33 +126,42 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     void discardStack(ticket.ticket_id, ticket.project_dir, 'close');
   };
 
-  const makeDiscardSection = (onClick: () => void) => (
-    <>
-      {discardError && (
-        <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2 py-1.5 break-words">
-          {discardError}
-        </div>
-      )}
-      <button
-        onClick={onClick}
-        disabled={discardInflight}
-        className="w-full text-xs py-1.5 px-3 rounded-md bg-red-500/5 text-red-400/70 border border-red-500/20 hover:bg-red-500/10 hover:text-red-400 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed flex items-center justify-center gap-1.5"
-        data-testid={`ticket-card-discard-${ticket.ticket_id}`}
-      >
-        <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="flex-shrink-0">
-          <polyline points="3 6 5 6 21 6"/>
-          <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
-          <path d="M10 11v6"/>
-          <path d="M14 11v6"/>
-          <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
-        </svg>
-        Discard
-      </button>
-    </>
-  );
+  const handleMoveToBacklog = async () => {
+    setShowMoveToBacklogDialog(false);
+    if (refinementSession) {
+      await window.sandstorm.tickets.cancelRefinement(refinementSession.id).catch(() => {});
+      removeRefinementSession(refinementSession.id);
+    }
+    void moveTicketColumn(ticket.ticket_id, ticket.project_dir, 'backlog');
+  };
 
-  const discardSection = makeDiscardSection(() => setShowDiscardDialog(true));
-  const earlyDiscardSection = makeDiscardSection(() => setShowEarlyDiscardDialog(true));
+  const isEarlyColumn = ticket.column === 'backlog' || ticket.column === 'refining' || ticket.column === 'spec_ready';
+  const isDiscardColumn = ticket.column === 'in_stack' || ticket.column === 'pr_open';
+
+  const discardIcon = (isEarlyColumn || isDiscardColumn) ? (
+    <button
+      onClick={isEarlyColumn ? () => setShowEarlyDiscardDialog(true) : () => setShowDiscardDialog(true)}
+      disabled={discardInflight}
+      className="p-1 text-red-400/40 hover:text-red-400 hover:bg-red-500/10 rounded transition-colors disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+      data-testid={`ticket-card-discard-${ticket.ticket_id}`}
+      aria-label="Discard"
+      title="Discard"
+    >
+      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="3 6 5 6 21 6"/>
+        <path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/>
+        <path d="M10 11v6"/>
+        <path d="M14 11v6"/>
+        <path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/>
+      </svg>
+    </button>
+  ) : null;
+
+  const discardErrorBlock = discardError ? (
+    <div className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2 py-1.5 break-words">
+      {discardError}
+    </div>
+  ) : null;
 
   const refinementSession = refinementSessions.find(
     (s) => s.ticketId === ticket.ticket_id && s.projectDir === ticket.project_dir
@@ -174,14 +184,17 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
       className={`bg-sandstorm-surface border border-sandstorm-border rounded-lg p-3 flex flex-col gap-2 shadow-card ${ticket.column === 'merged' ? 'opacity-40' : ''}`}
       data-testid={`ticket-card-${ticket.ticket_id}`}
     >
-      {/* Ticket ID + title */}
-      <div className="flex flex-col gap-0.5">
-        <span className="font-mono text-xs text-sandstorm-muted" data-testid={`ticket-id-${ticket.ticket_id}`}>
-          #{ticket.ticket_id}
-        </span>
-        <span className="text-sm text-sandstorm-text leading-snug line-clamp-2">
-          {ticket.title || `Ticket #${ticket.ticket_id}`}
-        </span>
+      {/* Ticket ID + title + discard icon */}
+      <div className="flex items-start gap-2">
+        <div className="flex flex-col gap-0.5 flex-1 min-w-0">
+          <span className="font-mono text-xs text-sandstorm-muted" data-testid={`ticket-id-${ticket.ticket_id}`}>
+            #{ticket.ticket_id}
+          </span>
+          <span className="text-sm text-sandstorm-text leading-snug line-clamp-2">
+            {ticket.title || `Ticket #${ticket.ticket_id}`}
+          </span>
+        </div>
+        {discardIcon}
       </div>
 
       {/* Column-specific content */}
@@ -201,7 +214,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           >
             Refine
           </button>
-          {earlyDiscardSection}
+          {discardErrorBlock}
         </div>
       )}
 
@@ -267,7 +280,14 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               Answer
             </button>
           )}
-          {earlyDiscardSection}
+          <button
+            onClick={() => setShowMoveToBacklogDialog(true)}
+            className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-surface-hover text-sandstorm-muted border border-sandstorm-border hover:border-sandstorm-accent/30 hover:text-sandstorm-text transition-colors font-medium"
+            data-testid={`ticket-card-move-to-backlog-${ticket.ticket_id}`}
+          >
+            Move to backlog
+          </button>
+          {discardErrorBlock}
         </div>
       )}
 
@@ -281,7 +301,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           >
             Start stack
           </button>
-          {earlyDiscardSection}
+          {discardErrorBlock}
         </div>
       )}
 
@@ -352,7 +372,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               )}
             </button>
           )}
-          {discardSection}
+          {discardErrorBlock}
         </div>
       )}
 
@@ -406,7 +426,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               )}
             </button>
           )}
-          {discardSection}
+          {discardErrorBlock}
         </div>
       )}
 
@@ -421,6 +441,17 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           confirmLabel="Discard ticket"
           onConfirm={() => void handleEarlyDiscardConfirm()}
           onCancel={() => setShowEarlyDiscardDialog(false)}
+        />
+      )}
+
+      {showMoveToBacklogDialog && (
+        <ConfirmDialog
+          title="Move ticket back to backlog?"
+          body="This discards the current refinement session and moves the ticket back to the backlog. Answers you already submitted and any title/body edits are kept on the ticket — only the in-progress refinement session is lost."
+          confirmLabel="Move to backlog"
+          onConfirm={() => void handleMoveToBacklog()}
+          onCancel={() => setShowMoveToBacklogDialog(false)}
+          data-testid={`move-to-backlog-dialog-${ticket.ticket_id}`}
         />
       )}
 
