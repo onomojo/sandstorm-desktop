@@ -101,8 +101,7 @@ export interface RawCaptureOptions {
 
 /**
  * Reads the opt-in flag. Default off — the flag must be explicitly set to
- * `1`. Any other value (including `true`, `yes`) is ignored, matching the
- * contract used by `SANDSTORM_TOKEN_TELEMETRY`.
+ * `1`. Any other value (including `true`, `yes`) is ignored.
  */
 export function isRawCaptureEnabled(
   env: NodeJS.ProcessEnv = process.env

@@ -43,6 +43,7 @@ function mockMergeIpc(result: unknown) {
     },
     stacks: { teardown: vi.fn().mockResolvedValue(undefined) },
     ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
+    tickets: { markDone: vi.fn().mockResolvedValue({ ok: true }) },
   };
   Object.defineProperty(window, 'sandstorm', {
     value: api,
@@ -60,6 +61,25 @@ function mockMergeIpcThrow(err: Error) {
     },
     stacks: { teardown: vi.fn().mockResolvedValue(undefined) },
     ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
+    tickets: { markDone: vi.fn().mockResolvedValue({ ok: true }) },
+  };
+  Object.defineProperty(window, 'sandstorm', {
+    value: api,
+    writable: true,
+    configurable: true,
+  });
+  return api;
+}
+
+function mockMergeIpcMarkDoneFail(mergeResult: unknown, markDoneError: string) {
+  const api = {
+    pr: {
+      merge: vi.fn().mockResolvedValue(mergeResult),
+      autoResolve: vi.fn(),
+    },
+    stacks: { teardown: vi.fn().mockResolvedValue(undefined) },
+    ticketBoard: { setColumn: vi.fn().mockResolvedValue(undefined) },
+    tickets: { markDone: vi.fn().mockResolvedValue({ ok: false, error: markDoneError }) },
   };
   Object.defineProperty(window, 'sandstorm', {
     value: api,
@@ -217,6 +237,7 @@ describe('mergeTicket store action — conflict classification', () => {
     expect(api.ticketBoard.setColumn).toHaveBeenCalledWith(TICKET_ID, PROJECT_DIR, 'merged');
     expect(useAppStore.getState().mergeConflicts[KEY]).toBeFalsy();
     expect(useAppStore.getState().moveTicketColumnError).toBeNull();
+    expect(api.tickets.markDone).toHaveBeenCalledTimes(1);
   });
 
   it('conflict result: sets conflict flag and conflict message, no teardown, no column move', async () => {
@@ -229,6 +250,7 @@ describe('mergeTicket store action — conflict classification', () => {
     expect(api.stacks.teardown).not.toHaveBeenCalled();
     expect(api.ticketBoard.setColumn).not.toHaveBeenCalled();
     expect(useAppStore.getState().moveTicketColumnError).toBeNull();
+    expect(api.tickets.markDone).not.toHaveBeenCalled();
   });
 
   it('failed result: sets moveTicketColumnError, no conflict flag, no teardown, no column move', async () => {
@@ -240,6 +262,18 @@ describe('mergeTicket store action — conflict classification', () => {
     expect(useAppStore.getState().mergeConflicts[KEY]).toBeFalsy();
     expect(api.stacks.teardown).not.toHaveBeenCalled();
     expect(api.ticketBoard.setColumn).not.toHaveBeenCalled();
+    expect(api.tickets.markDone).not.toHaveBeenCalled();
+  });
+
+  it('merged result with markDone failure: sets moveTicketColumnError, column stays at merged', async () => {
+    const api = mockMergeIpcMarkDoneFail({ status: 'merged' }, 'ticket API timeout');
+
+    await useAppStore.getState().mergeTicket(TICKET_ID, PROJECT_DIR);
+
+    expect(api.ticketBoard.setColumn).toHaveBeenCalledWith(TICKET_ID, PROJECT_DIR, 'merged');
+    expect(api.tickets.markDone).toHaveBeenCalledTimes(1);
+    expect(useAppStore.getState().moveTicketColumnError).toContain('ticket API timeout');
+    expect(useAppStore.getState().mergeConflicts[KEY]).toBeFalsy();
   });
 
   it('Stack not found throw: swallowed, advances to merged (regression guard)', async () => {

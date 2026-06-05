@@ -177,9 +177,10 @@ export function mockSandstormApi() {
       update: vi.fn().mockResolvedValue(undefined),
       testJiraConnection: vi.fn().mockResolvedValue({
         auth: { ok: true, displayName: 'Test User' },
-        jql: { ok: true, count: 5 },
+        jql: { ok: true, count: 5, hasMore: false },
       }),
       close: vi.fn().mockResolvedValue(undefined),
+      markDone: vi.fn().mockResolvedValue({ ok: true }),
     },
     ticketBoard: {
       setColumn: vi.fn().mockResolvedValue(undefined),
@@ -195,6 +196,24 @@ export function mockSandstormApi() {
     darkFactory: {
       getEnabled: vi.fn().mockResolvedValue(false),
       setEnabled: vi.fn().mockResolvedValue(undefined),
+    },
+    telemetry: {
+      summary: vi.fn().mockResolvedValue({
+        monthCost: 0,
+        prevMonthCost: 0,
+        tokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 },
+        cacheHitPct: 0,
+        sessions: 0,
+        ticketsShipped: null,
+        costPerTicket: null,
+        unpricedModels: [],
+        skippedLines: 0,
+      }),
+      daily: vi.fn().mockResolvedValue([]),
+      byModel: vi.fn().mockResolvedValue([]),
+      session: vi.fn().mockResolvedValue([]),
+      byTicket: vi.fn().mockResolvedValue([]),
+      refresh: vi.fn().mockResolvedValue({ ok: true }),
     },
     on: vi.fn().mockReturnValue(() => {}),
   };

@@ -4,6 +4,14 @@ import { cronNextFire, formatRelativeTime } from '../utils/cronNextFire';
 import { AskClaudeModal } from './AskClaudeModal';
 import trayIcon from '../tray-icon.png';
 
+function ChartIcon() {
+  return (
+    <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+      <polyline points="22 12 18 12 15 21 9 3 6 12 2 12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+    </svg>
+  );
+}
+
 function GearIcon() {
   return (
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none">
@@ -32,6 +40,10 @@ export function LeftRail() {
     setShowCreateTicketDialog,
     setShowModelSettings,
     activeProject,
+    mainView,
+    setMainView,
+    selectStack,
+    telemetrySummary,
   } = useAppStore();
 
   const [showAskClaude, setShowAskClaude] = useState(false);
@@ -227,6 +239,34 @@ export function LeftRail() {
                   );
                 })}
               </div>
+            </section>
+          )}
+
+          {/* Telemetry */}
+          {project && (
+            <section data-testid="rail-telemetry">
+              <button
+                onClick={() => {
+                  setMainView('telemetry');
+                  selectStack(null);
+                }}
+                className={`w-full flex items-center gap-3 px-4 py-3 rounded-lg border transition-colors text-left ${
+                  mainView === 'telemetry'
+                    ? 'bg-sandstorm-accent/15 border-sandstorm-accent/30 text-sandstorm-text'
+                    : 'bg-sandstorm-surface border-sandstorm-border hover:border-sandstorm-border-light text-sandstorm-text-secondary hover:text-sandstorm-text'
+                }`}
+                data-testid="telemetry-nav-btn"
+              >
+                <ChartIcon />
+                <div className="flex flex-col min-w-0 flex-1">
+                  <span className="text-sm font-medium">Telemetry</span>
+                  {telemetrySummary != null && (
+                    <span className="text-[11px] font-mono text-sandstorm-muted">
+                      ${telemetrySummary.monthCost.toFixed(2)} this month
+                    </span>
+                  )}
+                </div>
+              </button>
             </section>
           )}
 

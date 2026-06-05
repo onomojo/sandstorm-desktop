@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import type { ByTicketEntry } from '@main/telemetry/types';
 
 export type ScheduleAction =
   | { kind: 'run-script'; scriptName: string };
@@ -214,9 +215,10 @@ export interface SandstormAPI {
       label?: string;
     }) => Promise<{
       auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
-      jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+      jql: { ok: true; count: number; hasMore: boolean } | { ok: false; status?: number; message: string } | null;
     }>;
     close: (ticketId: string, projectDir: string) => Promise<void>;
+    markDone: (ticketId: string, projectDir: string) => Promise<{ ok: true } | { ok: false; error: string }>;
   };
   ticketBoard: {
     setColumn: (ticketId: string, projectDir: string, column: string) => Promise<void>;
@@ -247,6 +249,8 @@ export interface SandstormAPI {
     daily: (range: { since: string; until: string }) => Promise<unknown[]>;
     byModel: (range: { since: string; until: string }) => Promise<unknown[]>;
     session: (range: { since: string; until: string }) => Promise<unknown[]>;
+    byTicket: () => Promise<ByTicketEntry[]>;
+    refresh: () => Promise<{ ok: true }>;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
@@ -430,6 +434,8 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:testJiraConnection', params),
     close: (ticketId, projectDir) =>
       ipcRenderer.invoke('ticket:close', { ticketId, projectDir }),
+    markDone: (ticketId, projectDir) =>
+      ipcRenderer.invoke('ticket:mark-done', { ticketId, projectDir }),
   },
   ticketBoard: {
     setColumn: (ticketId, projectDir, column) =>
@@ -456,6 +462,8 @@ const api: SandstormAPI = {
     daily: (range) => ipcRenderer.invoke('stats:telemetry:daily', range),
     byModel: (range) => ipcRenderer.invoke('stats:telemetry:byModel', range),
     session: (range) => ipcRenderer.invoke('stats:telemetry:session', range),
+    byTicket: () => ipcRenderer.invoke('stats:telemetry:byTicket'),
+    refresh: () => ipcRenderer.invoke('stats:telemetry:refresh'),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

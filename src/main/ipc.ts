@@ -78,7 +78,8 @@ import {
   createPullRequest,
 } from './control-plane/pr-creator';
 import { showNotification } from './tray';
-import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection, closeTicketWithConfig } from './control-plane/ticket-config';
+import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection, closeTicketWithConfig, markTicketDoneWithConfig } from './control-plane/ticket-config';
+import { withRetry } from './control-plane/retry-with-backoff';
 import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
 import type { EphemeralStreamEvent } from './agent/types';
@@ -768,13 +769,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   const rollupStore = new TicketRollupStore(registry.getDb());
 
-  // Wire auto-invalidation hooks so the rollup cache stays fresh
-  registry.onStackArchived = (stackId) => rollupStore.markStackDirty(stackId);
-  registry.onBoardTicketMoved = (_ticketId, column) => {
-    if (column === 'merged') rollupStore.markDirty();
-  };
-  stackManager.setOnTaskCompleted((stackId) => rollupStore.markStackDirty(stackId));
-
   /** Build the set of transcript roots on each request: host root + all stack usage dirs. */
   function buildTelemetryRoots(): string[] {
     const hostRoot = os.homedir() + '/.claude/projects';
@@ -834,7 +828,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stats:telemetry:refresh', async () => {
     clearUsageCache();
-    rollupStore.refresh();
     return { ok: true };
   });
 
@@ -1427,6 +1420,22 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     const config = registry.getProjectTicketConfig(projectDir);
     if (!config) throw new Error(`No ticket provider configured for project: ${projectDir}`);
     await closeTicketWithConfig(ticketId, config, path.resolve(projectDir));
+  });
+
+  ipcMain.handle('ticket:mark-done', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
+    const resolvedDir = path.resolve(projectDir);
+    const config = registry.getProjectTicketConfig(resolvedDir);
+    if (!config) return { ok: true }; // no ticket provider configured — skip silently
+    try {
+      await withRetry(
+        () => markTicketDoneWithConfig(ticketId, config, resolvedDir),
+        { maxAttempts: 3, baseDelayMs: 1000 },
+      );
+      return { ok: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      return { ok: false, error: msg };
+    }
   });
 
   ipcMain.handle('ticket-board:delete', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {

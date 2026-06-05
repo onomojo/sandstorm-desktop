@@ -307,7 +307,7 @@ export async function jiraListTickets(
       jql += ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
     }
     const url =
-      `${config.jira_url.replace(/\/$/, '')}/rest/api/2/search` +
+      `${config.jira_url.replace(/\/$/, '')}/rest/api/3/search/jql` +
       `?jql=${encodeURIComponent(jql)}&fields=summary,reporter&maxResults=100`;
     const raw = await jiraRequest({ url, method: 'GET', auth: jiraAuth(config) });
     const result = JSON.parse(raw) as {
@@ -387,6 +387,57 @@ export async function jiraCloseTicket(
     if (/already archived/i.test(body)) return;
     throw err;
   }
+}
+
+/**
+ * Transition a Jira issue to its "Done" status via the transitions API (REST v2).
+ * Selection algorithm:
+ *   1. Prefer a transition whose target status name === 'Done' (case-insensitive).
+ *   2. Else first done-statusCategory transition not matching won't-do/cancel/reject.
+ *   3. Empty transitions list → treat as already Done (idempotent success).
+ *   4. No eligible transition found → throw so the Q5 retry+notify path handles it.
+ */
+export async function jiraTransitionToDone(
+  ticketId: string,
+  config: ProjectTicketConfig,
+): Promise<void> {
+  if (!config.jira_url || !config.jira_username || !config.jira_api_token) {
+    throw new Error(
+      'Jira credentials are missing. Configure JIRA_URL, JIRA_USERNAME, and JIRA_API_TOKEN in Project Settings.'
+    );
+  }
+  const base = config.jira_url.replace(/\/$/, '');
+  const auth = jiraAuth(config);
+  const raw = await jiraRequest({
+    url: `${base}/rest/api/2/issue/${ticketId}/transitions`,
+    method: 'GET',
+    auth,
+  });
+  const result = JSON.parse(raw) as {
+    transitions: { id: string; to: { name: string; statusCategory: { key: string } } }[];
+  };
+  const transitions = result.transitions ?? [];
+  // Empty list means no further transitions are available — issue is already Done.
+  if (transitions.length === 0) return;
+  const CANCEL = /won['']?t\s*do|cancel|reject/i;
+  let chosen = transitions.find((t) => t.to.name.toLowerCase() === 'done');
+  if (!chosen) {
+    chosen = transitions.find(
+      (t) => t.to.statusCategory.key === 'done' && !CANCEL.test(t.to.name),
+    );
+  }
+  if (!chosen) {
+    const names = transitions.map((t) => t.to.name).join(', ');
+    throw new Error(
+      `No eligible Done transition found for Jira issue ${ticketId}. Available: ${names}`,
+    );
+  }
+  await jiraRequest({
+    url: `${base}/rest/api/2/issue/${ticketId}/transitions`,
+    method: 'POST',
+    auth,
+    body: { transition: { id: chosen.id } },
+  });
 }
 
 export async function jiraCreateTicket(
@@ -481,6 +532,22 @@ export async function closeTicketWithConfig(
   return jiraCloseTicket(ticketId, config);
 }
 
+/**
+ * Mark a ticket as done after a merge — provider-neutral dispatch.
+ * GitHub → gh issue close (idempotent). Jira → transition to Done status.
+ * Does NOT archive; the discard/archive path uses closeTicketWithConfig.
+ */
+export async function markTicketDoneWithConfig(
+  ticketId: string,
+  config: ProjectTicketConfig,
+  cwd: string,
+): Promise<void> {
+  if (config.provider === 'github') {
+    return githubCloseTicket(ticketId, cwd);
+  }
+  return jiraTransitionToDone(ticketId, config);
+}
+
 export async function createTicketWithConfig(opts: {
   title: string;
   body: string;
@@ -500,7 +567,7 @@ export async function createTicketWithConfig(opts: {
 /** Result shape for the Test Connection feature in JIRA settings. */
 export interface TestJiraConnectionResult {
   auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
-  jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+  jql: { ok: true; count: number; hasMore: boolean } | { ok: false; status?: number; message: string } | null;
 }
 
 /**
@@ -535,13 +602,14 @@ export async function testJiraConnection(params: {
     jql += ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
   }
   const searchUrl =
-    `${baseUrl}/rest/api/2/search` +
+    `${baseUrl}/rest/api/3/search/jql` +
     `?jql=${encodeURIComponent(jql)}&fields=summary&maxResults=100`;
   try {
     const raw = await jiraRequest({ url: searchUrl, method: 'GET', auth });
-    const result = JSON.parse(raw) as { total?: number; issues?: unknown[] };
-    const count = result.total ?? result.issues?.length ?? 0;
-    return { auth: { ok: true, displayName }, jql: { ok: true, count } };
+    const result = JSON.parse(raw) as { issues?: unknown[]; nextPageToken?: string };
+    const count = result.issues?.length ?? 0;
+    const hasMore = Boolean(result.nextPageToken);
+    return { auth: { ok: true, displayName }, jql: { ok: true, count, hasMore } };
   } catch (err: unknown) {
     const e = err as { status?: number; message?: string };
     return {

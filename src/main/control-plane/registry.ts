@@ -595,6 +595,13 @@ export class Registry {
       this.setSchemaVersion(19);
     }
 
+    if (currentVersion < 20) {
+      // Retire orphaned #466 rollup cache (superseded by transcript pipeline, #499)
+      this.db.exec('DROP TABLE IF EXISTS ticket_rollups');
+      this.db.exec('DROP TABLE IF EXISTS rollup_dirty_stacks');
+      this.setSchemaVersion(20);
+    }
+
   }
 
   // --- Projects ---

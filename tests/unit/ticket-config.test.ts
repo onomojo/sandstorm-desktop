@@ -13,12 +13,14 @@ import {
   jiraCreateTicket,
   jiraListTickets,
   jiraCloseTicket,
+  jiraTransitionToDone,
   fetchTicketWithConfig,
   fetchRawBodyWithConfig,
   updateTicketWithConfig,
   createTicketWithConfig,
   listTicketsWithConfig,
   closeTicketWithConfig,
+  markTicketDoneWithConfig,
   testJiraConnection,
 } from '../../src/main/control-plane/ticket-config';
 import type { ProjectTicketConfig } from '../../src/main/control-plane/registry';
@@ -449,9 +451,17 @@ describe('jiraListTickets', () => {
   });
 
   it('returns ok:true with empty tickets array when JQL matches zero results', async () => {
-    mockJiraRequest(JSON.stringify({ total: 0, issues: [] }));
+    mockJiraRequest(JSON.stringify({ issues: [] }));
     const result = await jiraListTickets(JIRA_CONFIG);
     expect(result).toEqual({ ok: true, tickets: [] });
+  });
+
+  it('uses /rest/api/3/search/jql endpoint (not /rest/api/2/search)', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    await jiraListTickets(JIRA_CONFIG);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    expect(opts.path).toMatch(/^\/rest\/api\/3\/search\/jql/);
+    expect(opts.path).not.toMatch(/\/rest\/api\/2\/search/);
   });
 });
 
@@ -611,7 +621,7 @@ describe('testJiraConnection', () => {
       callCount++;
       const body = callCount === 1
         ? JSON.stringify({ displayName: 'Alice Smith' })
-        : JSON.stringify({ total: 3, issues: [{}, {}, {}] });
+        : JSON.stringify({ issues: [{}, {}, {}] });
       const mockResponse = {
         statusCode: 200,
         on: vi.fn((event: string, handler: Function) => {
@@ -637,6 +647,7 @@ describe('testJiraConnection', () => {
     expect(result.jql).not.toBeNull();
     if (result.jql && result.jql.ok) {
       expect(result.jql.count).toBe(3);
+      expect(result.jql.hasMore).toBe(false);
     }
   });
 
@@ -661,7 +672,7 @@ describe('testJiraConnection', () => {
       callCount++;
       const body = callCount === 1
         ? JSON.stringify({ displayName: 'Bob' })
-        : JSON.stringify({ total: 0, issues: [] });
+        : JSON.stringify({ issues: [] });
       const mockResponse = {
         statusCode: 200,
         on: vi.fn((event: string, handler: Function) => {
@@ -716,6 +727,95 @@ describe('testJiraConnection', () => {
     expect(result.jql).not.toBeNull();
     if (result.jql) {
       expect(result.jql.ok).toBe(false);
+    }
+  });
+
+  it('uses /rest/api/3/search/jql endpoint for JQL search (not /rest/api/2/search)', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Dave' })
+        : JSON.stringify({ issues: [] });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+    await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+    // Second call is the JQL search — check its path
+    const searchOpts = mockHttpsRequest.mock.calls[1][0] as { path: string };
+    expect(searchOpts.path).toMatch(/^\/rest\/api\/3\/search\/jql/);
+    expect(searchOpts.path).not.toMatch(/\/rest\/api\/2\/search/);
+  });
+
+  it('reports count from issues.length when response omits total', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Eve' })
+        : JSON.stringify({ issues: [{}, {}] }); // no total field
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+    expect(result.jql?.ok).toBe(true);
+    if (result.jql?.ok) {
+      expect(result.jql.count).toBe(2);
+      expect(result.jql.hasMore).toBe(false);
+    }
+  });
+
+  it('sets hasMore:true when response contains nextPageToken', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Frank' })
+        : JSON.stringify({ issues: new Array(100).fill({}), nextPageToken: 'abc123' });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+    const result = await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+    expect(result.jql?.ok).toBe(true);
+    if (result.jql?.ok) {
+      expect(result.jql.count).toBe(100);
+      expect(result.jql.hasMore).toBe(true);
     }
   });
 
@@ -860,5 +960,131 @@ describe('closeTicketWithConfig', () => {
   it('rejects on JIRA archive failure', async () => {
     mockJiraRequest('Forbidden', 403);
     await expect(closeTicketWithConfig('ACME-42', JIRA_CONFIG, '/proj')).rejects.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// jiraTransitionToDone
+// ---------------------------------------------------------------------------
+
+describe('jiraTransitionToDone', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('throws when Jira credentials are missing', async () => {
+    const cfg: ProjectTicketConfig = { provider: 'jira' };
+    await expect(jiraTransitionToDone('ACME-1', cfg)).rejects.toThrow('Jira credentials are missing');
+  });
+
+  it('(a) prefers a transition whose target name is "Done" (case-insensitive)', async () => {
+    const mockReq = mockJiraRequest(JSON.stringify({
+      transitions: [
+        { id: '10', to: { name: "Won't Do", statusCategory: { key: 'done' } } },
+        { id: '20', to: { name: 'DONE', statusCategory: { key: 'done' } } },
+        { id: '30', to: { name: 'In Progress', statusCategory: { key: 'indeterminate' } } },
+      ],
+    }));
+    await jiraTransitionToDone('ACME-1', JIRA_CONFIG);
+    const posted = mockReq.write.mock.calls[0]?.[0] as string;
+    expect(JSON.parse(posted)).toMatchObject({ transition: { id: '20' } });
+  });
+
+  it('(b) falls back to done-category transition excluding won\'t-do/cancel/reject', async () => {
+    const mockReq = mockJiraRequest(JSON.stringify({
+      transitions: [
+        { id: '10', to: { name: "Won't Do", statusCategory: { key: 'done' } } },
+        { id: '11', to: { name: 'Cancelled', statusCategory: { key: 'done' } } },
+        { id: '12', to: { name: 'Closed', statusCategory: { key: 'done' } } },
+      ],
+    }));
+    await jiraTransitionToDone('ACME-1', JIRA_CONFIG);
+    const posted = mockReq.write.mock.calls[0]?.[0] as string;
+    const body = JSON.parse(posted);
+    expect(body).toMatchObject({ transition: { id: '12' } });
+    expect(body.transition.id).not.toBe('10');
+    expect(body.transition.id).not.toBe('11');
+  });
+
+  it('(c) resolves successfully when transitions list is empty (issue already Done — idempotent)', async () => {
+    mockJiraRequest(JSON.stringify({ transitions: [] }));
+    await expect(jiraTransitionToDone('ACME-1', JIRA_CONFIG)).resolves.toBeUndefined();
+    expect(mockHttpsRequest).toHaveBeenCalledTimes(1); // only the GET, no POST
+  });
+
+  it('(e) throws gracefully when only Won\'t Do / Cancelled / Rejected transitions are available', async () => {
+    mockJiraRequest(JSON.stringify({
+      transitions: [
+        { id: '10', to: { name: "Won't Do", statusCategory: { key: 'done' } } },
+        { id: '11', to: { name: 'Cancelled', statusCategory: { key: 'done' } } },
+        { id: '12', to: { name: 'Rejected', statusCategory: { key: 'done' } } },
+      ],
+    }));
+    await expect(jiraTransitionToDone('ACME-1', JIRA_CONFIG)).rejects.toThrow(
+      'No eligible Done transition found',
+    );
+    expect(mockHttpsRequest).toHaveBeenCalledTimes(1); // no POST attempted
+  });
+
+  it('POSTs to /rest/api/2 transitions endpoint (not v3 archive)', async () => {
+    mockJiraRequest(JSON.stringify({
+      transitions: [{ id: '5', to: { name: 'Done', statusCategory: { key: 'done' } } }],
+    }));
+    await jiraTransitionToDone('ACME-1', JIRA_CONFIG);
+    const calls = mockHttpsRequest.mock.calls;
+    // Both GET and POST should use /rest/api/2/...
+    for (const call of calls) {
+      expect((call[0] as { path: string }).path).toContain('/rest/api/2/');
+      expect((call[0] as { path: string }).path).not.toContain('/rest/api/3/');
+      expect((call[0] as { path: string }).path).not.toContain('/archive');
+    }
+  });
+});
+
+// ---------------------------------------------------------------------------
+// markTicketDoneWithConfig
+// ---------------------------------------------------------------------------
+
+describe('markTicketDoneWithConfig', () => {
+  beforeEach(() => vi.clearAllMocks());
+
+  it('routes GitHub → gh issue close (NOT archive)', async () => {
+    mockExecFileSuccess('');
+    await markTicketDoneWithConfig('42', GITHUB_CONFIG, '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'close', '42'],
+      expect.objectContaining({ cwd: '/proj' }),
+      expect.any(Function),
+    );
+    expect(mockHttpsRequest).not.toHaveBeenCalled();
+  });
+
+  it('routes Jira → jiraTransitionToDone (NOT jiraCloseTicket / archive)', async () => {
+    mockJiraRequest(JSON.stringify({
+      transitions: [{ id: '5', to: { name: 'Done', statusCategory: { key: 'done' } } }],
+    }));
+    await markTicketDoneWithConfig('ACME-1', JIRA_CONFIG, '/proj');
+    expect(mockExecFile).not.toHaveBeenCalled();
+    // Should NOT call the archive endpoint
+    const archiveCalls = mockHttpsRequest.mock.calls.filter(
+      (c) => (c[0] as { path: string }).path?.includes('/archive'),
+    );
+    expect(archiveCalls).toHaveLength(0);
+    // Should call the transitions endpoint
+    const transitionCalls = mockHttpsRequest.mock.calls.filter(
+      (c) => (c[0] as { path: string }).path?.includes('/transitions'),
+    );
+    expect(transitionCalls.length).toBeGreaterThan(0);
+  });
+
+  it('regression: merge path must close ticket (not skip as old code did)', async () => {
+    mockExecFileSuccess('');
+    // GitHub merge path — closing ticket must be called
+    await markTicketDoneWithConfig('42', GITHUB_CONFIG, '/proj');
+    expect(mockExecFile).toHaveBeenCalledWith(
+      'gh',
+      ['issue', 'close', '42'],
+      expect.any(Object),
+      expect.any(Function),
+    );
   });
 });
