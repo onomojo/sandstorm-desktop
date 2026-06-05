@@ -5,6 +5,10 @@ test.describe('Refinement streaming panel', () => {
   test('refine-stream-panel shows live streamed text mid-run', async ({ electronApp, mainWindow }) => {
     // Wait for the app to be fully rendered
     await mainWindow.waitForSelector('text=Sandstorm', { timeout: 15000 });
+    await mainWindow.waitForFunction(
+      () => Boolean((window as unknown as { __useAppStore?: unknown }).__useAppStore),
+      { timeout: 15000 },
+    );
 
     const sessionId = 'int-test-refine-stream-1';
 
@@ -28,9 +32,20 @@ test.describe('Refinement streaming panel', () => {
       { sid: sessionId, ts: Date.now() },
     );
 
-    // Wait for the RefinementIndicator pill to appear in the title bar —
-    // it becomes visible as soon as the store has at least one session.
-    await mainWindow.waitForSelector('[data-testid="refinement-indicator-pill"]', { timeout: 5000 });
+    // Wait for the session to land in the store.
+    await mainWindow.waitForFunction(
+      (sid: string) => {
+        return (
+          window as unknown as {
+            __useAppStore: { getState: () => { refinementSessions: Array<{ id: string }> } };
+          }
+        ).__useAppStore
+          .getState()
+          .refinementSessions.some((s) => s.id === sid);
+      },
+      sessionId,
+      { timeout: 5000 },
+    );
 
     // Send streaming progress deltas, mirroring the onChunk callbacks that
     // spawnEphemeralAgent fires for each parsed text delta from the subprocess.
@@ -50,12 +65,16 @@ test.describe('Refinement streaming panel', () => {
       sessionId,
     );
 
-    // Expand the refinement indicator dropdown and click the session to open
-    // RefineTicketDialog. This mirrors the normal user flow for reopening a
-    // running session.
-    await mainWindow.click('[data-testid="refinement-indicator-pill"]');
-    await mainWindow.waitForSelector(`[data-testid="refinement-session-${sessionId}"]`, { timeout: 5000 });
-    await mainWindow.click(`[data-testid="refinement-session-${sessionId}"]`);
+    // The RefinementIndicator pill was removed (#510). Running sessions have no UI
+    // entry point to reopen the dialog (Q3 — accepted loss). Open programmatically
+    // to exercise the streaming panel independently of the entry-point affordance.
+    await mainWindow.evaluate((sid: string) => {
+      (
+        window as unknown as {
+          __useAppStore: { setState: (s: Record<string, unknown>) => void };
+        }
+      ).__useAppStore.setState({ showRefineTicketDialog: true, currentRefinementSessionId: sid });
+    }, sessionId);
 
     // The dialog must be open and the running state must include the stream panel.
     await mainWindow.waitForSelector('[data-testid="refine-ticket-dialog"]', { timeout: 5000 });
@@ -91,8 +110,14 @@ test.describe('Refinement streaming panel', () => {
 
   test('RefineTicketDialog renders radio buttons, textareas, and wider modal for structured questions', async ({ electronApp, mainWindow }) => {
     await mainWindow.waitForSelector('text=Sandstorm', { timeout: 15000 });
+    await mainWindow.waitForFunction(
+      () => Boolean((window as unknown as { __useAppStore?: unknown }).__useAppStore),
+      { timeout: 15000 },
+    );
 
     const sessionId = 'int-test-refine-structured-1';
+    const TICKET_ID = '998';
+    const PROJECT_DIR = '/tmp/integration-test-structured';
     const structuredQuestions: RefineQuestion[] = [
       {
         id: 'q1',
@@ -112,15 +137,99 @@ test.describe('Refinement streaming panel', () => {
       },
     ];
 
+    // The electronApp fixture is worker-scoped and shared across tests in this file.
+    // Test 1 leaves the dialog open; close it before interacting with the board.
+    const priorDialog = mainWindow.locator('[data-testid="refine-ticket-dialog"]');
+    if (await priorDialog.isVisible().catch(() => false)) {
+      // Click the backdrop overlay at the top-left corner (outside the centered modal content)
+      // to trigger handleClose via the overlay's onClick handler.
+      await priorDialog.click({ position: { x: 5, y: 5 } });
+      await priorDialog.waitFor({ state: 'hidden', timeout: 3000 });
+    }
+
+    // Capture the current lastTicketFetchAt before seeding so we can detect when
+    // the board refresh triggered by setting activeProjectId has completed.
+    const prevFetchAt = await mainWindow.evaluate(() =>
+      (
+        window as unknown as {
+          __useAppStore: { getState: () => { lastTicketFetchAt: number | null } };
+        }
+      ).__useAppStore.getState().lastTicketFetchAt,
+    );
+
+    // Seed project and activeProjectId — this triggers the KanbanBoard useEffect
+    // which calls refreshBoardTickets. Do NOT seed boardTickets yet.
+    await mainWindow.evaluate(
+      ({ dir }) => {
+        (
+          window as unknown as {
+            __useAppStore: { setState: (s: Record<string, unknown>) => void };
+          }
+        ).__useAppStore.setState({
+          projects: [{ id: 9002, name: 'int-test-structured', directory: dir, added_at: '' }],
+          activeProjectId: 9002,
+          boardTickets: [],
+          refinementSessions: [],
+          stacks: [],
+        });
+      },
+      { dir: PROJECT_DIR },
+    );
+
+    // Wait for the board refresh to complete (lastTicketFetchAt changes and loading stops).
+    await mainWindow.waitForFunction(
+      (prev: number | null) => {
+        const state = (
+          window as unknown as {
+            __useAppStore: {
+              getState: () => { lastTicketFetchAt: number | null; boardTicketsLoading: boolean };
+            };
+          }
+        ).__useAppStore.getState();
+        return state.lastTicketFetchAt !== prev && !state.boardTicketsLoading;
+      },
+      prevFetchAt,
+      { timeout: 5000 },
+    );
+
+    // Seed the ticket in the refining column. The KanbanBoard effect won't fire again
+    // because project.directory hasn't changed, so this state is stable.
+    await mainWindow.evaluate(
+      ({ ticketId, dir }) => {
+        (
+          window as unknown as {
+            __useAppStore: { setState: (s: Record<string, unknown>) => void };
+          }
+        ).__useAppStore.setState({
+          boardTickets: [
+            {
+              ticket_id: ticketId,
+              project_dir: dir,
+              column: 'refining',
+              title: 'Structured questions test ticket',
+              updated_at: '',
+            },
+          ],
+        });
+      },
+      { ticketId: TICKET_ID, dir: PROJECT_DIR },
+    );
+
+    // Wait for the ticket card to appear before injecting the session.
+    await mainWindow.waitForSelector(`[data-testid="ticket-card-${TICKET_ID}"]`, { timeout: 3000 });
+
     // Inject a failed gate with structured questions directly as a ready session.
     await electronApp.evaluate(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (electron: any, args: { sid: string; ts: number; questions: RefineQuestion[] }) => {
+      (
+        electron: any,
+        args: { sid: string; ts: number; questions: RefineQuestion[]; ticketId: string; dir: string },
+      ) => {
         const win = electron.BrowserWindow.getAllWindows()[0];
         win.webContents.send('refinement:update', {
           id: args.sid,
-          ticketId: '998',
-          projectDir: '/tmp/integration-test',
+          ticketId: args.ticketId,
+          projectDir: args.dir,
           status: 'ready',
           phase: 'check',
           startedAt: args.ts,
@@ -133,24 +242,15 @@ test.describe('Refinement streaming panel', () => {
           },
         });
       },
-      { sid: sessionId, ts: Date.now(), questions: structuredQuestions },
+      { sid: sessionId, ts: Date.now(), questions: structuredQuestions, ticketId: TICKET_ID, dir: PROJECT_DIR },
     );
 
-    // The electronApp fixture is worker-scoped and shared across tests in this file.
-    // Test 1 leaves the dialog open; close it before interacting with the indicator pill.
-    const priorDialog = mainWindow.locator('[data-testid="refine-ticket-dialog"]');
-    if (await priorDialog.isVisible().catch(() => false)) {
-      // Click the backdrop overlay at the top-left corner (outside the centered modal content)
-      // to trigger handleClose via the overlay's onClick handler.
-      await priorDialog.click({ position: { x: 5, y: 5 } });
-      await priorDialog.waitFor({ state: 'hidden', timeout: 3000 });
-    }
+    // Open the dialog via the ticket card's Answer button — the entry point for
+    // ready+questions sessions after the RefinementIndicator pill was removed (#510).
+    const answerBtn = mainWindow.locator(`[data-testid="ticket-card-answer-${TICKET_ID}"]`);
+    await expect(answerBtn).toBeVisible({ timeout: 5000 });
+    await answerBtn.click();
 
-    // Open the dialog via the refinement indicator.
-    await mainWindow.waitForSelector('[data-testid="refinement-indicator-pill"]', { timeout: 5000 });
-    await mainWindow.click('[data-testid="refinement-indicator-pill"]');
-    await mainWindow.waitForSelector(`[data-testid="refinement-session-${sessionId}"]`, { timeout: 5000 });
-    await mainWindow.click(`[data-testid="refinement-session-${sessionId}"]`);
     await mainWindow.waitForSelector('[data-testid="refine-ticket-dialog"]', { timeout: 5000 });
     await mainWindow.waitForSelector('[data-testid="refine-fail"]', { timeout: 5000 });
 
@@ -166,6 +266,21 @@ test.describe('Refinement streaming panel', () => {
     const modal = mainWindow.locator('[data-testid="refine-ticket-dialog"] > div').first();
     const className = await modal.getAttribute('class');
     expect(className).toContain('w-[768px]');
+
+    // Cleanup
+    await mainWindow.evaluate(() => {
+      (
+        window as unknown as {
+          __useAppStore: { setState: (s: Record<string, unknown>) => void };
+        }
+      ).__useAppStore.setState({
+        projects: [],
+        activeProjectId: null,
+        refinementSessions: [],
+        stacks: [],
+        boardTickets: [],
+      });
+    });
   });
 
   test('Answer button hidden while running, visible once ready with questions (#415)', async ({ electronApp, mainWindow }) => {
