@@ -8,6 +8,16 @@ import { TicketCard } from '../../../src/renderer/components/TicketCard';
 import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
 
+// Mock AnswerQuestionsModal to avoid IPC calls in tests
+vi.mock('../../../src/renderer/components/AnswerQuestionsModal', () => ({
+  AnswerQuestionsModal: ({ onClose, onResumed }: { stackId: string; onClose: () => void; onResumed: () => void }) => (
+    <div data-testid="answer-questions-modal">
+      <button data-testid="answer-modal-close" onClick={onClose}>Close</button>
+      <button data-testid="answer-modal-resumed" onClick={onResumed}>Resumed</button>
+    </div>
+  ),
+}));
+
 // Mock DiscardStackDialog to avoid full dialog rendering in all tests
 vi.mock('../../../src/renderer/components/DiscardStackDialog', () => ({
   DiscardStackDialog: ({ onBackToBacklog, onCloseTicket, onCancel, 'data-testid': testId }: {
@@ -622,6 +632,69 @@ describe('TicketCard', () => {
     render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
     expect(screen.getByTestId('ticket-card-resume-42')).toBeDefined();
     expect(screen.queryByTestId('ticket-card-create-pr-42')).toBeNull();
+  });
+
+  it('in_stack: shows Answer button when stack.status === needs_human', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'needs_human', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-in-stack-answer-42')).toBeDefined();
+  });
+
+  it('in_stack: does not show Answer button when no linked stack', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-in-stack-answer-42')).toBeNull();
+  });
+
+  it('in_stack: does not show Answer button for non-needs_human statuses', () => {
+    const nonAnswerStatuses = ['running', 'building', 'completed', 'failed', 'session_paused'];
+    nonAnswerStatuses.forEach((status) => {
+      const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status, pr_url: null, pr_number: null } as any;
+      const { unmount } = render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+      expect(screen.queryByTestId('ticket-card-in-stack-answer-42')).toBeNull();
+      unmount();
+    });
+  });
+
+  it('in_stack: needs_human does not show Create PR button (regression: was missing Answer affordance)', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'needs_human', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-in-stack-answer-42')).toBeDefined();
+    expect(screen.queryByTestId('ticket-card-create-pr-42')).toBeNull();
+  });
+
+  it('in_stack: clicking Answer button mounts AnswerQuestionsModal', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'needs_human', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('answer-questions-modal')).toBeNull();
+    fireEvent.click(screen.getByTestId('ticket-card-in-stack-answer-42'));
+    expect(screen.getByTestId('answer-questions-modal')).toBeDefined();
+  });
+
+  it('in_stack: closing AnswerQuestionsModal hides it', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'needs_human', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-in-stack-answer-42'));
+    expect(screen.getByTestId('answer-questions-modal')).toBeDefined();
+    fireEvent.click(screen.getByTestId('answer-modal-close'));
+    expect(screen.queryByTestId('answer-questions-modal')).toBeNull();
+  });
+
+  it('in_stack: onResumed closes modal and calls refreshStacks', async () => {
+    const refreshSpy = vi.fn().mockResolvedValue(undefined);
+    useAppStore.setState({ refreshStacks: refreshSpy } as any);
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'needs_human', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-in-stack-answer-42'));
+    fireEvent.click(screen.getByTestId('answer-modal-resumed'));
+    await waitFor(() => expect(refreshSpy).toHaveBeenCalled());
+    expect(screen.queryByTestId('answer-questions-modal')).toBeNull();
+  });
+
+  it('in_stack: session_paused still shows Resume button (regression guard)', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'session_paused', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-resume-42')).toBeDefined();
+    expect(screen.queryByTestId('ticket-card-in-stack-answer-42')).toBeNull();
   });
 
   it('pr_open: shows Merge button when stack has pr_number set', () => {
