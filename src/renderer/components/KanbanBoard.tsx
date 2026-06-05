@@ -35,12 +35,11 @@ export function KanbanBoard() {
     stacks,
     activeProject,
     refreshBoardTickets,
+    searchQuery,
   } = useAppStore();
 
   const [activeTab, setActiveTab] = useState<BoardTab>('active');
   const [mergedMode, setMergedMode] = useState<MergedMode>('recent');
-  const [backlogQuery, setBacklogQuery] = useState('');
-  const [debouncedBacklogQuery, setDebouncedBacklogQuery] = useState('');
 
   const project = activeProject();
 
@@ -48,21 +47,14 @@ export function KanbanBoard() {
     if (project?.directory) {
       refreshBoardTickets(project.directory);
     }
-    setBacklogQuery('');
-    setDebouncedBacklogQuery('');
   }, [project?.directory, refreshBoardTickets]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedBacklogQuery(backlogQuery);
-    }, 200);
-    return () => clearTimeout(timer);
-  }, [backlogQuery]);
 
   const projectTickets = selectProjectTickets(boardTickets, project?.directory);
 
   const ticketsByColumn = (column: KanbanColumn): TicketBoardEntry[] =>
     projectTickets.filter((t) => t.column === column);
+
+  const activeQuery = searchQuery.trim().replace(/^#/, '').trim();
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" data-testid="kanban-board">
@@ -139,37 +131,34 @@ export function KanbanBoard() {
           >
             {COLUMNS.map((col) => {
               const isMerged = col.id === 'merged';
-              const isBacklog = col.id === 'backlog';
               const sortedCards = isMerged
                 ? ticketsByColumn(col.id).slice().sort((a, b) => {
                     const dateCmp = b.updated_at.localeCompare(a.updated_at);
                     return dateCmp !== 0 ? dateCmp : a.ticket_id.localeCompare(b.ticket_id);
                   })
                 : ticketsByColumn(col.id);
-              const filteredCards = isBacklog
-                ? sortedCards.filter((t) => matchesTicketQuery(t, debouncedBacklogQuery))
+              const cappedCards = isMerged && mergedMode === 'recent'
+                ? sortedCards.slice(0, RECENT_MERGED_LIMIT)
                 : sortedCards;
-              const totalCount = filteredCards.length;
-              const cards = isMerged && mergedMode === 'recent'
-                ? filteredCards.slice(0, RECENT_MERGED_LIMIT)
-                : filteredCards;
-              const activeQuery = isBacklog
-                ? debouncedBacklogQuery.trim().replace(/^#/, '').trim()
-                : '';
+              const cards = cappedCards.filter((t) => matchesTicketQuery(t, searchQuery));
+              const totalCount = cappedCards.length;
               return (
                 <div
                   key={col.id}
-                  className="flex flex-col gap-2"
+                  className="flex flex-col"
                   style={{ flex: '1 1 0', minWidth: '240px' }}
                   data-testid={`kanban-column-${col.id}`}
                 >
-                  {/* Column header */}
-                  <div className="flex items-center justify-between px-1">
+                  {/* Column header — pinned */}
+                  <div
+                    className="flex items-center justify-between px-1 pb-2 shrink-0"
+                    data-testid={`column-header-${col.id}`}
+                  >
                     <span className={`text-xs font-semibold uppercase tracking-wide ${col.colorClass}`}>
                       {col.label}
                     </span>
                     <div className="flex items-center gap-1.5">
-                      {isBacklog && (
+                      {col.id === 'backlog' && (
                         <button
                           onClick={() => { if (project?.directory) refreshBoardTickets(project.directory); }}
                           disabled={boardTicketsLoading}
@@ -215,40 +204,19 @@ export function KanbanBoard() {
                         </div>
                       )}
                       {totalCount > 0 && (
-                        <span className="text-xs text-sandstorm-muted font-mono" data-testid={isBacklog ? 'backlog-count-badge' : undefined}>{totalCount}</span>
+                        <span className="text-xs text-sandstorm-muted font-mono" data-testid={col.id === 'backlog' ? 'backlog-count-badge' : undefined}>{totalCount}</span>
                       )}
                     </div>
                   </div>
 
-                  {/* Backlog search input */}
-                  {col.id === 'backlog' && (
-                    <div className="relative px-1">
-                      <input
-                        type="text"
-                        value={backlogQuery}
-                        onChange={(e) => setBacklogQuery(e.target.value)}
-                        placeholder="Filter backlog…"
-                        className="w-full px-2 py-1 pr-6 text-xs bg-sandstorm-surface border border-sandstorm-border rounded text-sandstorm-text placeholder-sandstorm-muted/50 focus:outline-none focus:border-sandstorm-accent"
-                        data-testid="backlog-filter-input"
-                      />
-                      {backlogQuery && (
-                        <button
-                          onClick={() => setBacklogQuery('')}
-                          className="absolute right-2 top-1/2 -translate-y-1/2 text-sandstorm-muted hover:text-sandstorm-text text-xs leading-none"
-                          data-testid="backlog-filter-clear"
-                          aria-label="Clear filter"
-                        >
-                          ×
-                        </button>
-                      )}
-                    </div>
-                  )}
-
-                  {/* Cards */}
-                  <div className="flex flex-col gap-2 flex-1">
+                  {/* Cards — scrollable */}
+                  <div
+                    className="flex flex-col gap-2 flex-1 overflow-y-auto min-h-0"
+                    data-testid={`column-cards-${col.id}`}
+                  >
                     {cards.length === 0 ? (
                       activeQuery ? (
-                        <div className="flex items-center justify-center h-16 text-xs text-sandstorm-muted/50 border border-dashed border-sandstorm-border rounded-lg" data-testid="backlog-no-match">
+                        <div className="flex items-center justify-center h-16 text-xs text-sandstorm-muted/50 border border-dashed border-sandstorm-border rounded-lg" data-testid={`no-match-${col.id}`}>
                           No tickets match your search
                         </div>
                       ) : (

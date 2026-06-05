@@ -6,7 +6,7 @@ import { spawnSync } from 'child_process';
 // are skipped (not failed) when claude is absent so that the verify
 // environment produces a clean signal.
 //
-// NOTE: the new LeftRail + KanbanBoard layout does not embed the
+// NOTE: the new TopNav + KanbanBoard layout does not embed the
 // AccountUsageBar component, so these tests no longer assert against its
 // DOM elements. They verify the session monitor's preload API instead,
 // which is the underlying contract for the usage feature.
@@ -15,7 +15,7 @@ const hasClaudeCli = spawnSync('which', ['claude'], { encoding: 'utf-8' }).statu
 test.describe('Usage Stats', () => {
   test('session monitor polls usage and exposes it via the preload API', async ({ mainWindow }) => {
     test.skip(!hasClaudeCli, 'claude CLI not found on PATH — cannot test usage data (requires live, authenticated claude)');
-    await mainWindow.waitForSelector('[data-testid="left-rail"]', { timeout: 15000 });
+    await mainWindow.waitForSelector('[data-testid="top-nav"]', { timeout: 15000 });
 
     // Give the session monitor time to complete at least one poll cycle.
     // The PTY-based fetch takes ~5-15s typical, up to 30s with onboarding.
@@ -39,7 +39,7 @@ test.describe('Usage Stats', () => {
   test('app does not crash when node-pty loads or fails to load', async ({ mainWindow }) => {
     // This test verifies graceful degradation — the app must work even if
     // node-pty fails to load (wrong ABI, missing binary, etc.)
-    await mainWindow.waitForSelector('[data-testid="left-rail"]', { timeout: 15000 });
+    await mainWindow.waitForSelector('[data-testid="top-nav"]', { timeout: 15000 });
 
     // Collect console errors during a settling period
     const errors: string[] = [];
@@ -65,7 +65,7 @@ test.describe('Usage Stats', () => {
 
   test('session monitor reports claude CLI availability', async ({ mainWindow }) => {
     test.skip(!hasClaudeCli, 'claude CLI not found on PATH — cannot assert claudeAvailable === true');
-    await mainWindow.waitForSelector('[data-testid="left-rail"]', { timeout: 15000 });
+    await mainWindow.waitForSelector('[data-testid="top-nav"]', { timeout: 15000 });
 
     // Give session monitor time to check claude availability
     await mainWindow.waitForTimeout(20000);
