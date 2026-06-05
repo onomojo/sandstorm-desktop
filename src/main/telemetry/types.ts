@@ -69,8 +69,8 @@ export interface ByModelEntry {
 
 export interface SessionEntry {
   sid: string;
-  ticket: null;  // pending attribution (#466)
-  stack: null;   // pending attribution (#466)
+  ticket: string | null;  // ticket attributed from stack manifest; null for host/orchestrator sessions
+  stack: string | null;   // stackId of the session; null for host/orchestrator sessions
   model: string; // model with highest output token count in session
   start: string; // ISO timestamp of first usage entry
   durMin: number; // duration in minutes (last entry - first entry)

@@ -248,7 +248,7 @@ export interface SandstormAPI {
     daily: (range: { since: string; until: string }) => Promise<unknown[]>;
     byModel: (range: { since: string; until: string }) => Promise<unknown[]>;
     session: (range: { since: string; until: string }) => Promise<unknown[]>;
-    byTicket: () => Promise<ByTicketEntry[]>;
+    byTicket: (range?: { since: string; until: string }) => Promise<ByTicketEntry[]>;
     refresh: () => Promise<{ ok: true }>;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
@@ -459,7 +459,7 @@ const api: SandstormAPI = {
     daily: (range) => ipcRenderer.invoke('stats:telemetry:daily', range),
     byModel: (range) => ipcRenderer.invoke('stats:telemetry:byModel', range),
     session: (range) => ipcRenderer.invoke('stats:telemetry:session', range),
-    byTicket: () => ipcRenderer.invoke('stats:telemetry:byTicket'),
+    byTicket: (range) => ipcRenderer.invoke('stats:telemetry:byTicket', range),
     refresh: () => ipcRenderer.invoke('stats:telemetry:refresh'),
   },
   on: (channel, callback) => {
