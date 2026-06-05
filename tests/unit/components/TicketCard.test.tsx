@@ -1332,6 +1332,56 @@ describe('TicketCard', () => {
   });
 
   // =========================================================================
+  // #525 — Discard icon-only, accessibility, and error-block tests
+  // =========================================================================
+
+  it('discard icon has aria-label="Discard" on backlog column', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-discard-42');
+    expect(btn.getAttribute('aria-label')).toBe('Discard');
+  });
+
+  it('discard icon has aria-label="Discard" on in_stack column', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    const btn = screen.getByTestId('ticket-card-discard-42');
+    expect(btn.getAttribute('aria-label')).toBe('Discard');
+  });
+
+  it('backlog: discard control does not render visible "Discard" text', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    // The word "Discard" must not appear as visible text in the card
+    expect(screen.queryByText('Discard')).toBeNull();
+  });
+
+  it('in_stack: discard control does not render visible "Discard" text', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.queryByText('Discard')).toBeNull();
+  });
+
+  it('getByLabelText("Discard") resolves to the same element as getByTestId for backlog', () => {
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    expect(screen.getByLabelText('Discard')).toBe(screen.getByTestId('ticket-card-discard-42'));
+  });
+
+  it('backlog: discard error block still renders in card body when discardErrors is set', () => {
+    useAppStore.setState({ discardErrors: { '42|/proj': 'Something went wrong' } } as any);
+    render(<TicketCard ticket={makeTicket('backlog') as any} stacks={[]} />);
+    expect(screen.getByText('Something went wrong')).toBeDefined();
+  });
+
+  it('in_stack: discard error block still renders in card body when discardErrors is set', () => {
+    useAppStore.setState({ discardErrors: { '42|/proj': 'Stack removal failed' } } as any);
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.getByText('Stack removal failed')).toBeDefined();
+  });
+
+  it('pr_open: discard error block still renders in card body when discardErrors is set', () => {
+    useAppStore.setState({ discardErrors: { '42|/proj': 'PR discard error' } } as any);
+    render(<TicketCard ticket={makeTicket('pr_open') as any} stacks={[]} />);
+    expect(screen.getByText('PR discard error')).toBeDefined();
+  });
+
+  // =========================================================================
   // #510 — gap-question Answer path survives RefinementIndicator removal
   // =========================================================================
 
