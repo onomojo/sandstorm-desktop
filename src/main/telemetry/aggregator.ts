@@ -54,8 +54,9 @@ export function aggregateSummary(
   skippedLines: number
 ): TelemetrySummary {
   const now = new Date();
+  // Use UTC consistently — entryMonth is derived from the ISO timestamp date slice (also UTC).
   const currentMonth = `${now.getUTCFullYear()}-${String(now.getUTCMonth() + 1).padStart(2, '0')}`;
-  const prevMonthDate = new Date(now.getUTCFullYear(), now.getUTCMonth() - 1, 1);
+  const prevMonthDate = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
   const prevMonth = `${prevMonthDate.getUTCFullYear()}-${String(prevMonthDate.getUTCMonth() + 1).padStart(2, '0')}`;
 
   const rangeTokens = zeroTokens();
@@ -180,22 +181,38 @@ export function aggregateByModel(entries: RawUsageEntry[], range: DateRange): By
 }
 
 /** Compute per-session breakdown over the given range. */
-export function aggregateSessions(entries: RawUsageEntry[], range: DateRange): SessionEntry[] {
+export function aggregateSessions(
+  entries: RawUsageEntry[],
+  range: DateRange,
+  stackRoots: string[] = [],
+): SessionEntry[] {
+  // Build stackId → ticket map from manifests (same approach as aggregateByTicket)
+  const stackToTicket = new Map<string, string | null>();
+  for (const root of stackRoots) {
+    const manifest = readManifest(root + '.manifest.json');
+    if (manifest) {
+      stackToTicket.set(manifest.stackId, manifest.ticket ?? null);
+    }
+  }
+
   const bySid = new Map<string, {
     tokens: TokenCounts;
     modelTokens: Map<string, number>;
     timestamps: string[];
     turns: number;
     cost: number;
+    stackId: string | null;
   }>();
 
   for (const entry of entries) {
     if (!inRange(entry.timestamp, range)) continue;
 
     if (!bySid.has(entry.sessionId)) {
-      bySid.set(entry.sessionId, { tokens: zeroTokens(), modelTokens: new Map(), timestamps: [], turns: 0, cost: 0 });
+      bySid.set(entry.sessionId, { tokens: zeroTokens(), modelTokens: new Map(), timestamps: [], turns: 0, cost: 0, stackId: entry.stackId });
     }
     const s = bySid.get(entry.sessionId)!;
+    // Use first non-null stackId encountered in this session
+    if (s.stackId === null && entry.stackId !== null) s.stackId = entry.stackId;
     addTokens(s.tokens, entry);
     s.modelTokens.set(entry.model, (s.modelTokens.get(entry.model) ?? 0) + entry.output);
     s.timestamps.push(entry.timestamp);
@@ -223,10 +240,13 @@ export function aggregateSessions(entries: RawUsageEntry[], range: DateRange): S
       const end = data.timestamps[data.timestamps.length - 1] ?? start;
       const durMs = start && end ? new Date(end).getTime() - new Date(start).getTime() : 0;
 
+      const stackId = data.stackId;
+      const ticket = stackId != null ? (stackToTicket.get(stackId) ?? null) : null;
+
       return {
         sid,
-        ticket: null,
-        stack: null,
+        ticket,
+        stack: stackId,
         model: primaryModel,
         start,
         durMin: durMs / 60_000,

@@ -15,6 +15,8 @@ import {
   validateComposeYaml,
   hasLegacyPortMappings,
   cleanupLegacyPorts,
+  hasUsageMount,
+  migrateUsageMount,
 } from '../../src/main/compose-generator';
 
 describe('compose-generator', () => {
@@ -481,6 +483,95 @@ describe('compose-generator', () => {
       );
 
       const result = cleanupLegacyPorts(tmpDir);
+      expect(result.success).toBe(false);
+    });
+  });
+
+  describe('hasUsageMount', () => {
+    it('returns false when no sandstorm compose exists', () => {
+      expect(hasUsageMount(tmpDir)).toBe(false);
+    });
+
+    it('returns false when compose lacks the usage mount', () => {
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sandstormDir, 'docker-compose.yml'),
+        'services:\n  claude:\n    volumes:\n      - ${SANDSTORM_WORKSPACE}:/app\n'
+      );
+      expect(hasUsageMount(tmpDir)).toBe(false);
+    });
+
+    it('returns true when compose has the usage mount', () => {
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sandstormDir, 'docker-compose.yml'),
+        'services:\n  claude:\n    volumes:\n      - ${SANDSTORM_USAGE_DIR}/${SANDSTORM_STACK_ID}:/home/claude/.claude/projects\n'
+      );
+      expect(hasUsageMount(tmpDir)).toBe(true);
+    });
+  });
+
+  describe('migrateUsageMount', () => {
+    function setupProject(sandstormDir: string) {
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(tmpDir, 'docker-compose.yml'),
+        'services:\n  app:\n    image: node\n'
+      );
+      fs.writeFileSync(
+        path.join(sandstormDir, 'config'),
+        'PROJECT_NAME=test\nCOMPOSE_FILE=docker-compose.yml\nPORT_MAP=\n'
+      );
+    }
+
+    it('regenerates compose to include usage mount when mount is absent', () => {
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      setupProject(sandstormDir);
+      // Write a stale compose without the usage mount
+      fs.writeFileSync(
+        path.join(sandstormDir, 'docker-compose.yml'),
+        'services:\n  claude:\n    volumes:\n      - ${SANDSTORM_WORKSPACE}:/app\n'
+      );
+
+      expect(hasUsageMount(tmpDir)).toBe(false);
+      const result = migrateUsageMount(tmpDir);
+      expect(result.success).toBe(true);
+
+      const newCompose = fs.readFileSync(path.join(sandstormDir, 'docker-compose.yml'), 'utf-8');
+      expect(newCompose).toContain('${SANDSTORM_USAGE_DIR}/${SANDSTORM_STACK_ID}:/home/claude/.claude/projects');
+    });
+
+    it('is idempotent — no-op when usage mount already present', () => {
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      const mountedCompose =
+        'services:\n  claude:\n    volumes:\n      - ${SANDSTORM_USAGE_DIR}/${SANDSTORM_STACK_ID}:/home/claude/.claude/projects\n';
+      fs.writeFileSync(path.join(sandstormDir, 'docker-compose.yml'), mountedCompose);
+
+      const result = migrateUsageMount(tmpDir);
+      expect(result.success).toBe(true);
+
+      // File content must be unchanged (idempotent)
+      const after = fs.readFileSync(path.join(sandstormDir, 'docker-compose.yml'), 'utf-8');
+      expect(after).toBe(mountedCompose);
+    });
+
+    it('returns error when no project compose file exists', () => {
+      const sandstormDir = path.join(tmpDir, '.sandstorm');
+      fs.mkdirSync(sandstormDir, { recursive: true });
+      fs.writeFileSync(
+        path.join(sandstormDir, 'config'),
+        'PROJECT_NAME=test\nCOMPOSE_FILE=nonexistent.yml\n'
+      );
+      // Write stale compose so hasUsageMount returns false
+      fs.writeFileSync(
+        path.join(sandstormDir, 'docker-compose.yml'),
+        'services:\n  claude:\n    volumes:\n      - ${SANDSTORM_WORKSPACE}:/app\n'
+      );
+
+      const result = migrateUsageMount(tmpDir);
       expect(result.success).toBe(false);
     });
   });

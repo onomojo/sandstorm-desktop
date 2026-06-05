@@ -861,7 +861,7 @@ declare global {
         daily: (range: DateRange) => Promise<DailyEntry[]>;
         byModel: (range: DateRange) => Promise<ByModelEntry[]>;
         session: (range: DateRange) => Promise<SessionEntry[]>;
-        byTicket: () => Promise<ByTicketEntry[]>;
+        byTicket: (range?: DateRange) => Promise<ByTicketEntry[]>;
         refresh: () => Promise<{ ok: true }>;
       };
       on: (channel: string, callback: (...args: unknown[]) => void) => () => void;

@@ -52,6 +52,7 @@ import {
   validateComposeYaml,
   hasLegacyPortMappings,
   cleanupLegacyPorts,
+  migrateUsageMount,
 } from './compose-generator';
 import { getDefaultReviewPrompt } from './review-prompt';
 import {
@@ -451,6 +452,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         // Non-critical — don't block migration check
       }
 
+      // Auto-migrate usage mount so inner-stack transcripts reach the host for telemetry
+      try {
+        migrateUsageMount(directory);
+      } catch {
+        // Non-critical — don't block migration check
+      }
+
       // Delete the 5 obsolete ticket scripts that are now built into sandstorm-desktop.
       // These were previously copied per-project from templates. This deletion is
       // idempotent — missing files are silently skipped, and scheduled/ is never touched.
@@ -794,7 +802,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     const summary = engine.getSummary(range);
     const shipped = rollupStore.ticketsShipped();
     // Numerator: lifetime sum of per-ticket transcript cost excluding orchestrator bucket
-    const allByTicket = engine.getByTicket();
+    const allByTicket = engine.getByTicket({ since: '2000-01-01', until: '2099-12-31' });
     const totalCost = allByTicket
       .filter((e) => e.ticketId !== ORCHESTRATOR_TICKET_ID)
       .reduce((sum, e) => sum + e.cost, 0);
@@ -817,13 +825,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return createUsageEngine(buildTelemetryRoots()).getSessions(range);
   });
 
-  ipcMain.handle('stats:telemetry:byTicket', async (): Promise<ByTicketEntry[]> => {
+  ipcMain.handle('stats:telemetry:byTicket', async (_event, range?: DateRange): Promise<ByTicketEntry[]> => {
     const stepWeights = registry.getStepWeightsByTicket();
     const allEphemeral = readEphemeralTimingRecords(agentBackend.getEphemeralTimingPath());
     const ephemeralRecords = allEphemeral
       .filter((r) => r.ticketId != null && r.stage != null)
       .map((r) => ({ ticketId: r.ticketId!, stage: r.stage!, turnCount: r.turnCount }));
-    return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords).getByTicket();
+    return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords).getByTicket(range);
   });
 
   ipcMain.handle('stats:telemetry:refresh', async () => {

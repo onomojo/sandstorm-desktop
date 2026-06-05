@@ -27,7 +27,7 @@ export interface UsageEngine {
   getDaily(range: DateRange): DailyEntry[];
   getByModel(range: DateRange): ByModelEntry[];
   getSessions(range: DateRange): SessionEntry[];
-  getByTicket(): ByTicketEntry[];
+  getByTicket(range?: DateRange): ByTicketEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -117,12 +117,18 @@ export function createUsageEngine(
 
     getSessions(range: DateRange): SessionEntry[] {
       const { entries } = loadCached(roots);
-      return aggregateSessions(entries, range);
+      return aggregateSessions(entries, range, stackRoots);
     },
 
-    getByTicket(): ByTicketEntry[] {
+    getByTicket(range?: DateRange): ByTicketEntry[] {
       const { entries } = loadCached(roots);
-      return aggregateByTicket(entries, stackRoots, stepWeights, ephemeralRecords);
+      const filtered = range
+        ? entries.filter((e) => {
+            const date = e.timestamp.slice(0, 10);
+            return date >= range.since && date <= range.until;
+          })
+        : entries;
+      return aggregateByTicket(filtered, stackRoots, stepWeights, ephemeralRecords);
     },
   };
 }
