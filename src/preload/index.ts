@@ -202,7 +202,6 @@ export interface SandstormAPI {
     retryRefinementAsync: (sessionId: string, ticketId: string, projectDir: string) => Promise<{ sessionId: string }>;
     postAnswers: (ticketId: string, projectDir: string, answersBody: string) => Promise<void>;
     cancelRefinement: (sessionId: string) => Promise<void>;
-    discardRefinement: (sessionId: string) => Promise<void>;
     listRefinements: () => Promise<unknown[]>;
     create: (projectDir: string, title: string, body: string) => Promise<{ url: string; ticketId: string }>;
     list: (projectDir: string) => Promise<{ tickets: unknown[]; error: unknown }>;
@@ -415,8 +414,6 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('tickets:postAnswers', ticketId, projectDir, answersBody),
     cancelRefinement: (sessionId) =>
       ipcRenderer.invoke('tickets:cancelRefinement', sessionId),
-    discardRefinement: (sessionId) =>
-      ipcRenderer.invoke('tickets:discardRefinement', sessionId),
     listRefinements: () =>
       ipcRenderer.invoke('tickets:listRefinements'),
     create: (projectDir, title, body) =>

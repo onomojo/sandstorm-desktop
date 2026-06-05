@@ -1330,4 +1330,53 @@ describe('TicketCard', () => {
     const btn = screen.getByTestId('ticket-card-discard-42') as HTMLButtonElement;
     expect(btn.disabled).toBe(true);
   });
+
+  // =========================================================================
+  // #510 — gap-question Answer path survives RefinementIndicator removal
+  // =========================================================================
+
+  it('refining: ready+questions — Answer button calls openRefinementSession (gap-question path works without indicator, #510)', () => {
+    const session = {
+      id: 'sess-510-answer',
+      ticketId: '42',
+      projectDir: PROJECT_DIR,
+      status: 'ready' as const,
+      phase: 'check' as const,
+      result: {
+        passed: false,
+        questions: [{ id: 'q1', question: 'Q?', options: [] }],
+        gateSummary: '',
+        ticketUrl: null,
+        cached: false,
+      },
+      startedAt: 0,
+    };
+    useAppStore.setState({ refinementSessions: [session] });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-answer-42'));
+    expect(useAppStore.getState().showRefineTicketDialog).toBe(true);
+    expect(useAppStore.getState().currentRefinementSessionId).toBe('sess-510-answer');
+    // No discard-related IPC is ever called when the Answer button is clicked
+    expect(api.tickets.cancelRefinement).not.toHaveBeenCalled();
+  });
+
+  it('refining: running session — no session-destructive IPC call is made (#510)', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-510-running',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'running',
+        phase: 'check',
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    // Progress bar visible — no actionable buttons that could destroy the session
+    expect(screen.queryByTestId('ticket-card-answer-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-retry-42')).toBeNull();
+    expect(screen.queryByTestId('ticket-card-start-refine-42')).toBeNull();
+    // No IPC calls that could destroy the running session
+    expect(api.tickets.cancelRefinement).not.toHaveBeenCalled();
+  });
 });

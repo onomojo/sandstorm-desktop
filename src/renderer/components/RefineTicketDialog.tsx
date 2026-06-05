@@ -258,7 +258,9 @@ export function RefineTicketDialog() {
   /** Close the dialog — keep in-flight sessions alive. */
   const handleClose = () => {
     setShowRefineTicketDialog(false);
-    // Don't clear currentRefinementSessionId — the indicator will let user reopen
+    // Don't clear currentRefinementSessionId — in-flight sessions stay alive in the store
+    // and continue to drive card UI (progress bar, Answer/Retry). There is intentionally
+    // no reopen affordance for the live streaming view.
   };
 
   /** Cancel with confirmation. */

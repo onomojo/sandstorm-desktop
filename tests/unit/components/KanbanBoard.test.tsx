@@ -274,6 +274,55 @@ describe('KanbanBoard', () => {
     expect(screen.queryByTestId('ticket-card-t12')).toBeNull();
   });
 
+  describe('backlog refresh button (#516)', () => {
+    it('renders backlog-refresh-button in the backlog column header only', () => {
+      render(<KanbanBoard />);
+      const backlogCol = screen.getByTestId('kanban-column-backlog');
+      expect(backlogCol.querySelector('[data-testid="backlog-refresh-button"]')).not.toBeNull();
+
+      const nonBacklogCols = ['refining', 'spec_ready', 'in_stack', 'pr_open', 'merged'];
+      for (const colId of nonBacklogCols) {
+        const col = screen.getByTestId(`kanban-column-${colId}`);
+        expect(col.querySelector('[data-testid="backlog-refresh-button"]')).toBeNull();
+      }
+    });
+
+    it('clicking the button calls refreshBoardTickets with the project directory exactly once', () => {
+      const refreshSpy = vi.fn();
+      useAppStore.setState({ refreshBoardTickets: refreshSpy } as any);
+      render(<KanbanBoard />);
+      refreshSpy.mockClear(); // clear the mount-effect call
+      const btn = screen.getByTestId('backlog-refresh-button');
+      fireEvent.click(btn);
+      expect(refreshSpy).toHaveBeenCalledTimes(1);
+      expect(refreshSpy).toHaveBeenCalledWith('/proj');
+    });
+
+    it('button is disabled when boardTicketsLoading is true', () => {
+      useAppStore.setState({ boardTicketsLoading: true });
+      render(<KanbanBoard />);
+      const btn = screen.getByTestId('backlog-refresh-button') as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+
+    it('clicking a disabled button does not invoke refreshBoardTickets', () => {
+      const refreshSpy = vi.fn();
+      useAppStore.setState({ boardTicketsLoading: true, refreshBoardTickets: refreshSpy } as any);
+      render(<KanbanBoard />);
+      refreshSpy.mockClear(); // clear the mount-effect call
+      const btn = screen.getByTestId('backlog-refresh-button');
+      fireEvent.click(btn);
+      expect(refreshSpy).not.toHaveBeenCalled();
+    });
+
+    it('button is enabled when boardTicketsLoading is false', () => {
+      useAppStore.setState({ boardTicketsLoading: false });
+      render(<KanbanBoard />);
+      const btn = screen.getByTestId('backlog-refresh-button') as HTMLButtonElement;
+      expect(btn.disabled).toBe(false);
+    });
+  });
+
   describe('backlog filter', () => {
     const backlogTickets = [
       { ticket_id: '501', project_dir: '/proj', column: 'backlog' as const, title: 'Add filter feature', updated_at: '' },
@@ -427,6 +476,21 @@ describe('KanbanBoard', () => {
       expect(screen.getByTestId('ticket-card-501')).toBeDefined();
       expect(screen.getByTestId('ticket-card-502')).toBeDefined();
     });
+  });
+
+  // =========================================================================
+  // #510 — RefinementIndicator removal
+  // =========================================================================
+  it('does not render refinement-indicator pill even when refinementSessions has running sessions (#510)', () => {
+    useAppStore.setState({
+      refinementSessions: [
+        { id: 'sess-1', ticketId: '1', projectDir: '/proj', status: 'running', phase: 'check', startedAt: 0 },
+        { id: 'sess-2', ticketId: '2', projectDir: '/proj', status: 'ready', phase: 'check', startedAt: 0, result: { passed: false, questions: [{ id: 'q1', question: 'Q?', options: [] }], gateSummary: '', ticketUrl: null, cached: false } },
+      ],
+    } as any);
+    render(<KanbanBoard />);
+    expect(screen.queryByTestId('refinement-indicator')).toBeNull();
+    expect(screen.queryByTestId('refinement-indicator-pill')).toBeNull();
   });
 
   describe('matchesTicketQuery', () => {
