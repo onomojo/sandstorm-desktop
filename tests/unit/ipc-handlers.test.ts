@@ -712,10 +712,9 @@ describe('IPC Handlers', () => {
       expect(result).toEqual(entries);
     });
 
-    it('stats:telemetry:refresh triggers rollup rebuild and returns { ok: true }', async () => {
+    it('stats:telemetry:refresh clears usage cache and returns { ok: true }', async () => {
       const result = await invokeHandler('stats:telemetry:refresh');
 
-      expect(mockRollupStoreInstance.refresh).toHaveBeenCalledOnce();
       expect(vi.mocked(clearUsageCache)).toHaveBeenCalledOnce();
       expect(result).toEqual({ ok: true });
     });
