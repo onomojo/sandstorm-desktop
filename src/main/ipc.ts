@@ -769,13 +769,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   const rollupStore = new TicketRollupStore(registry.getDb());
 
-  // Wire auto-invalidation hooks so the rollup cache stays fresh
-  registry.onStackArchived = (stackId) => rollupStore.markStackDirty(stackId);
-  registry.onBoardTicketMoved = (_ticketId, column) => {
-    if (column === 'merged') rollupStore.markDirty();
-  };
-  stackManager.setOnTaskCompleted((stackId) => rollupStore.markStackDirty(stackId));
-
   /** Build the set of transcript roots on each request: host root + all stack usage dirs. */
   function buildTelemetryRoots(): string[] {
     const hostRoot = os.homedir() + '/.claude/projects';
@@ -835,7 +828,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stats:telemetry:refresh', async () => {
     clearUsageCache();
-    rollupStore.refresh();
     return { ok: true };
   });
 

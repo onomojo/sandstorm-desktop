@@ -1225,4 +1225,101 @@ describe('Registry', () => {
     });
   });
 
+  // ---------------------------------------------------------------------------
+  // Migration v20: retire orphaned #466 rollup cache tables
+  // ---------------------------------------------------------------------------
+  describe('migration v20 — drop ticket_rollups and rollup_dirty_stacks', () => {
+    it('drops rollup tables on a DB that had them at v19', async () => {
+      // Pre-seed a DB at v19 with the rollup tables populated
+      const Database = (await import('better-sqlite3')).default;
+      const migrationDbPath = makeTempDb();
+      try {
+        const rawDb = new Database(migrationDbPath);
+        rawDb.pragma('journal_mode = WAL');
+        rawDb.pragma('foreign_keys = ON');
+        rawDb.exec(`
+          CREATE TABLE IF NOT EXISTS schema_version (
+            version     INTEGER PRIMARY KEY,
+            applied_at  TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          INSERT INTO schema_version (version) VALUES (19);
+
+          CREATE TABLE IF NOT EXISTS ticket_rollups (
+            ticket_id            TEXT PRIMARY KEY,
+            title                TEXT NOT NULL DEFAULT '',
+            column               TEXT,
+            total_cost           REAL NOT NULL DEFAULT 0,
+            total_input_tokens   INTEGER NOT NULL DEFAULT 0,
+            total_output_tokens  INTEGER NOT NULL DEFAULT 0,
+            total_cache_read     INTEGER NOT NULL DEFAULT 0,
+            total_cache_creation INTEGER NOT NULL DEFAULT 0,
+            primary_model        TEXT,
+            unpriced             INTEGER NOT NULL DEFAULT 0,
+            computed_at          TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          INSERT INTO ticket_rollups (ticket_id, total_cost) VALUES ('T-1', 1.5);
+
+          CREATE TABLE IF NOT EXISTS rollup_dirty_stacks (
+            stack_id  TEXT PRIMARY KEY,
+            marked_at TEXT NOT NULL DEFAULT (datetime('now'))
+          );
+          INSERT INTO rollup_dirty_stacks (stack_id) VALUES ('stack-abc');
+        `);
+        rawDb.close();
+
+        // Open via Registry — this runs all migrations including v20
+        const migrationRegistry = await Registry.create(migrationDbPath);
+
+        // Both rollup tables must be gone after v20
+        const remainingTables = (migrationRegistry.getDb().prepare(
+          `SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ticket_rollups','rollup_dirty_stacks')`
+        ).all() as { name: string }[]).map(r => r.name);
+        expect(remainingTables).toEqual([]);
+
+        migrationRegistry.close();
+      } finally {
+        cleanupDb(migrationDbPath);
+      }
+    });
+
+    it('is idempotent on a fresh DB (never had rollup tables)', async () => {
+      // Fresh DB via Registry.create goes through ALL migrations; v20 uses
+      // DROP TABLE IF EXISTS so it is a no-op if the tables were never created.
+      const freshDbPath = makeTempDb();
+      try {
+        const freshRegistry = await Registry.create(freshDbPath);
+        const remainingTables = (freshRegistry.getDb().prepare(
+          `SELECT name FROM sqlite_master WHERE type='table' AND name IN ('ticket_rollups','rollup_dirty_stacks')`
+        ).all() as { name: string }[]).map(r => r.name);
+        expect(remainingTables).toEqual([]);
+        freshRegistry.close();
+      } finally {
+        cleanupDb(freshDbPath);
+      }
+    });
+
+    it('stacks/tasks token columns and task_token_steps survive (regression guard)', () => {
+      // The existing registry fixture is a fully-migrated fresh DB — all columns
+      // from v1-v20 are present. Verify the token columns are NOT dropped.
+      const db = registry.getDb();
+
+      const stackCols = (db.prepare(`PRAGMA table_info(stacks)`).all() as { name: string }[]).map(r => r.name);
+      expect(stackCols).toContain('total_input_tokens');
+      expect(stackCols).toContain('total_output_tokens');
+      expect(stackCols).toContain('total_cache_read_tokens');
+      expect(stackCols).toContain('total_cache_creation_tokens');
+
+      const taskCols = (db.prepare(`PRAGMA table_info(tasks)`).all() as { name: string }[]).map(r => r.name);
+      expect(taskCols).toContain('input_tokens');
+      expect(taskCols).toContain('output_tokens');
+      expect(taskCols).toContain('cache_read_tokens');
+      expect(taskCols).toContain('cache_creation_tokens');
+
+      const taskTokenStepsExists = (db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='task_token_steps'`
+      ).all() as { name: string }[]).length > 0;
+      expect(taskTokenStepsExists).toBe(true);
+    });
+  });
+
 });
