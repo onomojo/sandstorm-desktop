@@ -37,6 +37,24 @@ describe('getDefaultSpecQualityGate', () => {
     expect(content).toContain('Read/write timing');
   });
 
+  it('includes enforced-artifact requirement in dependency contracts', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('must resolve to an enforced artifact');
+    expect(content).toContain('not prose');
+  });
+
+  it('includes contribution-to-the-whole criterion', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('### Contribution to the Whole');
+    expect(content).toContain('epic-level acceptance behavior');
+  });
+
+  it('new criteria do not reintroduce e2e/visual verification', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).not.toContain('### End-to-End Data Flow Verification');
+    expect(content).not.toContain('### Automated Visual Verification');
+  });
+
   it('includes all-verification-automatable criterion', () => {
     const content = getDefaultSpecQualityGate();
     expect(content).toContain('### All Verification Must Be Automatable');

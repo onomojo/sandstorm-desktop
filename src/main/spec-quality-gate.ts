@@ -84,6 +84,15 @@ When the ticket references another ticket, module, or external system's output:
 - Read/write timing must be compatible — if the source writes at end-of-process and the consumer reads mid-process, that's a conflict.
 - How contract compatibility is verified must be specified.
 - If the data source doesn't exist yet, the ticket must include creating it or explicitly depend on a ticket that does.
+- The contract must resolve to an enforced artifact — a committed type/interface, a schema, or a contract test — not prose. A contract that exists only in an epic description, a code comment, or an unmerged sibling ticket's text is NOT a contract; FAIL the ticket until the owning ticket lands the artifact (or this ticket creates it). (Consuming existing committed code/types is fine — that IS an enforced artifact.)
+- Name the single owner of each shared surface the ticket touches; a consumer or extender must reference that owner and must not redefine the shape.
+
+### Contribution to the Whole
+If the ticket is part of a larger epic or multi-ticket effort:
+- It must name which epic-level acceptance behavior(s) it advances, so coverage is traceable and no envisioned element is orphaned.
+- If it cannot point to an acceptance behavior it serves, either the epic's acceptance definition is incomplete or the ticket is scope creep — resolve before dispatch.
+- This is the per-ticket coverage check only. It does NOT require end-to-end or visual verification, and it does NOT replace a whole-epic acceptance review (a green ticket is progress, not proof the whole behavior works assembled).
+- Skip this criterion for standalone tickets with no parent epic.
 
 ### All Verification Must Be Automatable
 Every verification item must be executable autonomously with no human involvement:
