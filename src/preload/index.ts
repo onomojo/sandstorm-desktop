@@ -214,7 +214,7 @@ export interface SandstormAPI {
       label?: string;
     }) => Promise<{
       auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
-      jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+      jql: { ok: true; count: number; hasMore: boolean } | { ok: false; status?: number; message: string } | null;
     }>;
     close: (ticketId: string, projectDir: string) => Promise<void>;
     markDone: (ticketId: string, projectDir: string) => Promise<{ ok: true } | { ok: false; error: string }>;

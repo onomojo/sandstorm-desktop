@@ -38,6 +38,8 @@ import {
   removeLabel as realRemoveLabel,
 } from '../control-plane/ticket-labels';
 import type { SpecGateResult, RefineQuestion } from '../control-plane/ticket-spec';
+import { listTicketsWithConfig } from '../control-plane/ticket-config';
+import type { ProjectTicketConfig } from '../control-plane/registry';
 
 /** Marker that identifies comments posted by this bot. */
 export const BOT_COMMENT_MARKER = '<!-- sandstorm:bot-question -->';
@@ -219,13 +221,27 @@ export async function runRefineToComments(
  * Wire up the real deps for production use.
  * Accepts pre-wired specCheck/specRefine so the caller (index.ts) controls
  * how the ephemeral LLM is invoked (mirrors the ipc.ts specDeps pattern).
+ * getConfig provides the ProjectTicketConfig for the project, used to route
+ * listTickets through the in-app provider path (listTicketsWithConfig) instead
+ * of the legacy list-tickets.sh script.
  */
 export function buildRefineToCommentsDeps(
   specCheck: (ticketId: string, projectDir: string) => Promise<SpecGateResult>,
   specRefine: (ticketId: string, projectDir: string, userAnswers: string) => Promise<SpecGateResult>,
+  getConfig: (projectDir: string) => ProjectTicketConfig | null,
 ): RefineToCommentsDeps {
   return {
-    listTickets: realListTickets,
+    listTickets: async (label: string, projectDir: string): Promise<TicketEntry[]> => {
+      const config = getConfig(projectDir);
+      if (!config) {
+        throw new Error(`No ticket config for project: ${projectDir}`);
+      }
+      const result = await listTicketsWithConfig(config, projectDir, label);
+      if (!result.ok) {
+        throw new Error(`listTickets failed: ${JSON.stringify(result.error)}`);
+      }
+      return result.tickets;
+    },
     listComments: realListComments,
     postComment: realPostComment,
     addLabel: realAddLabel,

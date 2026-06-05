@@ -4,6 +4,7 @@ import { makePrEligible } from '../utils/duration';
 import { suggestStackName } from '../lib/stack-name';
 import { DiscardStackDialog } from './DiscardStackDialog';
 import { ConfirmDialog } from './ConfirmDialog';
+import { AnswerQuestionsModal } from './AnswerQuestionsModal';
 
 interface TicketCardProps {
   ticket: TicketBoardEntry;
@@ -41,10 +42,12 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     autoResolveInFlight,
     autoResolveErrors,
     mergeConflicts,
+    refreshStacks,
   } = useAppStore();
 
   const [showDiscardDialog, setShowDiscardDialog] = useState(false);
   const [showEarlyDiscardDialog, setShowEarlyDiscardDialog] = useState(false);
+  const [showAnswerModal, setShowAnswerModal] = useState(false);
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
   const stackKey = `${ticket.ticket_id}|${ticket.project_dir}`;
@@ -92,6 +95,15 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     if (stack) {
       void resumeStackWithContinuation(stack.id, true);
     }
+  };
+
+  const handleAnswer = () => {
+    setShowAnswerModal(true);
+  };
+
+  const handleAnswerResumed = () => {
+    setShowAnswerModal(false);
+    void refreshStacks();
   };
 
   const handleDiscardBackToBacklog = () => {
@@ -312,6 +324,15 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               Resume
             </button>
           )}
+          {stack && stack.status === 'needs_human' && (
+            <button
+              onClick={handleAnswer}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-amber-500/10 text-amber-400 border border-amber-500/30 hover:bg-amber-500/20 transition-colors font-medium"
+              data-testid={`ticket-card-in-stack-answer-${ticket.ticket_id}`}
+            >
+              Answer
+            </button>
+          )}
           {stack && (makePrEligible(stack) || prInFlight) && (
             <button
               onClick={handleCreatePR}
@@ -409,6 +430,14 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
           onCloseTicket={handleDiscardCloseTicket}
           onCancel={() => setShowDiscardDialog(false)}
           data-testid={`discard-stack-dialog-${ticket.ticket_id}`}
+        />
+      )}
+
+      {showAnswerModal && stack && (
+        <AnswerQuestionsModal
+          stackId={stack.id}
+          onClose={() => setShowAnswerModal(false)}
+          onResumed={handleAnswerResumed}
         />
       )}
     </div>

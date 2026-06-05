@@ -29,18 +29,12 @@ import { appendEphemeralTiming, type EphemeralTimingRecord } from './ephemeral-t
 import { extractStreamEvents } from './ephemeral-stream-events';
 import { resolveOuterClaudeTools } from './tools-allowlist';
 import { composeSystemPromptWithSkills } from './skill-enumeration';
-import { TokenTelemetry, ToolCallRecord, isTelemetryEnabled } from './token-telemetry';
 import {
   RawCaptureSession,
   RawCaptureSupervisor,
   createRawCaptureSupervisor,
   isRawCaptureEnabled,
 } from './raw-request-capture';
-
-/** In-flight per-cycle tracking; tool_use_id is only retained in memory. */
-interface InFlightToolCall extends ToolCallRecord {
-  tool_use_id: string;
-}
 
 const DEFAULT_TIMEOUT_MS = 10 * 60 * 1000; // 10 minutes — must be longer than MCP tool chain (300s ephemeral + 310s bridge)
 
@@ -59,9 +53,6 @@ interface ClaudeSession {
   cancelledTurn: boolean;   // true when the user cancelled the current turn (process kept alive)
   cancelFallback: ReturnType<typeof setTimeout> | null; // fallback kill timer after cancel
   turnIndex: number;            // 0-based index of completed turns in this session
-  lastResultAt: number | null;  // Date.now() of the previous `type:"result"` event, for telemetry deltas
-  subTurnCount: number;         // count of type:"assistant" events since the last type:"result" (= API calls in the current tool-use chain)
-  toolCallsInCycle: InFlightToolCall[]; // MCP tool calls made since the last type:"result"; reset on record
 }
 
 function getClaudeBin(): string {
@@ -101,7 +92,6 @@ export class ClaudeBackend implements AgentBackend {
   private logStream: fs.WriteStream | null = null;
   private timeoutMs: number;
   private modelResolver?: (projectDir: string) => string;
-  private telemetry: TokenTelemetry;
   private rawCapture: RawCaptureSupervisor;
   private rawCaptureByTab = new Map<string, RawCaptureSession>();
   private ephemeralTimingPath: string;
@@ -114,7 +104,6 @@ export class ClaudeBackend implements AgentBackend {
     this.timeoutMs = timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.modelResolver = modelResolver;
     this.initLogger();
-    this.telemetry = this.initTelemetry();
     this.rawCapture = this.initRawCapture();
     this.ephemeralTimingPath = this.resolveEphemeralTimingPath();
   }
@@ -167,23 +156,6 @@ export class ClaudeBackend implements AgentBackend {
     const sessionId = new Date().toISOString().replace(/[:.]/g, '-');
     const rootDir = path.join(baseDir, 'raw-api-capture', sessionId);
     return createRawCaptureSupervisor({ rootDir, enabled });
-  }
-
-  /**
-   * Opt-in per-turn token telemetry (#262 tactic A). Off unless
-   * `SANDSTORM_TOKEN_TELEMETRY=1` is set. Writes JSONL to the app's userData
-   * dir so it sits next to the existing claude log.
-   */
-  private initTelemetry(): TokenTelemetry {
-    const enabled = isTelemetryEnabled();
-    let filePath = '';
-    try {
-      const dir = typeof app !== 'undefined' && app.getPath ? app.getPath('userData') : os.tmpdir();
-      filePath = path.join(dir, 'sandstorm-desktop-token-telemetry.jsonl');
-    } catch {
-      filePath = path.join(os.tmpdir(), 'sandstorm-desktop-token-telemetry.jsonl');
-    }
-    return new TokenTelemetry({ filePath, enabled });
   }
 
   getSessionTokens(tabId: string): OuterClaudeSessionTokens {
@@ -293,9 +265,6 @@ export class ClaudeBackend implements AgentBackend {
         cancelledTurn: false,
         cancelFallback: null,
         turnIndex: 0,
-        lastResultAt: null,
-        subTurnCount: 0,
-        toolCallsInCycle: [],
       };
       this.sessions.set(tabId, session);
     }
@@ -1132,37 +1101,7 @@ export class ClaudeBackend implements AgentBackend {
               });
               this.emitSessionTokens(tabId);
 
-              // Per-turn telemetry (#262 tactic A). No-op when the opt-in
-              // env flag is off. Measurement lands first so later tactics
-              // have a baseline.
-              if (this.telemetry.active) {
-                const now = Date.now();
-                const secondsSincePrev =
-                  session.lastResultAt === null
-                    ? null
-                    : (now - session.lastResultAt) / 1000;
-                this.telemetry.record({
-                  ts: new Date(now).toISOString(),
-                  tabId,
-                  projectDir: session.projectDir,
-                  turn_index: session.turnIndex,
-                  seconds_since_prev_turn: secondsSincePrev,
-                  input_tokens: usage.input_tokens ?? 0,
-                  output_tokens: usage.output_tokens ?? 0,
-                  cache_creation_input_tokens: usage.cache_creation_input_tokens ?? 0,
-                  cache_read_input_tokens: usage.cache_read_input_tokens ?? 0,
-                  sub_turn_count: session.subTurnCount,
-                  tool_calls: session.toolCallsInCycle.map((c) => ({
-                    name: c.name,
-                    tool_result_bytes: c.tool_result_bytes,
-                  })),
-                });
-              }
               session.turnIndex += 1;
-              session.lastResultAt = Date.now();
-              // Reset per-cycle counters for the next user-message turn.
-              session.subTurnCount = 0;
-              session.toolCallsInCycle = [];
               // Advance the raw-capture turn boundary in lock-step with
               // our internal turn counter. Dumps for the next turn land
               // in files tagged with the incremented turn index (#299).
@@ -1194,83 +1133,16 @@ export class ClaudeBackend implements AgentBackend {
             continue;
           }
 
-          // Log tool_use events for observability + telemetry (#262 sub-turn instrumentation)
+          // Log tool_use events for observability
           if (parsed.type === 'content_block_start') {
             const contentBlock = (parsed as { content_block?: { type?: string; name?: string; id?: string } }).content_block;
             if (contentBlock?.type === 'tool_use') {
               this.log(`Tool call: tab=${tabId} tool=${contentBlock.name} id=${contentBlock.id}`);
-              if (contentBlock.name && contentBlock.id) {
-                session.toolCallsInCycle.push({
-                  name: contentBlock.name,
-                  tool_use_id: contentBlock.id,
-                  tool_result_bytes: 0,
-                });
-              }
             }
           }
           if (parsed.type === 'content_block_stop') {
             const idx = (parsed as { index?: number }).index;
             this.log(`Tool call ended: tab=${tabId} block_index=${idx}`);
-          }
-
-          // Count sub-API-calls: each type:"assistant" event is one API response.
-          // A direct reply has sub_turn_count=1; a tool-use chain produces >= 2.
-          // Also walk the assistant message content for tool_use blocks —
-          // some CLI builds (observed on the orchestrator path) emit tool_use
-          // here instead of via separate content_block_start events, so we
-          // capture from both paths and dedupe by tool_use_id.
-          if (parsed.type === 'assistant') {
-            session.subTurnCount += 1;
-            const assistantMsg = (parsed as { message?: { content?: unknown } }).message;
-            const assistantContent = assistantMsg?.content;
-            if (Array.isArray(assistantContent)) {
-              for (const block of assistantContent as Array<Record<string, unknown>>) {
-                if (block?.type !== 'tool_use') continue;
-                const id = typeof block.id === 'string' ? block.id : undefined;
-                const name = typeof block.name === 'string' ? block.name : undefined;
-                if (!id || !name) continue;
-                if (session.toolCallsInCycle.some((c) => c.tool_use_id === id)) continue;
-                session.toolCallsInCycle.push({
-                  name,
-                  tool_use_id: id,
-                  tool_result_bytes: 0,
-                });
-                this.log(`Tool call: tab=${tabId} tool=${name} id=${id}`);
-              }
-            }
-          }
-
-          // type:"user" carries tool_result blocks that the bridge returned to
-          // the model. Associate each tool_result's text size with its
-          // originating tool_use_id so we can see which tools fed the biggest
-          // payloads into the transcript.
-          if (parsed.type === 'user') {
-            const msg = (parsed as { message?: { content?: unknown } }).message;
-            const content = msg?.content;
-            if (Array.isArray(content)) {
-              for (const block of content as Array<Record<string, unknown>>) {
-                if (block?.type !== 'tool_result') continue;
-                const toolUseId = block.tool_use_id as string | undefined;
-                if (!toolUseId) continue;
-                const record = session.toolCallsInCycle.find(
-                  (c) => c.tool_use_id === toolUseId
-                );
-                if (!record) continue;
-                const blockContent = block.content;
-                let bytes = 0;
-                if (typeof blockContent === 'string') {
-                  bytes = Buffer.byteLength(blockContent, 'utf8');
-                } else if (Array.isArray(blockContent)) {
-                  for (const inner of blockContent as Array<Record<string, unknown>>) {
-                    if (typeof inner?.text === 'string') {
-                      bytes += Buffer.byteLength(inner.text, 'utf8');
-                    }
-                  }
-                }
-                // Accumulate in case a tool_result arrives in chunks
-                record.tool_result_bytes += bytes;
-              }
-            }
           }
 
           // Extract text for streaming output
@@ -1368,7 +1240,6 @@ export class ClaudeBackend implements AgentBackend {
     this.bridgeServer?.close();
     this.logStream?.end();
     this.logStream = null;
-    this.telemetry.close();
     // Close all raw-capture listeners (#299). Fire-and-forget — we don't
     // block shutdown on proxy drain.
     this.rawCapture.closeAll().catch(() => { /* ignore */ });

@@ -307,7 +307,7 @@ export async function jiraListTickets(
       jql += ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
     }
     const url =
-      `${config.jira_url.replace(/\/$/, '')}/rest/api/2/search` +
+      `${config.jira_url.replace(/\/$/, '')}/rest/api/3/search/jql` +
       `?jql=${encodeURIComponent(jql)}&fields=summary,reporter&maxResults=100`;
     const raw = await jiraRequest({ url, method: 'GET', auth: jiraAuth(config) });
     const result = JSON.parse(raw) as {
@@ -567,7 +567,7 @@ export async function createTicketWithConfig(opts: {
 /** Result shape for the Test Connection feature in JIRA settings. */
 export interface TestJiraConnectionResult {
   auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
-  jql: { ok: true; count: number } | { ok: false; status?: number; message: string } | null;
+  jql: { ok: true; count: number; hasMore: boolean } | { ok: false; status?: number; message: string } | null;
 }
 
 /**
@@ -602,13 +602,14 @@ export async function testJiraConnection(params: {
     jql += ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
   }
   const searchUrl =
-    `${baseUrl}/rest/api/2/search` +
+    `${baseUrl}/rest/api/3/search/jql` +
     `?jql=${encodeURIComponent(jql)}&fields=summary&maxResults=100`;
   try {
     const raw = await jiraRequest({ url: searchUrl, method: 'GET', auth });
-    const result = JSON.parse(raw) as { total?: number; issues?: unknown[] };
-    const count = result.total ?? result.issues?.length ?? 0;
-    return { auth: { ok: true, displayName }, jql: { ok: true, count } };
+    const result = JSON.parse(raw) as { issues?: unknown[]; nextPageToken?: string };
+    const count = result.issues?.length ?? 0;
+    const hasMore = Boolean(result.nextPageToken);
+    return { auth: { ok: true, displayName }, jql: { ok: true, count, hasMore } };
   } catch (err: unknown) {
     const e = err as { status?: number; message?: string };
     return {
