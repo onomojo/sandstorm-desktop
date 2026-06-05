@@ -28,12 +28,12 @@ test.beforeAll(async () => {
   // The renderer's mount fires refreshProjects() which calls projects:list — wait
   // for the main window's IPC handlers to be installed before reaching into the
   // main process. registerIpcHandlers() runs synchronously after createWindow()
-  // in the app's whenReady().then() chain, so once we can see the left-rail in
+  // in the app's whenReady().then() chain, so once we can see the top-nav in
   // the renderer (it issues IPC calls), the handlers exist.
   {
     const win = await app.firstWindow();
     await win.waitForLoadState('domcontentloaded');
-    await expect(win.locator('[data-testid="left-rail"]')).toBeVisible({ timeout: 15000 });
+    await expect(win.locator('[data-testid="top-nav"]')).toBeVisible({ timeout: 15000 });
   }
 
   // Set up test project and install the tickets:create stub in the main process.
@@ -79,7 +79,7 @@ test.beforeAll(async () => {
   const window = await app.firstWindow();
   await window.reload();
   await window.waitForLoadState('domcontentloaded');
-  await expect(window.locator('[data-testid="left-rail"]')).toBeVisible({ timeout: 15000 });
+  await expect(window.locator('[data-testid="top-nav"]')).toBeVisible({ timeout: 15000 });
 });
 
 test.afterAll(async () => {
@@ -99,7 +99,7 @@ test.afterAll(async () => {
 test('app launches and shows main UI', async () => {
   const window = await app.firstWindow();
   await window.waitForLoadState('domcontentloaded');
-  await expect(window.locator('[data-testid="left-rail"]')).toBeVisible({ timeout: 15000 });
+  await expect(window.locator('[data-testid="top-nav"]')).toBeVisible({ timeout: 15000 });
 });
 
 test('Create Ticket dialog opens and has required testids', async () => {
@@ -107,7 +107,8 @@ test('Create Ticket dialog opens and has required testids', async () => {
   await window.waitForLoadState('domcontentloaded');
 
   // Activate the test project so the New Ticket button is rendered
-  await window.locator(`[data-testid="workspace-pill-${testProjectId}"]`).click();
+  await window.locator('[data-testid="workspace-switcher-btn"]').click();
+  await window.locator(`[data-testid="workspace-item-${testProjectId}"]`).click();
   await expect(window.locator('[data-testid="new-ticket-btn"]')).toBeVisible({ timeout: 5000 });
 
   // Open the Create Ticket dialog and verify all required testids are present
@@ -129,7 +130,8 @@ test('tickets:create IPC handler seeds board and card appears in Backlog column 
   await window.waitForLoadState('domcontentloaded');
 
   // Activate the test project
-  await window.locator(`[data-testid="workspace-pill-${testProjectId}"]`).click();
+  await window.locator('[data-testid="workspace-switcher-btn"]').click();
+  await window.locator(`[data-testid="workspace-item-${testProjectId}"]`).click();
   await expect(window.locator('[data-testid="new-ticket-btn"]')).toBeVisible({ timeout: 5000 });
 
   // Open the Create Ticket dialog

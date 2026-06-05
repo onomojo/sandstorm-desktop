@@ -29,11 +29,13 @@ test.describe('Navigation', () => {
     }
 
     // App should still be responsive after repeated tab toggles.
-    await expect(mainWindow.locator('[data-testid="left-rail"]')).toBeVisible();
+    await expect(mainWindow.locator('[data-testid="top-nav"]')).toBeVisible();
   });
 
-  test('LeftRail Add project button opens the Open Project dialog', async ({ mainWindow }) => {
-    await mainWindow.waitForSelector('[data-testid="add-project-btn"]', { timeout: 15000 });
+  test('TopNav Add project button opens the Open Project dialog', async ({ mainWindow }) => {
+    await mainWindow.waitForSelector('[data-testid="workspace-switcher-btn"]', { timeout: 15000 });
+    await mainWindow.click('[data-testid="workspace-switcher-btn"]');
+    await mainWindow.waitForSelector('[data-testid="add-project-btn"]', { timeout: 5000 });
     await mainWindow.click('[data-testid="add-project-btn"]');
 
     // The OpenProjectDialog renders a heading "Open Project".

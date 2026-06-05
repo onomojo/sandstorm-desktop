@@ -12,8 +12,8 @@ import { mockSandstormApi } from './setup';
 vi.mock('../../../src/renderer/components/KanbanBoard', () => ({
   KanbanBoard: () => <div data-testid="kanban-board" />,
 }));
-vi.mock('../../../src/renderer/components/LeftRail', () => ({
-  LeftRail: () => <div data-testid="left-rail" />,
+vi.mock('../../../src/renderer/components/TopNav', () => ({
+  TopNav: () => <div data-testid="top-nav" />,
 }));
 vi.mock('../../../src/renderer/components/StackDetail', () => ({
   StackDetail: ({ onBack }: { onBack: () => void }) => (
@@ -48,9 +48,9 @@ describe('App', () => {
     });
   });
 
-  it('renders the app shell with left rail and kanban board', () => {
+  it('renders the app shell with top nav and kanban board', () => {
     render(<App />);
-    expect(screen.getByTestId('left-rail')).toBeDefined();
+    expect(screen.getByTestId('top-nav')).toBeDefined();
     expect(screen.getByTestId('kanban-board')).toBeDefined();
   });
 

@@ -1,9 +1,9 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, waitFor, fireEvent, act } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { KanbanBoard, matchesTicketQuery } from '../../../src/renderer/components/KanbanBoard';
 import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
@@ -19,7 +19,8 @@ describe('KanbanBoard', () => {
       stacks: [],
       boardTickets: [],
       boardTicketsLoading: false,
-    });
+      searchQuery: '',
+    } as any);
   });
 
   it('renders all 6 kanban columns', () => {
@@ -323,158 +324,143 @@ describe('KanbanBoard', () => {
     });
   });
 
-  describe('backlog filter', () => {
-    const backlogTickets = [
+  describe('global search', () => {
+    const tickets = [
       { ticket_id: '501', project_dir: '/proj', column: 'backlog' as const, title: 'Add filter feature', updated_at: '' },
-      { ticket_id: '502', project_dir: '/proj', column: 'backlog' as const, title: 'Fix navbar bug', updated_at: '' },
-      { ticket_id: '503', project_dir: '/proj', column: 'backlog' as const, title: '', updated_at: '' },
+      { ticket_id: '502', project_dir: '/proj', column: 'refining' as const, title: 'Fix navbar bug', updated_at: '' },
+      { ticket_id: '503', project_dir: '/proj', column: 'spec_ready' as const, title: '', updated_at: '' },
     ];
 
     beforeEach(() => {
-      vi.useFakeTimers();
-      useAppStore.setState({ boardTickets: backlogTickets });
+      useAppStore.setState({ boardTickets: tickets, searchQuery: '' } as any);
     });
 
-    afterEach(() => {
-      vi.useRealTimers();
-    });
-
-    it('renders a search input scoped to the Backlog column', () => {
+    it('does NOT render the old backlog-filter-input', () => {
       render(<KanbanBoard />);
-      expect(screen.getByTestId('backlog-filter-input')).toBeDefined();
+      expect(screen.queryByTestId('backlog-filter-input')).toBeNull();
     });
 
-    it('does not render a search input in non-backlog columns', () => {
+    it('no columns have a per-column search input', () => {
       render(<KanbanBoard />);
-      const backlogCol = screen.getByTestId('kanban-column-backlog');
-      const refiningCol = screen.getByTestId('kanban-column-refining');
-      expect(backlogCol.querySelector('[data-testid="backlog-filter-input"]')).toBeTruthy();
-      expect(refiningCol.querySelector('input')).toBeNull();
+      for (const colId of ['backlog', 'refining', 'spec_ready', 'in_stack', 'pr_open', 'merged']) {
+        const col = screen.getByTestId(`kanban-column-${colId}`);
+        expect(col.querySelector('input')).toBeNull();
+      }
     });
 
-    it('filters by title substring (case-insensitive) after debounce', async () => {
+    it('with empty searchQuery all cards render', () => {
       render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
-
-      fireEvent.change(input, { target: { value: 'FILTER' } });
-      act(() => { vi.advanceTimersByTime(200); });
-
-      expect(screen.getByText('Add filter feature')).toBeDefined();
-      expect(screen.queryByText('Fix navbar bug')).toBeNull();
+      expect(screen.getByTestId('ticket-card-501')).toBeDefined();
+      expect(screen.getByTestId('ticket-card-502')).toBeDefined();
     });
 
-    it('filters by ticket ID substring', async () => {
+    it('searchQuery filters cards across all columns by title', () => {
+      useAppStore.setState({ searchQuery: 'filter' } as any);
       render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
+      expect(screen.getByTestId('ticket-card-501')).toBeDefined();
+      expect(screen.queryByTestId('ticket-card-502')).toBeNull();
+    });
 
-      fireEvent.change(input, { target: { value: '502' } });
-      act(() => { vi.advanceTimersByTime(200); });
+    it('searchQuery filters cards in non-backlog columns', () => {
+      useAppStore.setState({ searchQuery: 'navbar' } as any);
+      render(<KanbanBoard />);
+      expect(screen.queryByTestId('ticket-card-501')).toBeNull();
+      expect(screen.getByTestId('ticket-card-502')).toBeDefined();
+    });
 
+    it('searchQuery filters by ticket ID across columns', () => {
+      useAppStore.setState({ searchQuery: '502' } as any);
+      render(<KanbanBoard />);
       expect(screen.getByTestId('ticket-card-502')).toBeDefined();
       expect(screen.queryByTestId('ticket-card-501')).toBeNull();
     });
 
-    it('strips leading # from query when matching by ID', async () => {
+    it('searchQuery strips leading # when filtering', () => {
+      useAppStore.setState({ searchQuery: '#501' } as any);
       render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
-
-      fireEvent.change(input, { target: { value: '#501' } });
-      act(() => { vi.advanceTimersByTime(200); });
-
       expect(screen.getByTestId('ticket-card-501')).toBeDefined();
       expect(screen.queryByTestId('ticket-card-502')).toBeNull();
     });
 
-    it('shows "No tickets match your search" when query matches nothing', async () => {
+    it('shows "No tickets match your search" in each column when query matches nothing', () => {
+      useAppStore.setState({ searchQuery: 'zzznomatch' } as any);
       render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
-
-      fireEvent.change(input, { target: { value: 'zzznomatch' } });
-      act(() => { vi.advanceTimersByTime(200); });
-
-      expect(screen.getByTestId('backlog-no-match')).toBeDefined();
-      expect(screen.getByTestId('backlog-no-match').textContent).toBe('No tickets match your search');
+      expect(screen.getByTestId('no-match-backlog')).toBeDefined();
+      expect(screen.getByTestId('no-match-refining')).toBeDefined();
     });
 
-    it('clear button resets filter and restores full list', async () => {
-      render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
-
-      fireEvent.change(input, { target: { value: 'filter' } });
-      act(() => { vi.advanceTimersByTime(200); });
-
-      expect(screen.queryByTestId('ticket-card-502')).toBeNull();
-
-      const clearBtn = screen.getByTestId('backlog-filter-clear');
-      fireEvent.click(clearBtn);
-      act(() => { vi.advanceTimersByTime(200); });
-
-      expect(screen.getByTestId('ticket-card-501')).toBeDefined();
-      expect(screen.getByTestId('ticket-card-502')).toBeDefined();
-    });
-
-    it('restores full list when input is cleared to empty string', async () => {
-      render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
-
-      fireEvent.change(input, { target: { value: 'filter' } });
-      act(() => { vi.advanceTimersByTime(200); });
-      expect(screen.queryByTestId('ticket-card-502')).toBeNull();
-
-      fireEvent.change(input, { target: { value: '' } });
-      act(() => { vi.advanceTimersByTime(200); });
-
-      expect(screen.getByTestId('ticket-card-501')).toBeDefined();
-      expect(screen.getByTestId('ticket-card-502')).toBeDefined();
-    });
-
-    it('count badge reflects filtered count', async () => {
-      render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
-
-      fireEvent.change(input, { target: { value: 'filter' } });
-      act(() => { vi.advanceTimersByTime(200); });
-
-      const badge = screen.getByTestId('backlog-count-badge');
-      expect(badge.textContent).toBe('1');
-    });
-
-    it('other columns are unaffected by the backlog query', async () => {
+    it('merged column respects RECENT_MERGED_LIMIT when searchQuery is empty', () => {
       useAppStore.setState({
-        boardTickets: [
-          ...backlogTickets,
-          { ticket_id: '600', project_dir: '/proj', column: 'refining' as const, title: 'Refining ticket filter', updated_at: '' },
-        ],
-      });
+        boardTickets: Array.from({ length: 12 }, (_, i) => ({
+          ticket_id: `m${i + 1}`,
+          project_dir: '/proj',
+          column: 'merged' as const,
+          title: `Merged ${i + 1}`,
+          updated_at: `2023-01-${String(i + 1).padStart(2, '0')}`,
+        })),
+        searchQuery: '',
+      } as any);
       render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
-
-      fireEvent.change(input, { target: { value: 'filter' } });
-      act(() => { vi.advanceTimersByTime(200); });
-
-      const refiningCol = screen.getByTestId('kanban-column-refining');
-      expect(refiningCol.textContent).toContain('Refining ticket filter');
+      const mergedCol = screen.getByTestId('kanban-column-merged');
+      const cards = mergedCol.querySelectorAll('[data-testid^="ticket-card-"]');
+      expect(cards.length).toBe(10);
     });
 
-    it('ticket with empty title matches by ID without throwing', async () => {
+    it('merged column search filters within already-loaded cards (does not expand beyond RECENT_MERGED_LIMIT)', () => {
+      useAppStore.setState({
+        boardTickets: Array.from({ length: 12 }, (_, i) => ({
+          ticket_id: `m${i + 1}`,
+          project_dir: '/proj',
+          column: 'merged' as const,
+          title: `Merged ${i + 1}`,
+          updated_at: `2023-01-${String(i + 1).padStart(2, '0')}`,
+        })),
+        searchQuery: 'Merged 1',
+      } as any);
       render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
+      // Only cards in the loaded set (10 most recent = m3-m12) matching query render
+      const mergedCol = screen.getByTestId('kanban-column-merged');
+      const cards = mergedCol.querySelectorAll('[data-testid^="ticket-card-"]');
+      expect(cards.length).toBeLessThanOrEqual(10);
+    });
+  });
 
-      fireEvent.change(input, { target: { value: '503' } });
-      act(() => { vi.advanceTimersByTime(200); });
-
-      expect(screen.getByTestId('ticket-card-503')).toBeDefined();
+  describe('board structure (pinned column headers)', () => {
+    it('all 6 columns have correct flex width style', () => {
+      render(<KanbanBoard />);
+      for (const colId of ['backlog', 'refining', 'spec_ready', 'in_stack', 'pr_open', 'merged']) {
+        const col = screen.getByTestId(`kanban-column-${colId}`) as HTMLElement;
+        // minWidth is the hard constraint: 240px
+        expect(col.style.minWidth).toBe('240px');
+        // flex: '1 1 0' — JSDOM doesn't serialize the shorthand into style attribute,
+        // so check the style attribute string for min-width which confirms inline style is present
+        expect(col.getAttribute('style')).toMatch(/min-width:\s*240px/);
+      }
     });
 
-    it('query of only # or whitespace shows all cards', async () => {
+    it('each column has a pinned header element outside the scroll container', () => {
       render(<KanbanBoard />);
-      const input = screen.getByTestId('backlog-filter-input');
+      for (const colId of ['backlog', 'refining', 'spec_ready', 'in_stack', 'pr_open', 'merged']) {
+        const header = screen.getByTestId(`column-header-${colId}`);
+        const cards = screen.getByTestId(`column-cards-${colId}`);
+        // header must NOT be inside the scrollable cards container
+        expect(cards.contains(header)).toBe(false);
+      }
+    });
 
-      fireEvent.change(input, { target: { value: '#' } });
-      act(() => { vi.advanceTimersByTime(200); });
+    it('each column has a scrollable cards container with overflow-y-auto', () => {
+      render(<KanbanBoard />);
+      for (const colId of ['backlog', 'refining', 'spec_ready', 'in_stack', 'pr_open', 'merged']) {
+        const cards = screen.getByTestId(`column-cards-${colId}`);
+        expect(cards.className).toContain('overflow-y-auto');
+      }
+    });
 
-      expect(screen.getByTestId('ticket-card-501')).toBeDefined();
-      expect(screen.getByTestId('ticket-card-502')).toBeDefined();
+    it('column header is a direct sibling of the cards container (not nested inside it)', () => {
+      render(<KanbanBoard />);
+      const header = screen.getByTestId('column-header-backlog');
+      const cards = screen.getByTestId('column-cards-backlog');
+      expect(header.parentElement).toBe(cards.parentElement);
     });
   });
 

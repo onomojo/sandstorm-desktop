@@ -11,7 +11,7 @@ import { SessionWarningModal } from './components/SessionWarningModal';
 import { SessionTokenLimitModal } from './components/SessionTokenLimitModal';
 import { ModelSettingsModal } from './components/ModelSettings';
 import { StaleWorkspaces } from './components/StaleWorkspaces';
-import { LeftRail } from './components/LeftRail';
+import { TopNav } from './components/TopNav';
 import { KanbanBoard } from './components/KanbanBoard';
 import { TelemetryView } from './components/TelemetryView';
 
@@ -240,23 +240,21 @@ export default function App() {
         </div>
       )}
 
-      {/* Main layout: left rail + content */}
-      <div className="flex-1 flex overflow-hidden">
-        <LeftRail />
+      {/* Top nav */}
+      <TopNav />
 
-        {/* Main content */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {selectedStackId ? (
-            <StackDetail
-              stackId={selectedStackId}
-              onBack={() => selectStack(null)}
-            />
-          ) : mainView === 'telemetry' ? (
-            <TelemetryView />
-          ) : (
-            <KanbanBoard />
-          )}
-        </div>
+      {/* Main content */}
+      <div className="flex-1 flex flex-col overflow-hidden">
+        {selectedStackId ? (
+          <StackDetail
+            stackId={selectedStackId}
+            onBack={() => selectStack(null)}
+          />
+        ) : mainView === 'telemetry' ? (
+          <TelemetryView />
+        ) : (
+          <KanbanBoard />
+        )}
       </div>
 
       {/* Session warning banner (non-blocking) */}

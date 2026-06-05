@@ -641,6 +641,10 @@ interface AppState {
   mainView: 'board' | 'telemetry';
   setMainView: (view: 'board' | 'telemetry') => void;
 
+  // Global ticket search
+  searchQuery: string;
+  setSearchQuery: (q: string) => void;
+
   // Telemetry slice
   telemetryRange: '7d' | '30d' | '90d' | 'all';
   telemetrySummary: TelemetrySummary | null;
@@ -1551,7 +1555,7 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Project actions
   setProjects: (projects) => set({ projects }),
-  setActiveProjectId: (id) => set({ activeProjectId: id }),
+  setActiveProjectId: (id) => set({ activeProjectId: id, searchQuery: '' }),
   setShowOpenProjectDialog: (show) => set({ showOpenProjectDialog: show }),
 
   refreshProjects: async () => {
@@ -1857,6 +1861,10 @@ export const useAppStore = create<AppState>((set, get) => ({
   // View navigation
   mainView: 'board',
   setMainView: (view) => set({ mainView: view }),
+
+  // Global ticket search
+  searchQuery: '',
+  setSearchQuery: (q) => set({ searchQuery: q }),
 
   // Telemetry slice
   telemetryRange: '30d',
