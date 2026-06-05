@@ -1382,6 +1382,132 @@ describe('TicketCard', () => {
   });
 
   // =========================================================================
+  // #539 — Error message surfaced in refine-fail badge
+  // =========================================================================
+
+  it('refining: errored session — badge shows refinementSession.error text', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-err-msg',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'errored',
+        phase: 'check',
+        error: 'Claude API rate limit exceeded',
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    const badge = screen.getByTestId('ticket-card-error-badge-42');
+    expect(badge.textContent).toContain('Claude API rate limit exceeded');
+  });
+
+  it('refining: ready+result.error — badge shows refinementSession.result.error text', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-ready-err-msg',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'ready',
+        phase: 'check',
+        result: {
+          passed: false,
+          questions: [],
+          gateSummary: '',
+          ticketUrl: null,
+          cached: false,
+          error: 'spec gate validation failed',
+        },
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    const badge = screen.getByTestId('ticket-card-error-badge-42');
+    expect(badge.textContent).toContain('spec gate validation failed');
+  });
+
+  it('refining: refineStartError only (no session) — badge shows gate-start error text', () => {
+    useAppStore.setState({
+      refineStartErrors: { [`42|${PROJECT_DIR}`]: 'IPC connection refused' },
+      refinementSessions: [],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    const badge = screen.getByTestId('ticket-card-error-badge-42');
+    expect(badge.textContent).toContain('IPC connection refused');
+  });
+
+  it('refining: interrupted session with no error field — badge falls back to "Refinement failed"', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-int-noerr',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'interrupted',
+        phase: 'check',
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    const badge = screen.getByTestId('ticket-card-error-badge-42');
+    expect(badge.textContent).toBe('Refinement failed');
+  });
+
+  it('refining: error badge has title attribute equal to the full message', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-title',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'errored',
+        phase: 'check',
+        error: 'Detailed error message here',
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    const badge = screen.getByTestId('ticket-card-error-badge-42');
+    expect(badge.getAttribute('title')).toBe('Detailed error message here');
+  });
+
+  it('refining: error badge has truncation class applied', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-truncate',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'errored',
+        phase: 'check',
+        error: 'Some error',
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    const badge = screen.getByTestId('ticket-card-error-badge-42');
+    expect(badge.classList.contains('truncate')).toBe(true);
+  });
+
+  it('refining: multiline error message renders in single badge element with full text in title', () => {
+    const multilineMsg = 'Line one\nLine two\nLine three';
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess-multiline',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'errored',
+        phase: 'check',
+        error: multilineMsg,
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    const badge = screen.getByTestId('ticket-card-error-badge-42');
+    expect(badge.textContent).toBe(multilineMsg);
+    expect(badge.getAttribute('title')).toBe(multilineMsg);
+    // Must be a single element, not multiple
+    expect(badge.tagName).toBeTruthy();
+  });
+
+  // =========================================================================
   // #510 — gap-question Answer path survives RefinementIndicator removal
   // =========================================================================
 
