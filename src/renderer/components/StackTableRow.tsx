@@ -45,13 +45,14 @@ export function StackTableRow({
   showProject?: boolean;
   columnWidths?: Record<string, number>;
 }) {
-  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation } = useAppStore();
+  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation, recheckCompletedStack } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
   const [duration, setDuration] = useState(() =>
     getStackDuration(stack.created_at, stack.updated_at, stack.status),
   );
   const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
+  const [recheckMessage, setRecheckMessage] = useState<string | null>(null);
   const rowRef = useRef<HTMLTableRowElement>(null);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -126,6 +127,20 @@ export function StackTableRow({
       await resumeStackWithContinuation(stack.id, true);
     } catch (err) {
       alert(`Failed to resume: ${err}`);
+    }
+  };
+
+  const handleRecheckCompleted = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRecheckMessage(null);
+    try {
+      const result = await recheckCompletedStack(stack.id);
+      if (result.outcome === 'container_gone') {
+        setRecheckMessage('Container not running');
+        setTimeout(() => setRecheckMessage(null), 4000);
+      }
+    } catch (err) {
+      alert(`Failed to re-check: ${err}`);
     }
   };
 
@@ -233,6 +248,21 @@ export function StackTableRow({
               >
                 ▶ Resume
               </button>
+            )}
+            {stack.status === 'completed' && (
+              <>
+                <button
+                  onClick={handleRecheckCompleted}
+                  className="text-[10px] font-medium px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20 hover:bg-orange-500/20 transition-colors"
+                  data-testid={`row-recheck-${stack.id}`}
+                  title="Check if this stack was token-limited and can be resumed"
+                >
+                  Check Resume
+                </button>
+                {recheckMessage && (
+                  <span className="text-[10px] text-sandstorm-muted">{recheckMessage}</span>
+                )}
+              </>
             )}
             {stack.status === 'needs_human' && (
               <button

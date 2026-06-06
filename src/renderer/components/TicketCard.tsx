@@ -25,6 +25,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     refinementSessions,
     retryRefinementForTicket,
     resumeStackWithContinuation,
+    recheckCompletedStack,
     startStackForTicket,
     stackCreateErrors,
     stackCreateInFlight,
@@ -49,6 +50,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const [showEarlyDiscardDialog, setShowEarlyDiscardDialog] = useState(false);
   const [showMoveToBacklogDialog, setShowMoveToBacklogDialog] = useState(false);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
+  const [recheckMessage, setRecheckMessage] = useState<string | null>(null);
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
   const stackKey = `${ticket.ticket_id}|${ticket.project_dir}`;
@@ -95,6 +97,20 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const handleResume = () => {
     if (stack) {
       void resumeStackWithContinuation(stack.id, true);
+    }
+  };
+
+  const handleRecheckCompleted = async () => {
+    if (!stack) return;
+    setRecheckMessage(null);
+    try {
+      const result = await recheckCompletedStack(stack.id);
+      if (result.outcome === 'container_gone') {
+        setRecheckMessage('Container not running — cannot verify log.');
+        setTimeout(() => setRecheckMessage(null), 4000);
+      }
+    } catch (err) {
+      alert(`Failed to re-check: ${err}`);
     }
   };
 
@@ -350,6 +366,20 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
             >
               Resume
             </button>
+          )}
+          {stack && stack.status === 'completed' && (
+            <div>
+              <button
+                onClick={handleRecheckCompleted}
+                className="w-full text-xs py-1 px-3 rounded-md bg-orange-500/10 text-orange-400 border border-orange-500/20 hover:bg-orange-500/20 transition-colors font-medium"
+                data-testid={`ticket-card-recheck-${ticket.ticket_id}`}
+              >
+                Check for Resume
+              </button>
+              {recheckMessage && (
+                <p className="mt-1 text-xs text-sandstorm-muted">{recheckMessage}</p>
+              )}
+            </div>
           )}
           {stack && stack.status === 'needs_human' && (
             <button
