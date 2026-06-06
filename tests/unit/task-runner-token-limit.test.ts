@@ -1,6 +1,7 @@
-import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'fs'
+import { describe, it, expect, beforeAll } from 'vitest'
+import { readFileSync, existsSync } from 'fs'
 import { resolve } from 'path'
+import { spawnSync } from 'child_process'
 
 const taskRunnerPath = resolve(__dirname, '../../sandstorm-cli/docker/task-runner.sh')
 const taskRunner = readFileSync(taskRunnerPath, 'utf-8')
@@ -22,6 +23,14 @@ describe('task-runner.sh token limit detection', () => {
     it('returns 0 on detection (success), 1 otherwise', () => {
       expect(taskRunner).toContain('return 0')
       expect(taskRunner).toContain('return 1')
+    })
+
+    it('filters out JSON lines before matching to prevent false positives', () => {
+      // Lines starting with '{' are stream-json objects; the real CLI notice is plain-text.
+      // The brace char is built via printf hex escape to avoid a literal '{' that would
+      // confuse naive brace-counting tools (see the existing no-local-outside-scope test).
+      expect(taskRunner).toContain("grep -vE \"^[[:space:]]*${open_brace}\"")
+      expect(taskRunner).toContain("printf '\\x7b'")  // hex escape for '{'
     })
   })
 
@@ -90,4 +99,70 @@ describe('task-runner.sh token limit detection', () => {
       expect(taskRunner).toContain('SESSION TOKEN LIMIT')
     })
   })
+
+  describe('exit-code gate removal', () => {
+    it('initial execution: token limit check precedes the exit-code failure block', () => {
+      // The unconditional check must come before the standalone failure-path
+      // "if [ $EXIT_CODE -ne 0 ]; then" (not the resume-fallback compound which
+      // also tests EXIT_CODE but with an additional && guard).
+      const execStart = taskRunner.indexOf('Starting initial execution pass')
+      const stopAskMarker = taskRunner.indexOf('Execution pass 1 complete, checking for STOP_AND_ASK')
+      const section = taskRunner.slice(execStart, stopAskMarker)
+      const tokenLimitIdx = section.indexOf('check_for_token_limit /tmp/claude-raw.log')
+      // Search for the standalone failure block (not the resume-fallback compound condition)
+      const exitCodeIdx = section.indexOf('if [ $EXIT_CODE -ne 0 ]; then')
+      expect(tokenLimitIdx).toBeGreaterThan(-1)
+      expect(exitCodeIdx).toBeGreaterThan(-1)
+      expect(tokenLimitIdx).toBeLessThan(exitCodeIdx)
+    })
+
+    it('review-feedback fix pass: token limit check not gated on fix_exit being non-zero', () => {
+      // Old guard was: "if [ $fix_exit -ne 0 ] && check_for_token_limit"
+      expect(taskRunner).not.toContain('fix_exit -ne 0 ] && check_for_token_limit')
+    })
+
+    it('verify fix pass: token limit check not gated on verify_fix_exit being non-zero', () => {
+      // Old guard was: "if [ $verify_fix_exit -ne 0 ] && check_for_token_limit"
+      expect(taskRunner).not.toContain('verify_fix_exit -ne 0 ] && check_for_token_limit')
+    })
+
+    it('review PASS branch also checks review raw log for token limit', () => {
+      // A token-limited review that emits REVIEW_PASS must still be caught.
+      // Verify both REVIEW_PASS-branch and REVIEW_FAIL-branch contain the check.
+      const reviewPassSection = taskRunner.slice(
+        taskRunner.indexOf('Save numbered review verdict'),
+        taskRunner.indexOf('REVIEW_PASSED=1'),
+      )
+      expect(reviewPassSection).toContain('check_for_token_limit /tmp/claude-review-raw.log')
+    })
+  })
 })
+
+// ---------------------------------------------------------------------------
+// Behavioral smoke test (bash-level) — sources check_for_token_limit from
+// task-runner.sh and exercises it with synthetic logs.
+// ---------------------------------------------------------------------------
+
+const smokeSh = resolve(__dirname, 'task-runner-token-limit-smoke.sh')
+const hasBash = spawnSync('which', ['bash'], { encoding: 'utf-8' }).status === 0
+
+describe.skipIf(!hasBash || !existsSync(smokeSh))(
+  'token limit behavioral smoke test (bash-level)',
+  () => {
+    it(
+      'detects plain-text limit lines and ignores JSON-embedded ones',
+      () => {
+        const result = spawnSync('bash', [smokeSh], {
+          encoding: 'utf-8',
+          timeout: 15_000,
+        })
+        if (result.status !== 0) {
+          console.error('smoke test stdout:', result.stdout)
+          console.error('smoke test stderr:', result.stderr)
+        }
+        expect(result.status).toBe(0)
+      },
+      15_000,
+    )
+  },
+)

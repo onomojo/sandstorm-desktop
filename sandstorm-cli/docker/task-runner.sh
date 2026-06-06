@@ -56,10 +56,15 @@ check_for_stop_and_ask() {
 # Scans the given log file (default: /tmp/claude-raw.log) for the case-insensitive
 # substring "You've hit your session limit". Structured for future expansion:
 # add additional confirmed limit patterns to the grep list below.
+# Only matches on plain-text (non-JSON) lines — lines starting with '{' are
+# stream-json objects (agent output) and are excluded to prevent false positives
+# when the phrase appears inside agent-authored content.
 # Returns 0 if token limit detected, 1 otherwise.
 check_for_token_limit() {
   local log_file="${1:-/tmp/claude-raw.log}"
-  if grep -qi "You've hit your session limit" "$log_file" 2>/dev/null; then
+  local open_brace
+  open_brace=$(printf '\x7b')  # hex 7b = open-brace char, avoids literal in source
+  if grep -vE "^[[:space:]]*${open_brace}" "$log_file" 2>/dev/null | grep -qi "You've hit your session limit"; then
     log_loop "Session token limit detected"
     return 0
   fi
@@ -507,22 +512,25 @@ while true; do
     # Capture execution summary (last 50 lines of task log)
     tail -50 /tmp/claude-task.log 2>/dev/null > /tmp/claude-execution-summary.txt
 
+    # Token limit check runs unconditionally — catches exit-0 limit hits where
+    # the CLI prints the message but exits 0 (the originally-reported bug).
+    if check_for_token_limit /tmp/claude-raw.log; then
+      log_loop "Session token limit reached during initial execution — marking token_limited"
+      rm -f /tmp/claude-task-prompt.txt
+      echo 1 > /tmp/claude-task.exit
+      echo "token_limited" > /tmp/claude-task.status
+      rm -f /tmp/claude-task.pid
+      echo ""
+      echo "=========================================="
+      echo "  Task finished — SESSION TOKEN LIMIT"
+      echo "=========================================="
+      echo ""
+      echo "ready" > /tmp/claude-ready
+      echo "Waiting for tasks..."
+      continue
+    fi
+
     if [ $EXIT_CODE -ne 0 ]; then
-      if check_for_token_limit /tmp/claude-raw.log; then
-        log_loop "Session token limit reached during initial execution — marking token_limited"
-        rm -f /tmp/claude-task-prompt.txt
-        echo 1 > /tmp/claude-task.exit
-        echo "token_limited" > /tmp/claude-task.status
-        rm -f /tmp/claude-task.pid
-        echo ""
-        echo "=========================================="
-        echo "  Task finished — SESSION TOKEN LIMIT"
-        echo "=========================================="
-        echo ""
-        echo "ready" > /tmp/claude-ready
-        echo "Waiting for tasks..."
-        continue
-      fi
       log_loop "Initial execution failed (exit $EXIT_CODE), skipping review loop"
       rm -f /tmp/claude-task-prompt.txt
       echo $EXIT_CODE > /tmp/claude-task.exit
@@ -627,6 +635,13 @@ while true; do
           echo "review_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           # Save numbered review verdict
           echo "REVIEW_PASS" > "/tmp/claude-review-verdict-${TOTAL_REVIEW_ITERATIONS}.txt"
+          # Check review raw log even on REVIEW_PASS — a token-limited run can still
+          # emit a REVIEW_PASS verdict if it cut off mid-review
+          if check_for_token_limit /tmp/claude-review-raw.log; then
+            TASK_TOKEN_LIMITED=1
+            TASK_FAILED=1
+            break
+          fi
           REVIEW_PASSED=1
           CONSECUTIVE_REVIEW_FAILS=0
           log_loop "Review passed at inner iteration $INNER_ITERATION"
@@ -718,8 +733,9 @@ while true; do
             tail -50 /tmp/claude-task.log 2>/dev/null
           } > "/tmp/claude-execute-output-${TOTAL_REVIEW_ITERATIONS}.txt" 2>/dev/null || true
 
-          # Token limit takes priority over STOP_AND_ASK and general failures
-          if [ $fix_exit -ne 0 ] && check_for_token_limit /tmp/claude-raw.log; then
+          # Token limit takes priority over STOP_AND_ASK and general failures.
+          # Check unconditionally — the CLI may exit 0 even when the limit is hit.
+          if check_for_token_limit /tmp/claude-raw.log; then
             TASK_TOKEN_LIMITED=1
             TASK_FAILED=1
             break
@@ -866,8 +882,9 @@ while true; do
         echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
         rm -f "$local_verify_fix"
 
-        # Token limit takes priority over STOP_AND_ASK and general failures
-        if [ $verify_fix_exit -ne 0 ] && check_for_token_limit /tmp/claude-raw.log; then
+        # Token limit takes priority over STOP_AND_ASK and general failures.
+        # Check unconditionally — the CLI may exit 0 even when the limit is hit.
+        if check_for_token_limit /tmp/claude-raw.log; then
           TASK_TOKEN_LIMITED=1
           TASK_FAILED=1
           break
