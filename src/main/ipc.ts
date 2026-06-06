@@ -940,6 +940,36 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return registry.getEffectiveModels(projectDir);
   });
 
+  // --- Backend Settings ---
+
+  ipcMain.handle('backendSettings:getGlobal', () => {
+    return registry.getGlobalBackendSettings();
+  });
+
+  ipcMain.handle('backendSettings:setGlobal', (_event, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => {
+    registry.setGlobalBackendSettings(settings);
+  });
+
+  ipcMain.handle('backendSettings:getProject', (_event, projectDir: string) => {
+    return registry.getProjectBackendSettings(projectDir);
+  });
+
+  ipcMain.handle('backendSettings:setProject', (_event, projectDir: string, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => {
+    registry.setProjectBackendSettings(projectDir, settings);
+  });
+
+  ipcMain.handle('backendSettings:getEffective', (_event, projectDir: string, surface: 'inner' | 'outer') => {
+    return registry.getEffectiveBackend(projectDir, surface);
+  });
+
+  ipcMain.handle('backendSettings:setSecret', (_event, key: string, surface: 'inner' | 'outer', name: string, value: string) => {
+    registry.setBackendSecret(key, surface, name, value);
+  });
+
+  ipcMain.handle('backendSettings:secretStatus', (_event, key: string, surface: 'inner' | 'outer') => {
+    return { set: registry.hasBackendSecret(key, surface) };
+  });
+
   // --- Session Monitor ---
 
   ipcMain.handle('session:getState', () => {

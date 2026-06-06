@@ -141,6 +141,15 @@ export interface SandstormAPI {
     removeProject: (projectDir: string) => Promise<void>;
     getEffective: (projectDir: string) => Promise<{ inner_model: string; outer_model: string }>;
   };
+  backendSettings: {
+    getGlobal: () => Promise<{ inner_backend: string; outer_backend: string; inner_provider: string | null; inner_model: string | null; outer_provider: string | null; outer_model: string | null }>;
+    setGlobal: (settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => Promise<void>;
+    getProject: (projectDir: string) => Promise<{ inner_backend: string; outer_backend: string; inner_provider: string | null; inner_model: string | null; outer_provider: string | null; outer_model: string | null } | null>;
+    setProject: (projectDir: string, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => Promise<void>;
+    getEffective: (projectDir: string, surface: 'inner' | 'outer') => Promise<{ backend: 'claude' | 'opencode'; provider?: string; model?: string }>;
+    setSecret: (key: string, surface: 'inner' | 'outer', name: string, value: string) => Promise<void>;
+    secretStatus: (key: string, surface: 'inner' | 'outer') => Promise<{ set: boolean }>;
+  };
   projectTicketConfig: {
     get: (projectDir: string) => Promise<{
       provider: 'github' | 'jira';
@@ -363,6 +372,15 @@ const api: SandstormAPI = {
     setProject: (projectDir, settings) => ipcRenderer.invoke('modelSettings:setProject', projectDir, settings),
     removeProject: (projectDir) => ipcRenderer.invoke('modelSettings:removeProject', projectDir),
     getEffective: (projectDir) => ipcRenderer.invoke('modelSettings:getEffective', projectDir),
+  },
+  backendSettings: {
+    getGlobal: () => ipcRenderer.invoke('backendSettings:getGlobal'),
+    setGlobal: (settings) => ipcRenderer.invoke('backendSettings:setGlobal', settings),
+    getProject: (projectDir) => ipcRenderer.invoke('backendSettings:getProject', projectDir),
+    setProject: (projectDir, settings) => ipcRenderer.invoke('backendSettings:setProject', projectDir, settings),
+    getEffective: (projectDir, surface) => ipcRenderer.invoke('backendSettings:getEffective', projectDir, surface),
+    setSecret: (key, surface, name, value) => ipcRenderer.invoke('backendSettings:setSecret', key, surface, name, value),
+    secretStatus: (key, surface) => ipcRenderer.invoke('backendSettings:secretStatus', key, surface),
   },
   projectTicketConfig: {
     get: (projectDir) => ipcRenderer.invoke('projectTicketConfig:get', projectDir),

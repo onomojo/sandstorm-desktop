@@ -61,6 +61,13 @@ const {
     setDarkFactoryEnabled: vi.fn(),
     getDb: vi.fn().mockReturnValue({}),
     getStepWeightsByTicket: vi.fn().mockReturnValue([]),
+    getGlobalBackendSettings: vi.fn().mockReturnValue({ inner_backend: 'claude', outer_backend: 'claude', inner_provider: null, inner_model: null, outer_provider: null, outer_model: null }),
+    setGlobalBackendSettings: vi.fn(),
+    getProjectBackendSettings: vi.fn().mockReturnValue(null),
+    setProjectBackendSettings: vi.fn(),
+    getEffectiveBackend: vi.fn().mockReturnValue({ backend: 'claude' }),
+    setBackendSecret: vi.fn(),
+    hasBackendSecret: vi.fn().mockReturnValue(false),
   };
 
   const mockStackManager = {
@@ -2178,6 +2185,13 @@ describe('IPC Handlers', () => {
       'modelSettings:setProject',
       'modelSettings:removeProject',
       'modelSettings:getEffective',
+      'backendSettings:getGlobal',
+      'backendSettings:setGlobal',
+      'backendSettings:getProject',
+      'backendSettings:setProject',
+      'backendSettings:getEffective',
+      'backendSettings:setSecret',
+      'backendSettings:secretStatus',
       'runtime:available',
       'session:getState',
       'session:getSettings',
@@ -2348,6 +2362,97 @@ describe('IPC Handlers', () => {
       await expect(
         invokeHandler('ticket-board:delete', { ticketId: '', projectDir: '/proj' })
       ).rejects.toThrow(/ticketId is required/);
+    });
+  });
+
+  // =========================================================================
+  // Backend Settings IPC handlers
+  // =========================================================================
+  describe('backendSettings:getGlobal', () => {
+    it('returns registry.getGlobalBackendSettings()', async () => {
+      const expected = { inner_backend: 'opencode', outer_backend: 'claude', inner_provider: 'anthropic', inner_model: 'claude-3-5-sonnet', outer_provider: null, outer_model: null };
+      mockRegistry.getGlobalBackendSettings.mockReturnValueOnce(expected);
+      const result = await invokeHandler('backendSettings:getGlobal');
+      expect(mockRegistry.getGlobalBackendSettings).toHaveBeenCalled();
+      expect(result).toEqual(expected);
+    });
+  });
+
+  describe('backendSettings:setGlobal', () => {
+    it('calls registry.setGlobalBackendSettings with the provided settings', async () => {
+      const settings = { inner_backend: 'opencode', outer_backend: 'claude' };
+      await invokeHandler('backendSettings:setGlobal', settings);
+      expect(mockRegistry.setGlobalBackendSettings).toHaveBeenCalledWith(settings);
+    });
+  });
+
+  describe('backendSettings:getProject', () => {
+    it('returns null when no project override exists', async () => {
+      mockRegistry.getProjectBackendSettings.mockReturnValueOnce(null);
+      const result = await invokeHandler('backendSettings:getProject', '/proj');
+      expect(mockRegistry.getProjectBackendSettings).toHaveBeenCalledWith('/proj');
+      expect(result).toBeNull();
+    });
+
+    it('returns project settings when present', async () => {
+      const expected = { inner_backend: 'opencode', outer_backend: 'global', inner_provider: null, inner_model: null, outer_provider: null, outer_model: null };
+      mockRegistry.getProjectBackendSettings.mockReturnValueOnce(expected);
+      const result = await invokeHandler('backendSettings:getProject', '/proj');
+      expect(result).toEqual(expected);
+    });
+  });
+
+  describe('backendSettings:setProject', () => {
+    it('calls registry.setProjectBackendSettings with projectDir and settings', async () => {
+      const settings = { inner_backend: 'opencode' };
+      await invokeHandler('backendSettings:setProject', '/proj', settings);
+      expect(mockRegistry.setProjectBackendSettings).toHaveBeenCalledWith('/proj', settings);
+    });
+  });
+
+  describe('backendSettings:getEffective', () => {
+    it('returns effective backend for inner surface', async () => {
+      mockRegistry.getEffectiveBackend.mockReturnValueOnce({ backend: 'opencode', provider: 'anthropic', model: 'claude-3-5-sonnet' });
+      const result = await invokeHandler('backendSettings:getEffective', '/proj', 'inner');
+      expect(mockRegistry.getEffectiveBackend).toHaveBeenCalledWith('/proj', 'inner');
+      expect(result).toEqual({ backend: 'opencode', provider: 'anthropic', model: 'claude-3-5-sonnet' });
+    });
+
+    it('returns effective backend for outer surface', async () => {
+      mockRegistry.getEffectiveBackend.mockReturnValueOnce({ backend: 'claude' });
+      const result = await invokeHandler('backendSettings:getEffective', '/proj', 'outer');
+      expect(mockRegistry.getEffectiveBackend).toHaveBeenCalledWith('/proj', 'outer');
+      expect(result).toEqual({ backend: 'claude' });
+    });
+  });
+
+  describe('backendSettings:setSecret', () => {
+    it('calls registry.setBackendSecret and returns undefined (write-only)', async () => {
+      const result = await invokeHandler('backendSettings:setSecret', 'global', 'inner', 'api_key', 'sk-test');
+      expect(mockRegistry.setBackendSecret).toHaveBeenCalledWith('global', 'inner', 'api_key', 'sk-test');
+      expect(result).toBeUndefined();
+    });
+  });
+
+  describe('backendSettings:secretStatus', () => {
+    it('returns { set: false } when no secret stored', async () => {
+      mockRegistry.hasBackendSecret.mockReturnValueOnce(false);
+      const result = await invokeHandler('backendSettings:secretStatus', 'global', 'inner');
+      expect(mockRegistry.hasBackendSecret).toHaveBeenCalledWith('global', 'inner');
+      expect(result).toEqual({ set: false });
+    });
+
+    it('returns { set: true } when secret exists', async () => {
+      mockRegistry.hasBackendSecret.mockReturnValueOnce(true);
+      const result = await invokeHandler('backendSettings:secretStatus', 'global', 'inner');
+      expect(result).toEqual({ set: true });
+    });
+
+    it('does not expose the secret value — only returns { set: boolean }', async () => {
+      mockRegistry.hasBackendSecret.mockReturnValueOnce(true);
+      const result = await invokeHandler('backendSettings:secretStatus', 'global', 'inner') as Record<string, unknown>;
+      expect(Object.keys(result)).toEqual(['set']);
+      expect(result['set']).toBe(true);
     });
   });
 });
