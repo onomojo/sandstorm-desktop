@@ -38,7 +38,6 @@ export default function App() {
     dockerConnected,
     refreshStacks,
     refreshProjects,
-    refreshStackHistory,
     refreshMetrics,
     refreshSessionState,
     selectStack,
@@ -174,7 +173,6 @@ export default function App() {
   useEffect(() => {
     refreshProjects();
     refreshStacks();
-    refreshStackHistory();
     refreshMetrics();
 
     const pollInterval = dockerConnected
@@ -199,7 +197,6 @@ export default function App() {
     );
     const unsubStacksUpdated = window.sandstorm.on('stacks:updated', () => {
       refreshStacks();
-      refreshStackHistory();
       const state = useAppStore.getState();
       const project = state.activeProject();
       if (project) {
@@ -215,7 +212,7 @@ export default function App() {
       unsubNavigate();
       unsubStacksUpdated();
     };
-  }, [dockerConnected, refreshStacks, refreshProjects, refreshStackHistory, refreshMetrics, selectStack]);
+  }, [dockerConnected, refreshStacks, refreshProjects, refreshMetrics, selectStack]);
 
   return (
     <div className="h-screen flex flex-col bg-sandstorm-bg text-sandstorm-text">

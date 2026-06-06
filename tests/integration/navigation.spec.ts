@@ -1,37 +1,6 @@
 import { test, expect } from './fixtures';
 
 test.describe('Navigation', () => {
-  test('can switch between Active and History tabs on the KanbanBoard', async ({ mainWindow }) => {
-    await mainWindow.waitForSelector('[data-testid="tab-active"]', { timeout: 15000 });
-
-    // Click History tab
-    await mainWindow.click('[data-testid="tab-history"]');
-    await mainWindow.waitForTimeout(500);
-
-    // Click back to Active tab
-    await mainWindow.click('[data-testid="tab-active"]');
-    await mainWindow.waitForTimeout(500);
-
-    // Both tabs remain visible and functional after switching
-    await expect(mainWindow.locator('[data-testid="tab-active"]')).toBeVisible();
-    await expect(mainWindow.locator('[data-testid="tab-history"]')).toBeVisible();
-  });
-
-  test('app remains stable after repeated tab interactions', async ({ mainWindow }) => {
-    await mainWindow.waitForSelector('[data-testid="tab-active"]', { timeout: 15000 });
-
-    // Toggle Active/History tabs multiple times to verify stability.
-    for (let i = 0; i < 3; i++) {
-      await mainWindow.click('[data-testid="tab-history"]');
-      await mainWindow.waitForTimeout(300);
-      await mainWindow.click('[data-testid="tab-active"]');
-      await mainWindow.waitForTimeout(300);
-    }
-
-    // App should still be responsive after repeated tab toggles.
-    await expect(mainWindow.locator('[data-testid="top-nav"]')).toBeVisible();
-  });
-
   test('TopNav Add project button opens the Open Project dialog', async ({ mainWindow }) => {
     await mainWindow.waitForSelector('[data-testid="workspace-switcher-btn"]', { timeout: 15000 });
     await mainWindow.click('[data-testid="workspace-switcher-btn"]');

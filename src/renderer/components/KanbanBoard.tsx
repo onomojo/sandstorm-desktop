@@ -22,7 +22,6 @@ const COLUMNS: { id: KanbanColumn; label: string; colorClass: string }[] = [
 
 const RECENT_MERGED_LIMIT = 10;
 
-type BoardTab = 'active' | 'history';
 type MergedMode = 'recent' | 'all';
 
 export function KanbanBoard() {
@@ -38,7 +37,6 @@ export function KanbanBoard() {
     searchQuery,
   } = useAppStore();
 
-  const [activeTab, setActiveTab] = useState<BoardTab>('active');
   const [mergedMode, setMergedMode] = useState<MergedMode>('recent');
 
   const project = activeProject();
@@ -58,69 +56,31 @@ export function KanbanBoard() {
 
   return (
     <div className="flex-1 flex flex-col overflow-hidden" data-testid="kanban-board">
-      {/* Board header — always rendered */}
-      <div className="flex items-center justify-between px-6 py-3 border-b border-sandstorm-border shrink-0">
-        {/* Left: project name + tabs */}
-        <div className="flex items-center gap-3">
-          {project && (
-            <h1 className="text-base font-semibold text-sandstorm-text">{project.name}</h1>
-          )}
-          <div className="flex items-center gap-1">
-            <button
-              onClick={() => setActiveTab('active')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                activeTab === 'active'
-                  ? 'bg-sandstorm-surface text-sandstorm-text'
-                  : 'text-sandstorm-muted hover:text-sandstorm-text'
-              }`}
-              data-testid="tab-active"
-            >
-              Active
-            </button>
-            <button
-              onClick={() => setActiveTab('history')}
-              className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-colors ${
-                activeTab === 'history'
-                  ? 'bg-sandstorm-surface text-sandstorm-text'
-                  : 'text-sandstorm-muted hover:text-sandstorm-text'
-              }`}
-              data-testid="tab-history"
-            >
-              History
-            </button>
-          </div>
-          {project && (
-            <>
-              {boardTicketsLoading && (
-                <span className="text-xs text-sandstorm-muted animate-pulse">Refreshing…</span>
-              )}
-              {boardTicketsError && !boardTicketsLoading && (
-                <span className="text-xs text-red-400" data-testid="board-tickets-error">{boardTicketsError}</span>
-              )}
-              {moveTicketColumnError && (
-                <button
-                  onClick={clearMoveTicketColumnError}
-                  className="text-xs text-red-400 hover:text-red-300 underline decoration-dotted"
-                  data-testid="move-ticket-column-error"
-                  title={moveTicketColumnError}
-                >
-                  Failed to update ticket column — click to dismiss
-                </button>
-              )}
-            </>
-          )}
-        </div>
-
-      </div>
-
       {/* Board content */}
       <div className="flex-1 overflow-hidden flex flex-col" data-testid="kanban-board-content">
+        {/* Inline status banner */}
+        {(boardTicketsLoading || boardTicketsError || moveTicketColumnError) && (
+          <div className="flex items-center gap-3 px-6 py-2 border-b border-sandstorm-border shrink-0">
+            {boardTicketsLoading && (
+              <span className="text-xs text-sandstorm-muted animate-pulse">Refreshing…</span>
+            )}
+            {boardTicketsError && !boardTicketsLoading && (
+              <span className="text-xs text-red-400" data-testid="board-tickets-error">{boardTicketsError}</span>
+            )}
+            {moveTicketColumnError && (
+              <button
+                onClick={clearMoveTicketColumnError}
+                className="text-xs text-red-400 hover:text-red-300 underline decoration-dotted"
+                data-testid="move-ticket-column-error"
+                title={moveTicketColumnError}
+              >
+                Failed to update ticket column — click to dismiss
+              </button>
+            )}
+          </div>
+        )}
         {!project ? (
           <div className="flex-1 flex items-center justify-center text-sandstorm-muted text-sm" data-testid="kanban-board-no-project">
-            No stacks yet
-          </div>
-        ) : activeTab === 'history' ? (
-          <div className="flex-1 flex items-center justify-center text-sandstorm-muted text-sm">
             No stacks yet
           </div>
         ) : (

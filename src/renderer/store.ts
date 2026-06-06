@@ -291,24 +291,6 @@ export interface StackMetrics {
   taskMetrics: TaskMetrics;
 }
 
-export interface StackHistoryRecord {
-  id: number;
-  stack_id: string;
-  project: string;
-  project_dir: string;
-  ticket: string | null;
-  branch: string | null;
-  description: string | null;
-  final_status: 'completed' | 'failed' | 'torn_down';
-  error: string | null;
-  runtime: 'docker' | 'podman';
-  task_prompt: string | null;
-  task_history: string | null;
-  created_at: string;
-  finished_at: string;
-  duration_seconds: number;
-}
-
 /**
  * Renderer-side mirror of `ScheduleAction` from src/main/scheduler/types.ts.
  * This PR only ships `run-script`; follow-up tickets add more kinds.
@@ -415,7 +397,6 @@ interface AppState {
 
   // Stacks
   stacks: Stack[];
-  stackHistory: StackHistoryRecord[];
   selectedStackId: string | null;
   showRefineTicketDialog: boolean;
   /**
@@ -626,7 +607,6 @@ interface AppState {
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
   refreshStacks: () => Promise<void>;
-  refreshStackHistory: () => Promise<void>;
   refreshMetrics: () => Promise<void>;
   refreshTokenUsage: () => Promise<void>;
   refreshRateLimitState: () => Promise<void>;
@@ -634,7 +614,6 @@ interface AppState {
 
   // Derived
   filteredStacks: () => Stack[];
-  filteredStackHistory: () => StackHistoryRecord[];
   activeProject: () => Project | undefined;
 
   // View navigation
@@ -706,7 +685,6 @@ declare global {
         teardown: (id: string) => Promise<void>;
         stop: (id: string) => Promise<void>;
         start: (id: string) => Promise<void>;
-        history: () => Promise<StackHistoryRecord[]>;
         setPr: (id: string, prUrl: string, prNumber: number) => Promise<void>;
         detectStale: () => Promise<StaleWorkspace[]>;
         cleanupStale: (workspacePaths: string[]) => Promise<CleanupResult[]>;
@@ -961,7 +939,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   // Stacks
   stacks: [],
-  stackHistory: [],
   stackMetrics: {},
   selectedStackId: null,
   showRefineTicketDialog: false,
@@ -1779,15 +1756,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     }
   },
 
-  refreshStackHistory: async () => {
-    try {
-      const stackHistory = await window.sandstorm.stacks.history();
-      set({ stackHistory });
-    } catch (err) {
-      set({ error: `Failed to refresh stack history: ${err}` });
-    }
-  },
-
   refreshMetrics: async () => {
     try {
       const { stacks, dockerConnected } = get();
@@ -1920,14 +1888,6 @@ export const useAppStore = create<AppState>((set, get) => ({
     const project = projects.find((p) => p.id === activeProjectId);
     if (!project) return stacks;
     return stacks.filter((s) => s.project_dir === project.directory);
-  },
-
-  filteredStackHistory: () => {
-    const { stackHistory, activeProjectId, projects } = get();
-    if (activeProjectId === null) return stackHistory;
-    const project = projects.find((p) => p.id === activeProjectId);
-    if (!project) return stackHistory;
-    return stackHistory.filter((s) => s.project_dir === project.directory);
   },
 
   activeProject: () => {
