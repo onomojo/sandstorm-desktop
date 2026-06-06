@@ -826,13 +826,19 @@ export class StackManager {
       return { outcome: 'container_gone' };
     }
 
-    // Two-stage grep mirrors check_for_token_limit() in task-runner.sh:63-72.
-    // The ^[[:space:]]*{ exclusion prevents JSON lines from producing false positives.
+    // Structured detection mirrors check_for_token_limit() in task-runner.sh:63-72.
+    // Checks JSON lines for rate_limit_event (rejected) or result (is_error:true, api_error_status:429).
+    // Falls back to plain-text grep for legacy/stderr output.
     let grepResult;
     try {
       grepResult = await runtime.exec(container.id, [
         'sh', '-c',
-        "grep -vE '^[[:space:]]*\\{' /tmp/claude-raw.log 2>/dev/null | grep -qi \"You've hit your session limit\"",
+        [
+          "grep -E '^[[:space:]]*\\{' /tmp/claude-raw.log 2>/dev/null",
+          "| jq -c 'select((.type == \"rate_limit_event\" and .rate_limit_info.status == \"rejected\") or (.type == \"result\" and .is_error == true and .api_error_status == 429))' 2>/dev/null",
+          '| grep -q .',
+          "|| grep -vE '^[[:space:]]*\\{' /tmp/claude-raw.log 2>/dev/null | grep -qi \"You've hit your session limit\"",
+        ].join(' '),
       ]);
     } catch {
       return { outcome: 'not_token_limited' };

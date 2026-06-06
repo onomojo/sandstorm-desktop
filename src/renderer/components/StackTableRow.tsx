@@ -138,6 +138,9 @@ export function StackTableRow({
       if (result.outcome === 'container_gone') {
         setRecheckMessage('Container not running');
         setTimeout(() => setRecheckMessage(null), 4000);
+      } else if (result.outcome === 'not_token_limited') {
+        setRecheckMessage('Completed normally');
+        setTimeout(() => setRecheckMessage(null), 4000);
       }
     } catch (err) {
       alert(`Failed to re-check: ${err}`);
@@ -249,15 +252,15 @@ export function StackTableRow({
                 ▶ Resume
               </button>
             )}
-            {stack.status === 'completed' && (
+            {stack.status === 'completed' && stack.latest_task_token_limited && (
               <>
                 <button
                   onClick={handleRecheckCompleted}
                   className="text-[10px] font-medium px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/20 hover:bg-orange-500/20 transition-colors"
-                  data-testid={`row-recheck-${stack.id}`}
-                  title="Check if this stack was token-limited and can be resumed"
+                  data-testid={`row-resume-completed-${stack.id}`}
+                  title="Resume this token-limited stack"
                 >
-                  Check Resume
+                  Resume
                 </button>
                 {recheckMessage && (
                   <span className="text-[10px] text-sandstorm-muted">{recheckMessage}</span>

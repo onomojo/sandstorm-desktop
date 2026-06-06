@@ -53,6 +53,7 @@ export interface Stack {
   updated_at: string;
   current_model: string | null;
   selfheal_continue_used: number;
+  latest_task_token_limited: boolean;
   services: ServiceInfo[];
 }
 

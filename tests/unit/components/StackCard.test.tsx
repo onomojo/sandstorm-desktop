@@ -32,6 +32,7 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     rate_limit_reset_at: null,
     current_model: null,
     selfheal_continue_used: 0,
+    latest_task_token_limited: false,
     services: [],
     ...overrides,
   };
@@ -226,6 +227,79 @@ describe('StackCard', () => {
     fireEvent.click(screen.getByTestId('card-resume-paused2'));
 
     expect(resumeFn).toHaveBeenCalledWith('paused2', true);
+  });
+
+  it('shows Resume button for completed stacks when latest_task_token_limited is true', () => {
+    render(
+      <StackCard
+        stack={makeStack({ id: 'token-limited', status: 'completed', latest_task_token_limited: true })}
+      />
+    );
+    expect(screen.getByTestId('card-resume-completed-token-limited')).toBeDefined();
+  });
+
+  it('does not show Resume button for completed stacks when latest_task_token_limited is false', () => {
+    render(
+      <StackCard
+        stack={makeStack({ id: 'normal-complete', status: 'completed', latest_task_token_limited: false })}
+      />
+    );
+    expect(screen.queryByTestId('card-resume-completed-normal-complete')).toBeNull();
+  });
+
+  it('does not show Resume button for non-completed stacks even when latest_task_token_limited is true', () => {
+    render(
+      <StackCard
+        stack={makeStack({ id: 'running-tl', status: 'running', latest_task_token_limited: true })}
+      />
+    );
+    expect(screen.queryByTestId('card-resume-completed-running-tl')).toBeNull();
+  });
+
+  it('calls recheckCompletedStack when completed Resume button is clicked', async () => {
+    const recheckFn = vi.fn().mockResolvedValue({ outcome: 'resuming_with_session' });
+    useAppStore.setState({ recheckCompletedStack: recheckFn } as any);
+
+    render(
+      <StackCard
+        stack={makeStack({ id: 'recheck-click', status: 'completed', latest_task_token_limited: true })}
+      />
+    );
+    fireEvent.click(screen.getByTestId('card-resume-completed-recheck-click'));
+
+    expect(recheckFn).toHaveBeenCalledWith('recheck-click');
+  });
+
+  it('shows not_token_limited feedback message when outcome is not_token_limited', async () => {
+    const recheckFn = vi.fn().mockResolvedValue({ outcome: 'not_token_limited' });
+    useAppStore.setState({ recheckCompletedStack: recheckFn } as any);
+
+    render(
+      <StackCard
+        stack={makeStack({ id: 'ntl-msg', status: 'completed', latest_task_token_limited: true })}
+      />
+    );
+    fireEvent.click(screen.getByTestId('card-resume-completed-ntl-msg'));
+
+    await waitFor(() => {
+      expect(screen.getByText('No interrupted work found — stack completed normally.')).toBeDefined();
+    });
+  });
+
+  it('shows container_gone feedback message when outcome is container_gone', async () => {
+    const recheckFn = vi.fn().mockResolvedValue({ outcome: 'container_gone' });
+    useAppStore.setState({ recheckCompletedStack: recheckFn } as any);
+
+    render(
+      <StackCard
+        stack={makeStack({ id: 'gone-msg', status: 'completed', latest_task_token_limited: true })}
+      />
+    );
+    fireEvent.click(screen.getByTestId('card-resume-completed-gone-msg'));
+
+    await waitFor(() => {
+      expect(screen.getByText('Container not running — cannot verify log.')).toBeDefined();
+    });
   });
 
   it('shows persistent Continue callout for failed stacks without hover', () => {

@@ -108,6 +108,9 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
       if (result.outcome === 'container_gone') {
         setRecheckMessage('Container not running — cannot verify log.');
         setTimeout(() => setRecheckMessage(null), 4000);
+      } else if (result.outcome === 'not_token_limited') {
+        setRecheckMessage('No interrupted work found — stack completed normally.');
+        setTimeout(() => setRecheckMessage(null), 4000);
       }
     } catch (err) {
       alert(`Failed to re-check: ${err}`);
@@ -367,14 +370,14 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               Resume
             </button>
           )}
-          {stack && stack.status === 'completed' && (
+          {stack && stack.status === 'completed' && stack.latest_task_token_limited && (
             <div>
               <button
                 onClick={handleRecheckCompleted}
                 className="w-full text-xs py-1 px-3 rounded-md bg-orange-500/10 text-orange-400 border border-orange-500/20 hover:bg-orange-500/20 transition-colors font-medium"
-                data-testid={`ticket-card-recheck-${ticket.ticket_id}`}
+                data-testid={`ticket-card-resume-completed-${ticket.ticket_id}`}
               >
-                Check for Resume
+                Resume
               </button>
               {recheckMessage && (
                 <p className="mt-1 text-xs text-sandstorm-muted">{recheckMessage}</p>
