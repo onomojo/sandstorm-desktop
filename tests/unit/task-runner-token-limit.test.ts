@@ -16,7 +16,15 @@ describe('task-runner.sh token limit detection', () => {
       expect(taskRunner).toContain('local log_file="${1:-/tmp/claude-raw.log}"')
     })
 
-    it('uses case-insensitive grep for the session limit string', () => {
+    it('uses jq structured detection for JSON lines', () => {
+      expect(taskRunner).toContain('jq -c')
+      expect(taskRunner).toContain('rate_limit_event')
+      expect(taskRunner).toContain('rate_limit_info.status == "rejected"')
+      expect(taskRunner).toContain('is_error == true')
+      expect(taskRunner).toContain('api_error_status == 429')
+    })
+
+    it('uses plain-text fallback for non-JSON lines', () => {
       expect(taskRunner).toContain('grep -qi "You\'ve hit your session limit"')
     })
 
@@ -25,12 +33,19 @@ describe('task-runner.sh token limit detection', () => {
       expect(taskRunner).toContain('return 1')
     })
 
-    it('filters out JSON lines before matching to prevent false positives', () => {
-      // Lines starting with '{' are stream-json objects; the real CLI notice is plain-text.
-      // The brace char is built via printf hex escape to avoid a literal '{' that would
-      // confuse naive brace-counting tools (see the existing no-local-outside-scope test).
-      expect(taskRunner).toContain("grep -vE \"^[[:space:]]*${open_brace}\"")
-      expect(taskRunner).toContain("printf '\\x7b'")  // hex escape for '{'
+    it('uses printf hex escape for open-brace to avoid literal in source', () => {
+      expect(taskRunner).toContain("printf '\\x7b'")
+    })
+
+    it('checks JSON lines first (structured detection) before plain-text fallback', () => {
+      const fnStart = taskRunner.indexOf('check_for_token_limit()')
+      const fnEnd = taskRunner.indexOf('return 1\n}', fnStart)
+      const fnBody = taskRunner.slice(fnStart, fnEnd)
+      const jqIdx = fnBody.indexOf('jq -c')
+      const plaintextIdx = fnBody.indexOf('grep -qi "You\'ve hit your session limit"')
+      expect(jqIdx).toBeGreaterThan(-1)
+      expect(plaintextIdx).toBeGreaterThan(-1)
+      expect(jqIdx).toBeLessThan(plaintextIdx)
     })
   })
 

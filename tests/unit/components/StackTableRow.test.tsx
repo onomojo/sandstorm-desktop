@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import React from 'react';
-import { render, screen, act, fireEvent } from '@testing-library/react';
+import { render, screen, act, fireEvent, waitFor } from '@testing-library/react';
 import { StackTableRow } from '../../../src/renderer/components/StackTableRow';
 import { useAppStore, Stack } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
@@ -31,6 +31,8 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     total_review_output_tokens: 0,
     rate_limit_reset_at: null,
     current_model: null,
+    selfheal_continue_used: 0,
+    latest_task_token_limited: false,
     services: [],
     ...overrides,
   };
@@ -370,6 +372,61 @@ describe('StackTableRow needs_human Answer button (#461)', () => {
     renderRow(makeStack({ id: 'nh3', status: 'needs_human', pr_url: null }));
     fireEvent.click(screen.getByTestId('row-answer-nh3'));
     expect(screen.getByTestId('answer-questions-modal')).toBeDefined();
+  });
+});
+
+describe('StackTableRow completed Resume button (token-limited)', () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('shows Resume button for completed stacks with latest_task_token_limited=true', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'tl1', status: 'completed', latest_task_token_limited: true }));
+    expect(screen.getByTestId('row-resume-completed-tl1')).toBeDefined();
+  });
+
+  it('does not show Resume button for completed stacks with latest_task_token_limited=false', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'tl2', status: 'completed', latest_task_token_limited: false }));
+    expect(screen.queryByTestId('row-resume-completed-tl2')).toBeNull();
+  });
+
+  it('does not show Resume button for non-completed stacks even if latest_task_token_limited=true', () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    renderRow(makeStack({ id: 'tl3', status: 'running', latest_task_token_limited: true }));
+    expect(screen.queryByTestId('row-resume-completed-tl3')).toBeNull();
+  });
+
+  it('calls recheckCompletedStack when Resume button is clicked', async () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    const recheckFn = vi.fn().mockResolvedValue({ outcome: 'resuming_with_session' });
+    useAppStore.setState({ recheckCompletedStack: recheckFn } as any);
+
+    renderRow(makeStack({ id: 'tl4', status: 'completed', latest_task_token_limited: true }));
+    fireEvent.click(screen.getByTestId('row-resume-completed-tl4'));
+
+    expect(recheckFn).toHaveBeenCalledWith('tl4');
+  });
+
+  it('shows not_token_limited feedback when outcome is not_token_limited', async () => {
+    vi.setSystemTime(new Date('2026-03-25T10:05:00Z'));
+    const recheckFn = vi.fn().mockResolvedValue({ outcome: 'not_token_limited' });
+    useAppStore.setState({ recheckCompletedStack: recheckFn } as any);
+
+    renderRow(makeStack({ id: 'tl5', status: 'completed', latest_task_token_limited: true }));
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('row-resume-completed-tl5'));
+    });
+
+    expect(screen.getByText('Completed normally')).toBeDefined();
   });
 });
 

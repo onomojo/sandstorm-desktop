@@ -38,6 +38,7 @@ export interface Stack {
   updated_at: string;
   current_model: string | null;
   selfheal_continue_used: number;
+  latest_task_token_limited: boolean;
 }
 
 export type StackStatus =
@@ -706,7 +707,7 @@ export class Registry {
 
   // --- Stacks ---
 
-  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'total_execution_input_tokens' | 'total_execution_output_tokens' | 'total_review_input_tokens' | 'total_review_output_tokens' | 'total_cache_read_tokens' | 'total_cache_creation_tokens' | 'rate_limit_reset_at' | 'current_model' | 'selfheal_continue_used'>): Stack {
+  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'total_execution_input_tokens' | 'total_execution_output_tokens' | 'total_review_input_tokens' | 'total_review_output_tokens' | 'total_cache_read_tokens' | 'total_cache_creation_tokens' | 'rate_limit_reset_at' | 'current_model' | 'selfheal_continue_used' | 'latest_task_token_limited'>): Stack {
     if (!stack.id) {
       throw new Error('Stack id is required and cannot be null or empty');
     }
@@ -719,17 +720,32 @@ export class Registry {
   }
 
   getStack(id: string): Stack | undefined {
-    return this.db.prepare(
-      `SELECT s.*, (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model
+    const row = this.db.prepare(
+      `SELECT s.*,
+       (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model,
+       COALESCE(
+         (SELECT CASE WHEN LOWER(execution_summary) LIKE '%you''ve hit your session limit%' THEN 1 ELSE 0 END
+          FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1),
+         0
+       ) as latest_task_token_limited
        FROM stacks s WHERE s.id = ?`
-    ).get(id) as Stack | undefined;
+    ).get(id) as (Omit<Stack, 'latest_task_token_limited'> & { latest_task_token_limited: number }) | undefined;
+    if (!row) return undefined;
+    return { ...row, latest_task_token_limited: row.latest_task_token_limited !== 0 };
   }
 
   listStacks(): Stack[] {
-    return (this.db.prepare(
-      `SELECT s.*, (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model
+    const rows = (this.db.prepare(
+      `SELECT s.*,
+       (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model,
+       COALESCE(
+         (SELECT CASE WHEN LOWER(execution_summary) LIKE '%you''ve hit your session limit%' THEN 1 ELSE 0 END
+          FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1),
+         0
+       ) as latest_task_token_limited
        FROM stacks s WHERE s.id IS NOT NULL ORDER BY s.created_at DESC`
-    ).all() as Stack[]);
+    ).all() as (Omit<Stack, 'latest_task_token_limited'> & { latest_task_token_limited: number })[]);
+    return rows.map(row => ({ ...row, latest_task_token_limited: row.latest_task_token_limited !== 0 }));
   }
 
   updateStackStatus(id: string, status: StackStatus, error?: string): void {

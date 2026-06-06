@@ -1629,6 +1629,49 @@ describe('TicketCard', () => {
     await waitFor(() => expect(discardSpy).toHaveBeenCalledWith('42', PROJECT_DIR, 'close'));
   });
 
+  it('in_stack: shows Resume button for completed stack with latest_task_token_limited=true', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', latest_task_token_limited: true, pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-resume-completed-42')).toBeDefined();
+  });
+
+  it('in_stack: does not show Resume button for completed stack with latest_task_token_limited=false', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', latest_task_token_limited: false, pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-resume-completed-42')).toBeNull();
+  });
+
+  it('in_stack: calling Resume on completed token-limited stack calls recheckCompletedStack', async () => {
+    const recheckFn = vi.fn().mockResolvedValue({ outcome: 'resuming_with_session' });
+    useAppStore.setState({ recheckCompletedStack: recheckFn } as any);
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', latest_task_token_limited: true, pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-resume-completed-42'));
+    await waitFor(() => expect(recheckFn).toHaveBeenCalledWith('s1'));
+  });
+
+  it('in_stack: not_token_limited outcome shows "completed normally" message', async () => {
+    const recheckFn = vi.fn().mockResolvedValue({ outcome: 'not_token_limited' });
+    useAppStore.setState({ recheckCompletedStack: recheckFn } as any);
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', latest_task_token_limited: true, pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-resume-completed-42'));
+    await waitFor(() => {
+      expect(screen.getByText('No interrupted work found — stack completed normally.')).toBeDefined();
+    });
+  });
+
+  it('in_stack: container_gone outcome shows appropriate message', async () => {
+    const recheckFn = vi.fn().mockResolvedValue({ outcome: 'container_gone' });
+    useAppStore.setState({ recheckCompletedStack: recheckFn } as any);
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', latest_task_token_limited: true, pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-resume-completed-42'));
+    await waitFor(() => {
+      expect(screen.getByText('Container not running — cannot verify log.')).toBeDefined();
+    });
+  });
+
   it('refining: running session — no session-destructive IPC call is made (#510)', () => {
     useAppStore.setState({
       refinementSessions: [{

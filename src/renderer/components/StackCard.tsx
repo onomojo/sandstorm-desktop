@@ -137,6 +137,9 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
       if (result.outcome === 'container_gone') {
         setRecheckMessage('Container not running — cannot verify log.');
         setTimeout(() => setRecheckMessage(null), 4000);
+      } else if (result.outcome === 'not_token_limited') {
+        setRecheckMessage('No interrupted work found — stack completed normally.');
+        setTimeout(() => setRecheckMessage(null), 4000);
       }
     } catch (err) {
       alert(`Failed to re-check: ${err}`);
@@ -361,16 +364,16 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
         </div>
       )}
 
-      {/* Re-check for missed token-limit on completed stacks */}
-      {stack.status === 'completed' && (
+      {/* Resume button — shown only when the latest task looks token-limited */}
+      {stack.status === 'completed' && stack.latest_task_token_limited && (
         <div className="mt-2 ml-5">
           <button
             onClick={handleRecheckCompleted}
             className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-orange-500/10 text-orange-400 border border-orange-500/20 hover:bg-orange-500/20 transition-colors active:scale-[0.98]"
-            data-testid={`card-recheck-${stack.id}`}
-            title="Check if this stack was token-limited and can be resumed"
+            data-testid={`card-resume-completed-${stack.id}`}
+            title="Resume this token-limited stack"
           >
-            Check for Resume
+            Resume
           </button>
           {recheckMessage && (
             <span className="ml-2 text-xs text-sandstorm-muted">{recheckMessage}</span>

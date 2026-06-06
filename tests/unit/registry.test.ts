@@ -290,6 +290,58 @@ describe('Registry', () => {
     it('deleting non-existent stack is a no-op', () => {
       expect(() => registry.deleteStack('ghost')).not.toThrow();
     });
+
+    it('latest_task_token_limited is false when stack has no tasks', () => {
+      registry.createStack(makeStack({ id: 'no-tasks' }));
+      const stacks = registry.listStacks();
+      const stack = stacks.find(s => s.id === 'no-tasks');
+      expect(stack?.latest_task_token_limited).toBe(false);
+    });
+
+    it('latest_task_token_limited is false when latest task execution_summary is null', () => {
+      registry.createStack(makeStack({ id: 'null-summary' }));
+      const task = registry.createTask('null-summary', 'do work', null);
+      registry.completeTask(task.id, 0);
+      const stacks = registry.listStacks();
+      const stack = stacks.find(s => s.id === 'null-summary');
+      expect(stack?.latest_task_token_limited).toBe(false);
+    });
+
+    it('latest_task_token_limited is true when latest task execution_summary contains the session limit marker', () => {
+      registry.createStack(makeStack({ id: 'token-limited' }));
+      registry.updateStackStatus('token-limited', 'completed');
+      const task = registry.createTask('token-limited', 'do work', null);
+      registry.updateTaskMetadata(task.id, { execution_summary: "You've hit your session limit · resets 5:20am (UTC)" });
+      registry.completeTask(task.id, 0);
+      const stacks = registry.listStacks();
+      const stack = stacks.find(s => s.id === 'token-limited');
+      expect(stack?.latest_task_token_limited).toBe(true);
+    });
+
+    it('latest_task_token_limited is false for normal completion execution_summary', () => {
+      registry.createStack(makeStack({ id: 'normal-complete' }));
+      const task = registry.createTask('normal-complete', 'do work', null);
+      registry.updateTaskMetadata(task.id, { execution_summary: 'Task completed successfully. No issues found.' });
+      registry.completeTask(task.id, 0);
+      const stacks = registry.listStacks();
+      const stack = stacks.find(s => s.id === 'normal-complete');
+      expect(stack?.latest_task_token_limited).toBe(false);
+    });
+
+    it('latest_task_token_limited uses the most recent task only', () => {
+      registry.createStack(makeStack({ id: 'multi-tasks' }));
+      const task1 = registry.createTask('multi-tasks', 'first work', null);
+      registry.updateTaskMetadata(task1.id, { execution_summary: "You've hit your session limit · resets 5:20am (UTC)" });
+      registry.completeTask(task1.id, 0);
+      // Create a second task that completed normally
+      const task2 = registry.createTask('multi-tasks', 'second work', null);
+      registry.updateTaskMetadata(task2.id, { execution_summary: 'Task completed.' });
+      registry.completeTask(task2.id, 0);
+      const stacks = registry.listStacks();
+      const stack = stacks.find(s => s.id === 'multi-tasks');
+      // Most recent task (task2) has normal completion, so flag should be false
+      expect(stack?.latest_task_token_limited).toBe(false);
+    });
   });
 
   // ===========================================

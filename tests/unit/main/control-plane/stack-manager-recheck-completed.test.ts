@@ -291,16 +291,16 @@ describe('StackManager.recheckCompletedStack', () => {
   });
 
   // ---------------------------------------------------------------------------
-  // Inline grep correctness
+  // Detection command correctness
   // ---------------------------------------------------------------------------
-  it('execs the two-stage grep targeting /tmp/claude-raw.log with the {-line exclusion', async () => {
+  it('execs the structured detection command targeting /tmp/claude-raw.log', async () => {
     setupRunningContainer();
     setupNoTokenLimitGrep();
     createCompletedTask();
 
     await manager.recheckCompletedStack('s1');
 
-    // Find the exec call that ran the grep
+    // Find the exec call that ran the detection command
     const execCalls = vi.mocked(runtime.exec).mock.calls;
     const grepCall = execCalls.find((args) => {
       const cmd = args[1] as string[];
@@ -311,33 +311,37 @@ describe('StackManager.recheckCompletedStack', () => {
 
     // Must target the log file
     expect(shellCmd).toContain('/tmp/claude-raw.log');
-    // Must include the {-line exclusion
-    expect(shellCmd).toMatch(/\^\[/);
-    expect(shellCmd).toContain('{');
-    // Must include the marker
+    // Must include structured JSON detection for rate_limit_event
+    expect(shellCmd).toContain('rate_limit_event');
+    expect(shellCmd).toContain('rejected');
+    // Must include structured JSON detection for error result
+    expect(shellCmd).toContain('is_error');
+    expect(shellCmd).toContain('429');
+    // Must include plain-text fallback
     expect(shellCmd).toContain("You've hit your session limit");
   });
 
-  it('treats JSON-only log lines as non-matching (filter correctness)', () => {
-    // Simulate the two-stage grep via the shell command:
-    // The exclusion must filter out lines that begin with optional whitespace + {
-    const shellCmd =
-      "grep -vE '^[[:space:]]*\\{' /tmp/claude-raw.log 2>/dev/null | grep -qi \"You've hit your session limit\"";
+  it('detection command: JSON lines with rate_limit_event (rejected) would match', () => {
+    // Verify the structured shell command mirrors the task-runner logic:
+    // JSON lines containing rate_limit_event with rejected status are the primary signal.
+    const shellCmd = [
+      "grep -E '^[[:space:]]*\\{' /tmp/claude-raw.log 2>/dev/null",
+      "| jq -c 'select((.type == \"rate_limit_event\" and .rate_limit_info.status == \"rejected\") or (.type == \"result\" and .is_error == true and .api_error_status == 429))' 2>/dev/null",
+      '| grep -q .',
+      "|| grep -vE '^[[:space:]]*\\{' /tmp/claude-raw.log 2>/dev/null | grep -qi \"You've hit your session limit\"",
+    ].join(' ');
 
-    // Lines that begin with '{' (JSON) should be filtered by the first grep
-    const jsonLine = '{"type":"result","result":"You\'ve hit your session limit"}';
-    const plainLine = "You've hit your session limit";
-
-    // Verify the exclusion regex matches json-prefixed lines
-    const exclusionRe = /^[[:space:]]*\{/;
-    // Use JS equivalent
-    const jsExclusionRe = /^[\s]*\{/;
-    expect(jsExclusionRe.test(jsonLine)).toBe(true);
-    expect(jsExclusionRe.test(plainLine)).toBe(false);
-
-    // The shell command references the correct log file and marker
-    expect(shellCmd).toContain('/tmp/claude-raw.log');
+    expect(shellCmd).toContain('rate_limit_event');
+    expect(shellCmd).toContain('rejected');
+    expect(shellCmd).toContain('is_error');
+    expect(shellCmd).toContain('429');
     expect(shellCmd).toContain("You've hit your session limit");
+
+    // JSON lines (starting with {) should be included by the first grep
+    const jsJsonLineRe = /^[\s]*\{/;
+    expect(jsJsonLineRe.test('{"type":"rate_limit_event"}')).toBe(true);
+    // Non-JSON lines should be excluded from structured detection
+    expect(jsJsonLineRe.test("You've hit your session limit")).toBe(false);
   });
 });
 

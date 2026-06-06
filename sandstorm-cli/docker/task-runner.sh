@@ -53,21 +53,37 @@ check_for_stop_and_ask() {
 }
 
 # Check if a run_claude invocation was terminated by a session token limit.
-# Scans the given log file (default: /tmp/claude-raw.log) for the case-insensitive
-# substring "You've hit your session limit". Structured for future expansion:
-# add additional confirmed limit patterns to the grep list below.
-# Only matches on plain-text (non-JSON) lines — lines starting with '{' are
-# stream-json objects (agent output) and are excluded to prevent false positives
-# when the phrase appears inside agent-authored content.
+# A log indicates token-limited iff it contains a JSON line where:
+#   - type == "rate_limit_event" AND .rate_limit_info.status == "rejected", OR
+#   - type == "result" AND .is_error == true AND .api_error_status == 429.
+# Falls back to a plain-text grep for non-stream-json/stderr output.
+# The JSON check must come first: in stream-json mode every line is JSON, so
+# the plain-text fallback alone would never match. Mirrors the predicate in
+# recheckCompletedStack() in stack-manager.ts.
 # Returns 0 if token limit detected, 1 otherwise.
 check_for_token_limit() {
   local log_file="${1:-/tmp/claude-raw.log}"
   local open_brace
   open_brace=$(printf '\x7b')  # hex 7b = open-brace char, avoids literal in source
-  if grep -vE "^[[:space:]]*${open_brace}" "$log_file" 2>/dev/null | grep -qi "You've hit your session limit"; then
-    log_loop "Session token limit detected"
+
+  # Structured detection: scan JSON lines for rate_limit_event (rejected) or
+  # result (is_error:true, api_error_status:429). jq is available (used at run_claude).
+  if grep -E "^[[:space:]]*${open_brace}" "$log_file" 2>/dev/null \
+     | jq -c 'select(
+         (.type == "rate_limit_event" and .rate_limit_info.status == "rejected") or
+         (.type == "result" and .is_error == true and .api_error_status == 429)
+       )' 2>/dev/null \
+     | grep -q .; then
+    log_loop "Session token limit detected (structured JSON)"
     return 0
   fi
+
+  # Plain-text fallback: match non-JSON lines for legacy or stderr output.
+  if grep -vE "^[[:space:]]*${open_brace}" "$log_file" 2>/dev/null | grep -qi "You've hit your session limit"; then
+    log_loop "Session token limit detected (plain-text)"
+    return 0
+  fi
+
   return 1
 }
 
