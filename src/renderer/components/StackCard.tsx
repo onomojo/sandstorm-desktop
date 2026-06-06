@@ -78,9 +78,10 @@ function formatMs(ms: number): string {
 }
 
 export function StackCard({ stack, showProject }: { stack: Stack; showProject?: boolean }) {
-  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation } = useAppStore();
+  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation, recheckCompletedStack } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
   const [showResolveModal, setShowResolveModal] = useState(false);
+  const [recheckMessage, setRecheckMessage] = useState<string | null>(null);
 
   const runningCount = stack.services.filter(
     (s) => s.status === 'running'
@@ -125,6 +126,20 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
       await resumeStackWithContinuation(stack.id, true);
     } catch (err) {
       alert(`Failed to resume: ${err}`);
+    }
+  };
+
+  const handleRecheckCompleted = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setRecheckMessage(null);
+    try {
+      const result = await recheckCompletedStack(stack.id);
+      if (result.outcome === 'container_gone') {
+        setRecheckMessage('Container not running — cannot verify log.');
+        setTimeout(() => setRecheckMessage(null), 4000);
+      }
+    } catch (err) {
+      alert(`Failed to re-check: ${err}`);
     }
   };
 
@@ -343,6 +358,23 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
             </svg>
             Make PR
           </button>
+        </div>
+      )}
+
+      {/* Re-check for missed token-limit on completed stacks */}
+      {stack.status === 'completed' && (
+        <div className="mt-2 ml-5">
+          <button
+            onClick={handleRecheckCompleted}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-md bg-orange-500/10 text-orange-400 border border-orange-500/20 hover:bg-orange-500/20 transition-colors active:scale-[0.98]"
+            data-testid={`card-recheck-${stack.id}`}
+            title="Check if this stack was token-limited and can be resumed"
+          >
+            Check for Resume
+          </button>
+          {recheckMessage && (
+            <span className="ml-2 text-xs text-sandstorm-muted">{recheckMessage}</span>
+          )}
         </div>
       )}
 

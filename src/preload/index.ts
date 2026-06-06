@@ -77,6 +77,9 @@ export interface SandstormAPI {
     getFailureDiagnosis: (stackId: string) => Promise<unknown>;
     selfHealContinue: (stackId: string) => Promise<void>;
     restartWithFindings: (stackId: string, updatedTicketBody: string) => Promise<{ newStackId: string }>;
+    recheckCompleted: (stackId: string) => Promise<{
+      outcome: 'resuming_with_session' | 'resumed_fresh' | 'not_token_limited' | 'container_gone' | 'idle';
+    }>;
   };
   tasks: {
     dispatch: (stackId: string, prompt: string, model?: string) => Promise<unknown>;
@@ -316,6 +319,8 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('stacks:selfHealContinue', stackId),
     restartWithFindings: (stackId: string, updatedTicketBody: string) =>
       ipcRenderer.invoke('stacks:restartWithFindings', stackId, updatedTicketBody),
+    recheckCompleted: (stackId: string) =>
+      ipcRenderer.invoke('stacks:recheckCompleted', stackId),
   },
   tasks: {
     dispatch: (stackId, prompt, model?) =>
