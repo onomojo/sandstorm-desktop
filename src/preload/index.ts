@@ -141,6 +141,16 @@ export interface SandstormAPI {
     removeProject: (projectDir: string) => Promise<void>;
     getEffective: (projectDir: string) => Promise<{ inner_model: string; outer_model: string }>;
   };
+  modelRouting: {
+    getEffective: (projectDir: string) => Promise<Record<string, { backend: string; model: string }>>;
+    getProject: (projectDir: string) => Promise<{ assignments: Record<string, { backend: string; model: string }>; preset: string | null } | null>;
+    setProject: (projectDir: string, config: { assignments?: Record<string, { backend: string; model: string }>; preset?: string | null }) => Promise<void>;
+    removeProject: (projectDir: string) => Promise<void>;
+    getGlobal: () => Promise<{ assignments: Record<string, { backend: string; model: string }>; preset: string | null }>;
+    setGlobal: (config: { assignments?: Record<string, { backend: string; model: string }>; preset?: string | null }) => Promise<void>;
+    applyPreset: (projectDir: string, presetId: string) => Promise<void>;
+    getAvailableModels: (projectDir: string) => Promise<Array<{ backend: string; model: string; label: string; version: string; provider: string; needsKey?: boolean; available: boolean }>>;
+  };
   projectTicketConfig: {
     get: (projectDir: string) => Promise<{
       provider: 'github' | 'jira';
@@ -363,6 +373,16 @@ const api: SandstormAPI = {
     setProject: (projectDir, settings) => ipcRenderer.invoke('modelSettings:setProject', projectDir, settings),
     removeProject: (projectDir) => ipcRenderer.invoke('modelSettings:removeProject', projectDir),
     getEffective: (projectDir) => ipcRenderer.invoke('modelSettings:getEffective', projectDir),
+  },
+  modelRouting: {
+    getEffective: (projectDir) => ipcRenderer.invoke('modelRouting:getEffective', projectDir),
+    getProject: (projectDir) => ipcRenderer.invoke('modelRouting:getProject', projectDir),
+    setProject: (projectDir, config) => ipcRenderer.invoke('modelRouting:setProject', projectDir, config),
+    removeProject: (projectDir) => ipcRenderer.invoke('modelRouting:removeProject', projectDir),
+    getGlobal: () => ipcRenderer.invoke('modelRouting:getGlobal'),
+    setGlobal: (config) => ipcRenderer.invoke('modelRouting:setGlobal', config),
+    applyPreset: (projectDir, presetId) => ipcRenderer.invoke('modelRouting:applyPreset', projectDir, presetId),
+    getAvailableModels: (projectDir) => ipcRenderer.invoke('modelRouting:getAvailableModels', projectDir),
   },
   projectTicketConfig: {
     get: (projectDir) => ipcRenderer.invoke('projectTicketConfig:get', projectDir),
