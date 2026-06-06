@@ -74,7 +74,6 @@ export interface SandstormAPI {
     cleanupStale: (workspacePaths: string[]) => Promise<unknown[]>;
     getNeedsHumanQuestions: (stackId: string) => Promise<string | null>;
     resumeNeedsHuman: (stackId: string, answers: string) => Promise<void>;
-    getFailureDiagnosis: (stackId: string) => Promise<unknown>;
     selfHealContinue: (stackId: string) => Promise<void>;
     restartWithFindings: (stackId: string, updatedTicketBody: string) => Promise<{ newStackId: string }>;
     recheckCompleted: (stackId: string) => Promise<{
@@ -313,8 +312,6 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('stacks:getNeedsHumanQuestions', stackId),
     resumeNeedsHuman: (stackId: string, answers: string) =>
       ipcRenderer.invoke('stacks:resumeNeedsHuman', stackId, answers),
-    getFailureDiagnosis: (stackId: string) =>
-      ipcRenderer.invoke('stacks:getFailureDiagnosis', stackId),
     selfHealContinue: (stackId: string) =>
       ipcRenderer.invoke('stacks:selfHealContinue', stackId),
     restartWithFindings: (stackId: string, updatedTicketBody: string) =>

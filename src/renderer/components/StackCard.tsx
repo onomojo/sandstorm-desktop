@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 import { getStackDuration } from '../utils/duration';
 import { formatTokenCount, buildTokenTooltip } from '../utils/format';
-import { ResolveFailureModal } from './ResolveFailureModal';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -80,7 +79,7 @@ function formatMs(ms: number): string {
 export function StackCard({ stack, showProject }: { stack: Stack; showProject?: boolean }) {
   const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation, recheckCompletedStack } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
-  const [showResolveModal, setShowResolveModal] = useState(false);
+  const [isContinuing, setIsContinuing] = useState(false);
   const [recheckMessage, setRecheckMessage] = useState<string | null>(null);
 
   const runningCount = stack.services.filter(
@@ -143,6 +142,19 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
       }
     } catch (err) {
       alert(`Failed to re-check: ${err}`);
+    }
+  };
+
+  const handleContinue = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setIsContinuing(true);
+    try {
+      await window.sandstorm.stacks.selfHealContinue(stack.id);
+      refreshStacks();
+    } catch (err) {
+      alert(`Failed to continue: ${err}`);
+    } finally {
+      setIsContinuing(false);
     }
   };
 
@@ -332,18 +344,19 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
         </div>
       )}
 
-      {/* Resolve Failure callout — persistent, always visible for failed stacks */}
+      {/* Continue callout — persistent, always visible for failed stacks, calls selfHealContinue directly */}
       {stack.status === 'failed' && (
         <div className="mt-3 ml-5">
           <button
-            onClick={(e) => { e.stopPropagation(); setShowResolveModal(true); }}
-            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors active:scale-[0.98]"
-            data-testid={`card-resolve-failure-${stack.id}`}
+            onClick={handleContinue}
+            disabled={isContinuing}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors active:scale-[0.98] disabled:opacity-40 disabled:cursor-not-allowed"
+            data-testid={`card-continue-${stack.id}`}
           >
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+              <polygon points="5 3 19 12 5 21 5 3"/>
             </svg>
-            Resolve Failure
+            {isContinuing ? 'Continuing…' : 'Continue — reset reviews & run 5 more'}
           </button>
         </div>
       )}
@@ -404,26 +417,10 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
         {stack.status !== 'stopped' && (
           <ActionButton label="Shell" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
         )}
-        {stack.status === 'failed' && (
-          <ActionButton
-            label="Resolve Failure"
-            onClick={(e) => { e.stopPropagation(); setShowResolveModal(true); }}
-            primary
-            data-testid="resolve-failure-btn"
-          />
-        )}
         {stack.status !== 'running' && stack.status !== 'building' && stack.status !== 'rebuilding' && (
           <ActionButton label="Tear Down" onClick={handleTeardown} danger />
         )}
       </div>
-
-      {showResolveModal && (
-        <ResolveFailureModal
-          stack={stack}
-          onClose={() => setShowResolveModal(false)}
-          onResolved={() => { setShowResolveModal(false); refreshStacks(); }}
-        />
-      )}
     </div>
   );
 }

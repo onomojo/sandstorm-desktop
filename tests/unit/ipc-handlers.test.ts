@@ -2336,7 +2336,6 @@ describe('IPC Handlers', () => {
       'darkFactory:setEnabled',
       'stacks:getNeedsHumanQuestions',
       'stacks:resumeNeedsHuman',
-      'stacks:getFailureDiagnosis',
       'stacks:selfHealContinue',
       'stacks:restartWithFindings',
       'stacks:recheckCompleted',

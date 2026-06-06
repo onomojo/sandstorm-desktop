@@ -302,43 +302,68 @@ describe('StackCard', () => {
     });
   });
 
-  it('shows persistent Resolve Failure callout for failed stacks without hover', () => {
+  it('shows persistent Continue callout for failed stacks without hover', () => {
     render(<StackCard stack={makeStack({ id: 'fail-callout', status: 'failed' })} />);
-    expect(screen.getByTestId('card-resolve-failure-fail-callout')).toBeDefined();
+    expect(screen.getByTestId('card-continue-fail-callout')).toBeDefined();
   });
 
-  it('does not show persistent Resolve Failure callout for non-failed stacks', () => {
+  it('does not show Continue callout for non-failed stacks', () => {
     const { unmount } = render(<StackCard stack={makeStack({ id: 'up-callout', status: 'up' })} />);
-    expect(screen.queryByTestId('card-resolve-failure-up-callout')).toBeNull();
+    expect(screen.queryByTestId('card-continue-up-callout')).toBeNull();
     unmount();
     render(<StackCard stack={makeStack({ id: 'running-callout', status: 'running' })} />);
-    expect(screen.queryByTestId('card-resolve-failure-running-callout')).toBeNull();
+    expect(screen.queryByTestId('card-continue-running-callout')).toBeNull();
   });
 
-  it('shows Resolve Failure button only for failed stacks', () => {
-    const { unmount } = render(
-      <StackCard stack={makeStack({ id: 'resolve-failed', status: 'failed' })} />
-    );
-    expect(screen.getByTestId('resolve-failure-btn')).toBeDefined();
-    unmount();
-
-    render(<StackCard stack={makeStack({ id: 'resolve-up', status: 'up' })} />);
-    expect(screen.queryByTestId('resolve-failure-btn')).toBeNull();
-  });
-
-  it('does not show Resolve Failure button for running stacks', () => {
-    render(<StackCard stack={makeStack({ id: 'resolve-running', status: 'running' })} />);
-    expect(screen.queryByTestId('resolve-failure-btn')).toBeNull();
-  });
-
-  it('opens ResolveFailureModal when Resolve Failure button is clicked', async () => {
-    render(
-      <StackCard stack={makeStack({ id: 'resolve-modal', status: 'failed' })} />
-    );
+  it('does not render ResolveFailureModal or hover-gated Resolve Failure button for failed stacks', () => {
+    render(<StackCard stack={makeStack({ id: 'no-modal', status: 'failed' })} />);
     expect(screen.queryByTestId('resolve-failure-modal')).toBeNull();
-    fireEvent.click(screen.getByTestId('resolve-failure-btn'));
+    expect(screen.queryByTestId('resolve-failure-btn')).toBeNull();
+  });
+
+  it('Continue button is enabled and calls selfHealContinue directly when clicked', async () => {
+    const api = mockSandstormApi();
+    api.stacks.selfHealContinue.mockResolvedValue(undefined);
+
+    render(<StackCard stack={makeStack({ id: 'continue-test', status: 'failed' })} />);
+
+    const btn = screen.getByTestId('card-continue-continue-test') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+
+    fireEvent.click(btn);
+
     await waitFor(() => {
-      expect(screen.getByTestId('resolve-failure-modal')).toBeDefined();
+      expect(api.stacks.selfHealContinue).toHaveBeenCalledWith('continue-test');
     });
+  });
+
+  it('ticket-522 fixture: failed stack with selfheal_continue_used=0, session_id present renders enabled Continue button', () => {
+    render(
+      <StackCard
+        stack={makeStack({
+          id: 'ticket-522',
+          status: 'failed',
+          selfheal_continue_used: 0,
+        })}
+      />
+    );
+    const btn = screen.getByTestId('card-continue-ticket-522') as HTMLButtonElement;
+    expect(btn).toBeDefined();
+    expect(btn.disabled).toBe(false);
+    expect(btn.textContent).toContain('Continue');
+  });
+
+  it('Continue button does not call getFailureDiagnosis (regression: no LLM gate in click path)', async () => {
+    const api = mockSandstormApi();
+    api.stacks.selfHealContinue.mockResolvedValue(undefined);
+
+    render(<StackCard stack={makeStack({ id: 'no-llm-gate', status: 'failed' })} />);
+    fireEvent.click(screen.getByTestId('card-continue-no-llm-gate'));
+
+    await waitFor(() => {
+      expect(api.stacks.selfHealContinue).toHaveBeenCalledWith('no-llm-gate');
+    });
+    // getFailureDiagnosis must never be called — it no longer exists on the api mock
+    expect('getFailureDiagnosis' in api.stacks).toBe(false);
   });
 });

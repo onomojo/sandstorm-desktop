@@ -696,7 +696,6 @@ declare global {
         cleanupStale: (workspacePaths: string[]) => Promise<CleanupResult[]>;
         getNeedsHumanQuestions: (stackId: string) => Promise<string | null>;
         resumeNeedsHuman: (stackId: string, answers: string) => Promise<void>;
-        getFailureDiagnosis: (stackId: string) => Promise<FailureDiagnosis>;
         selfHealContinue: (stackId: string) => Promise<void>;
         restartWithFindings: (stackId: string, updatedTicketBody: string) => Promise<{ newStackId: string }>;
         recheckCompleted: (stackId: string) => Promise<{
@@ -873,29 +872,6 @@ export interface RefineQuestion {
   id: string;
   question: string;
   options: RefineQuestionOption[];
-}
-
-/** Parsed from the diagnostic agent's free-form output (agent owns these fields only). */
-export interface DiagnosticAgentOutput {
-  summary: string;
-  eligibility: {
-    selfHeal: boolean;
-    answerQuestions: boolean;
-    reincorporateSpec: boolean;
-  };
-  questions?: RefineQuestion[];
-}
-
-export interface FailureTimelineEntry {
-  iteration: number;
-  phase: 'execute' | 'review' | 'verify';
-  verdict: 'pass' | 'fail';
-  detail: string;
-}
-
-/** Returned by getFailureDiagnosis IPC handler = agent output + deterministic timeline. */
-export interface FailureDiagnosis extends DiagnosticAgentOutput {
-  timeline: FailureTimelineEntry[];
 }
 
 /** Renderer-side mirror of `SpecGateResult` from main/control-plane/ticket-spec.ts. */
