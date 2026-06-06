@@ -36,7 +36,7 @@ export function ResolveFailureModal({ stack, onClose, onResolved }: ResolveFailu
     return () => { cancelled = true; };
   }, [stack.id]);
 
-  const canSelfHeal = diagnosis?.eligibility.selfHeal === true && stack.selfheal_continue_used === 0;
+  const canSelfHeal = diagnosis?.eligibility.selfHeal === true;
   const canAnswerQuestions = diagnosis?.eligibility.answerQuestions === true && (diagnosis.questions?.length ?? 0) > 0;
   const canReincorporate = diagnosis?.eligibility.reincorporateSpec === true;
 
@@ -161,11 +161,9 @@ export function ResolveFailureModal({ stack, onClose, onResolved }: ResolveFailu
                     description="Re-dispatch the task on this same stack for one more review round."
                     enabled={canSelfHeal && !submitting}
                     disabledReason={
-                      stack.selfheal_continue_used !== 0
-                        ? 'Continuation already consumed'
-                        : !diagnosis.eligibility.selfHeal
-                          ? 'Diagnostic agent recommends against another attempt'
-                          : undefined
+                      !diagnosis.eligibility.selfHeal
+                        ? 'Diagnostic agent recommends against another attempt'
+                        : undefined
                     }
                     onAction={handleSelfHeal}
                     actionLabel="Continue"

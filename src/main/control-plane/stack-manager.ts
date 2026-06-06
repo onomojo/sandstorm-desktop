@@ -2035,8 +2035,10 @@ export class StackManager {
   }
 
   /**
-   * Grant the failed stack exactly one additional review round on the same branch.
-   * The guard is consumed on dispatch; a second call is rejected.
+   * Continue a failed stack on the same branch, repeatable.
+   * Uses --resume <session_id> when available (Case A) so the agent retains context;
+   * falls back to fresh dispatch (Case B) when session_id is null.
+   * The guard is used as a within-call race lock only — reset to 0 on success and on failure.
    */
   async selfHealContinue(stackId: string): Promise<void> {
     const stack = this.registry.getStack(stackId);
@@ -2044,17 +2046,11 @@ export class StackManager {
     if (stack.status !== 'failed') {
       throw new SandstormError(ErrorCode.INVALID_INPUT, `Stack "${stackId}" is not in failed state`);
     }
-    if (stack.selfheal_continue_used !== 0) {
-      throw new SandstormError(
-        ErrorCode.INVALID_INPUT,
-        `Stack "${stackId}" has already consumed its self-heal continuation`
-      );
-    }
 
     const task = this.registry.getMostRecentTask(stackId);
     if (!task) throw new SandstormError(ErrorCode.INTERNAL_ERROR, `No task found for stack "${stackId}"`);
 
-    // Consume the guard before dispatch to prevent double-use
+    // Set guard as within-call race lock before dispatch
     this.registry.setSelfhealContinueUsed(stackId, 1);
 
     this.registry.updateStackStatus(stackId, 'building');
@@ -2062,17 +2058,36 @@ export class StackManager {
     try {
       await this.ensureStackContainersRunning(stack, stackId);
     } catch (err) {
+      this.registry.setSelfhealContinueUsed(stackId, 0);
       this.registry.updateStackStatus(stackId, 'failed');
       this.notifyUpdate();
       throw err;
     }
 
     try {
-      await this.dispatchTask(stackId, task.prompt, task.model ?? undefined, {
-        gateApproved: true,
-        skipTicketFetch: true,
-      });
+      if (task.session_id) {
+        // Case A: resume with existing Claude session — reopen task, reset iterations, dispatch continuation
+        this.registry.reopenTaskForResume(task.id);
+        this.registry.setTaskIterations(task.id, 0, task.verify_retries);
+        const continuationPrompt =
+          'Continue the prior work on this task. The review loop count has been reset — you have fresh review iterations to work with. Resume from where you left off.';
+        await this.dispatchContinuation(stack, stackId, { ...task, status: 'running' }, continuationPrompt);
+      } else {
+        // Case B: no session_id — fresh dispatch of original task prompt
+        await this.dispatchTask(stackId, task.prompt, task.model ?? undefined, {
+          gateApproved: true,
+          skipTicketFetch: true,
+        });
+      }
+      // Reset guard on success so the stack remains continuable
+      this.registry.setSelfhealContinueUsed(stackId, 0);
     } catch (err) {
+      if (task.session_id) {
+        // Revert reopened task to terminal state so it doesn't strand in running
+        this.registry.completeTask(task.id, 1);
+      }
+      // Reset guard so the stack is not permanently blocked
+      this.registry.setSelfhealContinueUsed(stackId, 0);
       this.registry.updateStackStatus(stackId, 'failed');
       this.notifyUpdate();
       throw err;

@@ -314,6 +314,22 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
         </div>
       )}
 
+      {/* Resolve Failure callout — persistent, always visible for failed stacks */}
+      {stack.status === 'failed' && (
+        <div className="mt-3 ml-5">
+          <button
+            onClick={(e) => { e.stopPropagation(); setShowResolveModal(true); }}
+            className="inline-flex items-center gap-1.5 text-xs font-medium px-3 py-1.5 rounded-md bg-red-500/10 text-red-400 border border-red-500/30 hover:bg-red-500/20 transition-colors active:scale-[0.98]"
+            data-testid={`card-resolve-failure-${stack.id}`}
+          >
+            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/>
+            </svg>
+            Resolve Failure
+          </button>
+        </div>
+      )}
+
       {/* Persistent primary-action callout — always visible, no hover gate (#315) */}
       {(stack.status === 'completed' || stack.status === 'pushed') && !stack.pr_url && (
         <div className="mt-3 ml-5">
