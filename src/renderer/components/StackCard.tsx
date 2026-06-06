@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { Stack, StackMetrics, useAppStore } from '../store';
 import { getStackDuration } from '../utils/duration';
 import { formatTokenCount, buildTokenTooltip } from '../utils/format';
+import { ResolveFailureModal } from './ResolveFailureModal';
 
 const STATUS_COLORS: Record<string, string> = {
   building: 'bg-amber-400',
@@ -79,6 +80,7 @@ function formatMs(ms: number): string {
 export function StackCard({ stack, showProject }: { stack: Stack; showProject?: boolean }) {
   const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
+  const [showResolveModal, setShowResolveModal] = useState(false);
 
   const runningCount = stack.services.filter(
     (s) => s.status === 'running'
@@ -351,10 +353,26 @@ export function StackCard({ stack, showProject }: { stack: Stack; showProject?: 
         {stack.status !== 'stopped' && (
           <ActionButton label="Shell" onClick={(e) => { e.stopPropagation(); selectStack(stack.id); }} />
         )}
+        {stack.status === 'failed' && (
+          <ActionButton
+            label="Resolve Failure"
+            onClick={(e) => { e.stopPropagation(); setShowResolveModal(true); }}
+            primary
+            data-testid="resolve-failure-btn"
+          />
+        )}
         {stack.status !== 'running' && stack.status !== 'building' && stack.status !== 'rebuilding' && (
           <ActionButton label="Tear Down" onClick={handleTeardown} danger />
         )}
       </div>
+
+      {showResolveModal && (
+        <ResolveFailureModal
+          stack={stack}
+          onClose={() => setShowResolveModal(false)}
+          onResolved={() => { setShowResolveModal(false); refreshStacks(); }}
+        />
+      )}
     </div>
   );
 }
@@ -364,11 +382,13 @@ function ActionButton({
   onClick,
   danger,
   primary,
+  'data-testid': testId,
 }: {
   label: string;
   onClick: (e: React.MouseEvent) => void;
   danger?: boolean;
   primary?: boolean;
+  'data-testid'?: string;
 }) {
   const base = 'titlebar-no-drag text-[11px] font-medium px-2.5 py-1 rounded-md transition-all active:scale-[0.97]';
   const variant = danger
@@ -378,7 +398,7 @@ function ActionButton({
       : 'text-sandstorm-muted hover:bg-sandstorm-surface hover:text-sandstorm-text-secondary';
 
   return (
-    <button onClick={onClick} className={`${base} ${variant}`}>
+    <button onClick={onClick} className={`${base} ${variant}`} data-testid={testId}>
       {label}
     </button>
   );

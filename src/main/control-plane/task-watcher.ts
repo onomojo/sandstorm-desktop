@@ -390,6 +390,26 @@ export class TaskWatcher extends EventEmitter {
       }
     } catch { /* best effort */ }
 
+    // Read numbered execute output files
+    try {
+      const lsResult = await runtime.exec(containerId, [
+        'sh', '-c', 'ls /tmp/claude-execute-output-*.txt 2>/dev/null || true',
+      ]);
+      const files = lsResult.stdout.trim().split('\n').filter(Boolean);
+      if (files.length > 0) {
+        const outputs: string[] = [];
+        for (const file of files.sort()) {
+          try {
+            const result = await runtime.exec(containerId, ['cat', file]);
+            outputs.push(result.stdout);
+          } catch { /* skip unreadable files */ }
+        }
+        if (outputs.length > 0) {
+          metadata.execute_outputs = JSON.stringify(outputs);
+        }
+      }
+    } catch { /* best effort */ }
+
     // Read execution summary
     try {
       const result = await runtime.exec(containerId, [

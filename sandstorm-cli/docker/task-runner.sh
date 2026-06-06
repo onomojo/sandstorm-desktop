@@ -466,6 +466,7 @@ while true; do
     # Clean up numbered metadata files from previous tasks
     rm -f /tmp/claude-review-verdict-*.txt
     rm -f /tmp/claude-verify-output-*.txt
+    rm -f /tmp/claude-execute-output-*.txt
     rm -f /tmp/claude-execution-summary.txt
     rm -f /tmp/claude-phase-timing.txt
     rm -f /tmp/claude-meta-review.txt
@@ -496,6 +497,12 @@ while true; do
     fi
 
     echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
+
+    # Write execute outcome marker for timeline (initial execute = index 0)
+    {
+      if [ $EXIT_CODE -eq 0 ]; then echo "EXECUTE_PASS"; else echo "EXECUTE_FAIL"; fi
+      tail -50 /tmp/claude-task.log 2>/dev/null
+    } > /tmp/claude-execute-output-0.txt 2>/dev/null || true
 
     # Capture execution summary (last 50 lines of task log)
     tail -50 /tmp/claude-task.log 2>/dev/null > /tmp/claude-execution-summary.txt
@@ -705,6 +712,12 @@ while true; do
           echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           rm -f "$local_fix_prompt"
 
+          # Write execute outcome marker for timeline (numbered by TOTAL_REVIEW_ITERATIONS)
+          {
+            if [ $fix_exit -eq 0 ]; then echo "EXECUTE_PASS"; else echo "EXECUTE_FAIL"; fi
+            tail -50 /tmp/claude-task.log 2>/dev/null
+          } > "/tmp/claude-execute-output-${TOTAL_REVIEW_ITERATIONS}.txt" 2>/dev/null || true
+
           # Token limit takes priority over STOP_AND_ASK and general failures
           if [ $fix_exit -ne 0 ] && check_for_token_limit /tmp/claude-raw.log; then
             TASK_TOKEN_LIMITED=1
@@ -747,9 +760,15 @@ while true; do
       verify_result=$?
       echo "verify_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
 
-      # Save numbered verify output
+      # Save numbered verify output with verdict prefix (first line: VERIFY_PASS/VERIFY_FAIL/VERIFY_INFRA)
       VERIFY_INDEX=$((TOTAL_VERIFY_RETRIES + 1))
-      cp /tmp/claude-verify.log "/tmp/claude-verify-output-${VERIFY_INDEX}.txt" 2>/dev/null
+      {
+        if [ "$verify_result" -eq 0 ]; then echo "VERIFY_PASS"
+        elif [ "$verify_result" -eq 2 ]; then echo "VERIFY_INFRA"
+        else echo "VERIFY_FAIL"
+        fi
+        cat /tmp/claude-verify.log 2>/dev/null
+      } > "/tmp/claude-verify-output-${VERIFY_INDEX}.txt" 2>/dev/null || true
 
       if [ $verify_result -eq 0 ]; then
         log_loop "Verification PASSED"

@@ -8,7 +8,7 @@ import { PortProxy } from './port-proxy';
 import { TaskWatcher, WorkflowProgressData } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
-import { fetchTicketWithConfig } from './ticket-config';
+import { fetchRawBodyWithConfig, fetchTicketWithConfig, updateTicketWithConfig } from './ticket-config';
 import { referencesTicket } from './ticket-fetcher';
 import { workspacePathFor } from './pr-creator';
 
@@ -786,12 +786,14 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    if (stack.status !== 'needs_human') {
-      throw new SandstormError(ErrorCode.INVALID_INPUT, `Stack "${stackId}" is not in needs_human state`);
+    if (stack.status !== 'needs_human' && stack.status !== 'failed') {
+      throw new SandstormError(ErrorCode.INVALID_INPUT, `Stack "${stackId}" is not in a resumable state (needs_human or failed)`);
     }
 
     const task = this.registry.getMostRecentTask(stackId);
     if (!task) throw new SandstormError(ErrorCode.INTERNAL_ERROR, `No task found for stack "${stackId}"`);
+
+    const originalStatus = stack.status;
 
     // Bring containers up
     this.registry.updateStackStatus(stackId, 'building');
@@ -799,7 +801,7 @@ export class StackManager {
     try {
       await this.ensureStackContainersRunning(stack, stackId);
     } catch (err) {
-      this.registry.updateStackStatus(stackId, 'needs_human');
+      this.registry.updateStackStatus(stackId, originalStatus);
       this.notifyUpdate();
       throw err;
     }
@@ -821,18 +823,18 @@ export class StackManager {
             skipTicketFetch: true,
           });
         } catch (err) {
-          // Revert task to terminal needs_human state so it doesn't strand in interrupted
+          // Revert task to terminal state so it doesn't strand in interrupted
           this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
-          this.registry.updateStackStatus(stackId, 'needs_human');
+          this.registry.updateStackStatus(stackId, originalStatus);
           this.notifyUpdate();
           throw err;
         }
       }
     } catch (err) {
       if (task.session_id) {
-        // Revert task to terminal needs_human state so it doesn't strand in running
+        // Revert task to terminal state so it doesn't strand in running
         this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
-        this.registry.updateStackStatus(stackId, 'needs_human');
+        this.registry.updateStackStatus(stackId, originalStatus);
         this.notifyUpdate();
       }
       throw err;
@@ -2030,6 +2032,139 @@ export class StackManager {
         await this.teardownStack(stackId).catch(() => {});
       }
     }
+  }
+
+  /**
+   * Grant the failed stack exactly one additional review round on the same branch.
+   * The guard is consumed on dispatch; a second call is rejected.
+   */
+  async selfHealContinue(stackId: string): Promise<void> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+    if (stack.status !== 'failed') {
+      throw new SandstormError(ErrorCode.INVALID_INPUT, `Stack "${stackId}" is not in failed state`);
+    }
+    if (stack.selfheal_continue_used !== 0) {
+      throw new SandstormError(
+        ErrorCode.INVALID_INPUT,
+        `Stack "${stackId}" has already consumed its self-heal continuation`
+      );
+    }
+
+    const task = this.registry.getMostRecentTask(stackId);
+    if (!task) throw new SandstormError(ErrorCode.INTERNAL_ERROR, `No task found for stack "${stackId}"`);
+
+    // Consume the guard before dispatch to prevent double-use
+    this.registry.setSelfhealContinueUsed(stackId, 1);
+
+    this.registry.updateStackStatus(stackId, 'building');
+    this.notifyUpdate();
+    try {
+      await this.ensureStackContainersRunning(stack, stackId);
+    } catch (err) {
+      this.registry.updateStackStatus(stackId, 'failed');
+      this.notifyUpdate();
+      throw err;
+    }
+
+    try {
+      await this.dispatchTask(stackId, task.prompt, task.model ?? undefined, {
+        gateApproved: true,
+        skipTicketFetch: true,
+      });
+    } catch (err) {
+      this.registry.updateStackStatus(stackId, 'failed');
+      this.notifyUpdate();
+      throw err;
+    }
+  }
+
+  /**
+   * Compute the next `-rN` branch name for a ticket restart.
+   * The original branch counts as r1, so the first restart is `-r2`.
+   * N = 1 + max existing rK across active stacks + stack_history.
+   */
+  nextRestartBranch(ticketId: string, baseStackId: string): string {
+    const existing = this.registry.getBranchesForTicket(ticketId);
+    const prefix = `feat/${ticketId}-`;
+    let maxR = 1;
+    for (const branch of existing) {
+      if (!branch.startsWith(prefix)) continue;
+      const suffix = branch.slice(prefix.length);
+      const parts = suffix.split('-');
+      // Look for a trailing -rN segment
+      const last = parts[parts.length - 1];
+      if (/^r\d+$/.test(last)) {
+        const n = parseInt(last.slice(1), 10);
+        if (n > maxR) maxR = n;
+      }
+    }
+    // Derive base name from the stack id (strip ticket prefix)
+    const baseName = baseStackId.startsWith(prefix)
+      ? baseStackId.slice(prefix.length).replace(/-r\d+$/, '')
+      : baseStackId;
+    return `${prefix}${baseName}-r${maxR + 1}`;
+  }
+
+  /**
+   * Push the old failed branch to remote before teardown so the diff is preserved.
+   * Runs commit-if-dirty then push. Throws on push failure (teardown must not proceed).
+   */
+  async pushOldBranchBeforeTeardown(stackId: string, ticketId: string): Promise<void> {
+    await this.push(stackId, `wip: preserve failed-review state for ${ticketId}`);
+  }
+
+  /**
+   * Re-incorporate findings into the ticket spec and restart on a fresh branch.
+   * Sequence: update ticket body → push old branch → create new stack → dispatch → teardown old.
+   * Teardown is skipped if push fails (guard against data loss).
+   */
+  async restartWithFindings(
+    stackId: string,
+    findings: string,
+  ): Promise<{ newStackId: string }> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+    if (stack.status !== 'failed') {
+      throw new SandstormError(ErrorCode.INVALID_INPUT, `Stack "${stackId}" is not in failed state`);
+    }
+    const ticketId = stack.ticket;
+    if (!ticketId) throw new SandstormError(ErrorCode.INVALID_INPUT, 'Stack has no associated ticket');
+
+    // 1. Compose updated ticket body: original spec + appended findings
+    const ticketConfig = this.registry.getProjectTicketConfig(stack.project_dir);
+    let updatedTicketBody = findings;
+    if (ticketConfig) {
+      const originalBody = await fetchRawBodyWithConfig(ticketId, ticketConfig, stack.project_dir);
+      if (originalBody) {
+        updatedTicketBody = `${originalBody}\n\n---\n\n## Findings from failed attempt\n\n${findings}`;
+      }
+      await updateTicketWithConfig(ticketId, updatedTicketBody, ticketConfig, stack.project_dir);
+    }
+
+    // 2. Compute new branch name
+    const newBranch = this.nextRestartBranch(ticketId, stackId);
+    const newStackId = newBranch.replace(/^feat\//, '');
+
+    // 3. Push old branch (commit-if-dirty + push) — MUST succeed before teardown
+    await this.pushOldBranchBeforeTeardown(stackId, ticketId);
+
+    // 4. Create new stack on new branch
+    const newStack = this.createStack({
+      name: newStackId,
+      projectDir: stack.project_dir,
+      ticket: ticketId,
+      branch: newBranch,
+      description: stack.description ?? undefined,
+      runtime: stack.runtime,
+      task: updatedTicketBody,
+      forceBypass: true,
+    });
+
+    // 5. Tear down old stack (push already succeeded)
+    await this.teardownStack(stackId);
+
+    return { newStackId: newStack.id };
   }
 
   destroy(): void {

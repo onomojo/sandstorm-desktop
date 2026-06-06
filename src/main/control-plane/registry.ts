@@ -37,6 +37,7 @@ export interface Stack {
   created_at: string;
   updated_at: string;
   current_model: string | null;
+  selfheal_continue_used: number;
 }
 
 export type StackStatus =
@@ -77,6 +78,7 @@ export interface Task {
   verify_retries: number;
   review_verdicts: string | null;
   verify_outputs: string | null;
+  execute_outputs: string | null;
   execution_summary: string | null;
   needs_human_questions: string | null;
   execution_started_at: string | null;
@@ -121,6 +123,7 @@ export interface StackHistoryRecord {
   created_at: string;
   finished_at: string;
   duration_seconds: number;
+  selfheal_continue_used: number;
 }
 
 export interface Project {
@@ -667,6 +670,15 @@ export class Registry {
       this.setSchemaVersion(22);
     }
 
+    if (currentVersion < 23) {
+      // Per-iteration execute output markers for failure timeline (#545)
+      try { this.db.exec('ALTER TABLE tasks ADD COLUMN execute_outputs TEXT'); } catch { /* exists */ }
+      // One-shot self-heal continuation guard on stacks (#545)
+      try { this.db.exec('ALTER TABLE stacks ADD COLUMN selfheal_continue_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      // Mirror selfheal_continue_used in archive so the guard survives archival inspection
+      try { this.db.exec('ALTER TABLE stack_history ADD COLUMN selfheal_continue_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
+      this.setSchemaVersion(23);
+    }
   }
 
   // --- Projects ---
@@ -694,7 +706,7 @@ export class Registry {
 
   // --- Stacks ---
 
-  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'total_execution_input_tokens' | 'total_execution_output_tokens' | 'total_review_input_tokens' | 'total_review_output_tokens' | 'total_cache_read_tokens' | 'total_cache_creation_tokens' | 'rate_limit_reset_at' | 'current_model'>): Stack {
+  createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'total_execution_input_tokens' | 'total_execution_output_tokens' | 'total_review_input_tokens' | 'total_review_output_tokens' | 'total_cache_read_tokens' | 'total_cache_creation_tokens' | 'rate_limit_reset_at' | 'current_model' | 'selfheal_continue_used'>): Stack {
     if (!stack.id) {
       throw new Error('Stack id is required and cannot be null or empty');
     }
@@ -792,6 +804,21 @@ export class Registry {
     const task = this.getMostRecentTask(stackId);
     if (!task || task.status !== 'needs_human') return null;
     return task.needs_human_questions ?? null;
+  }
+
+  setSelfhealContinueUsed(stackId: string, value: 0 | 1): void {
+    this.db.prepare('UPDATE stacks SET selfheal_continue_used = ? WHERE id = ?').run(value, stackId);
+  }
+
+  /** Return all branch names (active stacks + stack_history) for the given ticket. */
+  getBranchesForTicket(ticketId: string): string[] {
+    const active = this.db.prepare(
+      "SELECT branch FROM stacks WHERE ticket = ? AND branch IS NOT NULL"
+    ).all(ticketId) as { branch: string }[];
+    const history = this.db.prepare(
+      "SELECT branch FROM stack_history WHERE ticket = ? AND branch IS NOT NULL"
+    ).all(ticketId) as { branch: string }[];
+    return [...active, ...history].map((r) => r.branch);
   }
 
   completeTaskVerifyBlockedEnvironmental(taskId: number, reason: string): void {
@@ -950,6 +977,7 @@ export class Registry {
   updateTaskMetadata(taskId: number, metadata: {
     review_verdicts?: string;
     verify_outputs?: string;
+    execute_outputs?: string;
     execution_summary?: string;
     execution_started_at?: string;
     execution_finished_at?: string;
@@ -1169,8 +1197,8 @@ export class Registry {
 
     this.db.prepare(
       `INSERT INTO stack_history
-        (stack_id, project, project_dir, ticket, branch, description, final_status, error, runtime, task_prompt, task_history, created_at, duration_seconds)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        (stack_id, project, project_dir, ticket, branch, description, final_status, error, runtime, task_prompt, task_history, created_at, duration_seconds, selfheal_continue_used)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       stack.id,
       stack.project,
@@ -1185,6 +1213,7 @@ export class Registry {
       taskHistory,
       stack.created_at,
       durationSeconds,
+      stack.selfheal_continue_used ?? 0,
     );
 
     this.onStackArchived?.(id);

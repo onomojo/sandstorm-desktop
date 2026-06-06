@@ -52,6 +52,7 @@ export interface Stack {
   created_at: string;
   updated_at: string;
   current_model: string | null;
+  selfheal_continue_used: number;
   services: ServiceInfo[];
 }
 
@@ -90,6 +91,7 @@ export interface Task {
   verify_retries: number;
   review_verdicts: string | null;
   verify_outputs: string | null;
+  execute_outputs: string | null;
   execution_summary: string | null;
   execution_started_at: string | null;
   execution_finished_at: string | null;
@@ -690,6 +692,9 @@ declare global {
         cleanupStale: (workspacePaths: string[]) => Promise<CleanupResult[]>;
         getNeedsHumanQuestions: (stackId: string) => Promise<string | null>;
         resumeNeedsHuman: (stackId: string, answers: string) => Promise<void>;
+        getFailureDiagnosis: (stackId: string) => Promise<FailureDiagnosis>;
+        selfHealContinue: (stackId: string) => Promise<void>;
+        restartWithFindings: (stackId: string, updatedTicketBody: string) => Promise<{ newStackId: string }>;
       };
       tasks: {
         dispatch: (stackId: string, prompt: string, model?: string) => Promise<Task>;
@@ -861,6 +866,29 @@ export interface RefineQuestion {
   id: string;
   question: string;
   options: RefineQuestionOption[];
+}
+
+/** Parsed from the diagnostic agent's free-form output (agent owns these fields only). */
+export interface DiagnosticAgentOutput {
+  summary: string;
+  eligibility: {
+    selfHeal: boolean;
+    answerQuestions: boolean;
+    reincorporateSpec: boolean;
+  };
+  questions?: RefineQuestion[];
+}
+
+export interface FailureTimelineEntry {
+  iteration: number;
+  phase: 'execute' | 'review' | 'verify';
+  verdict: 'pass' | 'fail';
+  detail: string;
+}
+
+/** Returned by getFailureDiagnosis IPC handler = agent output + deterministic timeline. */
+export interface FailureDiagnosis extends DiagnosticAgentOutput {
+  timeline: FailureTimelineEntry[];
 }
 
 /** Renderer-side mirror of `SpecGateResult` from main/control-plane/ticket-spec.ts. */
