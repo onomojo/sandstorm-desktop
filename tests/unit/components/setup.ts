@@ -35,11 +35,6 @@ export function mockSandstormApi() {
       cleanupStale: vi.fn().mockResolvedValue([]),
       getNeedsHumanQuestions: vi.fn().mockResolvedValue(null),
       resumeNeedsHuman: vi.fn().mockResolvedValue(undefined),
-      getFailureDiagnosis: vi.fn().mockResolvedValue({
-        summary: 'Test failure summary',
-        eligibility: { selfHeal: true, answerQuestions: false, reincorporateSpec: false },
-        timeline: [],
-      }),
       selfHealContinue: vi.fn().mockResolvedValue(undefined),
       restartWithFindings: vi.fn().mockResolvedValue({ newStackId: 'feat/123-fix-r2' }),
     },

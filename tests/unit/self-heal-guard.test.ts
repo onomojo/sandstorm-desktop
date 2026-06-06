@@ -308,4 +308,29 @@ describe('selfHealContinue', () => {
     });
     await expect(manager.selfHealContinue('idle-sh')).rejects.toMatchObject({ code: 'INVALID_INPUT' });
   });
+
+  it('ticket-522 fixture: two consecutive failed→continue cycles both reset review_iterations to 0 and selfheal_continue_used to 0', async () => {
+    // Matches ticket-522 shape: status=failed, selfheal_continue_used=0, session_id present, review_iterations=5
+    const { stackId, taskId } = makeFailedStack('session-ticket-522', 5);
+    expect(registry.getStack(stackId)!.selfheal_continue_used).toBe(0);
+
+    const { dispatchCont } = mockDispatch();
+
+    // Cycle 1
+    await manager.selfHealContinue(stackId);
+    expect(registry.getMostRecentTask(stackId)!.review_iterations).toBe(0);
+    expect(registry.getStack(stackId)!.selfheal_continue_used).toBe(0);
+    expect(dispatchCont).toHaveBeenCalledTimes(1);
+
+    // Drive stack back to failed for cycle 2
+    registry.updateStackStatus(stackId, 'failed');
+    const task2 = registry.getMostRecentTask(stackId)!;
+    registry.setTaskIterations(task2.id, 5, 0);
+
+    // Cycle 2
+    await manager.selfHealContinue(stackId);
+    expect(registry.getMostRecentTask(stackId)!.review_iterations).toBe(0);
+    expect(registry.getStack(stackId)!.selfheal_continue_used).toBe(0);
+    expect(dispatchCont).toHaveBeenCalledTimes(2);
+  });
 });
