@@ -68,6 +68,13 @@ const {
     getEffectiveBackend: vi.fn().mockReturnValue({ backend: 'claude' }),
     setBackendSecret: vi.fn(),
     hasBackendSecret: vi.fn().mockReturnValue(false),
+    getEffectiveRouting: vi.fn().mockReturnValue({}),
+    getProjectRouting: vi.fn().mockReturnValue(null),
+    setProjectRouting: vi.fn(),
+    removeProjectRouting: vi.fn(),
+    getGlobalRouting: vi.fn().mockReturnValue({ assignments: {}, preset: null }),
+    setGlobalRouting: vi.fn(),
+    applyPreset: vi.fn(),
   };
 
   const mockStackManager = {
@@ -2122,6 +2129,86 @@ describe('IPC Handlers', () => {
   });
 
   // =========================================================================
+  // Model Routing IPC Handlers
+  // =========================================================================
+  describe('modelRouting handlers', () => {
+    it('modelRouting:getEffective delegates to registry.getEffectiveRouting', async () => {
+      const map = { execution: { backend: 'claude', model: 'sonnet' } };
+      mockRegistry.getEffectiveRouting.mockReturnValue(map);
+      const result = await invokeHandler('modelRouting:getEffective', '/proj/a');
+      expect(result).toEqual(map);
+      expect(mockRegistry.getEffectiveRouting).toHaveBeenCalledWith('/proj/a');
+    });
+
+    it('modelRouting:getProject delegates to registry.getProjectRouting', async () => {
+      const config = { assignments: {}, preset: 'balanced' };
+      mockRegistry.getProjectRouting.mockReturnValue(config);
+      const result = await invokeHandler('modelRouting:getProject', '/proj/a');
+      expect(result).toEqual(config);
+      expect(mockRegistry.getProjectRouting).toHaveBeenCalledWith('/proj/a');
+    });
+
+    it('modelRouting:getProject returns null when no project routing', async () => {
+      mockRegistry.getProjectRouting.mockReturnValue(null);
+      const result = await invokeHandler('modelRouting:getProject', '/proj/a');
+      expect(result).toBeNull();
+    });
+
+    it('modelRouting:setProject delegates to registry.setProjectRouting', async () => {
+      const config = { assignments: { outer: { backend: 'claude', model: 'opus' } }, preset: null };
+      await invokeHandler('modelRouting:setProject', '/proj/a', config);
+      expect(mockRegistry.setProjectRouting).toHaveBeenCalledWith('/proj/a', config);
+    });
+
+    it('modelRouting:removeProject delegates to registry.removeProjectRouting', async () => {
+      await invokeHandler('modelRouting:removeProject', '/proj/a');
+      expect(mockRegistry.removeProjectRouting).toHaveBeenCalledWith('/proj/a');
+    });
+
+    it('modelRouting:getGlobal delegates to registry.getGlobalRouting', async () => {
+      const config = { assignments: { outer: { backend: 'claude', model: 'sonnet' } }, preset: null };
+      mockRegistry.getGlobalRouting.mockReturnValue(config);
+      const result = await invokeHandler('modelRouting:getGlobal');
+      expect(result).toEqual(config);
+      expect(mockRegistry.getGlobalRouting).toHaveBeenCalledOnce();
+    });
+
+    it('modelRouting:setGlobal delegates to registry.setGlobalRouting', async () => {
+      const config = { preset: 'max_quality' };
+      await invokeHandler('modelRouting:setGlobal', config);
+      expect(mockRegistry.setGlobalRouting).toHaveBeenCalledWith(config);
+    });
+
+    it('modelRouting:applyPreset delegates to registry.applyPreset', async () => {
+      await invokeHandler('modelRouting:applyPreset', '/proj/a', 'balanced');
+      expect(mockRegistry.applyPreset).toHaveBeenCalledWith('/proj/a', 'balanced');
+    });
+
+    it('modelRouting:getAvailableModels returns non-empty model list', async () => {
+      const result = await invokeHandler('modelRouting:getAvailableModels', '/proj/a') as unknown[];
+      expect(Array.isArray(result)).toBe(true);
+      expect(result.length).toBeGreaterThan(0);
+      const first = result[0] as Record<string, unknown>;
+      expect(first).toHaveProperty('backend');
+      expect(first).toHaveProperty('model');
+      expect(first).toHaveProperty('label');
+      expect(first).toHaveProperty('version');
+      expect(first).toHaveProperty('provider');
+      expect(first).toHaveProperty('available');
+    });
+
+    it('modelRouting:getAvailableModels includes claude models', async () => {
+      const result = await invokeHandler('modelRouting:getAvailableModels', '/proj/a') as Array<{ backend: string; model: string }>;
+      const claudeModels = result.filter(m => m.backend === 'claude');
+      expect(claudeModels.length).toBeGreaterThan(0);
+      const modelIds = claudeModels.map(m => m.model);
+      expect(modelIds).toContain('opus');
+      expect(modelIds).toContain('sonnet');
+      expect(modelIds).toContain('haiku');
+    });
+  });
+
+  // =========================================================================
   // Handler Registration Completeness
   // =========================================================================
   describe('handler registration', () => {
@@ -2192,6 +2279,14 @@ describe('IPC Handlers', () => {
       'backendSettings:getEffective',
       'backendSettings:setSecret',
       'backendSettings:secretStatus',
+      'modelRouting:getEffective',
+      'modelRouting:getProject',
+      'modelRouting:setProject',
+      'modelRouting:removeProject',
+      'modelRouting:getGlobal',
+      'modelRouting:setGlobal',
+      'modelRouting:applyPreset',
+      'modelRouting:getAvailableModels',
       'runtime:available',
       'session:getState',
       'session:getSettings',

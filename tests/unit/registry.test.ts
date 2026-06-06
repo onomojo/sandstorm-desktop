@@ -1320,6 +1320,85 @@ describe('Registry', () => {
       ).all() as { name: string }[]).length > 0;
       expect(taskTokenStepsExists).toBe(true);
     });
+
+    it('model_routing table exists after migration', () => {
+      const db = registry.getDb();
+      const exists = (db.prepare(
+        `SELECT name FROM sqlite_master WHERE type='table' AND name='model_routing'`
+      ).all() as { name: string }[]).length > 0;
+      expect(exists).toBe(true);
+    });
+  });
+
+  // ==========================================================================
+  // Model Routing CRUD
+  // ==========================================================================
+  describe('model routing CRUD', () => {
+    it('getGlobalRouting returns empty config on fresh database', () => {
+      const config = registry.getGlobalRouting();
+      expect(config.assignments).toEqual({});
+      expect(config.preset).toBeNull();
+    });
+
+    it('setGlobalRouting and getGlobalRouting round-trip', () => {
+      registry.setGlobalRouting({
+        assignments: { outer: { backend: 'claude', model: 'opus' } },
+        preset: 'balanced',
+      });
+      const config = registry.getGlobalRouting();
+      expect(config.assignments.outer).toEqual({ backend: 'claude', model: 'opus' });
+      expect(config.preset).toBe('balanced');
+    });
+
+    it('setGlobalRouting partial update preserves existing fields', () => {
+      registry.setGlobalRouting({ preset: 'budget' });
+      registry.setGlobalRouting({ assignments: { review: { backend: 'claude', model: 'sonnet' } } });
+      const config = registry.getGlobalRouting();
+      expect(config.preset).toBe('budget');
+      expect(config.assignments.review?.model).toBe('sonnet');
+    });
+
+    it('getProjectRouting returns null for missing project', () => {
+      expect(registry.getProjectRouting('/proj/missing')).toBeNull();
+    });
+
+    it('setProjectRouting and getProjectRouting round-trip', () => {
+      registry.setProjectRouting('/proj/a', {
+        assignments: { execution: { backend: 'claude', model: 'haiku' } },
+        preset: 'balanced',
+      });
+      const config = registry.getProjectRouting('/proj/a');
+      expect(config).not.toBeNull();
+      expect(config!.assignments.execution).toEqual({ backend: 'claude', model: 'haiku' });
+      expect(config!.preset).toBe('balanced');
+    });
+
+    it('removeProjectRouting removes the row', () => {
+      registry.setProjectRouting('/proj/a', { preset: 'budget' });
+      registry.removeProjectRouting('/proj/a');
+      expect(registry.getProjectRouting('/proj/a')).toBeNull();
+    });
+
+    it('different projects have independent routing', () => {
+      registry.setProjectRouting('/proj/a', { preset: 'budget' });
+      registry.setProjectRouting('/proj/b', { preset: 'max_quality' });
+      expect(registry.getProjectRouting('/proj/a')!.preset).toBe('budget');
+      expect(registry.getProjectRouting('/proj/b')!.preset).toBe('max_quality');
+    });
+
+    it('applyPreset sets preset and clears assignments on project row', () => {
+      registry.setProjectRouting('/proj/a', {
+        assignments: { outer: { backend: 'claude', model: 'sonnet' } },
+      });
+      registry.applyPreset('/proj/a', 'max_quality');
+      const config = registry.getProjectRouting('/proj/a');
+      expect(config!.preset).toBe('max_quality');
+      expect(config!.assignments).toEqual({});
+    });
+
+    it('applyPreset throws for unknown preset', () => {
+      expect(() => registry.applyPreset('/proj/a', 'nonexistent' as 'balanced')).toThrow();
+    });
   });
 
 });
