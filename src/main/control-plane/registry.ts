@@ -3,6 +3,13 @@ import { app } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { KANBAN_COLUMNS } from '../../shared/kanban';
+import {
+  TOUCHPOINTS,
+  PRESETS,
+  type TouchpointId,
+  type RoutingAssignment,
+  type PresetId,
+} from './routing';
 
 export interface Stack {
   id: string;
@@ -140,6 +147,11 @@ export interface TokenValidationResult {
 export interface ModelSettings {
   inner_model: string;
   outer_model: string;
+}
+
+export interface RoutingConfig {
+  assignments: Partial<Record<TouchpointId, RoutingAssignment>>;
+  preset: PresetId | null;
 }
 
 export type TicketProvider = 'github' | 'jira';
@@ -600,6 +612,18 @@ export class Registry {
       this.db.exec('DROP TABLE IF EXISTS ticket_rollups');
       this.db.exec('DROP TABLE IF EXISTS rollup_dirty_stacks');
       this.setSchemaVersion(20);
+    }
+
+    if (currentVersion < 21) {
+      // Per-touchpoint model routing: global + per-project routing maps with preset support
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS model_routing (
+          key         TEXT PRIMARY KEY,
+          assignments TEXT NOT NULL DEFAULT '{}',
+          preset      TEXT
+        );
+      `);
+      this.setSchemaVersion(21);
     }
 
   }
@@ -1217,6 +1241,128 @@ export class Registry {
     this.db.prepare('DELETE FROM model_settings WHERE key = ?').run(key);
   }
 
+  // --- Model Routing ---
+
+  private parseAssignments(json: string): Partial<Record<TouchpointId, RoutingAssignment>> {
+    try {
+      const parsed = JSON.parse(json);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Partial<Record<TouchpointId, RoutingAssignment>>;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+
+  private getLegacyEffectiveModels(projectDir: string): ModelSettings {
+    const global = this.getGlobalModelSettings();
+    const project = this.getProjectModelSettings(projectDir);
+    if (!project) return global;
+    return {
+      inner_model: project.inner_model === 'global' ? global.inner_model : project.inner_model,
+      outer_model: project.outer_model === 'global' ? global.outer_model : project.outer_model,
+    };
+  }
+
+  getGlobalRouting(): RoutingConfig {
+    const row = this.db.prepare(
+      "SELECT assignments, preset FROM model_routing WHERE key = 'global'"
+    ).get() as { assignments: string; preset: string | null } | undefined;
+    if (!row) return { assignments: {}, preset: null };
+    return {
+      assignments: this.parseAssignments(row.assignments),
+      preset: (row.preset as PresetId | null) ?? null,
+    };
+  }
+
+  setGlobalRouting(config: Partial<RoutingConfig>): void {
+    const current = this.getGlobalRouting();
+    const assignments = config.assignments !== undefined ? config.assignments : current.assignments;
+    const preset = config.preset !== undefined ? config.preset : current.preset;
+    this.db.prepare(
+      "INSERT OR REPLACE INTO model_routing (key, assignments, preset) VALUES ('global', ?, ?)"
+    ).run(JSON.stringify(assignments), preset ?? null);
+  }
+
+  getProjectRouting(projectDir: string): RoutingConfig | null {
+    const key = `project:${path.resolve(projectDir)}`;
+    const row = this.db.prepare(
+      'SELECT assignments, preset FROM model_routing WHERE key = ?'
+    ).get(key) as { assignments: string; preset: string | null } | undefined;
+    if (!row) return null;
+    return {
+      assignments: this.parseAssignments(row.assignments),
+      preset: (row.preset as PresetId | null) ?? null,
+    };
+  }
+
+  setProjectRouting(projectDir: string, config: Partial<RoutingConfig>): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    const existing = this.getProjectRouting(projectDir);
+    const assignments = config.assignments !== undefined ? config.assignments : (existing?.assignments ?? {});
+    const preset = config.preset !== undefined ? config.preset : (existing?.preset ?? null);
+    this.db.prepare(
+      'INSERT OR REPLACE INTO model_routing (key, assignments, preset) VALUES (?, ?, ?)'
+    ).run(key, JSON.stringify(assignments), preset ?? null);
+  }
+
+  removeProjectRouting(projectDir: string): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    this.db.prepare('DELETE FROM model_routing WHERE key = ?').run(key);
+  }
+
+  applyPreset(projectDir: string, presetId: PresetId): void {
+    if (!(presetId in PRESETS)) throw new Error(`Unknown preset: ${presetId}`);
+    const key = `project:${path.resolve(projectDir)}`;
+    this.db.prepare(
+      'INSERT OR REPLACE INTO model_routing (key, assignments, preset) VALUES (?, ?, ?)'
+    ).run(key, '{}', presetId);
+  }
+
+  getEffectiveRoutingFor(projectDir: string, touchpoint: TouchpointId): RoutingAssignment {
+    const projectRow = this.getProjectRouting(projectDir);
+    if (projectRow) {
+      if (projectRow.assignments[touchpoint]) {
+        return projectRow.assignments[touchpoint]!;
+      }
+      if (projectRow.preset && projectRow.preset in PRESETS) {
+        return PRESETS[projectRow.preset][touchpoint];
+      }
+    }
+
+    const globalRow = this.getGlobalRouting();
+    if (globalRow.assignments[touchpoint]) {
+      return globalRow.assignments[touchpoint]!;
+    }
+    if (globalRow.preset && globalRow.preset in PRESETS) {
+      return PRESETS[globalRow.preset][touchpoint];
+    }
+
+    const legacy = this.getLegacyEffectiveModels(projectDir);
+    const outerTouchpoints: TouchpointId[] = ['outer', 'refine', 'pr_description'];
+    if (outerTouchpoints.includes(touchpoint)) {
+      return { backend: 'claude', model: legacy.outer_model };
+    }
+    return { backend: 'claude', model: legacy.inner_model };
+  }
+
+  getEffectiveRouting(projectDir: string): Record<TouchpointId, RoutingAssignment> {
+    const result = {} as Record<TouchpointId, RoutingAssignment>;
+    for (const t of TOUCHPOINTS) {
+      result[t] = this.getEffectiveRoutingFor(projectDir, t);
+    }
+    return result;
+  }
+
+  getContainerPhaseModels(projectDir: string): Record<'execution' | 'review' | 'meta_review', RoutingAssignment> {
+    return {
+      execution:   this.getEffectiveRoutingFor(projectDir, 'execution'),
+      review:      this.getEffectiveRoutingFor(projectDir, 'review'),
+      meta_review: this.getEffectiveRoutingFor(projectDir, 'meta_review'),
+    };
+  }
+
   // --- Project Ticket Config ---
 
   getProjectTicketConfig(projectDir: string): ProjectTicketConfig | null {
@@ -1384,19 +1530,10 @@ export class Registry {
     ).run(ticketId, normalizedDir);
   }
 
-  /**
-   * Resolve the effective model for a project.
-   * Resolution order: per-project override > global default > hardcoded fallback
-   */
   getEffectiveModels(projectDir: string): ModelSettings {
-    const global = this.getGlobalModelSettings();
-    const project = this.getProjectModelSettings(projectDir);
-
-    if (!project) return global;
-
     return {
-      inner_model: project.inner_model === 'global' ? global.inner_model : project.inner_model,
-      outer_model: project.outer_model === 'global' ? global.outer_model : project.outer_model,
+      inner_model: this.getEffectiveRoutingFor(projectDir, 'execution').model,
+      outer_model: this.getEffectiveRoutingFor(projectDir, 'outer').model,
     };
   }
 
