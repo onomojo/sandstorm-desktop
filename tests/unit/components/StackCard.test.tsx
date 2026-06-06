@@ -228,6 +228,19 @@ describe('StackCard', () => {
     expect(resumeFn).toHaveBeenCalledWith('paused2', true);
   });
 
+  it('shows persistent Resolve Failure callout for failed stacks without hover', () => {
+    render(<StackCard stack={makeStack({ id: 'fail-callout', status: 'failed' })} />);
+    expect(screen.getByTestId('card-resolve-failure-fail-callout')).toBeDefined();
+  });
+
+  it('does not show persistent Resolve Failure callout for non-failed stacks', () => {
+    const { unmount } = render(<StackCard stack={makeStack({ id: 'up-callout', status: 'up' })} />);
+    expect(screen.queryByTestId('card-resolve-failure-up-callout')).toBeNull();
+    unmount();
+    render(<StackCard stack={makeStack({ id: 'running-callout', status: 'running' })} />);
+    expect(screen.queryByTestId('card-resolve-failure-running-callout')).toBeNull();
+  });
+
   it('shows Resolve Failure button only for failed stacks', () => {
     const { unmount } = render(
       <StackCard stack={makeStack({ id: 'resolve-failed', status: 'failed' })} />

@@ -113,7 +113,7 @@ describe('ResolveFailureModal', () => {
     expect(btn.disabled).toBe(false);
   });
 
-  it('self-heal button is disabled when continuation already consumed', async () => {
+  it('self-heal button is enabled even when selfheal_continue_used is 1 (repeatable)', async () => {
     api.stacks.getFailureDiagnosis.mockResolvedValue(DIAGNOSIS_SELF_HEAL);
     render(
       <ResolveFailureModal stack={makeFailedStack({ selfheal_continue_used: 1 })} onClose={vi.fn()} onResolved={vi.fn()} />
@@ -121,7 +121,7 @@ describe('ResolveFailureModal', () => {
     await waitFor(() => expect(screen.queryByTestId('resolve-modal-loading')).toBeNull());
 
     const btn = screen.getByTestId('self-heal-btn') as HTMLButtonElement;
-    expect(btn.disabled).toBe(true);
+    expect(btn.disabled).toBe(false);
   });
 
   it('clicking self-heal calls selfHealContinue and triggers onResolved', async () => {

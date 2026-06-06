@@ -689,4 +689,74 @@ describe('runStartupReconciliation', () => {
 
     watcher.unwatchAll();
   });
+
+  // -------------------------------------------------------------------------
+  // (j) failed-stack guard reset — selfheal_continue_used reset to 0 on startup
+  // -------------------------------------------------------------------------
+  it('(j) resets selfheal_continue_used to 0 for every failed stack', async () => {
+    const stackId = `failed-guard-${Math.random().toString(36).slice(2)}`;
+    registry.createStack({
+      id: stackId,
+      project: 'proj',
+      project_dir: '/proj',
+      ticket: null,
+      branch: null,
+      description: null,
+      status: 'failed',
+      runtime: 'docker',
+    });
+    registry.setSelfhealContinueUsed(stackId, 1);
+
+    const runtime = makeRuntime();
+    const sm = makeStackManagerMock();
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+
+    await runStartupReconciliation(
+      registry, sm as unknown as StackManager, watcher,
+      runtime, runtime, notifyUpdate,
+      { workspaceExistsFn: () => false }
+    );
+
+    const stack = registry.getStack(stackId)!;
+    expect(stack.selfheal_continue_used).toBe(0);
+
+    watcher.unwatchAll();
+  });
+
+  it('(j) idempotent — reset is safe to run twice', async () => {
+    const stackId = `failed-idempotent-${Math.random().toString(36).slice(2)}`;
+    registry.createStack({
+      id: stackId,
+      project: 'proj',
+      project_dir: '/proj',
+      ticket: null,
+      branch: null,
+      description: null,
+      status: 'failed',
+      runtime: 'docker',
+    });
+    registry.setSelfhealContinueUsed(stackId, 1);
+
+    const runtime = makeRuntime();
+    const sm = makeStackManagerMock();
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+
+    await runStartupReconciliation(
+      registry, sm as unknown as StackManager, watcher,
+      runtime, runtime, notifyUpdate,
+      { workspaceExistsFn: () => false }
+    );
+
+    // Second run — should remain 0, not flip to 1
+    await runStartupReconciliation(
+      registry, sm as unknown as StackManager, watcher,
+      runtime, runtime, notifyUpdate,
+      { workspaceExistsFn: () => false }
+    );
+
+    const stack = registry.getStack(stackId)!;
+    expect(stack.selfheal_continue_used).toBe(0);
+
+    watcher.unwatchAll();
+  });
 });

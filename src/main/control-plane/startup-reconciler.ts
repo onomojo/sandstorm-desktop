@@ -112,6 +112,14 @@ export async function runStartupReconciliation(
   registry.reconcilePrOpenStuckTickets();
   notifyUpdate();
 
+  // Reset selfheal_continue_used to 0 for every failed stack so previously-stuck
+  // stacks are continuable and the guard is never permanently set.
+  const failedStacks = registry.listStacks().filter((s) => s.status === 'failed');
+  for (const stack of failedStacks) {
+    registry.setSelfhealContinueUsed(stack.id, 0);
+  }
+  if (failedStacks.length > 0) notifyUpdate();
+
   const staleStacks = registry.listStacks().filter((s) => RECONCILE_STATUSES.has(s.status));
 
   for (const stack of staleStacks) {
