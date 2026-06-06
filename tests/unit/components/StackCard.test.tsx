@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { StackCard } from '../../../src/renderer/components/StackCard';
 import { useAppStore, Stack } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
@@ -31,6 +31,7 @@ function makeStack(overrides: Partial<Stack> = {}): Stack {
     total_review_output_tokens: 0,
     rate_limit_reset_at: null,
     current_model: null,
+    selfheal_continue_used: 0,
     services: [],
     ...overrides,
   };
@@ -225,5 +226,32 @@ describe('StackCard', () => {
     fireEvent.click(screen.getByTestId('card-resume-paused2'));
 
     expect(resumeFn).toHaveBeenCalledWith('paused2', true);
+  });
+
+  it('shows Resolve Failure button only for failed stacks', () => {
+    const { unmount } = render(
+      <StackCard stack={makeStack({ id: 'resolve-failed', status: 'failed' })} />
+    );
+    expect(screen.getByTestId('resolve-failure-btn')).toBeDefined();
+    unmount();
+
+    render(<StackCard stack={makeStack({ id: 'resolve-up', status: 'up' })} />);
+    expect(screen.queryByTestId('resolve-failure-btn')).toBeNull();
+  });
+
+  it('does not show Resolve Failure button for running stacks', () => {
+    render(<StackCard stack={makeStack({ id: 'resolve-running', status: 'running' })} />);
+    expect(screen.queryByTestId('resolve-failure-btn')).toBeNull();
+  });
+
+  it('opens ResolveFailureModal when Resolve Failure button is clicked', async () => {
+    render(
+      <StackCard stack={makeStack({ id: 'resolve-modal', status: 'failed' })} />
+    );
+    expect(screen.queryByTestId('resolve-failure-modal')).toBeNull();
+    fireEvent.click(screen.getByTestId('resolve-failure-btn'));
+    await waitFor(() => {
+      expect(screen.getByTestId('resolve-failure-modal')).toBeDefined();
+    });
   });
 });

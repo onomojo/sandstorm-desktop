@@ -78,6 +78,7 @@ import {
   workspacePathFor,
   createPullRequest,
 } from './control-plane/pr-creator';
+import { getFailureDiagnosis } from './control-plane/failure-diagnosis';
 import { showNotification } from './tray';
 import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection, closeTicketWithConfig, markTicketDoneWithConfig } from './control-plane/ticket-config';
 import { withRetry } from './control-plane/retry-with-backoff';
@@ -1008,6 +1009,18 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stacks:resumeNeedsHuman', async (_event, stackId: string, answers: string) => {
     await stackManager.resumeNeedsHumanStack(stackId, answers);
+  });
+
+  ipcMain.handle('stacks:getFailureDiagnosis', async (_event, stackId: string) => {
+    return getFailureDiagnosis(stackId, registry, agentBackend);
+  });
+
+  ipcMain.handle('stacks:selfHealContinue', async (_event, stackId: string) => {
+    await stackManager.selfHealContinue(stackId);
+  });
+
+  ipcMain.handle('stacks:restartWithFindings', async (_event, stackId: string, findings: string) => {
+    return stackManager.restartWithFindings(stackId, findings);
   });
 
   ipcMain.on('session:activity', () => {
