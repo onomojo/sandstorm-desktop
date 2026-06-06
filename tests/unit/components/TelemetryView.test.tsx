@@ -94,6 +94,23 @@ describe('TelemetryView', () => {
     setupStore();
   });
 
+  describe('duplicate view-switcher removal (#546)', () => {
+    it('does not render the duplicate Board tab in the telemetry header', () => {
+      render(<TelemetryView />);
+      expect(screen.queryByTestId('tab-board')).toBeNull();
+    });
+
+    it('does not render the duplicate Telemetry tab in the telemetry header', () => {
+      render(<TelemetryView />);
+      expect(screen.queryByTestId('tab-telemetry')).toBeNull();
+    });
+
+    it('still renders the range-chips date filter', () => {
+      render(<TelemetryView />);
+      expect(screen.getByTestId('range-chips')).toBeDefined();
+    });
+  });
+
   describe('KPI panel', () => {
     it('renders monthCost', () => {
       render(<TelemetryView />);

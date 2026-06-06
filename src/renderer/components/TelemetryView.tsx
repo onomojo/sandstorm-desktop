@@ -69,9 +69,6 @@ export function TelemetryView() {
     telemetryError,
     boardTickets,
     activeProject,
-    mainView,
-    setMainView,
-    selectStack,
   } = useAppStore();
 
   const project = activeProject();
@@ -178,26 +175,6 @@ export function TelemetryView() {
             {project && (
               <span className="text-sandstorm-muted text-sm truncate max-w-[200px]">{project.name}</span>
             )}
-            {/* Board | Telemetry tabset */}
-            <div className="flex items-center gap-1 bg-sandstorm-surface rounded-lg p-0.5 border border-sandstorm-border">
-              <button
-                onClick={() => { setMainView('board'); selectStack(null); }}
-                className={`px-3 py-1 rounded text-xs font-medium transition-colors ${
-                  mainView !== 'telemetry'
-                    ? 'bg-sandstorm-accent text-sandstorm-rail'
-                    : 'text-sandstorm-text-secondary hover:text-sandstorm-text'
-                }`}
-                data-testid="tab-board"
-              >
-                Board
-              </button>
-              <button
-                className="px-3 py-1 rounded text-xs font-medium bg-sandstorm-accent text-sandstorm-rail"
-                data-testid="tab-telemetry"
-              >
-                Telemetry
-              </button>
-            </div>
           </div>
 
           <div className="flex items-center gap-2">
