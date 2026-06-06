@@ -37,6 +37,35 @@ function AskClaudeIcon() {
   );
 }
 
+function GridIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <rect x="3" y="3" width="7" height="7" rx="1"/>
+      <rect x="14" y="3" width="7" height="7" rx="1"/>
+      <rect x="3" y="14" width="7" height="7" rx="1"/>
+      <rect x="14" y="14" width="7" height="7" rx="1"/>
+    </svg>
+  );
+}
+
+function ChartIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M3 3v18h18"/>
+      <path d="M7 14l3-4 3 3 4-6"/>
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <circle cx="11" cy="11" r="7"/>
+      <path d="M21 21l-4.3-4.3"/>
+    </svg>
+  );
+}
+
 
 export function TopNav() {
   const {
@@ -173,6 +202,9 @@ export function TopNav() {
               className="flex items-center gap-1 px-2 py-1 rounded text-sm text-sandstorm-text hover:bg-sandstorm-surface transition-colors"
               data-testid="view-switcher-btn"
             >
+              <span data-testid="view-icon">
+                {mainView === 'telemetry' ? <ChartIcon /> : <GridIcon />}
+              </span>
               <span>{mainView === 'telemetry' ? 'Telemetry' : 'Board'}</span>
               <ChevronDown />
             </button>
@@ -187,11 +219,12 @@ export function TopNav() {
                     setMainView('board');
                     setViewOpen(false);
                   }}
-                  className={`flex items-center w-full px-3 py-2 text-sm text-left hover:bg-sandstorm-accent/10 transition-colors ${
+                  className={`flex items-center gap-1.5 w-full px-3 py-2 text-sm text-left hover:bg-sandstorm-accent/10 transition-colors ${
                     mainView === 'board' ? 'text-sandstorm-text' : 'text-sandstorm-text-secondary'
                   }`}
                   data-testid="view-item-board"
                 >
+                  <span data-testid="view-item-board-icon"><GridIcon /></span>
                   Board
                 </button>
                 <button
@@ -200,11 +233,12 @@ export function TopNav() {
                     selectStack(null);
                     setViewOpen(false);
                   }}
-                  className={`flex items-center w-full px-3 py-2 text-sm text-left hover:bg-sandstorm-accent/10 transition-colors ${
+                  className={`flex items-center gap-1.5 w-full px-3 py-2 text-sm text-left hover:bg-sandstorm-accent/10 transition-colors ${
                     mainView === 'telemetry' ? 'text-sandstorm-text' : 'text-sandstorm-text-secondary'
                   }`}
                   data-testid="view-item-telemetry"
                 >
+                  <span data-testid="view-item-telemetry-icon"><ChartIcon /></span>
                   Telemetry
                 </button>
               </div>
@@ -214,14 +248,22 @@ export function TopNav() {
 
         {/* Center zone: search */}
         <div className="flex justify-center px-4">
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search tickets…"
-            className="w-full max-w-sm px-3 py-1.5 text-sm bg-sandstorm-surface border border-sandstorm-border rounded-lg text-sandstorm-text placeholder-sandstorm-muted/60 focus:outline-none focus:border-sandstorm-accent"
-            data-testid="search-input"
-          />
+          <div className="relative w-full max-w-sm">
+            <span
+              data-testid="search-icon"
+              className="absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-sandstorm-muted/60"
+            >
+              <SearchIcon />
+            </span>
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search tickets…"
+              className="w-full pl-8 pr-3 py-1.5 text-sm bg-sandstorm-surface border border-sandstorm-border rounded-lg text-sandstorm-text placeholder-sandstorm-muted/60 focus:outline-none focus:border-sandstorm-accent"
+              data-testid="search-input"
+            />
+          </div>
         </div>
 
         {/* Right zone: actions + identity */}

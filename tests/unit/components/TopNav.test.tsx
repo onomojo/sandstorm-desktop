@@ -214,6 +214,50 @@ describe('TopNav', () => {
     expect(btn.textContent).toContain('Telemetry');
   });
 
+  // ── View icons ────────────────────────────────────────────────────────────
+
+  it('view-switcher button shows grid icon when mainView is board', () => {
+    useAppStore.setState({ mainView: 'board' });
+    render(<TopNav />);
+    expect(screen.getByTestId('view-icon')).toBeDefined();
+    const icon = screen.getByTestId('view-icon');
+    expect(icon.querySelector('rect')).not.toBeNull();
+  });
+
+  it('view-switcher button shows chart icon when mainView is telemetry', () => {
+    useAppStore.setState({ mainView: 'telemetry' });
+    render(<TopNav />);
+    expect(screen.getByTestId('view-icon')).toBeDefined();
+    const icon = screen.getByTestId('view-icon');
+    expect(icon.querySelector('path')).not.toBeNull();
+    expect(icon.querySelector('rect')).toBeNull();
+  });
+
+  it('view dropdown shows grid icon in board row', () => {
+    render(<TopNav />);
+    fireEvent.click(screen.getByTestId('view-switcher-btn'));
+    expect(screen.getByTestId('view-item-board-icon')).toBeDefined();
+  });
+
+  it('view dropdown shows chart icon in telemetry row', () => {
+    render(<TopNav />);
+    fireEvent.click(screen.getByTestId('view-switcher-btn'));
+    expect(screen.getByTestId('view-item-telemetry-icon')).toBeDefined();
+  });
+
+  it('search icon renders adjacent to search input', () => {
+    render(<TopNav />);
+    expect(screen.getByTestId('search-icon')).toBeDefined();
+    expect(screen.getByTestId('search-input')).toBeDefined();
+  });
+
+  it('search icon does not block input interaction', () => {
+    render(<TopNav />);
+    const input = screen.getByTestId('search-input');
+    fireEvent.change(input, { target: { value: 'hello' } });
+    expect(useAppStore.getState().searchQuery).toBe('hello');
+  });
+
   // ── Action buttons ────────────────────────────────────────────────────────
 
   it('clicking Ask Claude button opens the modal', async () => {

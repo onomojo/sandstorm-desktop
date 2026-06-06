@@ -3,6 +3,15 @@ import { app } from 'electron';
 import path from 'path';
 import fs from 'fs';
 import { KANBAN_COLUMNS } from '../../shared/kanban';
+import { resolveEffectiveBackend } from './backend-resolution';
+import type { GlobalBackendInput, ProjectBackendInput, EffectiveBackend, BackendType } from './backend-resolution';
+import {
+  TOUCHPOINTS,
+  PRESETS,
+  type TouchpointId,
+  type RoutingAssignment,
+  type PresetId,
+} from './routing';
 
 export interface Stack {
   id: string;
@@ -143,6 +152,22 @@ export interface TokenValidationResult {
 export interface ModelSettings {
   inner_model: string;
   outer_model: string;
+}
+
+export type { BackendType, EffectiveBackend } from './backend-resolution';
+
+export interface BackendSettings {
+  inner_backend: string;
+  outer_backend: string;
+  inner_provider: string | null;
+  inner_model: string | null;
+  outer_provider: string | null;
+  outer_model: string | null;
+}
+
+export interface RoutingConfig {
+  assignments: Partial<Record<TouchpointId, RoutingAssignment>>;
+  preset: PresetId | null;
 }
 
 export type TicketProvider = 'github' | 'jira';
@@ -606,15 +631,54 @@ export class Registry {
     }
 
     if (currentVersion < 21) {
+      // Per-touchpoint model routing: global + per-project routing maps with preset support
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS model_routing (
+          key         TEXT PRIMARY KEY,
+          assignments TEXT NOT NULL DEFAULT '{}',
+          preset      TEXT
+        );
+      `);
+      this.setSchemaVersion(21);
+    }
+
+    if (currentVersion < 22) {
+      // Pluggable agent backend: persist per-surface backend choice and OpenCode credentials
+      try { this.db.exec("ALTER TABLE model_settings ADD COLUMN inner_backend TEXT NOT NULL DEFAULT 'claude'"); } catch { /* column already exists */ }
+      try { this.db.exec("ALTER TABLE model_settings ADD COLUMN outer_backend TEXT NOT NULL DEFAULT 'claude'"); } catch { /* column already exists */ }
+
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS opencode_settings (
+          key      TEXT NOT NULL,
+          surface  TEXT NOT NULL,
+          provider TEXT,
+          model    TEXT,
+          PRIMARY KEY (key, surface)
+        );
+      `);
+
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS backend_secrets (
+          key     TEXT NOT NULL,
+          surface TEXT NOT NULL,
+          name    TEXT,
+          value   TEXT,
+          PRIMARY KEY (key, surface)
+        );
+      `);
+
+      this.setSchemaVersion(22);
+    }
+
+    if (currentVersion < 23) {
       // Per-iteration execute output markers for failure timeline (#545)
       try { this.db.exec('ALTER TABLE tasks ADD COLUMN execute_outputs TEXT'); } catch { /* exists */ }
       // One-shot self-heal continuation guard on stacks (#545)
       try { this.db.exec('ALTER TABLE stacks ADD COLUMN selfheal_continue_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
       // Mirror selfheal_continue_used in archive so the guard survives archival inspection
       try { this.db.exec('ALTER TABLE stack_history ADD COLUMN selfheal_continue_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
-      this.setSchemaVersion(21);
+      this.setSchemaVersion(23);
     }
-
   }
 
   // --- Projects ---
@@ -1216,8 +1280,9 @@ export class Registry {
 
   setGlobalModelSettings(settings: Partial<ModelSettings>): void {
     const current = this.getGlobalModelSettings();
+    // Use UPDATE to avoid resetting the new inner_backend/outer_backend columns
     this.db.prepare(
-      "INSERT OR REPLACE INTO model_settings (key, inner_model, outer_model) VALUES ('global', ?, ?)"
+      "UPDATE model_settings SET inner_model = ?, outer_model = ? WHERE key = 'global'"
     ).run(
       settings.inner_model ?? current.inner_model,
       settings.outer_model ?? current.outer_model,
@@ -1237,14 +1302,140 @@ export class Registry {
     const existing = this.getProjectModelSettings(projectDir);
     const inner = settings.inner_model ?? existing?.inner_model ?? 'global';
     const outer = settings.outer_model ?? existing?.outer_model ?? 'global';
+    // INSERT OR IGNORE ensures row exists with backend defaults; UPDATE sets only model columns
     this.db.prepare(
-      'INSERT OR REPLACE INTO model_settings (key, inner_model, outer_model) VALUES (?, ?, ?)'
-    ).run(key, inner, outer);
+      "INSERT OR IGNORE INTO model_settings (key, inner_model, outer_model, inner_backend, outer_backend) VALUES (?, 'global', 'global', 'global', 'global')"
+    ).run(key);
+    this.db.prepare(
+      'UPDATE model_settings SET inner_model = ?, outer_model = ? WHERE key = ?'
+    ).run(inner, outer, key);
   }
 
   removeProjectModelSettings(projectDir: string): void {
     const key = `project:${path.resolve(projectDir)}`;
     this.db.prepare('DELETE FROM model_settings WHERE key = ?').run(key);
+  }
+
+  // --- Model Routing ---
+
+  private parseAssignments(json: string): Partial<Record<TouchpointId, RoutingAssignment>> {
+    try {
+      const parsed = JSON.parse(json);
+      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
+        return parsed as Partial<Record<TouchpointId, RoutingAssignment>>;
+      }
+      return {};
+    } catch {
+      return {};
+    }
+  }
+
+  private getLegacyEffectiveModels(projectDir: string): ModelSettings {
+    const global = this.getGlobalModelSettings();
+    const project = this.getProjectModelSettings(projectDir);
+    if (!project) return global;
+    return {
+      inner_model: project.inner_model === 'global' ? global.inner_model : project.inner_model,
+      outer_model: project.outer_model === 'global' ? global.outer_model : project.outer_model,
+    };
+  }
+
+  getGlobalRouting(): RoutingConfig {
+    const row = this.db.prepare(
+      "SELECT assignments, preset FROM model_routing WHERE key = 'global'"
+    ).get() as { assignments: string; preset: string | null } | undefined;
+    if (!row) return { assignments: {}, preset: null };
+    return {
+      assignments: this.parseAssignments(row.assignments),
+      preset: (row.preset as PresetId | null) ?? null,
+    };
+  }
+
+  setGlobalRouting(config: Partial<RoutingConfig>): void {
+    const current = this.getGlobalRouting();
+    const assignments = config.assignments !== undefined ? config.assignments : current.assignments;
+    const preset = config.preset !== undefined ? config.preset : current.preset;
+    this.db.prepare(
+      "INSERT OR REPLACE INTO model_routing (key, assignments, preset) VALUES ('global', ?, ?)"
+    ).run(JSON.stringify(assignments), preset ?? null);
+  }
+
+  getProjectRouting(projectDir: string): RoutingConfig | null {
+    const key = `project:${path.resolve(projectDir)}`;
+    const row = this.db.prepare(
+      'SELECT assignments, preset FROM model_routing WHERE key = ?'
+    ).get(key) as { assignments: string; preset: string | null } | undefined;
+    if (!row) return null;
+    return {
+      assignments: this.parseAssignments(row.assignments),
+      preset: (row.preset as PresetId | null) ?? null,
+    };
+  }
+
+  setProjectRouting(projectDir: string, config: Partial<RoutingConfig>): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    const existing = this.getProjectRouting(projectDir);
+    const assignments = config.assignments !== undefined ? config.assignments : (existing?.assignments ?? {});
+    const preset = config.preset !== undefined ? config.preset : (existing?.preset ?? null);
+    this.db.prepare(
+      'INSERT OR REPLACE INTO model_routing (key, assignments, preset) VALUES (?, ?, ?)'
+    ).run(key, JSON.stringify(assignments), preset ?? null);
+  }
+
+  removeProjectRouting(projectDir: string): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    this.db.prepare('DELETE FROM model_routing WHERE key = ?').run(key);
+  }
+
+  applyPreset(projectDir: string, presetId: PresetId): void {
+    if (!(presetId in PRESETS)) throw new Error(`Unknown preset: ${presetId}`);
+    const key = `project:${path.resolve(projectDir)}`;
+    this.db.prepare(
+      'INSERT OR REPLACE INTO model_routing (key, assignments, preset) VALUES (?, ?, ?)'
+    ).run(key, '{}', presetId);
+  }
+
+  getEffectiveRoutingFor(projectDir: string, touchpoint: TouchpointId): RoutingAssignment {
+    const projectRow = this.getProjectRouting(projectDir);
+    if (projectRow) {
+      if (projectRow.assignments[touchpoint]) {
+        return projectRow.assignments[touchpoint]!;
+      }
+      if (projectRow.preset && projectRow.preset in PRESETS) {
+        return PRESETS[projectRow.preset][touchpoint];
+      }
+    }
+
+    const globalRow = this.getGlobalRouting();
+    if (globalRow.assignments[touchpoint]) {
+      return globalRow.assignments[touchpoint]!;
+    }
+    if (globalRow.preset && globalRow.preset in PRESETS) {
+      return PRESETS[globalRow.preset][touchpoint];
+    }
+
+    const legacy = this.getLegacyEffectiveModels(projectDir);
+    const outerTouchpoints: TouchpointId[] = ['outer', 'refine', 'pr_description'];
+    if (outerTouchpoints.includes(touchpoint)) {
+      return { backend: 'claude', model: legacy.outer_model };
+    }
+    return { backend: 'claude', model: legacy.inner_model };
+  }
+
+  getEffectiveRouting(projectDir: string): Record<TouchpointId, RoutingAssignment> {
+    const result = {} as Record<TouchpointId, RoutingAssignment>;
+    for (const t of TOUCHPOINTS) {
+      result[t] = this.getEffectiveRoutingFor(projectDir, t);
+    }
+    return result;
+  }
+
+  getContainerPhaseModels(projectDir: string): Record<'execution' | 'review' | 'meta_review', RoutingAssignment> {
+    return {
+      execution:   this.getEffectiveRoutingFor(projectDir, 'execution'),
+      review:      this.getEffectiveRoutingFor(projectDir, 'review'),
+      meta_review: this.getEffectiveRoutingFor(projectDir, 'meta_review'),
+    };
   }
 
   // --- Project Ticket Config ---
@@ -1414,20 +1605,166 @@ export class Registry {
     ).run(ticketId, normalizedDir);
   }
 
-  /**
-   * Resolve the effective model for a project.
-   * Resolution order: per-project override > global default > hardcoded fallback
-   */
   getEffectiveModels(projectDir: string): ModelSettings {
-    const global = this.getGlobalModelSettings();
-    const project = this.getProjectModelSettings(projectDir);
+    return {
+      inner_model: this.getEffectiveRoutingFor(projectDir, 'execution').model,
+      outer_model: this.getEffectiveRoutingFor(projectDir, 'outer').model,
+    };
+  }
 
-    if (!project) return global;
+  // --- Backend Settings ---
+
+  getGlobalBackendSettings(): BackendSettings {
+    const modelRow = this.db.prepare(
+      "SELECT inner_backend, outer_backend FROM model_settings WHERE key = 'global'"
+    ).get() as { inner_backend: string; outer_backend: string } | undefined;
+
+    const innerOC = this.db.prepare(
+      "SELECT provider, model FROM opencode_settings WHERE key = 'global' AND surface = 'inner'"
+    ).get() as { provider: string | null; model: string | null } | undefined;
+
+    const outerOC = this.db.prepare(
+      "SELECT provider, model FROM opencode_settings WHERE key = 'global' AND surface = 'outer'"
+    ).get() as { provider: string | null; model: string | null } | undefined;
 
     return {
-      inner_model: project.inner_model === 'global' ? global.inner_model : project.inner_model,
-      outer_model: project.outer_model === 'global' ? global.outer_model : project.outer_model,
+      inner_backend: modelRow?.inner_backend ?? 'claude',
+      outer_backend: modelRow?.outer_backend ?? 'claude',
+      inner_provider: innerOC?.provider ?? null,
+      inner_model: innerOC?.model ?? null,
+      outer_provider: outerOC?.provider ?? null,
+      outer_model: outerOC?.model ?? null,
     };
+  }
+
+  setGlobalBackendSettings(settings: Partial<BackendSettings>): void {
+    const current = this.getGlobalBackendSettings();
+
+    this.db.prepare(
+      "UPDATE model_settings SET inner_backend = ?, outer_backend = ? WHERE key = 'global'"
+    ).run(
+      settings.inner_backend ?? current.inner_backend,
+      settings.outer_backend ?? current.outer_backend,
+    );
+
+    this.db.prepare(
+      "INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'inner', ?, ?)"
+    ).run(
+      settings.inner_provider !== undefined ? settings.inner_provider : current.inner_provider,
+      settings.inner_model !== undefined ? settings.inner_model : current.inner_model,
+    );
+
+    this.db.prepare(
+      "INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'outer', ?, ?)"
+    ).run(
+      settings.outer_provider !== undefined ? settings.outer_provider : current.outer_provider,
+      settings.outer_model !== undefined ? settings.outer_model : current.outer_model,
+    );
+  }
+
+  getProjectBackendSettings(projectDir: string): BackendSettings | null {
+    const key = `project:${path.resolve(projectDir)}`;
+
+    const modelRow = this.db.prepare(
+      'SELECT inner_backend, outer_backend FROM model_settings WHERE key = ?'
+    ).get(key) as { inner_backend: string; outer_backend: string } | undefined;
+
+    if (!modelRow) return null;
+
+    const innerOC = this.db.prepare(
+      "SELECT provider, model FROM opencode_settings WHERE key = ? AND surface = 'inner'"
+    ).get(key) as { provider: string | null; model: string | null } | undefined;
+
+    const outerOC = this.db.prepare(
+      "SELECT provider, model FROM opencode_settings WHERE key = ? AND surface = 'outer'"
+    ).get(key) as { provider: string | null; model: string | null } | undefined;
+
+    return {
+      inner_backend: modelRow.inner_backend,
+      outer_backend: modelRow.outer_backend,
+      inner_provider: innerOC?.provider ?? null,
+      inner_model: innerOC?.model ?? null,
+      outer_provider: outerOC?.provider ?? null,
+      outer_model: outerOC?.model ?? null,
+    };
+  }
+
+  setProjectBackendSettings(projectDir: string, settings: Partial<BackendSettings>): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    const existing = this.getProjectBackendSettings(projectDir);
+
+    const inner_backend = settings.inner_backend ?? existing?.inner_backend ?? 'global';
+    const outer_backend = settings.outer_backend ?? existing?.outer_backend ?? 'global';
+
+    // Ensure row exists with safe defaults; then update only backend columns
+    this.db.prepare(
+      "INSERT OR IGNORE INTO model_settings (key, inner_model, outer_model, inner_backend, outer_backend) VALUES (?, 'global', 'global', 'global', 'global')"
+    ).run(key);
+    this.db.prepare(
+      'UPDATE model_settings SET inner_backend = ?, outer_backend = ? WHERE key = ?'
+    ).run(inner_backend, outer_backend, key);
+
+    const inner_provider = settings.inner_provider !== undefined ? settings.inner_provider : (existing?.inner_provider ?? null);
+    const inner_model = settings.inner_model !== undefined ? settings.inner_model : (existing?.inner_model ?? null);
+    const outer_provider = settings.outer_provider !== undefined ? settings.outer_provider : (existing?.outer_provider ?? null);
+    const outer_model = settings.outer_model !== undefined ? settings.outer_model : (existing?.outer_model ?? null);
+
+    this.db.prepare(
+      "INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES (?, 'inner', ?, ?)"
+    ).run(key, inner_provider, inner_model);
+
+    this.db.prepare(
+      "INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES (?, 'outer', ?, ?)"
+    ).run(key, outer_provider, outer_model);
+  }
+
+  getEffectiveBackend(projectDir: string, surface: 'inner' | 'outer'): EffectiveBackend {
+    const globalSettings = this.getGlobalBackendSettings();
+    const projectSettings = this.getProjectBackendSettings(projectDir);
+
+    const globalInput: GlobalBackendInput = {
+      inner_backend: globalSettings.inner_backend as BackendType,
+      outer_backend: globalSettings.outer_backend as BackendType,
+      inner_provider: globalSettings.inner_provider,
+      inner_model: globalSettings.inner_model,
+      outer_provider: globalSettings.outer_provider,
+      outer_model: globalSettings.outer_model,
+    };
+
+    const projectInput: ProjectBackendInput | null = projectSettings
+      ? {
+          inner_backend: projectSettings.inner_backend,
+          outer_backend: projectSettings.outer_backend,
+          inner_provider: projectSettings.inner_provider,
+          inner_model: projectSettings.inner_model,
+          outer_provider: projectSettings.outer_provider,
+          outer_model: projectSettings.outer_model,
+        }
+      : null;
+
+    return resolveEffectiveBackend(globalInput, projectInput, surface);
+  }
+
+  // --- Backend Secrets ---
+
+  setBackendSecret(key: string, surface: 'inner' | 'outer', name: string, value: string): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES (?, ?, ?, ?)'
+    ).run(key, surface, name, value);
+  }
+
+  hasBackendSecret(key: string, surface: 'inner' | 'outer'): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 FROM backend_secrets WHERE key = ? AND surface = ?'
+    ).get(key, surface);
+    return row != null;
+  }
+
+  getBackendSecret(key: string, surface: 'inner' | 'outer'): string | null {
+    const row = this.db.prepare(
+      'SELECT value FROM backend_secrets WHERE key = ? AND surface = ?'
+    ).get(key, surface) as { value: string } | undefined;
+    return row?.value ?? null;
   }
 
   // --- Session Monitor Settings ---

@@ -37,7 +37,6 @@ describe('App', () => {
     api = mockSandstormApi();
     useAppStore.setState({
       stacks: [],
-      stackHistory: [],
       stackMetrics: {},
       projects: [],
       activeProjectId: null,
@@ -104,6 +103,14 @@ describe('App', () => {
     render(<App />);
     expect(api.on).toHaveBeenCalledWith('docker:connected', expect.any(Function));
     expect(api.on).toHaveBeenCalledWith('docker:disconnected', expect.any(Function));
+  });
+
+  it('does not call stacks.history on mount', async () => {
+    render(<App />);
+    await waitFor(() => {
+      expect(api.docker.status).toHaveBeenCalled();
+    });
+    expect(api.stacks.history).not.toHaveBeenCalled();
   });
 
   it('renders ModelSettingsModal when showModelSettings is true', () => {

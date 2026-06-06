@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import React from 'react';
 import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import { KanbanBoard, matchesTicketQuery } from '../../../src/renderer/components/KanbanBoard';
@@ -33,14 +33,67 @@ describe('KanbanBoard', () => {
     expect(screen.getByTestId('kanban-column-merged')).toBeDefined();
   });
 
-  it('shows project name in board header', () => {
+  it('does not render a second header with Active/History tabs (#546)', () => {
     render(<KanbanBoard />);
-    expect(screen.getByText('proj')).toBeDefined();
+    expect(screen.queryByTestId('tab-active')).toBeNull();
+    expect(screen.queryByTestId('tab-history')).toBeNull();
   });
 
   it('does not render the new-stack-btn in the header', () => {
     render(<KanbanBoard />);
     expect(screen.queryByTestId('new-stack-btn')).toBeNull();
+  });
+
+  describe('relocated status indicators (#546)', () => {
+    let savedRefreshBoardTickets: ReturnType<typeof useAppStore.getState>['refreshBoardTickets'];
+
+    beforeEach(() => {
+      savedRefreshBoardTickets = useAppStore.getState().refreshBoardTickets;
+    });
+
+    afterEach(() => {
+      useAppStore.setState({
+        boardTicketsError: null,
+        moveTicketColumnError: null,
+        refreshBoardTickets: savedRefreshBoardTickets,
+      } as any);
+    });
+
+    it('loading indicator appears inside kanban-board-content', () => {
+      useAppStore.setState({ boardTicketsLoading: true });
+      render(<KanbanBoard />);
+      const content = screen.getByTestId('kanban-board-content');
+      expect(content.textContent).toContain('Refreshing…');
+    });
+
+    it('board-tickets-error appears inside kanban-board-content', () => {
+      useAppStore.setState({
+        boardTicketsError: 'Load failed',
+        boardTicketsLoading: false,
+        refreshBoardTickets: vi.fn().mockResolvedValue(undefined),
+      } as any);
+      render(<KanbanBoard />);
+      const content = screen.getByTestId('kanban-board-content');
+      expect(content.querySelector('[data-testid="board-tickets-error"]')).not.toBeNull();
+    });
+
+    it('move-ticket-column-error appears inside kanban-board-content', () => {
+      useAppStore.setState({ moveTicketColumnError: 'Column move failed' });
+      render(<KanbanBoard />);
+      const content = screen.getByTestId('kanban-board-content');
+      expect(content.querySelector('[data-testid="move-ticket-column-error"]')).not.toBeNull();
+    });
+
+    it('clicking the move-ticket-column-error dismiss button calls clearMoveTicketColumnError', () => {
+      const clearSpy = vi.fn();
+      useAppStore.setState({
+        moveTicketColumnError: 'Column move failed',
+        clearMoveTicketColumnError: clearSpy,
+      } as any);
+      render(<KanbanBoard />);
+      fireEvent.click(screen.getByTestId('move-ticket-column-error'));
+      expect(clearSpy).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('shows "No cards" placeholder in empty columns', () => {

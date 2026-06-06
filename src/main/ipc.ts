@@ -84,6 +84,8 @@ import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig,
 import { withRetry } from './control-plane/retry-with-backoff';
 import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
+import { CLAUDE_MODELS } from './control-plane/routing';
+import type { RoutingAssignment, PresetId } from './control-plane/routing';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
 import { listTicketsWithConfig } from './control-plane/ticket-lister';
@@ -939,6 +941,70 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('modelSettings:getEffective', (_event, projectDir: string) => {
     return registry.getEffectiveModels(projectDir);
+  });
+
+  // --- Backend Settings ---
+
+  ipcMain.handle('backendSettings:getGlobal', () => {
+    return registry.getGlobalBackendSettings();
+  });
+
+  ipcMain.handle('backendSettings:setGlobal', (_event, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => {
+    registry.setGlobalBackendSettings(settings);
+  });
+
+  ipcMain.handle('backendSettings:getProject', (_event, projectDir: string) => {
+    return registry.getProjectBackendSettings(projectDir);
+  });
+
+  ipcMain.handle('backendSettings:setProject', (_event, projectDir: string, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => {
+    registry.setProjectBackendSettings(projectDir, settings);
+  });
+
+  ipcMain.handle('backendSettings:getEffective', (_event, projectDir: string, surface: 'inner' | 'outer') => {
+    return registry.getEffectiveBackend(projectDir, surface);
+  });
+
+  ipcMain.handle('backendSettings:setSecret', (_event, key: string, surface: 'inner' | 'outer', name: string, value: string) => {
+    registry.setBackendSecret(key, surface, name, value);
+  });
+
+  ipcMain.handle('backendSettings:secretStatus', (_event, key: string, surface: 'inner' | 'outer') => {
+    return { set: registry.hasBackendSecret(key, surface) };
+  });
+
+  // --- Model Routing ---
+
+  ipcMain.handle('modelRouting:getEffective', (_event, projectDir: string) => {
+    return registry.getEffectiveRouting(projectDir);
+  });
+
+  ipcMain.handle('modelRouting:getProject', (_event, projectDir: string) => {
+    return registry.getProjectRouting(projectDir);
+  });
+
+  ipcMain.handle('modelRouting:setProject', (_event, projectDir: string, config: { assignments?: Partial<Record<string, RoutingAssignment>>; preset?: PresetId | null }) => {
+    registry.setProjectRouting(projectDir, config);
+  });
+
+  ipcMain.handle('modelRouting:removeProject', (_event, projectDir: string) => {
+    registry.removeProjectRouting(projectDir);
+  });
+
+  ipcMain.handle('modelRouting:getGlobal', () => {
+    return registry.getGlobalRouting();
+  });
+
+  ipcMain.handle('modelRouting:setGlobal', (_event, config: { assignments?: Partial<Record<string, RoutingAssignment>>; preset?: PresetId | null }) => {
+    registry.setGlobalRouting(config);
+  });
+
+  ipcMain.handle('modelRouting:applyPreset', (_event, projectDir: string, presetId: PresetId) => {
+    registry.applyPreset(projectDir, presetId);
+  });
+
+  ipcMain.handle('modelRouting:getAvailableModels', (_event, _projectDir: string) => {
+    return CLAUDE_MODELS;
   });
 
   // --- Session Monitor ---
