@@ -133,6 +133,18 @@ export async function runStartupReconciliation(
     // Notify renderer after each stack so cards refresh live
     notifyUpdate();
   }
+
+  // Ongoing safeguard: re-check completed stacks for missed token-limit signals.
+  // recheckCompletedStack handles the container-absent case internally.
+  const completedStacks = registry.listStacks().filter((s) => s.status === 'completed');
+  for (const stack of completedStacks) {
+    try {
+      await stackManager.recheckCompletedStack(stack.id);
+    } catch (err) {
+      console.warn(`[StartupReconciler] Error rechecking completed stack ${stack.id}:`, err);
+    }
+    notifyUpdate();
+  }
 }
 
 async function reconcileStack(

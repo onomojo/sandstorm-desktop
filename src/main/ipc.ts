@@ -1077,6 +1077,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     await stackManager.resumeNeedsHumanStack(stackId, answers);
   });
 
+  ipcMain.handle('stacks:recheckCompleted', async (_event, stackId: string) => {
+    return stackManager.recheckCompletedStack(stackId);
+  });
+
   ipcMain.handle('stacks:getFailureDiagnosis', async (_event, stackId: string) => {
     return getFailureDiagnosis(stackId, registry, agentBackend);
   });

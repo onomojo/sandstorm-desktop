@@ -11,6 +11,7 @@ import { SandstormError, ErrorCode } from '../errors';
 import { fetchRawBodyWithConfig, fetchTicketWithConfig, updateTicketWithConfig } from './ticket-config';
 import { referencesTicket } from './ticket-fetcher';
 import { workspacePathFor } from './pr-creator';
+import { parseTokenUsage } from './token-parser';
 
 const execFileAsync = promisify(execFile);
 
@@ -656,13 +657,21 @@ export class StackManager {
       throw err;
     }
 
-    const runningTask = this.registry.getRunningTask(stackId);
+    let runningTask = this.registry.getRunningTask(stackId);
 
     if (!runningTask) {
-      // Case C: no in-flight task — leave stack idle
-      this.registry.updateStackStatus(stackId, 'idle');
-      this.notifyUpdate();
-      return { outcome: 'idle' };
+      // Q-A fallback: try most-recent task + reopenTaskForResume before idling.
+      // Covers session_paused stacks whose task was already completed/closed
+      // (e.g. after recheckCompletedStack transitions a 'completed' stack here).
+      const mostRecentTask = this.registry.getMostRecentTask(stackId);
+      if (!mostRecentTask) {
+        // Case C: no task at all — leave stack idle
+        this.registry.updateStackStatus(stackId, 'idle');
+        this.notifyUpdate();
+        return { outcome: 'idle' };
+      }
+      this.registry.reopenTaskForResume(mostRecentTask.id);
+      runningTask = { ...mostRecentTask, status: 'running' as const };
     }
 
     if (runningTask.session_id) {
@@ -776,6 +785,105 @@ export class StackManager {
 
     this.taskWatcher.watch(stackId, claudeContainer.id);
     this.taskWatcher.streamOutput(stackId, claudeContainer.id, () => {}).catch(() => {});
+  }
+
+  /**
+   * Re-check a `completed` stack to determine if it was actually token-limited.
+   * Execs a two-stage grep against the container log (mirroring check_for_token_limit
+   * in task-runner.sh:63-72) and, on confirmation, drives the stack through the
+   * existing continuation machinery (Case A with session_id, Case B without).
+   *
+   * Returns `container_gone` when the claude container is absent or not running.
+   * Returns `not_token_limited` when the grep finds no marker.
+   * Returns `idle` when confirmed but no task record exists.
+   * Returns the resumeStackWithContinuation outcome otherwise.
+   */
+  async recheckCompletedStack(stackId: string): Promise<{
+    outcome: 'resuming_with_session' | 'resumed_fresh' | 'not_token_limited' | 'container_gone' | 'idle';
+  }> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    // Idempotency guard — abort if status has already changed
+    if (stack.status !== 'completed') {
+      return { outcome: 'idle' };
+    }
+
+    const runtime = this.getRuntimeForStack(stack);
+    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
+
+    let containers;
+    try {
+      containers = await runtime.listContainers({ name: `${composeProjectName}-claude` });
+    } catch (err) {
+      console.debug(`[StackManager] recheckCompletedStack: container list failed for ${stackId}:`, err);
+      return { outcome: 'container_gone' };
+    }
+
+    const container = containers[0] ?? null;
+    if (!container || container.status !== 'running') {
+      console.debug(`[StackManager] recheckCompletedStack: container absent or not running for ${stackId}`);
+      return { outcome: 'container_gone' };
+    }
+
+    // Two-stage grep mirrors check_for_token_limit() in task-runner.sh:63-72.
+    // The ^[[:space:]]*{ exclusion prevents JSON lines from producing false positives.
+    let grepResult;
+    try {
+      grepResult = await runtime.exec(container.id, [
+        'sh', '-c',
+        "grep -vE '^[[:space:]]*\\{' /tmp/claude-raw.log 2>/dev/null | grep -qi \"You've hit your session limit\"",
+      ]);
+    } catch {
+      return { outcome: 'not_token_limited' };
+    }
+
+    if (grepResult.exitCode !== 0) {
+      // Genuine completion — marker not found
+      return { outcome: 'not_token_limited' };
+    }
+
+    // Token limit confirmed. Get the most-recent task to update session_id.
+    const task = this.registry.getMostRecentTask(stackId);
+    if (!task) {
+      return { outcome: 'idle' };
+    }
+
+    // Best-effort: read session_id from log so resumeStackWithContinuation can use Case A.
+    try {
+      const rawResult = await runtime.exec(container.id, ['cat', '/tmp/claude-raw.log']);
+      if (rawResult.stdout) {
+        const usage = parseTokenUsage(rawResult.stdout);
+        if (usage.session_id) {
+          this.registry.setTaskSessionId(task.id, usage.session_id);
+        }
+      }
+    } catch {
+      // Non-fatal — resume falls back to Case B (fresh re-dispatch)
+    }
+
+    // Transition to session_paused so resumeStackWithContinuation can proceed.
+    // The task is still 'completed'; the Q-A fallback in resumeStackWithContinuation
+    // will call getMostRecentTask + reopenTaskForResume before Case A/B.
+    this.registry.updateStackStatus(stackId, 'session_paused');
+    this.notifyUpdate();
+
+    try {
+      const result = await this.resumeStackWithContinuation(stackId, () => false, true);
+      return result;
+    } catch (err) {
+      // Revert: close any reopened task and restore stack to completed.
+      // Include 'interrupted' because Case B calls interruptTask before dispatchTask;
+      // if dispatchTask throws, the task is 'interrupted', not 'running'.
+      const reopenedTask = this.registry.getMostRecentTask(stackId);
+      if (reopenedTask && (reopenedTask.status === 'running' || reopenedTask.status === 'interrupted')) {
+        this.registry.completeTask(reopenedTask.id, 0); // also sets stack to 'completed'
+      } else {
+        this.registry.updateStackStatus(stackId, 'completed');
+      }
+      this.notifyUpdate();
+      throw err;
+    }
   }
 
   /**
