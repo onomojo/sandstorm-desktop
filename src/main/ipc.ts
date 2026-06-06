@@ -83,6 +83,8 @@ import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig,
 import { withRetry } from './control-plane/retry-with-backoff';
 import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
+import { CLAUDE_MODELS } from './control-plane/routing';
+import type { RoutingAssignment, PresetId } from './control-plane/routing';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
 import { listTicketsWithConfig } from './control-plane/ticket-lister';
@@ -938,6 +940,40 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('modelSettings:getEffective', (_event, projectDir: string) => {
     return registry.getEffectiveModels(projectDir);
+  });
+
+  // --- Model Routing ---
+
+  ipcMain.handle('modelRouting:getEffective', (_event, projectDir: string) => {
+    return registry.getEffectiveRouting(projectDir);
+  });
+
+  ipcMain.handle('modelRouting:getProject', (_event, projectDir: string) => {
+    return registry.getProjectRouting(projectDir);
+  });
+
+  ipcMain.handle('modelRouting:setProject', (_event, projectDir: string, config: { assignments?: Partial<Record<string, RoutingAssignment>>; preset?: PresetId | null }) => {
+    registry.setProjectRouting(projectDir, config);
+  });
+
+  ipcMain.handle('modelRouting:removeProject', (_event, projectDir: string) => {
+    registry.removeProjectRouting(projectDir);
+  });
+
+  ipcMain.handle('modelRouting:getGlobal', () => {
+    return registry.getGlobalRouting();
+  });
+
+  ipcMain.handle('modelRouting:setGlobal', (_event, config: { assignments?: Partial<Record<string, RoutingAssignment>>; preset?: PresetId | null }) => {
+    registry.setGlobalRouting(config);
+  });
+
+  ipcMain.handle('modelRouting:applyPreset', (_event, projectDir: string, presetId: PresetId) => {
+    registry.applyPreset(projectDir, presetId);
+  });
+
+  ipcMain.handle('modelRouting:getAvailableModels', (_event, _projectDir: string) => {
+    return CLAUDE_MODELS;
   });
 
   // --- Session Monitor ---
