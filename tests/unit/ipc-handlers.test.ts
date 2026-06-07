@@ -33,6 +33,7 @@ const {
   mockDeleteRefinement,
   mockPersistRefinement,
   mockLoadRefinements,
+  mockFilterSessionsByBoardState,
   mockUsageEngine,
   mockRollupStoreInstance,
 } = vi.hoisted(() => {
@@ -43,6 +44,19 @@ const {
   const mockDeleteRefinement = vi.fn();
   const mockPersistRefinement = vi.fn();
   const mockLoadRefinements = vi.fn().mockReturnValue([]);
+  const mockFilterSessionsByBoardState = vi.fn().mockImplementation(
+    (sessions: Array<{ ticketId: string; projectDir: string; id: string }>, getColumn: (t: string, p: string) => string | null) => {
+      const LIVE = new Set(['refining', 'spec_ready']);
+      const keep: typeof sessions = [];
+      const prune: typeof sessions = [];
+      for (const s of sessions) {
+        const col = getColumn(s.ticketId, s.projectDir);
+        if (col !== null && LIVE.has(col)) keep.push(s);
+        else prune.push(s);
+      }
+      return { keep, prune };
+    },
+  );
 
   const mockRegistry = {
     listProjects: vi.fn().mockReturnValue([]),
@@ -75,6 +89,7 @@ const {
     getGlobalRouting: vi.fn().mockReturnValue({ assignments: {}, preset: null }),
     setGlobalRouting: vi.fn(),
     applyPreset: vi.fn(),
+    onBoardTicketMoved: vi.fn(),
   };
 
   const mockStackManager = {
@@ -202,6 +217,7 @@ const {
     mockDeleteRefinement,
     mockPersistRefinement,
     mockLoadRefinements,
+    mockFilterSessionsByBoardState,
     mockUsageEngine,
     mockRollupStoreInstance,
   };
@@ -325,6 +341,7 @@ vi.mock('../../src/main/control-plane/refinement-store', () => ({
   persistRefinement: (...args: unknown[]) => mockPersistRefinement(...args),
   deleteRefinement: (...args: unknown[]) => mockDeleteRefinement(...args),
   loadRefinements: () => mockLoadRefinements(),
+  filterSessionsByBoardState: (...args: unknown[]) => mockFilterSessionsByBoardState(...args),
 }));
 
 // ---------------------------------------------------------------------------
@@ -2125,6 +2142,204 @@ describe('IPC Handlers', () => {
       // surface is the fix. This assertion replaces the old registration check
       // that expected it to be present.
       expect(registeredHandlers['tickets:discardRefinement']).toBeUndefined();
+    });
+  });
+
+  // =========================================================================
+  // Lifecycle cleanup — cancelRefinementSession on board column changes (#566)
+  // =========================================================================
+  describe('refinement lifecycle cleanup on board moves (#566)', () => {
+    function getBoardMovedListener(): (ticketId: string, projectDir: string, column: string) => void {
+      const calls = mockRegistry.onBoardTicketMoved.mock.calls;
+      if (calls.length === 0) throw new Error('onBoardTicketMoved was not called during registerIpcHandlers');
+      return calls[0][0] as (ticketId: string, projectDir: string, column: string) => void;
+    }
+
+    it('subscribes a listener to registry.onBoardTicketMoved during setup', () => {
+      expect(mockRegistry.onBoardTicketMoved).toHaveBeenCalledOnce();
+      expect(typeof getBoardMovedListener()).toBe('function');
+    });
+
+    it('cancels active session when ticket moves to backlog', async () => {
+      mockSpawnSpecCheck.mockReturnValue({ promise: new Promise(() => {}), cancel: vi.fn() });
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'T-1', '/proj') as { sessionId: string };
+
+      const listener = getBoardMovedListener();
+      listener('T-1', '/proj', 'backlog');
+
+      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
+      expect(mockMainWindow.webContents.send).toHaveBeenCalledWith('refinement:update', { id: sessionId, status: 'cancelled' });
+    });
+
+    it('cancels active session when ticket moves to in_stack', async () => {
+      mockSpawnSpecCheck.mockReturnValue({ promise: new Promise(() => {}), cancel: vi.fn() });
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'T-2', '/proj') as { sessionId: string };
+
+      const listener = getBoardMovedListener();
+      listener('T-2', '/proj', 'in_stack');
+
+      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
+      expect(mockMainWindow.webContents.send).toHaveBeenCalledWith('refinement:update', { id: sessionId, status: 'cancelled' });
+    });
+
+    it('cancels active session when ticket moves to merged', async () => {
+      mockSpawnSpecCheck.mockReturnValue({ promise: new Promise(() => {}), cancel: vi.fn() });
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'T-3', '/proj') as { sessionId: string };
+
+      const listener = getBoardMovedListener();
+      listener('T-3', '/proj', 'merged');
+
+      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
+    });
+
+    it('does NOT cancel session when ticket moves to spec_ready', async () => {
+      mockSpawnSpecCheck.mockReturnValue({ promise: new Promise(() => {}), cancel: vi.fn() });
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'T-4', '/proj') as { sessionId: string };
+      mockDeleteRefinement.mockClear();
+
+      const listener = getBoardMovedListener();
+      listener('T-4', '/proj', 'spec_ready');
+
+      expect(mockDeleteRefinement).not.toHaveBeenCalledWith(sessionId);
+    });
+
+    it('does NOT cancel session when ticket moves to refining', async () => {
+      mockSpawnSpecCheck.mockReturnValue({ promise: new Promise(() => {}), cancel: vi.fn() });
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'T-5', '/proj') as { sessionId: string };
+      mockDeleteRefinement.mockClear();
+
+      const listener = getBoardMovedListener();
+      listener('T-5', '/proj', 'refining');
+
+      expect(mockDeleteRefinement).not.toHaveBeenCalledWith(sessionId);
+    });
+
+    it('calls entry.cancel() to abort in-flight agent on cleanup', async () => {
+      const cancelFn = vi.fn();
+      mockSpawnSpecCheck.mockReturnValue({ promise: new Promise(() => {}), cancel: cancelFn });
+      await invokeHandler('tickets:specCheckAsync', 'T-6', '/proj');
+
+      const listener = getBoardMovedListener();
+      listener('T-6', '/proj', 'backlog');
+
+      expect(cancelFn).toHaveBeenCalled();
+    });
+
+    it('does not cancel a session for a different ticket', async () => {
+      mockSpawnSpecCheck.mockReturnValue({ promise: new Promise(() => {}), cancel: vi.fn() });
+      await invokeHandler('tickets:specCheckAsync', 'T-7', '/proj');
+      mockDeleteRefinement.mockClear();
+
+      const listener = getBoardMovedListener();
+      listener('T-OTHER', '/proj', 'backlog');
+
+      expect(mockDeleteRefinement).not.toHaveBeenCalled();
+    });
+
+    it('does not cancel a session for a different projectDir', async () => {
+      mockSpawnSpecCheck.mockReturnValue({ promise: new Promise(() => {}), cancel: vi.fn() });
+      await invokeHandler('tickets:specCheckAsync', 'T-8', '/proj-a');
+      mockDeleteRefinement.mockClear();
+
+      const listener = getBoardMovedListener();
+      listener('T-8', '/proj-b', 'backlog');
+
+      expect(mockDeleteRefinement).not.toHaveBeenCalled();
+    });
+  });
+
+  // =========================================================================
+  // Startup prune — stale sessions deleted before broadcast (#566)
+  // =========================================================================
+  describe('startup prune (#566)', () => {
+    function reRegister() {
+      for (const key of Object.keys(registeredHandlers)) {
+        delete registeredHandlers[key];
+      }
+      const win = { webContents: { send: vi.fn() } };
+      registerIpcHandlers(win as unknown as import('electron').BrowserWindow);
+    }
+
+    it('deletes sessions for tickets in non-live columns before broadcast', () => {
+      const stale = { id: 'stale-1', ticketId: 'T1', projectDir: '/proj1', status: 'ready' as const, phase: 'check' as const, startedAt: 0 };
+      const live = { id: 'live-1', ticketId: 'T2', projectDir: '/proj2', status: 'interrupted' as const, phase: 'check' as const, startedAt: 0 };
+
+      mockLoadRefinements.mockReturnValueOnce([stale, live]);
+      mockRegistry.listBoardTickets.mockImplementation((projectDir: string) => {
+        if (projectDir === '/proj1') return [{ ticket_id: 'T1', project_dir: '/proj1', column: 'backlog', title: '', created_at: '', updated_at: '' }];
+        if (projectDir === '/proj2') return [{ ticket_id: 'T2', project_dir: '/proj2', column: 'refining', title: '', created_at: '', updated_at: '' }];
+        return [];
+      });
+
+      mockDeleteRefinement.mockClear();
+      reRegister();
+
+      expect(mockDeleteRefinement).toHaveBeenCalledWith('stale-1');
+      expect(mockDeleteRefinement).not.toHaveBeenCalledWith('live-1');
+    });
+
+    it('deletes sessions whose ticket board row does not exist', () => {
+      const orphan = { id: 'orphan-1', ticketId: 'T9', projectDir: '/gone', status: 'ready' as const, phase: 'check' as const, startedAt: 0 };
+
+      mockLoadRefinements.mockReturnValueOnce([orphan]);
+      mockRegistry.listBoardTickets.mockReturnValue([]);
+
+      mockDeleteRefinement.mockClear();
+      reRegister();
+
+      expect(mockDeleteRefinement).toHaveBeenCalledWith('orphan-1');
+    });
+
+    it('keeps sessions for tickets in spec_ready', () => {
+      const live = { id: 'live-sr', ticketId: 'TS', projectDir: '/proj', status: 'ready' as const, phase: 'check' as const, startedAt: 0 };
+
+      mockLoadRefinements.mockReturnValueOnce([live]);
+      mockRegistry.listBoardTickets.mockReturnValue([
+        { ticket_id: 'TS', project_dir: '/proj', column: 'spec_ready', title: '', created_at: '', updated_at: '' },
+      ]);
+
+      mockDeleteRefinement.mockClear();
+      reRegister();
+
+      expect(mockDeleteRefinement).not.toHaveBeenCalledWith('live-sr');
+    });
+
+    it('persists kept sessions back to disk', () => {
+      const live = { id: 'live-p', ticketId: 'TL', projectDir: '/p', status: 'interrupted' as const, phase: 'check' as const, startedAt: 0 };
+
+      mockLoadRefinements.mockReturnValueOnce([live]);
+      mockRegistry.listBoardTickets.mockReturnValue([
+        { ticket_id: 'TL', project_dir: '/p', column: 'refining', title: '', created_at: '', updated_at: '' },
+      ]);
+
+      mockPersistRefinement.mockClear();
+      reRegister();
+
+      expect(mockPersistRefinement).toHaveBeenCalledWith(expect.objectContaining({ id: 'live-p' }));
+    });
+  });
+
+  // =========================================================================
+  // cancelRefinementSession helper — used by cancelRefinement and cleanup (#566)
+  // =========================================================================
+  describe('tickets:cancelRefinement uses shared cancel helper', () => {
+    it('aborts in-flight agent, removes from map, deletes from disk, broadcasts cancelled', async () => {
+      const cancelFn = vi.fn();
+      mockSpawnSpecCheck.mockReturnValue({ promise: new Promise(() => {}), cancel: cancelFn });
+      const { sessionId } = await invokeHandler('tickets:specCheckAsync', 'T-C', '/proj') as { sessionId: string };
+      mockDeleteRefinement.mockClear();
+      mockMainWindow.webContents.send.mockClear();
+
+      await invokeHandler('tickets:cancelRefinement', sessionId);
+
+      expect(cancelFn).toHaveBeenCalled();
+      expect(mockDeleteRefinement).toHaveBeenCalledWith(sessionId);
+      expect(mockMainWindow.webContents.send).toHaveBeenCalledWith('refinement:update', { id: sessionId, status: 'cancelled' });
+    });
+
+    it('is a no-op for unknown session id', async () => {
+      await expect(invokeHandler('tickets:cancelRefinement', 'no-such-id')).resolves.not.toThrow();
+      expect(mockDeleteRefinement).not.toHaveBeenCalled();
     });
   });
 

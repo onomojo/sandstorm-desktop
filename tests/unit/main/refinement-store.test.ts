@@ -26,6 +26,7 @@ import {
   loadRefinements,
   persistRefinement,
   deleteRefinement,
+  filterSessionsByBoardState,
   type RefinementSession,
 } from '../../../src/main/control-plane/refinement-store';
 
@@ -116,5 +117,88 @@ describe('refinement-store', () => {
   it('handles corrupted store file gracefully', () => {
     fs.writeFileSync(storePath, 'not valid json{{');
     expect(loadRefinements()).toEqual([]);
+  });
+});
+
+describe('filterSessionsByBoardState', () => {
+  function makeSession(overrides: Partial<RefinementSession> = {}): RefinementSession {
+    return {
+      id: 'test-id',
+      ticketId: '123',
+      projectDir: '/proj',
+      status: 'ready',
+      phase: 'check',
+      startedAt: 0,
+      ...overrides,
+    };
+  }
+
+  it('keeps sessions whose ticket column is refining', () => {
+    const s = makeSession({ ticketId: 'T1', projectDir: '/p' });
+    const { keep, prune } = filterSessionsByBoardState([s], () => 'refining');
+    expect(keep).toHaveLength(1);
+    expect(prune).toHaveLength(0);
+  });
+
+  it('keeps sessions whose ticket column is spec_ready', () => {
+    const s = makeSession({ ticketId: 'T1', projectDir: '/p' });
+    const { keep, prune } = filterSessionsByBoardState([s], () => 'spec_ready');
+    expect(keep).toHaveLength(1);
+    expect(prune).toHaveLength(0);
+  });
+
+  it('prunes sessions in backlog', () => {
+    const s = makeSession({ ticketId: 'T1', projectDir: '/p' });
+    const { keep, prune } = filterSessionsByBoardState([s], () => 'backlog');
+    expect(keep).toHaveLength(0);
+    expect(prune).toHaveLength(1);
+  });
+
+  it('prunes sessions in in_stack', () => {
+    const s = makeSession({ ticketId: 'T1', projectDir: '/p' });
+    const { keep, prune } = filterSessionsByBoardState([s], () => 'in_stack');
+    expect(keep).toHaveLength(0);
+    expect(prune).toHaveLength(1);
+  });
+
+  it('prunes sessions in merged', () => {
+    const s = makeSession();
+    const { keep, prune } = filterSessionsByBoardState([s], () => 'merged');
+    expect(keep).toHaveLength(0);
+    expect(prune).toHaveLength(1);
+  });
+
+  it('prunes sessions whose ticket row is absent (getColumn returns null)', () => {
+    const s = makeSession();
+    const { keep, prune } = filterSessionsByBoardState([s], () => null);
+    expect(keep).toHaveLength(0);
+    expect(prune).toHaveLength(1);
+  });
+
+  it('partitions a mixed list correctly', () => {
+    const keep1 = makeSession({ id: 'k1', ticketId: 'T1', projectDir: '/p1' });
+    const keep2 = makeSession({ id: 'k2', ticketId: 'T2', projectDir: '/p2' });
+    const prune1 = makeSession({ id: 'p1', ticketId: 'T3', projectDir: '/p3' });
+    const prune2 = makeSession({ id: 'p2', ticketId: 'T4', projectDir: '/p4' });
+
+    const columns: Record<string, string | null> = {
+      'T1': 'refining',
+      'T2': 'spec_ready',
+      'T3': 'in_stack',
+      'T4': null,
+    };
+
+    const result = filterSessionsByBoardState(
+      [keep1, keep2, prune1, prune2],
+      (ticketId) => columns[ticketId] ?? null,
+    );
+    expect(result.keep.map((s) => s.id)).toEqual(['k1', 'k2']);
+    expect(result.prune.map((s) => s.id)).toEqual(['p1', 'p2']);
+  });
+
+  it('returns empty keep and prune for empty input', () => {
+    const { keep, prune } = filterSessionsByBoardState([], () => null);
+    expect(keep).toHaveLength(0);
+    expect(prune).toHaveLength(0);
   });
 });

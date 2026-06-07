@@ -1385,6 +1385,32 @@ describe('Registry', () => {
   // ==========================================================================
   // Model Routing CRUD
   // ==========================================================================
+  describe('onBoardTicketMoved', () => {
+    it('dispatches to multiple subscribers with (ticketId, projectDir, column)', () => {
+      const calls1: [string, string, string][] = [];
+      const calls2: [string, string, string][] = [];
+      registry.onBoardTicketMoved((tid, dir, col) => calls1.push([tid, dir, col]));
+      registry.onBoardTicketMoved((tid, dir, col) => calls2.push([tid, dir, col]));
+
+      registry.setBoardTicketColumn('ticket-1', '/my/project', 'in_stack');
+
+      expect(calls1).toHaveLength(1);
+      expect(calls1[0]).toEqual(['ticket-1', path.resolve('/my/project'), 'in_stack']);
+      expect(calls2).toHaveLength(1);
+      expect(calls2[0]).toEqual(['ticket-1', path.resolve('/my/project'), 'in_stack']);
+    });
+
+    it('fires on every setBoardTicketColumn call across multiple moves', () => {
+      const calls: string[] = [];
+      registry.onBoardTicketMoved((tid, _dir, col) => calls.push(`${tid}:${col}`));
+
+      registry.setBoardTicketColumn('t1', '/p', 'backlog');
+      registry.setBoardTicketColumn('t2', '/p', 'in_stack');
+
+      expect(calls).toEqual(['t1:backlog', 't2:in_stack']);
+    });
+  });
+
   describe('model routing CRUD', () => {
     it('getGlobalRouting returns empty config on fresh database', () => {
       const config = registry.getGlobalRouting();

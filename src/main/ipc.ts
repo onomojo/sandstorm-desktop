@@ -70,6 +70,7 @@ import {
   loadRefinements,
   persistRefinement,
   deleteRefinement,
+  filterSessionsByBoardState,
   type RefinementSession,
 } from './control-plane/refinement-store';
 import { randomUUID } from 'crypto';
@@ -1215,13 +1216,58 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     mainWindow?.webContents.send('refinement:update', session);
   }
 
+  /** Cancel a refinement session: abort in-flight agent, remove from map, delete from disk, broadcast cancelled. */
+  function cancelRefinementSession(id: string, broadcast = true): void {
+    const entry = activeRefinements.get(id);
+    if (entry) {
+      entry.cancel?.();
+      activeRefinements.delete(id);
+      deleteRefinement(id);
+      if (broadcast) {
+        mainWindow?.webContents.send('refinement:update', { id, status: 'cancelled' });
+      }
+    }
+  }
+
   // On startup, load any persisted sessions (running → interrupted) and
-  // broadcast them to the renderer once the window is ready.
+  // prune sessions whose tickets are no longer in an active refinement column.
   const persistedSessions = loadRefinements();
-  for (const s of persistedSessions) {
+
+  // Build a per-project column cache to avoid redundant queries.
+  const _startupColumnCache = new Map<string, Map<string, string>>();
+  const { keep: sessionsToKeep, prune: sessionsToPrune } = filterSessionsByBoardState(
+    persistedSessions,
+    (ticketId, projectDir) => {
+      if (!_startupColumnCache.has(projectDir)) {
+        const rows = registry.listBoardTickets(projectDir);
+        _startupColumnCache.set(projectDir, new Map(rows.map((r) => [r.ticket_id, r.column])));
+      }
+      return _startupColumnCache.get(projectDir)!.get(ticketId) ?? null;
+    },
+  );
+
+  for (const s of sessionsToPrune) {
+    deleteRefinement(s.id);
+  }
+
+  for (const s of sessionsToKeep) {
     activeRefinements.set(s.id, { session: s, cancel: null });
     persistRefinement(s);
   }
+
+  // Subscribe to board column changes: cancel any refinement session when a ticket
+  // leaves the refinement lifecycle (moves to backlog, in_stack, or merged).
+  const REFINEMENT_CLEANUP_COLUMNS = new Set(['backlog', 'in_stack', 'merged']);
+  registry.onBoardTicketMoved((ticketId, projectDir, column) => {
+    if (!REFINEMENT_CLEANUP_COLUMNS.has(column)) return;
+    for (const [id, entry] of activeRefinements) {
+      if (entry.session.ticketId === ticketId && entry.session.projectDir === projectDir) {
+        cancelRefinementSession(id);
+        break;
+      }
+    }
+  });
+
   // Delay the broadcast slightly so the renderer has time to mount.
   setTimeout(() => {
     for (const { session } of activeRefinements.values()) {
@@ -1340,13 +1386,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   );
 
   ipcMain.handle('tickets:cancelRefinement', (_event, id: string) => {
-    const entry = activeRefinements.get(id);
-    if (entry) {
-      entry.cancel?.();
-      activeRefinements.delete(id);
-      deleteRefinement(id);
-      mainWindow?.webContents.send('refinement:update', { id, status: 'cancelled' });
-    }
+    cancelRefinementSession(id);
   });
 
   ipcMain.handle('tickets:listRefinements', () => {
@@ -1363,9 +1403,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       // Cancel the existing session internally (without sending a cancelled event
       // to the renderer, since we are immediately replacing it).
       if (existingEntry) {
-        existingEntry.cancel?.();
-        activeRefinements.delete(sessionId);
-        deleteRefinement(sessionId);
+        cancelRefinementSession(sessionId, false);
       }
 
       // Determine whether to resume from refine phase or restart from check.
