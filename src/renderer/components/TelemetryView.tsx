@@ -1,13 +1,13 @@
 import React, { useEffect, useState } from 'react';
 import { useAppStore } from '../store';
 import type { KanbanColumn } from '../types/kanban';
-import type { ByTicketEntry, LifecycleCosts } from '@main/telemetry/types';
+import type { ByTicketEntry, ByModelEntry, LifecycleCosts } from '@main/telemetry/types';
 import { Sparkline } from './telemetry/Sparkline';
 import { Donut } from './telemetry/Donut';
 import { StackedBars } from './telemetry/StackedBars';
 import type { TokenClass } from './telemetry/StackedBars';
 import { TOKEN_COLORS, TOKEN_LABELS } from './telemetry/StackedBars';
-import { groupByPipeline } from './telemetry/utils';
+import { groupByPipeline, ORCHESTRATOR_TICKET_ID } from './telemetry/utils';
 import { StackedHBar } from './telemetry/StackedHBar';
 
 type RangeOption = '7d' | '30d' | '90d' | 'all';
@@ -34,6 +34,64 @@ const LIFECYCLE_COLORS: Record<LifecycleStage, string> = {
 
 const MODEL_PALETTE = ['#d4a854', '#7b5ea7', '#4a7fb5', '#4a8c6e', '#c9a227', '#e87b5a'];
 
+const MODEL_FAMILIES: Array<{ key: string; displayLabel: string; color: string }> = [
+  { key: 'opus', displayLabel: 'Opus', color: MODEL_PALETTE[0] },
+  { key: 'sonnet', displayLabel: 'Sonnet', color: MODEL_PALETTE[1] },
+  { key: 'haiku', displayLabel: 'Haiku', color: MODEL_PALETTE[2] },
+];
+
+interface ModelRow {
+  key: string;
+  label: string;
+  color: string;
+  cost: number;
+  unpriced: boolean;
+}
+
+function getModelFamily(model: string): string | null {
+  const lc = model.toLowerCase();
+  for (const { key } of MODEL_FAMILIES) {
+    if (lc.includes(key)) return key;
+  }
+  return null;
+}
+
+function buildModelRows(byModel: ByModelEntry[]): ModelRow[] {
+  const familyCosts: Record<string, { cost: number; unpriced: boolean }> = {};
+  const extras: ByModelEntry[] = [];
+
+  for (const entry of byModel) {
+    const family = getModelFamily(entry.model);
+    if (family) {
+      if (!familyCosts[family]) familyCosts[family] = { cost: 0, unpriced: false };
+      familyCosts[family].cost += entry.cost;
+      familyCosts[family].unpriced = familyCosts[family].unpriced || entry.unpriced;
+    } else {
+      extras.push(entry);
+    }
+  }
+
+  const rows: ModelRow[] = MODEL_FAMILIES.map(({ key, displayLabel, color }) => ({
+    key,
+    label: displayLabel,
+    color,
+    cost: familyCosts[key]?.cost ?? 0,
+    unpriced: familyCosts[key]?.unpriced ?? false,
+  }));
+
+  extras.forEach((entry, i) => {
+    rows.push({
+      key: entry.model,
+      label: entry.model,
+      color: MODEL_PALETTE[(MODEL_FAMILIES.length + i) % MODEL_PALETTE.length],
+      cost: entry.cost,
+      unpriced: entry.unpriced,
+    });
+  });
+
+  return rows;
+}
+
 function fmt$(n: number): string {
   if (n === 0) return '$0.00';
   if (n < 0.01) return '<$0.01';
@@ -51,6 +109,14 @@ function fmtDelta(curr: number, prev: number): string {
   const pct = ((curr - prev) / prev) * 100;
   const sign = pct >= 0 ? '▲' : '▼';
   return `${sign}${Math.abs(pct).toFixed(1)}%`;
+}
+
+function fmtDeltaWithDir(curr: number, prev: number): string {
+  if (prev === 0) return '—';
+  const pct = ((curr - prev) / prev) * 100;
+  const sign = pct >= 0 ? '▲' : '▼';
+  const dir = pct >= 0 ? 'higher' : 'lower';
+  return `${sign}${Math.abs(pct).toFixed(1)}% ${dir}`;
 }
 
 const ALL_TOKEN_CLASSES: TokenClass[] = ['input', 'output', 'cacheCreate', 'cacheRead'];
@@ -103,11 +169,13 @@ export function TelemetryView() {
 
   // Derived: per-ticket rows (join with boardTickets for title/column)
   const ticketRows = telemetryByTicket.map((entry) => {
-    const board = boardTickets.find((t) => t.ticket_id === entry.ticketId);
+    const isOrchestrator = entry.ticketId === ORCHESTRATOR_TICKET_ID;
+    const board = isOrchestrator ? undefined : boardTickets.find((t) => t.ticket_id === entry.ticketId);
     return {
       ...entry,
-      title: board?.title ?? `#${entry.ticketId}`,
-      column: board?.column as KanbanColumn | undefined,
+      title: isOrchestrator ? 'Orchestrator · ad-hoc' : (board?.title ?? `#${entry.ticketId}`),
+      column: isOrchestrator ? undefined : (board?.column as KanbanColumn | undefined),
+      displayId: isOrchestrator ? '—' : `#${entry.ticketId}`,
     };
   });
 
@@ -120,26 +188,26 @@ export function TelemetryView() {
     return b.cost - a.cost; // stable tie-break
   });
 
-  // Max ticket cost for bar scaling
-  const maxTicketCost = sortedTickets.reduce((m, t) => Math.max(m, t.cost), 0) || 1;
+  // Max ticket cost for bar scaling (zero-cost tickets get affordance, not bars)
+  const maxTicketCost = sortedTickets.reduce((m, t) => Math.max(m, t.cost), 0);
 
   // Pipeline groups
   const pipelineGroups = groupByPipeline(telemetryByTicket, boardTickets);
   const pipelineTotal = pipelineGroups.reduce((s, g) => s + g.totalCost, 0);
 
-  // Month-vs-last bar heights
+  // Month-vs-last bar scaling
   const monthMax = Math.max(
     telemetrySummary?.monthCost ?? 0,
     telemetrySummary?.prevMonthCost ?? 0,
     0.0001,
   );
 
-  // Model donut segments
-  const modelSegments = telemetryByModel.map((m, i) => ({
-    value: m.cost,
-    color: MODEL_PALETTE[i % MODEL_PALETTE.length],
-    label: m.model,
-  }));
+  // Model rows with fixed scaffold + extras
+  const modelRows = buildModelRows(telemetryByModel);
+  const modelTotal = modelRows.reduce((s, r) => s + r.cost, 0);
+  const modelSegments = modelRows
+    .filter((r) => r.cost > 0)
+    .map((r) => ({ value: r.cost, color: r.color, label: r.label }));
 
   const hasLifecycle = telemetryByTicket.some((e) => e.lifecycle !== null);
 
@@ -310,34 +378,30 @@ export function TelemetryView() {
           {/* Panel 3: Cost by model */}
           <div className="bg-sandstorm-surface rounded-xl border border-sandstorm-border p-4" data-testid="panel-by-model">
             <div className="text-sm font-medium text-sandstorm-text mb-3">Cost by Model</div>
-            {telemetryByModel.length === 0 ? (
-              <div className="text-sandstorm-muted text-xs py-4 text-center">No data</div>
-            ) : (
-              <div className="flex items-center gap-4">
-                <Donut
-                  segments={modelSegments}
-                  size={100}
-                  centerLabel={telemetrySummary ? fmt$(telemetrySummary.monthCost) : undefined}
-                />
-                <div className="flex flex-col gap-1.5 flex-1 min-w-0">
-                  {telemetryByModel.map((m, i) => (
-                    <div key={m.model} className="flex items-center justify-between gap-2" data-testid={`model-row-${i}`}>
-                      <div className="flex items-center gap-1.5 min-w-0">
-                        <span
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ backgroundColor: MODEL_PALETTE[i % MODEL_PALETTE.length] }}
-                        />
-                        <span className="text-xs text-sandstorm-text-secondary truncate">{m.model}</span>
-                        {m.unpriced && (
-                          <span className="text-[10px] text-amber-400 shrink-0" title="No price data for this model">unpriced</span>
-                        )}
-                      </div>
-                      <span className="text-xs font-mono text-sandstorm-text shrink-0">{fmt$(m.cost)}</span>
+            <div className="flex items-center gap-4">
+              <Donut
+                segments={modelSegments}
+                size={100}
+                centerLabel={fmt$(modelTotal)}
+              />
+              <div className="flex flex-col gap-1.5 flex-1 min-w-0">
+                {modelRows.map((row) => (
+                  <div key={row.key} className="flex items-center justify-between gap-2" data-testid={`model-row-${row.key}`}>
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: row.color }}
+                      />
+                      <span className="text-xs text-sandstorm-text-secondary truncate">{row.label}</span>
+                      {row.unpriced && (
+                        <span className="text-[10px] text-amber-400 shrink-0" title="No price data for this model">unpriced</span>
+                      )}
                     </div>
-                  ))}
-                </div>
+                    <span className="text-xs font-mono text-sandstorm-text shrink-0">{fmt$(row.cost)}</span>
+                  </div>
+                ))}
               </div>
-            )}
+            </div>
           </div>
 
           {/* Panel 6: This month vs last */}
@@ -345,37 +409,37 @@ export function TelemetryView() {
             <div className="text-sm font-medium text-sandstorm-text mb-3">This Month vs Last</div>
             {telemetrySummary ? (
               <div className="flex flex-col gap-3">
-                {/* Bars */}
-                <div className="flex items-end gap-4" data-testid="month-vs-bars">
+                {/* Horizontal bars */}
+                <div className="flex flex-col gap-2" data-testid="month-vs-bars">
                   {[
                     { label: 'This month', cost: telemetrySummary.monthCost, testId: 'bar-this-month' },
                     { label: 'Last month', cost: telemetrySummary.prevMonthCost, testId: 'bar-last-month' },
                   ].map(({ label, cost, testId }) => (
-                    <div key={label} className="flex flex-col items-center gap-1">
-                      <span className="text-xs font-mono text-sandstorm-text">{fmt$(cost)}</span>
-                      <div
-                        className="w-12 bg-sandstorm-accent rounded-t"
-                        style={{ height: `${Math.max((cost / monthMax) * 80, cost > 0 ? 4 : 0)}px` }}
-                        data-testid={testId}
-                        data-cost={cost}
-                        data-height-pct={(cost / monthMax) * 100}
-                      />
-                      <span className="text-[10px] text-sandstorm-muted">{label}</span>
+                    <div key={label} className="flex items-center gap-2">
+                      <span className="text-xs text-sandstorm-muted w-[72px] shrink-0">{label}</span>
+                      <div className="flex-1 bg-sandstorm-border/30 rounded overflow-hidden h-4">
+                        <div
+                          className="h-full rounded bg-sandstorm-accent"
+                          style={{ width: `${Math.max((cost / monthMax) * 100, cost > 0 ? 1 : 0)}%` }}
+                          data-testid={testId}
+                          data-cost={cost}
+                          data-width-pct={(cost / monthMax) * 100}
+                        />
+                      </div>
+                      <span className="text-xs font-mono text-sandstorm-text w-12 text-right shrink-0">{fmt$(cost)}</span>
                     </div>
                   ))}
-                  <div className="ml-2 self-center">
-                    <span
-                      className={`text-sm font-mono font-bold ${
-                        telemetrySummary.monthCost >= telemetrySummary.prevMonthCost
-                          ? 'text-red-400'
-                          : 'text-emerald-400'
-                      }`}
-                      data-testid="month-delta"
-                    >
-                      {fmtDelta(telemetrySummary.monthCost, telemetrySummary.prevMonthCost)}
-                    </span>
-                  </div>
                 </div>
+                <span
+                  className={`text-sm font-mono font-bold ${
+                    telemetrySummary.monthCost >= telemetrySummary.prevMonthCost
+                      ? 'text-red-400'
+                      : 'text-emerald-400'
+                  }`}
+                  data-testid="month-delta"
+                >
+                  {fmtDeltaWithDir(telemetrySummary.monthCost, telemetrySummary.prevMonthCost)}
+                </span>
                 <Sparkline data={dailyCosts} width={220} height={40} />
               </div>
             ) : (
@@ -438,7 +502,7 @@ export function TelemetryView() {
           ) : (
             <div className="flex flex-col gap-2" data-testid="ticket-rows">
               {sortedTickets.map((entry) => {
-                const barWidthPct = (entry.cost / maxTicketCost) * 100;
+                const barWidthPct = maxTicketCost > 0 ? (entry.cost / maxTicketCost) * 100 : 0;
                 const rightValue =
                   sortKey === 'total' || !entry.lifecycle
                     ? fmt$(entry.cost)
@@ -447,13 +511,17 @@ export function TelemetryView() {
                 return (
                   <div key={entry.ticketId} className="flex items-center gap-3" data-testid={`ticket-row-${entry.ticketId}`}>
                     <span className="text-xs font-mono text-sandstorm-muted shrink-0 w-14 truncate">
-                      #{entry.ticketId}
+                      {entry.displayId}
                     </span>
                     <span className="text-xs text-sandstorm-text-secondary shrink-0 w-32 truncate" title={entry.title}>
                       {entry.title}
                     </span>
                     <div className="flex-1 relative h-4 bg-sandstorm-border/30 rounded overflow-hidden">
-                      {entry.lifecycle ? (
+                      {entry.cost === 0 ? (
+                        <span className="text-xs text-sandstorm-muted italic pl-1" data-testid={`ticket-no-spend-${entry.ticketId}`}>
+                          no spend recorded yet
+                        </span>
+                      ) : entry.lifecycle ? (
                         <div style={{ width: `${barWidthPct}%`, height: '100%' }}>
                           <StackedHBar
                             segments={LIFECYCLE_STAGES.map((stage) => ({
@@ -487,38 +555,42 @@ export function TelemetryView() {
         {/* Panel 5: Spend by pipeline stage */}
         <div className="bg-sandstorm-surface rounded-xl border border-sandstorm-border p-4" data-testid="panel-pipeline">
           <div className="text-sm font-medium text-sandstorm-text mb-3">Spend by Pipeline Stage</div>
+          {/* Single 100% stacked bar */}
+          <div className="mb-3" data-testid="pipeline-bar">
+            <StackedHBar
+              segments={pipelineGroups
+                .filter((g) => g.totalCost > 0)
+                .map((g) => ({
+                  value: g.totalCost,
+                  color: g.color,
+                  label: `${g.displayName}: ${fmt$(g.totalCost)} (${pipelineTotal > 0 ? g.pct.toFixed(1) : '0'}%)`,
+                }))}
+              height={16}
+            />
+          </div>
+          {/* Per-column figure rows */}
           <div className="flex flex-col gap-2">
             {pipelineGroups.map((group) => (
               <div key={group.column} className="flex items-center gap-3" data-testid={`pipeline-row-${group.column}`}>
+                <span
+                  className="w-2 h-2 rounded-full shrink-0"
+                  style={{ backgroundColor: group.color }}
+                />
                 <span className="text-xs text-sandstorm-text-secondary shrink-0 w-24">{group.displayName}</span>
-                <div className="flex-1">
-                  {group.totalCost > 0 ? (
-                    <div
-                      className="h-4 rounded"
-                      style={{
-                        width: `${group.pct}%`,
-                        backgroundColor: group.color,
-                        minWidth: '2px',
-                      }}
-                    />
-                  ) : (
-                    <span className="text-xs text-sandstorm-muted" data-testid={`pipeline-empty-${group.column}`}>
-                      $0 — not yet started
+                {group.totalCost > 0 ? (
+                  <>
+                    <span className="text-xs font-mono text-sandstorm-text" data-testid={`pipeline-cost-${group.column}`}>
+                      {fmt$(group.totalCost)}
                     </span>
-                  )}
-                </div>
-                <div className="flex items-center gap-2 shrink-0">
-                  {group.totalCost > 0 && (
-                    <>
-                      <span className="text-xs font-mono text-sandstorm-text" data-testid={`pipeline-cost-${group.column}`}>
-                        {fmt$(group.totalCost)}
-                      </span>
-                      <span className="text-xs font-mono text-sandstorm-muted" data-testid={`pipeline-pct-${group.column}`}>
-                        {pipelineTotal > 0 ? `${group.pct.toFixed(1)}%` : '0%'}
-                      </span>
-                    </>
-                  )}
-                </div>
+                    <span className="text-xs font-mono text-sandstorm-muted" data-testid={`pipeline-pct-${group.column}`}>
+                      {pipelineTotal > 0 ? `${group.pct.toFixed(1)}%` : '0%'}
+                    </span>
+                  </>
+                ) : (
+                  <span className="text-xs text-sandstorm-muted" data-testid={`pipeline-empty-${group.column}`}>
+                    $0 — not yet started
+                  </span>
+                )}
               </div>
             ))}
           </div>
@@ -528,4 +600,3 @@ export function TelemetryView() {
     </div>
   );
 }
-

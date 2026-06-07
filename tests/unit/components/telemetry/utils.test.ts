@@ -53,12 +53,15 @@ describe('groupByPipeline', () => {
     expect(unattr.displayName).toBe('Unattributed');
   });
 
-  it('__orchestrator__ goes to Unattributed', () => {
+  it('__orchestrator__ is excluded from pipeline grouping entirely', () => {
     const byTicket = [makeEntry('__orchestrator__', 2.5)];
     const boardTickets: TicketBoardEntry[] = [];
     const groups = groupByPipeline(byTicket, boardTickets);
     const unattr = groups.find((g) => g.column === 'unattributed')!;
-    expect(unattr.totalCost).toBe(2.5);
+    // orchestrator excluded — does not count toward any column, including unattributed
+    expect(unattr.totalCost).toBe(0);
+    const grandTotal = groups.reduce((s, g) => s + g.totalCost, 0);
+    expect(grandTotal).toBe(0);
   });
 
   it('percentages sum to 100', () => {

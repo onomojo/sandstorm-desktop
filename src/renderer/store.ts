@@ -1884,7 +1884,7 @@ export const useAppStore = create<AppState>((set, get) => ({
         window.sandstorm.telemetry.summary(range),
         window.sandstorm.telemetry.daily(range),
         window.sandstorm.telemetry.byModel(range),
-        window.sandstorm.telemetry.byTicket(),
+        window.sandstorm.telemetry.byTicket(range),
       ]);
       if (seq !== _telemetryFetchSeq) return;
       set({
