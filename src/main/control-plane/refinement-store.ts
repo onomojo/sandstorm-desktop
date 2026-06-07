@@ -64,3 +64,27 @@ export function persistRefinement(session: RefinementSession): void {
 export function deleteRefinement(id: string): void {
   writeAll(readAll().filter((s) => s.id !== id));
 }
+
+const LIVE_REFINEMENT_COLUMNS = new Set(['refining', 'spec_ready']);
+
+/**
+ * Pure helper: partition sessions into those that should be kept vs pruned.
+ * A session is kept only when its ticket's board column is 'refining' or 'spec_ready'.
+ * Sessions whose ticket row is absent (getColumn returns null) are pruned.
+ */
+export function filterSessionsByBoardState(
+  sessions: RefinementSession[],
+  getColumn: (ticketId: string, projectDir: string) => string | null,
+): { keep: RefinementSession[]; prune: RefinementSession[] } {
+  const keep: RefinementSession[] = [];
+  const prune: RefinementSession[] = [];
+  for (const session of sessions) {
+    const col = getColumn(session.ticketId, session.projectDir);
+    if (col !== null && LIVE_REFINEMENT_COLUMNS.has(col)) {
+      keep.push(session);
+    } else {
+      prune.push(session);
+    }
+  }
+  return { keep, prune };
+}

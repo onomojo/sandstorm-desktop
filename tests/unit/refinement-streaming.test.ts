@@ -62,6 +62,8 @@ vi.mock('../../src/main/index', () => ({
     getProject: vi.fn(),
     getPorts: vi.fn(),
     getDb: vi.fn().mockReturnValue({}),
+    listBoardTickets: vi.fn().mockReturnValue([]),
+    onBoardTicketMoved: vi.fn(),
   },
   stackManager: {
     setOnStackUpdate: vi.fn(),

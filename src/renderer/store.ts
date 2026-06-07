@@ -1246,11 +1246,21 @@ export const useAppStore = create<AppState>((set, get) => ({
     const key = `${ticketId}|${projectDir}`;
     // Guard: prevent duplicate gate start during async latency window
     if (get().refineInFlight[key]) return;
-    // Guard: don't start a second gate if a session already exists
+
     const existingSession = get().refinementSessions.find(
       (s) => s.ticketId === ticketId && s.projectDir === projectDir
     );
-    if (existingSession) return;
+
+    if (existingSession) {
+      if (existingSession.status === 'running') {
+        // An in-flight gate is already running — surface its dialog instead of starting a new one.
+        get().openRefinementSession(existingSession.id);
+        return;
+      }
+      // Stale session (ready, errored, interrupted) — discard it and start fresh.
+      void window.sandstorm.tickets.cancelRefinement(existingSession.id).catch(() => {});
+      get().removeRefinementSession(existingSession.id);
+    }
 
     set((state) => {
       const { [key]: _, ...restErrors } = state.refineStartErrors;

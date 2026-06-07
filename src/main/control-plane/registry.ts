@@ -884,8 +884,12 @@ export class Registry {
 
   /** Optional callback invoked after archiveStack — used by rollup store for cache invalidation. */
   onStackArchived?: (stackId: string) => void;
-  /** Optional callback invoked after setBoardTicketColumn — used by rollup store for cache invalidation. */
-  onBoardTicketMoved?: (ticketId: string, column: string) => void;
+  /** Listeners invoked after setBoardTicketColumn. Signature includes projectDir so subscribers can key by (ticketId, projectDir). */
+  private _boardTicketMovedListeners: Array<(ticketId: string, projectDir: string, column: string) => void> = [];
+
+  onBoardTicketMoved(listener: (ticketId: string, projectDir: string, column: string) => void): void {
+    this._boardTicketMovedListeners.push(listener);
+  }
 
   /** Exposes the underlying Database instance for modules that need direct SQL access (e.g. rollup store). */
   getDb(): Database.Database {
@@ -1531,7 +1535,9 @@ export class Registry {
        VALUES (?, ?, ?, '')
        ON CONFLICT(ticket_id, project_dir) DO UPDATE SET column = excluded.column, updated_at = datetime('now')`
     ).run(ticketId, normalizedDir, column);
-    this.onBoardTicketMoved?.(ticketId, column);
+    for (const listener of this._boardTicketMovedListeners) {
+      listener(ticketId, normalizedDir, column);
+    }
   }
 
   /**
