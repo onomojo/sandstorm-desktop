@@ -1,4 +1,6 @@
+import { ORCHESTRATOR_TICKET_ID } from '../../../shared/constants';
 import type { ByTicketEntry } from '@main/telemetry/types';
+export { ORCHESTRATOR_TICKET_ID };
 import type { TicketBoardEntry } from '../../store';
 import { KANBAN_COLUMNS } from '../../types/kanban';
 import type { KanbanColumn } from '../../types/kanban';
@@ -36,6 +38,7 @@ export function groupByPipeline(
   const costByColumn: Record<string, number> = {};
 
   for (const entry of byTicket) {
+    if (entry.ticketId === ORCHESTRATOR_TICKET_ID) continue;
     const board = boardTickets.find((t) => t.ticket_id === entry.ticketId);
     const col = board?.column ?? 'unattributed';
     costByColumn[col] = (costByColumn[col] ?? 0) + entry.cost;

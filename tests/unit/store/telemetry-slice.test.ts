@@ -150,10 +150,12 @@ describe('telemetry store slice', () => {
       expect(callArg.since).toBe('1970-01-01');
     });
 
-    it('byTicket is called without a range argument', async () => {
+    it('byTicket is called with the same DateRange as summary', async () => {
       const api = mockSandstormApi();
+      useAppStore.setState({ telemetryRange: '30d' });
       await useAppStore.getState().fetchTelemetry();
-      expect(api.telemetry.byTicket).toHaveBeenCalledWith();
+      const summaryArg = api.telemetry.summary.mock.calls[0][0] as { since: string; until: string };
+      expect(api.telemetry.byTicket).toHaveBeenCalledWith(summaryArg);
     });
   });
 });

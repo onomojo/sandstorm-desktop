@@ -250,15 +250,15 @@ describe('TelemetryView', () => {
       expect(screen.getByTestId('bar-last-month')).toBeDefined();
     });
 
-    it('bars are scaled to max(monthCost, prevMonthCost)', () => {
+    it('renders horizontal bars (data-width-pct attribute)', () => {
       render(<TelemetryView />);
       const thisBar = screen.getByTestId('bar-this-month');
       const lastBar = screen.getByTestId('bar-last-month');
-      const thisH = parseFloat(thisBar.getAttribute('data-height-pct') ?? '0');
-      const lastH = parseFloat(lastBar.getAttribute('data-height-pct') ?? '0');
+      const thisW = parseFloat(thisBar.getAttribute('data-width-pct') ?? '0');
+      const lastW = parseFloat(lastBar.getAttribute('data-width-pct') ?? '0');
       // this month ($10.50) > last month ($8.00) → this bar has 100%, last bar ~76%
-      expect(thisH).toBeCloseTo(100, 0);
-      expect(lastH).toBeCloseTo(76.2, 0);
+      expect(thisW).toBeCloseTo(100, 0);
+      expect(lastW).toBeCloseTo(76.2, 0);
     });
 
     it('shows delta sign correctly', () => {
@@ -271,6 +271,23 @@ describe('TelemetryView', () => {
       render(<TelemetryView />);
       expect(screen.getByTestId('month-delta').textContent).toContain('▼');
     });
+
+    it('delta includes "higher" when this month > last', () => {
+      render(<TelemetryView />);
+      expect(screen.getByTestId('month-delta').textContent).toContain('higher');
+    });
+
+    it('delta includes "lower" when this month < last', () => {
+      setupStore({ summary: { monthCost: 3.0, prevMonthCost: 8.0 } });
+      render(<TelemetryView />);
+      expect(screen.getByTestId('month-delta').textContent).toContain('lower');
+    });
+
+    it('shows — for delta when prevMonthCost is 0 (no higher/lower)', () => {
+      setupStore({ summary: { monthCost: 5.0, prevMonthCost: 0 } });
+      render(<TelemetryView />);
+      expect(screen.getByTestId('month-delta').textContent).toBe('—');
+    });
   });
 
   describe('Pipeline panel', () => {
@@ -280,6 +297,12 @@ describe('TelemetryView', () => {
       expect(screen.getByTestId('pipeline-row-backlog')).toBeDefined();
       expect(screen.getByTestId('pipeline-row-merged')).toBeDefined();
       expect(screen.getByTestId('pipeline-row-unattributed')).toBeDefined();
+    });
+
+    it('renders a single stacked bar in the pipeline panel', () => {
+      render(<TelemetryView />);
+      const pipelineBar = screen.getByTestId('pipeline-bar');
+      expect(pipelineBar.querySelector('[data-testid="stacked-hbar"]')).toBeTruthy();
     });
 
     it('shows $0 hint for empty columns', () => {
@@ -294,7 +317,7 @@ describe('TelemetryView', () => {
       expect(screen.getByTestId('pipeline-cost-merged').textContent).toBe('$4.50');
     });
 
-    it('unmatched ticketId (orchestrator) goes to Unattributed', () => {
+    it('orchestrator entry is excluded from pipeline grouping (not counted in Unattributed)', () => {
       setupStore({
         byTicket: [
           { ticketId: '__orchestrator__', model: null, cost: 2.0, tokens: { input: 10, output: 5, cacheCreate: 0, cacheRead: 0, total: 15 }, cacheHit: 0, lifecycle: null, unpriced: false },
@@ -302,7 +325,119 @@ describe('TelemetryView', () => {
       });
       render(<TelemetryView />);
       const unattribRow = screen.getByTestId('pipeline-row-unattributed');
-      expect(unattribRow.textContent).toContain('$2.00');
+      // orchestrator is excluded — unattributed row should show empty state
+      expect(unattribRow.textContent).not.toContain('$2.00');
+      expect(unattribRow.textContent).toContain('$0 — not yet started');
+    });
+  });
+
+  describe('Orchestrator row', () => {
+    it('renders orchestrator as "Orchestrator · ad-hoc" title, not #__orchestrator__', () => {
+      setupStore({
+        byTicket: [
+          { ticketId: '__orchestrator__', model: null, cost: 2.0, tokens: { input: 10, output: 5, cacheCreate: 0, cacheRead: 0, total: 15 }, cacheHit: 0, lifecycle: null, unpriced: false },
+        ],
+      });
+      render(<TelemetryView />);
+      const row = screen.getByTestId('ticket-row-__orchestrator__');
+      expect(row.textContent).toContain('Orchestrator · ad-hoc');
+      expect(row.textContent).not.toContain('#__orchestrator__');
+    });
+
+    it('orchestrator row shows — as displayId', () => {
+      setupStore({
+        byTicket: [
+          { ticketId: '__orchestrator__', model: null, cost: 2.0, tokens: { input: 10, output: 5, cacheCreate: 0, cacheRead: 0, total: 15 }, cacheHit: 0, lifecycle: null, unpriced: false },
+        ],
+      });
+      render(<TelemetryView />);
+      const row = screen.getByTestId('ticket-row-__orchestrator__');
+      expect(row.textContent).toContain('—');
+    });
+  });
+
+  describe('Zero-cost tickets', () => {
+    it('shows "no spend recorded yet" affordance for zero-cost tickets', () => {
+      setupStore({
+        byTicket: [
+          { ticketId: '99', model: null, cost: 0, tokens: { input: 0, output: 0, cacheCreate: 0, cacheRead: 0, total: 0 }, cacheHit: 0, lifecycle: null, unpriced: false },
+        ],
+      });
+      render(<TelemetryView />);
+      expect(screen.getByTestId('ticket-no-spend-99')).toBeDefined();
+      expect(screen.getByTestId('ticket-no-spend-99').textContent).toContain('no spend recorded yet');
+    });
+
+    it('does not show no-spend affordance for tickets with cost > 0', () => {
+      render(<TelemetryView />);
+      expect(screen.queryByTestId('ticket-no-spend-42')).toBeNull();
+    });
+  });
+
+  describe('Model legend scaffold', () => {
+    it('renders Opus, Sonnet, and Haiku rows even when absent in byModel', () => {
+      setupStore({ byModel: [] });
+      render(<TelemetryView />);
+      expect(screen.getByTestId('model-row-opus')).toBeDefined();
+      expect(screen.getByTestId('model-row-sonnet')).toBeDefined();
+      expect(screen.getByTestId('model-row-haiku')).toBeDefined();
+    });
+
+    it('absent scaffold model shows $0.00', () => {
+      setupStore({
+        byModel: [
+          { model: 'claude-sonnet-4-6', cost: 5.0, tokens: { input: 50000, output: 20000, cacheCreate: 1000, cacheRead: 4000, total: 75000 }, sessions: 3, unpriced: false },
+        ],
+      });
+      render(<TelemetryView />);
+      // opus and haiku are absent
+      expect(screen.getByTestId('model-row-opus').textContent).toContain('$0.00');
+      expect(screen.getByTestId('model-row-haiku').textContent).toContain('$0.00');
+    });
+
+    it('donut center matches byModel sum (range total), not monthCost', () => {
+      // monthCost = 10.50, but byModel sums to 10.50 (8.0+2.5)
+      render(<TelemetryView />);
+      const centerLabel = screen.getByTestId('donut-center-label');
+      // byModel total = 8.0 + 2.5 = 10.5
+      expect(centerLabel.textContent).toBe('$10.50');
+    });
+
+    it('donut center shows $0.00 when byModel is empty', () => {
+      setupStore({ byModel: [] });
+      render(<TelemetryView />);
+      const centerLabel = screen.getByTestId('donut-center-label');
+      expect(centerLabel.textContent).toBe('$0.00');
+    });
+
+    it('extra model not in scaffold is still rendered', () => {
+      setupStore({
+        byModel: [
+          { model: 'claude-gemma-3', cost: 1.0, tokens: { input: 5000, output: 2000, cacheCreate: 0, cacheRead: 0, total: 7000 }, sessions: 1, unpriced: false },
+        ],
+      });
+      render(<TelemetryView />);
+      expect(screen.getByTestId('model-row-claude-gemma-3')).toBeDefined();
+    });
+  });
+
+  describe('Eager telemetry fetch', () => {
+    it('fetchTelemetry populates telemetrySummary independently of TelemetryView mounting', async () => {
+      const api = mockSandstormApi();
+      api.telemetry.summary.mockResolvedValue({
+        monthCost: 7.5,
+        prevMonthCost: 3.0,
+        tokens: { input: 10000, output: 5000, cacheCreate: 500, cacheRead: 2000, total: 17500 },
+        cacheHitPct: 16.7,
+        sessions: 2,
+        ticketsShipped: null,
+        costPerTicket: null,
+        unpricedModels: [],
+        skippedLines: 0,
+      });
+      // Call directly — simulates App.tsx eager fetch without TelemetryView mounted
+      await useAppStore.getState().fetchTelemetry();
+      expect(useAppStore.getState().telemetrySummary?.monthCost).toBe(7.5);
     });
   });
 

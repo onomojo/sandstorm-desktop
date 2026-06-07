@@ -40,6 +40,7 @@ export default function App() {
     refreshProjects,
     refreshMetrics,
     refreshSessionState,
+    fetchTelemetry,
     selectStack,
     setDockerConnected,
     sessionMonitorState,
@@ -174,6 +175,7 @@ export default function App() {
     refreshProjects();
     refreshStacks();
     refreshMetrics();
+    void fetchTelemetry();
 
     const pollInterval = dockerConnected
       ? STACK_POLL_INTERVAL
@@ -212,7 +214,7 @@ export default function App() {
       unsubNavigate();
       unsubStacksUpdated();
     };
-  }, [dockerConnected, refreshStacks, refreshProjects, refreshMetrics, selectStack]);
+  }, [dockerConnected, refreshStacks, refreshProjects, refreshMetrics, selectStack, fetchTelemetry]);
 
   return (
     <div className="h-screen flex flex-col bg-sandstorm-bg text-sandstorm-text">
