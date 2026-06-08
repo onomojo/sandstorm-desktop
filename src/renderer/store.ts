@@ -324,6 +324,15 @@ export interface ModelSettings {
   outer_model: string;
 }
 
+export interface BackendSettings {
+  inner_backend: string;
+  outer_backend: string;
+  inner_provider: string | null;
+  inner_model: string | null;
+  outer_provider: string | null;
+  outer_model: string | null;
+}
+
 export type TicketListError =
   | { reason: 'missing-creds' }
   | { reason: 'http-status'; status: number; body?: string }
@@ -468,6 +477,16 @@ interface AppState {
   getProjectModelSettings: (projectDir: string) => Promise<ModelSettings | null>;
   setProjectModelSettings: (projectDir: string, settings: Partial<ModelSettings>) => Promise<void>;
   removeProjectModelSettings: (projectDir: string) => Promise<void>;
+
+  // Backend settings
+  globalBackendSettings: BackendSettings;
+  refreshGlobalBackendSettings: () => Promise<void>;
+  setGlobalBackendSettings: (settings: Partial<BackendSettings>) => Promise<void>;
+  getProjectBackendSettings: (projectDir: string) => Promise<BackendSettings | null>;
+  setProjectBackendSettings: (projectDir: string, settings: Partial<BackendSettings>) => Promise<void>;
+  getEffectiveBackend: (projectDir: string, surface: 'inner' | 'outer') => Promise<{ backend: 'claude' | 'opencode'; provider?: string; model?: string }>;
+  setBackendSecret: (scope: 'global' | string, surface: 'inner' | 'outer', value: string) => Promise<void>;
+  getBackendSecretStatus: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<{ set: boolean }>;
 
   // Project ticket config
   getProjectTicketConfig: (projectDir: string) => Promise<ProjectTicketConfig | null>;
@@ -763,6 +782,15 @@ declare global {
         removeProject: (projectDir: string) => Promise<void>;
         getEffective: (projectDir: string) => Promise<ModelSettings>;
       };
+      backendSettings: {
+        getGlobal: () => Promise<BackendSettings>;
+        setGlobal: (settings: Partial<BackendSettings>) => Promise<void>;
+        getProject: (projectDir: string) => Promise<BackendSettings | null>;
+        setProject: (projectDir: string, settings: Partial<BackendSettings>) => Promise<void>;
+        getEffective: (projectDir: string, surface: 'inner' | 'outer') => Promise<{ backend: 'claude' | 'opencode'; provider?: string; model?: string }>;
+        setSecret: (scope: 'global' | string, surface: 'inner' | 'outer', name: string, value: string) => Promise<void>;
+        secretStatus: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<{ set: boolean }>;
+      };
       projectTicketConfig: {
         get: (projectDir: string) => Promise<ProjectTicketConfig | null>;
         set: (projectDir: string, config: ProjectTicketConfig) => Promise<void>;
@@ -1057,6 +1085,43 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   removeProjectModelSettings: async (projectDir) => {
     await window.sandstorm.modelSettings.removeProject(projectDir);
+  },
+
+  // Backend settings
+  globalBackendSettings: { inner_backend: 'claude', outer_backend: 'claude', inner_provider: null, inner_model: null, outer_provider: null, outer_model: null },
+
+  refreshGlobalBackendSettings: async () => {
+    try {
+      const globalBackendSettings = await window.sandstorm.backendSettings.getGlobal();
+      set({ globalBackendSettings });
+    } catch {
+      // Non-fatal
+    }
+  },
+
+  setGlobalBackendSettings: async (settings) => {
+    await window.sandstorm.backendSettings.setGlobal(settings);
+    await get().refreshGlobalBackendSettings();
+  },
+
+  getProjectBackendSettings: async (projectDir) => {
+    return window.sandstorm.backendSettings.getProject(projectDir);
+  },
+
+  setProjectBackendSettings: async (projectDir, settings) => {
+    await window.sandstorm.backendSettings.setProject(projectDir, settings);
+  },
+
+  getEffectiveBackend: async (projectDir, surface) => {
+    return window.sandstorm.backendSettings.getEffective(projectDir, surface);
+  },
+
+  setBackendSecret: async (scope, surface, value) => {
+    await window.sandstorm.backendSettings.setSecret(scope, surface, 'api_key', value);
+  },
+
+  getBackendSecretStatus: async (scope, surface) => {
+    return window.sandstorm.backendSettings.secretStatus(scope, surface);
   },
 
   // Project ticket config

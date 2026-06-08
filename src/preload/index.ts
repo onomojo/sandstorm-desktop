@@ -152,8 +152,8 @@ export interface SandstormAPI {
     getProject: (projectDir: string) => Promise<{ inner_backend: string; outer_backend: string; inner_provider: string | null; inner_model: string | null; outer_provider: string | null; outer_model: string | null } | null>;
     setProject: (projectDir: string, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => Promise<void>;
     getEffective: (projectDir: string, surface: 'inner' | 'outer') => Promise<{ backend: 'claude' | 'opencode'; provider?: string; model?: string }>;
-    setSecret: (key: string, surface: 'inner' | 'outer', name: string, value: string) => Promise<void>;
-    secretStatus: (key: string, surface: 'inner' | 'outer') => Promise<{ set: boolean }>;
+    setSecret: (scope: 'global' | string, surface: 'inner' | 'outer', name: string, value: string) => Promise<void>;
+    secretStatus: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<{ set: boolean }>;
   };
   modelRouting: {
     getEffective: (projectDir: string) => Promise<Record<string, { backend: string; model: string }>>;
@@ -400,8 +400,8 @@ const api: SandstormAPI = {
     getProject: (projectDir) => ipcRenderer.invoke('backendSettings:getProject', projectDir),
     setProject: (projectDir, settings) => ipcRenderer.invoke('backendSettings:setProject', projectDir, settings),
     getEffective: (projectDir, surface) => ipcRenderer.invoke('backendSettings:getEffective', projectDir, surface),
-    setSecret: (key, surface, name, value) => ipcRenderer.invoke('backendSettings:setSecret', key, surface, name, value),
-    secretStatus: (key, surface) => ipcRenderer.invoke('backendSettings:secretStatus', key, surface),
+    setSecret: (scope, surface, name, value) => ipcRenderer.invoke('backendSettings:setSecret', scope, surface, name, value),
+    secretStatus: (scope, surface) => ipcRenderer.invoke('backendSettings:secretStatus', scope, surface),
   },
   modelRouting: {
     getEffective: (projectDir) => ipcRenderer.invoke('modelRouting:getEffective', projectDir),

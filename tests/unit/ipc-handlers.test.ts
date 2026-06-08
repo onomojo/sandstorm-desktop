@@ -2843,24 +2843,42 @@ describe('IPC Handlers', () => {
   });
 
   describe('backendSettings:setSecret', () => {
-    it('calls registry.setBackendSecret and returns undefined (write-only)', async () => {
+    it('derives key="global" when scope is "global" and calls registry.setBackendSecret', async () => {
       const result = await invokeHandler('backendSettings:setSecret', 'global', 'inner', 'api_key', 'sk-test');
       expect(mockRegistry.setBackendSecret).toHaveBeenCalledWith('global', 'inner', 'api_key', 'sk-test');
       expect(result).toBeUndefined();
     });
+
+    it('derives key="project:<resolved>" when scope is a projectDir', async () => {
+      const projectDir = '/some/project';
+      const path = require('path');
+      const expectedKey = `project:${path.resolve(projectDir)}`;
+      await invokeHandler('backendSettings:setSecret', projectDir, 'outer', 'api_key', 'sk-proj');
+      expect(mockRegistry.setBackendSecret).toHaveBeenCalledWith(expectedKey, 'outer', 'api_key', 'sk-proj');
+    });
   });
 
   describe('backendSettings:secretStatus', () => {
-    it('returns { set: false } when no secret stored', async () => {
+    it('returns { set: false } when no secret stored (global scope)', async () => {
       mockRegistry.hasBackendSecret.mockReturnValueOnce(false);
       const result = await invokeHandler('backendSettings:secretStatus', 'global', 'inner');
       expect(mockRegistry.hasBackendSecret).toHaveBeenCalledWith('global', 'inner');
       expect(result).toEqual({ set: false });
     });
 
-    it('returns { set: true } when secret exists', async () => {
+    it('returns { set: true } when secret exists (global scope)', async () => {
       mockRegistry.hasBackendSecret.mockReturnValueOnce(true);
       const result = await invokeHandler('backendSettings:secretStatus', 'global', 'inner');
+      expect(result).toEqual({ set: true });
+    });
+
+    it('derives key="project:<resolved>" for project scope and returns secret status', async () => {
+      const projectDir = '/some/project';
+      const path = require('path');
+      const expectedKey = `project:${path.resolve(projectDir)}`;
+      mockRegistry.hasBackendSecret.mockReturnValueOnce(true);
+      const result = await invokeHandler('backendSettings:secretStatus', projectDir, 'inner');
+      expect(mockRegistry.hasBackendSecret).toHaveBeenCalledWith(expectedKey, 'inner');
       expect(result).toEqual({ set: true });
     });
 
