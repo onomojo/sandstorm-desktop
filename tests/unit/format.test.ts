@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { buildTokenTooltip, formatTokenCount, formatBytes } from '../../src/renderer/utils/format';
+import { buildTokenTooltip, formatTokenCount, formatBytes, formatTokensCompact } from '../../src/renderer/utils/format';
 import type { Stack } from '../../src/renderer/store';
 
 function makeStack(overrides: Partial<Stack> = {}): Stack {
@@ -38,6 +38,28 @@ describe('formatTokenCount', () => {
 
   it('formats millions with M suffix', () => {
     expect(formatTokenCount(1500000)).toBe('1.50M');
+  });
+});
+
+describe('formatTokensCompact', () => {
+  it('returns raw integer for values under 1000', () => {
+    expect(formatTokensCompact(999)).toBe('999');
+  });
+
+  it('formats thousands with uppercase K and no decimal', () => {
+    expect(formatTokensCompact(20000)).toBe('20K');
+    expect(formatTokensCompact(850000)).toBe('850K');
+    expect(formatTokensCompact(1000)).toBe('1K');
+    expect(formatTokensCompact(999_999)).toBe('1000K');
+  });
+
+  it('formats millions with 1 decimal place', () => {
+    expect(formatTokensCompact(1_000_000)).toBe('1.0M');
+    expect(formatTokensCompact(1_200_000)).toBe('1.2M');
+  });
+
+  it('formats billions with 2 decimal places', () => {
+    expect(formatTokensCompact(1_000_000_000)).toBe('1.00B');
   });
 });
 

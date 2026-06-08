@@ -1,5 +1,6 @@
 import React from 'react';
 import type { DailyEntry } from '@main/telemetry/types';
+import { formatTokensCompact } from '../../utils/format';
 
 export type TokenClass = 'input' | 'output' | 'cacheCreate' | 'cacheRead';
 
@@ -18,6 +19,18 @@ export const TOKEN_LABELS: Record<TokenClass, string> = {
 };
 
 const CLASS_ORDER: TokenClass[] = ['cacheRead', 'cacheCreate', 'output', 'input'];
+
+const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+
+function formatDate(dateStr: string): string {
+  const parts = dateStr.split('-');
+  const month = MONTHS[parseInt(parts[1], 10) - 1];
+  const day = parseInt(parts[2], 10);
+  return `${month} ${day}`;
+}
+
+const Y_AXIS_W = 38;
+const X_AXIS_H = 16;
 
 interface StackedBarsProps {
   data: DailyEntry[];
@@ -59,23 +72,31 @@ export function StackedBars({ data, activeClasses, width = 400, height = 120 }: 
       return Math.max(max, sum);
     }, 0) || 1;
 
+  const plotW = width - Y_AXIS_W;
+  const plotH = height - X_AXIS_H;
+
   const barCount = data.length;
-  const barWidth = Math.max(Math.floor((width / barCount) * 0.7), 2);
-  const barGap = Math.max((width - barWidth * barCount) / (barCount + 1), 1);
+  const barWidth = Math.max(Math.floor((plotW / barCount) * 0.7), 2);
+  const barGap = Math.max((plotW - barWidth * barCount) / (barCount + 1), 1);
+
+  const step = data.length > 12 ? Math.ceil(data.length / 12) : 1;
 
   const rects: React.ReactElement[] = [];
+  const xLabels: React.ReactElement[] = [];
+
   data.forEach((day, i) => {
-    const x = barGap + i * (barWidth + barGap);
-    let y = height;
+    const barX = Y_AXIS_W + barGap + i * (barWidth + barGap);
+    let y = plotH;
+
     CLASS_ORDER.filter((c) => activeClasses.has(c)).forEach((cls) => {
       const val = day.tokens[cls] ?? 0;
-      const barH = Math.max((val / yMax) * height, 0);
+      const barH = Math.max((val / yMax) * plotH, 0);
       y -= barH;
       if (barH > 0) {
         rects.push(
           <rect
             key={`${i}-${cls}`}
-            x={x}
+            x={barX}
             y={y}
             width={barWidth}
             height={barH}
@@ -84,6 +105,21 @@ export function StackedBars({ data, activeClasses, width = 400, height = 120 }: 
         );
       }
     });
+
+    if (i % step === 0) {
+      xLabels.push(
+        <text
+          key={`label-${i}`}
+          x={barX + barWidth / 2}
+          y={plotH + X_AXIS_H - 3}
+          textAnchor="middle"
+          fontSize={9}
+          className="fill-current text-sandstorm-muted"
+        >
+          {formatDate(day.date)}
+        </text>,
+      );
+    }
   });
 
   return (
@@ -93,7 +129,26 @@ export function StackedBars({ data, activeClasses, width = 400, height = 120 }: 
       data-testid="stacked-bars"
       data-ymax={yMax}
     >
+      <text
+        x={Y_AXIS_W - 4}
+        y={10}
+        textAnchor="end"
+        fontSize={10}
+        className="fill-current text-sandstorm-muted"
+      >
+        {formatTokensCompact(yMax)}
+      </text>
+      <text
+        x={Y_AXIS_W - 4}
+        y={plotH}
+        textAnchor="end"
+        fontSize={10}
+        className="fill-current text-sandstorm-muted"
+      >
+        0
+      </text>
       {rects}
+      {xLabels}
     </svg>
   );
 }
