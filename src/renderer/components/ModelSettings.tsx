@@ -24,6 +24,25 @@ const PROJECT_OUTER_OPTIONS = [
   ...OUTER_MODEL_OPTIONS,
 ] as const;
 
+const GLOBAL_BACKEND_OPTIONS = [
+  { id: 'claude', label: 'Claude Code' },
+  { id: 'opencode', label: 'OpenCode' },
+] as const;
+
+const PROJECT_BACKEND_OPTIONS = [
+  { id: 'global', label: 'Use Global Default' },
+  { id: 'claude', label: 'Claude Code' },
+  { id: 'opencode', label: 'OpenCode' },
+] as const;
+
+const OPENCODE_PROVIDERS = [
+  { id: 'anthropic', label: 'Anthropic' },
+  { id: 'openai', label: 'OpenAI' },
+  { id: 'amazon-bedrock', label: 'Amazon Bedrock' },
+  { id: 'ollama', label: 'Ollama' },
+  { id: 'openrouter', label: 'OpenRouter' },
+] as const;
+
 function ModelButton({
   id,
   label,
@@ -55,6 +74,100 @@ function ModelButton({
   );
 }
 
+function BackendSelector({
+  scope,
+  backend,
+  onBackendChange,
+  provider,
+  onProviderChange,
+  model,
+  onModelChange,
+  credInput,
+  onCredInputChange,
+  credSet,
+  testId,
+}: {
+  scope: 'global' | 'project';
+  backend: string;
+  onBackendChange: (v: string) => void;
+  provider: string;
+  onProviderChange: (v: string) => void;
+  model: string;
+  onModelChange: (v: string) => void;
+  credInput: string;
+  onCredInputChange: (v: string) => void;
+  credSet: boolean;
+  testId: string;
+}) {
+  const options = scope === 'global' ? GLOBAL_BACKEND_OPTIONS : PROJECT_BACKEND_OPTIONS;
+  return (
+    <div className="space-y-2">
+      <div className="flex gap-2 flex-wrap">
+        {options.map((opt) => (
+          <button
+            key={opt.id}
+            onClick={() => { onBackendChange(opt.id); }}
+            className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-all ${
+              backend === opt.id
+                ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
+                : 'border-sandstorm-border bg-sandstorm-bg text-sandstorm-muted hover:border-sandstorm-border-light'
+            }`}
+            data-testid={`${testId}-${opt.id}`}
+          >
+            {opt.label}
+          </button>
+        ))}
+      </div>
+
+      {backend === 'opencode' && (
+        <div className="space-y-2 pl-1 pt-1" data-testid={`${testId}-opencode-fields`}>
+          <div>
+            <label className="block text-[10px] font-medium text-sandstorm-text-secondary mb-1">Provider</label>
+            <select
+              value={provider}
+              onChange={(e) => { onProviderChange(e.target.value); }}
+              className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+              data-testid={`${testId}-provider`}
+            >
+              {OPENCODE_PROVIDERS.map((p) => (
+                <option key={p.id} value={p.id}>{p.label}</option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className="block text-[10px] font-medium text-sandstorm-text-secondary mb-1">Model</label>
+            <input
+              type="text"
+              value={model}
+              onChange={(e) => { onModelChange(e.target.value); }}
+              placeholder="e.g. claude-sonnet-4-5"
+              className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+              data-testid={`${testId}-model`}
+            />
+          </div>
+          <div>
+            <label className="block text-[10px] font-medium text-sandstorm-text-secondary mb-1">
+              API Credential
+              <span className="ml-2 font-normal text-sandstorm-muted" data-testid={`${testId}-cred-status`}>
+                {credSet ? '(Set)' : '(Not set)'}
+              </span>
+            </label>
+            <input
+              type="password"
+              value={credInput}
+              onChange={(e) => { onCredInputChange(e.target.value); }}
+              placeholder={credSet ? 'Enter new value to update' : 'Enter API key'}
+              className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+              data-testid={`${testId}-cred-input`}
+              autoComplete="new-password"
+            />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export function ModelSettingsModal() {
   const {
     setShowModelSettings,
@@ -68,6 +181,14 @@ export function ModelSettingsModal() {
     setProjectTicketConfig,
     getDarkFactoryEnabled,
     setDarkFactoryEnabled,
+    globalBackendSettings,
+    refreshGlobalBackendSettings,
+    setGlobalBackendSettings,
+    getProjectBackendSettings,
+    setProjectBackendSettings,
+    getEffectiveBackend,
+    setBackendSecret,
+    getBackendSecretStatus,
   } = useAppStore();
 
   const project = activeProject();
@@ -78,11 +199,41 @@ export function ModelSettingsModal() {
   const [globalOuter, setGlobalOuter] = useState(globalModelSettings.outer_model);
   const [globalDirty, setGlobalDirty] = useState(false);
 
+  // Global backend state
+  const [globalInnerBackend, setGlobalInnerBackend] = useState<string>(globalBackendSettings.inner_backend ?? 'claude');
+  const [globalInnerProvider, setGlobalInnerProvider] = useState<string>(globalBackendSettings.inner_provider ?? 'anthropic');
+  const [globalInnerModel, setGlobalInnerModel] = useState<string>(globalBackendSettings.inner_model ?? '');
+  const [globalInnerCredInput, setGlobalInnerCredInput] = useState('');
+  const [globalInnerCredSet, setGlobalInnerCredSet] = useState(false);
+  const [globalOuterBackend, setGlobalOuterBackend] = useState<string>(globalBackendSettings.outer_backend ?? 'claude');
+  const [globalOuterProvider, setGlobalOuterProvider] = useState<string>(globalBackendSettings.outer_provider ?? 'anthropic');
+  const [globalOuterModel, setGlobalOuterModel] = useState<string>(globalBackendSettings.outer_model ?? '');
+  const [globalOuterCredInput, setGlobalOuterCredInput] = useState('');
+  const [globalOuterCredSet, setGlobalOuterCredSet] = useState(false);
+  const [globalBackendLoaded, setGlobalBackendLoaded] = useState(false);
+
   // Project model settings state
   const [projectInner, setProjectInner] = useState('global');
   const [projectOuter, setProjectOuter] = useState('global');
   const [projectDirty, setProjectDirty] = useState(false);
   const [projectLoaded, setProjectLoaded] = useState(false);
+
+  // Project backend state
+  const [projectInnerBackend, setProjectInnerBackend] = useState<string>('global');
+  const [projectInnerProvider, setProjectInnerProvider] = useState<string>('anthropic');
+  const [projectInnerModel, setProjectInnerModel] = useState<string>('');
+  const [projectInnerCredInput, setProjectInnerCredInput] = useState('');
+  const [projectInnerCredSet, setProjectInnerCredSet] = useState(false);
+  const [projectOuterBackend, setProjectOuterBackend] = useState<string>('global');
+  const [projectOuterProvider, setProjectOuterProvider] = useState<string>('anthropic');
+  const [projectOuterModel, setProjectOuterModel] = useState<string>('');
+  const [projectOuterCredInput, setProjectOuterCredInput] = useState('');
+  const [projectOuterCredSet, setProjectOuterCredSet] = useState(false);
+  const [projectBackendLoaded, setProjectBackendLoaded] = useState(false);
+
+  // Effective backend for summary
+  const [effectiveInnerBackend, setEffectiveInnerBackend] = useState<{ backend: 'claude' | 'opencode'; provider?: string; model?: string } | null>(null);
+  const [effectiveOuterBackend, setEffectiveOuterBackend] = useState<{ backend: 'claude' | 'opencode'; provider?: string; model?: string } | null>(null);
 
   // Dark factory state
   const [darkFactoryEnabled, setDarkFactoryEnabledLocal] = useState(false);
@@ -119,6 +270,29 @@ export function ModelSettingsModal() {
     setGlobalOuter(globalModelSettings.outer_model);
   }, [globalModelSettings]);
 
+  const loadGlobalBackendSettings = useCallback(async () => {
+    await refreshGlobalBackendSettings();
+    const settings = useAppStore.getState().globalBackendSettings;
+    setGlobalInnerBackend(settings.inner_backend ?? 'claude');
+    setGlobalInnerProvider(settings.inner_provider ?? 'anthropic');
+    setGlobalInnerModel(settings.inner_model ?? '');
+    setGlobalOuterBackend(settings.outer_backend ?? 'claude');
+    setGlobalOuterProvider(settings.outer_provider ?? 'anthropic');
+    setGlobalOuterModel(settings.outer_model ?? '');
+
+    const [innerStatus, outerStatus] = await Promise.all([
+      getBackendSecretStatus('global', 'inner'),
+      getBackendSecretStatus('global', 'outer'),
+    ]);
+    setGlobalInnerCredSet(innerStatus.set);
+    setGlobalOuterCredSet(outerStatus.set);
+    setGlobalBackendLoaded(true);
+  }, [refreshGlobalBackendSettings, getBackendSecretStatus]);
+
+  useEffect(() => {
+    loadGlobalBackendSettings();
+  }, [loadGlobalBackendSettings]);
+
   const loadProjectSettings = useCallback(async () => {
     if (!project) return;
     const settings = await getProjectModelSettings(project.directory);
@@ -135,6 +309,44 @@ export function ModelSettingsModal() {
     setProjectLoaded(true);
     setProjectDirty(false);
   }, [project, getProjectModelSettings, getDarkFactoryEnabled]);
+
+  const loadProjectBackendSettings = useCallback(async () => {
+    if (!project) return;
+    const settings = await getProjectBackendSettings(project.directory);
+    if (settings) {
+      setProjectInnerBackend(settings.inner_backend ?? 'global');
+      setProjectInnerProvider(settings.inner_provider ?? 'anthropic');
+      setProjectInnerModel(settings.inner_model ?? '');
+      setProjectOuterBackend(settings.outer_backend ?? 'global');
+      setProjectOuterProvider(settings.outer_provider ?? 'anthropic');
+      setProjectOuterModel(settings.outer_model ?? '');
+    } else {
+      setProjectInnerBackend('global');
+      setProjectInnerProvider('anthropic');
+      setProjectInnerModel('');
+      setProjectOuterBackend('global');
+      setProjectOuterProvider('anthropic');
+      setProjectOuterModel('');
+    }
+
+    const [innerStatus, outerStatus] = await Promise.all([
+      getBackendSecretStatus(project.directory, 'inner'),
+      getBackendSecretStatus(project.directory, 'outer'),
+    ]);
+    setProjectInnerCredSet(innerStatus.set);
+    setProjectOuterCredSet(outerStatus.set);
+    setProjectBackendLoaded(true);
+  }, [project, getProjectBackendSettings, getBackendSecretStatus]);
+
+  const loadEffectiveBackend = useCallback(async () => {
+    if (!project) return;
+    const [inner, outer] = await Promise.all([
+      getEffectiveBackend(project.directory, 'inner'),
+      getEffectiveBackend(project.directory, 'outer'),
+    ]);
+    setEffectiveInnerBackend(inner);
+    setEffectiveOuterBackend(outer);
+  }, [project, getEffectiveBackend]);
 
   const loadTicketConfig = useCallback(async () => {
     if (!project) return;
@@ -162,14 +374,34 @@ export function ModelSettingsModal() {
 
   useEffect(() => {
     loadProjectSettings();
+    loadProjectBackendSettings();
+    loadEffectiveBackend();
     loadTicketConfig();
-  }, [loadProjectSettings, loadTicketConfig]);
+  }, [loadProjectSettings, loadProjectBackendSettings, loadEffectiveBackend, loadTicketConfig]);
 
   const handleSaveGlobal = async () => {
     setSaving(true);
     setError(null);
     try {
       await setGlobalModelSettings({ inner_model: globalInner, outer_model: globalOuter });
+      await setGlobalBackendSettings({
+        inner_backend: globalInnerBackend,
+        inner_provider: globalInnerBackend === 'opencode' ? (globalInnerProvider || null) : null,
+        inner_model: globalInnerBackend === 'opencode' ? (globalInnerModel || null) : null,
+        outer_backend: globalOuterBackend,
+        outer_provider: globalOuterBackend === 'opencode' ? (globalOuterProvider || null) : null,
+        outer_model: globalOuterBackend === 'opencode' ? (globalOuterModel || null) : null,
+      });
+      if (globalInnerBackend === 'opencode' && globalInnerCredInput) {
+        await setBackendSecret('global', 'inner', globalInnerCredInput);
+        setGlobalInnerCredInput('');
+        setGlobalInnerCredSet(true);
+      }
+      if (globalOuterBackend === 'opencode' && globalOuterCredInput) {
+        await setBackendSecret('global', 'outer', globalOuterCredInput);
+        setGlobalOuterCredInput('');
+        setGlobalOuterCredSet(true);
+      }
       setGlobalDirty(false);
     } catch (err) {
       setError(String(err));
@@ -188,6 +420,25 @@ export function ModelSettingsModal() {
         outer_model: projectOuter,
       });
       await setDarkFactoryEnabled(project.directory, darkFactoryEnabled);
+      await setProjectBackendSettings(project.directory, {
+        inner_backend: projectInnerBackend,
+        inner_provider: projectInnerBackend === 'opencode' ? (projectInnerProvider || null) : null,
+        inner_model: projectInnerBackend === 'opencode' ? (projectInnerModel || null) : null,
+        outer_backend: projectOuterBackend,
+        outer_provider: projectOuterBackend === 'opencode' ? (projectOuterProvider || null) : null,
+        outer_model: projectOuterBackend === 'opencode' ? (projectOuterModel || null) : null,
+      });
+      if (projectInnerBackend === 'opencode' && projectInnerCredInput) {
+        await setBackendSecret(project.directory, 'inner', projectInnerCredInput);
+        setProjectInnerCredInput('');
+        setProjectInnerCredSet(true);
+      }
+      if (projectOuterBackend === 'opencode' && projectOuterCredInput) {
+        await setBackendSecret(project.directory, 'outer', projectOuterCredInput);
+        setProjectOuterCredInput('');
+        setProjectOuterCredSet(true);
+      }
+      await loadEffectiveBackend();
       setProjectDirty(false);
     } catch (err) {
       setError(String(err));
@@ -262,6 +513,15 @@ export function ModelSettingsModal() {
   const effectiveInner = projectInner === 'global' ? globalInner : projectInner;
   const effectiveOuter = projectOuter === 'global' ? globalOuter : projectOuter;
 
+  function formatEffectiveBackendSummary(eb: { backend: 'claude' | 'opencode'; provider?: string; model?: string } | null, claudeModel: string) {
+    if (!eb) return claudeModel;
+    if (eb.backend === 'claude') return claudeModel;
+    const parts = ['OpenCode'];
+    if (eb.provider) parts.push(eb.provider);
+    if (eb.model) parts.push(eb.model);
+    return parts.join(' / ');
+  }
+
   return (
     <div
       className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 animate-fade-in"
@@ -308,99 +568,195 @@ export function ModelSettingsModal() {
 
         {/* Content */}
         <div className="px-6 py-5 space-y-5">
-          {activeTab === 'global' && (
+          {activeTab === 'global' && globalBackendLoaded && (
             <>
               <div>
                 <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
-                  Default Inner Model
+                  Inner Agent Backend
                 </label>
                 <p className="text-[10px] text-sandstorm-muted mb-2">
-                  Model used for stack execution (inner Claude agent)
+                  Backend used for stack execution (inner agent)
                 </p>
-                <div className="flex gap-2">
-                  {INNER_MODEL_OPTIONS.map((m) => (
-                    <ModelButton
-                      key={m.id}
-                      id={m.id}
-                      label={m.label}
-                      desc={m.desc}
-                      selected={globalInner === m.id}
-                      onClick={() => { setGlobalInner(m.id); setGlobalDirty(true); }}
-                      testId={`global-inner-${m.id}`}
-                    />
-                  ))}
-                </div>
+                <BackendSelector
+                  scope="global"
+                  backend={globalInnerBackend}
+                  onBackendChange={(v) => { setGlobalInnerBackend(v); setGlobalDirty(true); }}
+                  provider={globalInnerProvider}
+                  onProviderChange={(v) => { setGlobalInnerProvider(v); setGlobalDirty(true); }}
+                  model={globalInnerModel}
+                  onModelChange={(v) => { setGlobalInnerModel(v); setGlobalDirty(true); }}
+                  credInput={globalInnerCredInput}
+                  onCredInputChange={(v) => { setGlobalInnerCredInput(v); setGlobalDirty(true); }}
+                  credSet={globalInnerCredSet}
+                  testId="global-inner-backend"
+                />
               </div>
+
+              {globalInnerBackend === 'claude' && (
+                <div>
+                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
+                    Default Inner Model
+                  </label>
+                  <p className="text-[10px] text-sandstorm-muted mb-2">
+                    Model used for stack execution (inner Claude agent)
+                  </p>
+                  <div className="flex gap-2">
+                    {INNER_MODEL_OPTIONS.map((m) => (
+                      <ModelButton
+                        key={m.id}
+                        id={m.id}
+                        label={m.label}
+                        desc={m.desc}
+                        selected={globalInner === m.id}
+                        onClick={() => { setGlobalInner(m.id); setGlobalDirty(true); }}
+                        testId={`global-inner-${m.id}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
-                  Default Outer Model
+                  Outer Agent Backend
                 </label>
                 <p className="text-[10px] text-sandstorm-muted mb-2">
-                  Model used for orchestration (outer Claude)
+                  Backend used for orchestration (outer agent)
                 </p>
-                <div className="flex gap-2">
-                  {OUTER_MODEL_OPTIONS.map((m) => (
-                    <ModelButton
-                      key={m.id}
-                      id={m.id}
-                      label={m.label}
-                      desc={m.desc}
-                      selected={globalOuter === m.id}
-                      onClick={() => { setGlobalOuter(m.id); setGlobalDirty(true); }}
-                      testId={`global-outer-${m.id}`}
-                    />
-                  ))}
-                </div>
+                <BackendSelector
+                  scope="global"
+                  backend={globalOuterBackend}
+                  onBackendChange={(v) => { setGlobalOuterBackend(v); setGlobalDirty(true); }}
+                  provider={globalOuterProvider}
+                  onProviderChange={(v) => { setGlobalOuterProvider(v); setGlobalDirty(true); }}
+                  model={globalOuterModel}
+                  onModelChange={(v) => { setGlobalOuterModel(v); setGlobalDirty(true); }}
+                  credInput={globalOuterCredInput}
+                  onCredInputChange={(v) => { setGlobalOuterCredInput(v); setGlobalDirty(true); }}
+                  credSet={globalOuterCredSet}
+                  testId="global-outer-backend"
+                />
               </div>
+
+              {globalOuterBackend === 'claude' && (
+                <div>
+                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
+                    Default Outer Model
+                  </label>
+                  <p className="text-[10px] text-sandstorm-muted mb-2">
+                    Model used for orchestration (outer Claude)
+                  </p>
+                  <div className="flex gap-2">
+                    {OUTER_MODEL_OPTIONS.map((m) => (
+                      <ModelButton
+                        key={m.id}
+                        id={m.id}
+                        label={m.label}
+                        desc={m.desc}
+                        selected={globalOuter === m.id}
+                        onClick={() => { setGlobalOuter(m.id); setGlobalDirty(true); }}
+                        testId={`global-outer-${m.id}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
             </>
           )}
 
-          {activeTab === 'project' && project && projectLoaded && darkFactoryLoaded && (
+          {activeTab === 'project' && project && projectLoaded && darkFactoryLoaded && projectBackendLoaded && (
             <>
               <div>
                 <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
-                  Inner Model Override
+                  Inner Agent Backend
                 </label>
                 <p className="text-[10px] text-sandstorm-muted mb-2">
-                  Override the global default for this project
+                  Override the global backend for the inner agent
                 </p>
-                <div className="flex gap-2 flex-wrap">
-                  {PROJECT_INNER_OPTIONS.map((m) => (
-                    <ModelButton
-                      key={m.id}
-                      id={m.id}
-                      label={m.label}
-                      desc={m.desc}
-                      selected={projectInner === m.id}
-                      onClick={() => { setProjectInner(m.id); setProjectDirty(true); }}
-                      testId={`project-inner-${m.id}`}
-                    />
-                  ))}
-                </div>
+                <BackendSelector
+                  scope="project"
+                  backend={projectInnerBackend}
+                  onBackendChange={(v) => { setProjectInnerBackend(v); setProjectDirty(true); }}
+                  provider={projectInnerProvider}
+                  onProviderChange={(v) => { setProjectInnerProvider(v); setProjectDirty(true); }}
+                  model={projectInnerModel}
+                  onModelChange={(v) => { setProjectInnerModel(v); setProjectDirty(true); }}
+                  credInput={projectInnerCredInput}
+                  onCredInputChange={(v) => { setProjectInnerCredInput(v); setProjectDirty(true); }}
+                  credSet={projectInnerCredSet}
+                  testId="project-inner-backend"
+                />
               </div>
+
+              {projectInnerBackend !== 'opencode' && (
+                <div>
+                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
+                    Inner Model Override
+                  </label>
+                  <p className="text-[10px] text-sandstorm-muted mb-2">
+                    Override the global default for this project
+                  </p>
+                  <div className="flex gap-2 flex-wrap">
+                    {PROJECT_INNER_OPTIONS.map((m) => (
+                      <ModelButton
+                        key={m.id}
+                        id={m.id}
+                        label={m.label}
+                        desc={m.desc}
+                        selected={projectInner === m.id}
+                        onClick={() => { setProjectInner(m.id); setProjectDirty(true); }}
+                        testId={`project-inner-${m.id}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
 
               <div>
                 <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
-                  Outer Model Override
+                  Outer Agent Backend
                 </label>
                 <p className="text-[10px] text-sandstorm-muted mb-2">
-                  Override the global default for this project
+                  Override the global backend for the outer agent
                 </p>
-                <div className="flex gap-2 flex-wrap">
-                  {PROJECT_OUTER_OPTIONS.map((m) => (
-                    <ModelButton
-                      key={m.id}
-                      id={m.id}
-                      label={m.label}
-                      desc={m.desc}
-                      selected={projectOuter === m.id}
-                      onClick={() => { setProjectOuter(m.id); setProjectDirty(true); }}
-                      testId={`project-outer-${m.id}`}
-                    />
-                  ))}
-                </div>
+                <BackendSelector
+                  scope="project"
+                  backend={projectOuterBackend}
+                  onBackendChange={(v) => { setProjectOuterBackend(v); setProjectDirty(true); }}
+                  provider={projectOuterProvider}
+                  onProviderChange={(v) => { setProjectOuterProvider(v); setProjectDirty(true); }}
+                  model={projectOuterModel}
+                  onModelChange={(v) => { setProjectOuterModel(v); setProjectDirty(true); }}
+                  credInput={projectOuterCredInput}
+                  onCredInputChange={(v) => { setProjectOuterCredInput(v); setProjectDirty(true); }}
+                  credSet={projectOuterCredSet}
+                  testId="project-outer-backend"
+                />
               </div>
+
+              {projectOuterBackend !== 'opencode' && (
+                <div>
+                  <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
+                    Outer Model Override
+                  </label>
+                  <p className="text-[10px] text-sandstorm-muted mb-2">
+                    Override the global default for this project
+                  </p>
+                  <div className="flex gap-2 flex-wrap">
+                    {PROJECT_OUTER_OPTIONS.map((m) => (
+                      <ModelButton
+                        key={m.id}
+                        id={m.id}
+                        label={m.label}
+                        desc={m.desc}
+                        selected={projectOuter === m.id}
+                        onClick={() => { setProjectOuter(m.id); setProjectDirty(true); }}
+                        testId={`project-outer-${m.id}`}
+                      />
+                    ))}
+                  </div>
+                </div>
+              )}
 
               {/* Dark factory toggle */}
               <div>
@@ -435,10 +791,10 @@ export function ModelSettingsModal() {
                 <p className="text-[11px] font-medium text-sandstorm-text-secondary mb-1.5">Effective Models</p>
                 <div className="flex gap-4 text-[11px]">
                   <span className="text-sandstorm-muted">
-                    Inner: <span className="text-sandstorm-text font-medium" data-testid="effective-inner">{effectiveInner}</span>
+                    Inner: <span className="text-sandstorm-text font-medium" data-testid="effective-inner">{formatEffectiveBackendSummary(effectiveInnerBackend, effectiveInner)}</span>
                   </span>
                   <span className="text-sandstorm-muted">
-                    Outer: <span className="text-sandstorm-text font-medium" data-testid="effective-outer">{effectiveOuter}</span>
+                    Outer: <span className="text-sandstorm-text font-medium" data-testid="effective-outer">{formatEffectiveBackendSummary(effectiveOuterBackend, effectiveOuter)}</span>
                   </span>
                 </div>
               </div>
