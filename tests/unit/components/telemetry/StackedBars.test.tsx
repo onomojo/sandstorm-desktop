@@ -70,4 +70,44 @@ describe('StackedBars', () => {
     const svg = container.querySelector('[data-testid="stacked-bars"]');
     expect(svg?.getAttribute('data-ymax')).toBe('20000');
   });
+
+  it('renders a date label for each entry when N <= 12', () => {
+    render(
+      <StackedBars
+        data={daily}
+        activeClasses={new Set<TokenClass>(['input', 'output', 'cacheCreate', 'cacheRead'])}
+      />,
+    );
+    expect(screen.getByText('Jun 1')).toBeDefined();
+    expect(screen.getByText('Jun 2')).toBeDefined();
+  });
+
+  it('renders at most 12 date labels for 30 entries and always includes the first', () => {
+    const thirtyDays: DailyEntry[] = Array.from({ length: 30 }, (_, i) => ({
+      date: `2026-06-${String(i + 1).padStart(2, '0')}`,
+      cost: 1.0,
+      tokens: { input: 1000, output: 500, cacheCreate: 100, cacheRead: 200 },
+      byModel: {},
+    }));
+    const { container } = render(
+      <StackedBars data={thirtyDays} activeClasses={new Set<TokenClass>(['input'])} />,
+    );
+    const svg = container.querySelector('[data-testid="stacked-bars"]')!;
+    const allTexts = Array.from(svg.querySelectorAll('text'));
+    const dateTexts = allTexts.filter((t) => /^[A-Z][a-z]+ \d+$/.test(t.textContent ?? ''));
+    expect(dateTexts.length).toBeLessThanOrEqual(12);
+    expect(dateTexts.some((t) => t.textContent === 'Jun 1')).toBe(true);
+  });
+
+  it('renders y-axis compact top tick and baseline 0 tick', () => {
+    // yMax for daily fixture (all classes): day 2 sum = 20000+8000+1000+4000 = 33000 => "33K"
+    render(
+      <StackedBars
+        data={daily}
+        activeClasses={new Set<TokenClass>(['input', 'output', 'cacheCreate', 'cacheRead'])}
+      />,
+    );
+    expect(screen.getByText('33K')).toBeDefined();
+    expect(screen.getByText('0')).toBeDefined();
+  });
 });
