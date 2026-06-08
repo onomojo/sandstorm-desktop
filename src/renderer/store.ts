@@ -872,6 +872,8 @@ export interface RefineQuestion {
   id: string;
   question: string;
   options: RefineQuestionOption[];
+  /** 'gap' = self-resolvable spec correction (read-only in UI, not fed to spec_refine) */
+  kind?: 'gap';
 }
 
 /** Renderer-side mirror of `SpecGateResult` from main/control-plane/ticket-spec.ts. */
@@ -882,6 +884,8 @@ export interface SpecGateResult {
   ticketUrl: string | null;
   cached: boolean;
   error?: string;
+  /** Full evaluator report text, capped at 64KB. Present on FAIL; null/absent on PASS or error. */
+  reportText?: string | null;
 }
 
 export type RefinementStatus = 'running' | 'ready' | 'errored' | 'interrupted';

@@ -47,6 +47,21 @@ export const BOT_COMMENT_MARKER = '<!-- sandstorm:bot-question -->';
 /** Marker that identifies answer comments posted by the interactive dialog. */
 export const ANSWER_COMMENT_MARKER = '<!-- sandstorm:user-answers -->';
 
+/** Marker that identifies FAIL gate-report comments posted by the interactive dialog. */
+export const GATE_FAIL_REPORT_MARKER = '<!-- sandstorm:gate-fail-report -->';
+
+/**
+ * Returns the body text of the most-recent GATE_FAIL_REPORT_MARKER comment,
+ * or null if none exists. Mirrors the append-plus-read-latest pattern used by
+ * getLatestUserAnswers for ANSWER_COMMENT_MARKER.
+ */
+export function getLatestGateFailReport(comments: TicketComment[]): string | null {
+  const candidates = comments.filter((c) => c.body.includes(GATE_FAIL_REPORT_MARKER));
+  if (candidates.length === 0) return null;
+  const latest = candidates[candidates.length - 1];
+  return latest.body.replace(GATE_FAIL_REPORT_MARKER, '').trim();
+}
+
 export interface RefineToCommentsDeps {
   listTickets: (label: string, projectDir: string) => Promise<TicketEntry[]>;
   listComments: (ticketId: string, projectDir: string) => Promise<TicketComment[]>;

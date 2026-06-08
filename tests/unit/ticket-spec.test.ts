@@ -202,7 +202,38 @@ describe('extractQuestions', () => {
     const questions = extractQuestions(r);
     expect(questions).toHaveLength(2);
     expect(questions[0].question).toBe('First gap');
+    expect(questions[0].kind).toBe('gap');
     expect(questions[1].question).toBe('Second gap');
+    expect(questions[1].kind).toBe('gap');
+  });
+
+  it('parses checkbox items under Gaps heading — mandated buildSpecCheckPrompt format (regression)', () => {
+    const r = `## Spec Quality Gate: FAIL\n\n### Gaps (if any)\n- [ ] Citation stale — update to line 42\n- [ ] Wrong version check — use < 24\n\n## Results\n`;
+    const questions = extractQuestions(r);
+    expect(questions.length).toBeGreaterThan(0);
+    expect(questions[0].question).toBe('Citation stale — update to line 42');
+    expect(questions[0].kind).toBe('gap');
+    expect(questions[1].question).toBe('Wrong version check — use < 24');
+    expect(questions[1].kind).toBe('gap');
+  });
+
+  it('combines checkbox gaps with JSON questions when both are present', () => {
+    const r = `## Spec Quality Gate: FAIL\n\n### Gaps (if any)\n- [ ] Gap item — needs fixing\n\n### Questions Requiring User Answers (if any)\n\n\`\`\`json\n[{"id":"q1","question":"Which approach?","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}]\n\`\`\`\n`;
+    const questions = extractQuestions(r);
+    // Gaps appear first, then JSON questions
+    expect(questions.length).toBe(2);
+    expect(questions[0].kind).toBe('gap');
+    expect(questions[0].question).toBe('Gap item — needs fixing');
+    expect(questions[1].kind).toBeUndefined();
+    expect(questions[1].question).toBe('Which approach?');
+  });
+
+  it('marks Questions-section items with no kind (only Gaps items get kind: gap)', () => {
+    const r = `### Questions\n1. What is the approach?\n2. How should we handle it?`;
+    const questions = extractQuestions(r);
+    expect(questions).toHaveLength(2);
+    expect(questions[0].kind).toBeUndefined();
+    expect(questions[1].kind).toBeUndefined();
   });
 
   it('also captures JSON block under a Gaps heading', () => {
@@ -337,6 +368,29 @@ describe('runSpecCheck', () => {
     expect(deps.markSpecReady).not.toHaveBeenCalled();
   });
 
+  it('includes reportText on FAIL and null on PASS', async () => {
+    const failDeps = makeDeps({
+      runCheck: vi.fn().mockResolvedValue({ passed: false, report: FAIL_REPORT }),
+    });
+    const failResult = await runSpecCheck('1', '/proj', failDeps);
+    expect(failResult.reportText).toBe(FAIL_REPORT);
+
+    const passDeps = makeDeps();
+    const passResult = await runSpecCheck('1', '/proj', passDeps);
+    expect(passResult.reportText).toBeNull();
+  });
+
+  it('caps reportText at 64KB', async () => {
+    const longReport = `## Spec Quality Gate: FAIL\n\n` + 'x'.repeat(70 * 1024);
+    const deps = makeDeps({
+      runCheck: vi.fn().mockResolvedValue({ passed: false, report: longReport }),
+    });
+    const result = await runSpecCheck('1', '/proj', deps);
+    expect(result.reportText).toBeDefined();
+    expect(result.reportText!.length).toBeLessThan(longReport.length);
+    expect(result.reportText).toContain('[Report truncated at 64KB]');
+  });
+
   it('surfaces handler errors verbatim', async () => {
     const deps = makeDeps({
       runCheck: vi.fn().mockResolvedValue({ passed: false, error: 'No quality gate configured' }),
@@ -386,5 +440,17 @@ describe('runSpecRefine', () => {
     expect(result.questions).toHaveLength(2);
     expect(result.questions[0]).toMatchObject({ question: expect.any(String), options: [] });
     expect(deps.markSpecReady).not.toHaveBeenCalled();
+  });
+
+  it('includes reportText on FAIL and null on PASS (runSpecRefine)', async () => {
+    const failDeps = makeDeps({
+      runRefine: vi.fn().mockResolvedValue({ passed: false, report: FAIL_REPORT }),
+    });
+    const failResult = await runSpecRefine('1', '/proj', 'answers', failDeps);
+    expect(failResult.reportText).toBe(FAIL_REPORT);
+
+    const passDeps = makeDeps();
+    const passResult = await runSpecRefine('1', '/proj', 'answers', passDeps);
+    expect(passResult.reportText).toBeNull();
   });
 });

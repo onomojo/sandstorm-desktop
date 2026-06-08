@@ -7,8 +7,10 @@ import {
   getLastBotComment,
   getUserAnswersAfterBot,
   getLatestUserAnswers,
+  getLatestGateFailReport,
   BOT_COMMENT_MARKER,
   ANSWER_COMMENT_MARKER,
+  GATE_FAIL_REPORT_MARKER,
   type RefineToCommentsDeps,
 } from '../../../../src/main/scheduler/refine-to-comments';
 import type { TicketEntry, TicketComment } from '../../../../src/main/control-plane/ticket-comments';
@@ -458,4 +460,59 @@ describe('buildRefineToCommentsDeps — provider reroute', () => {
     expect(result).toEqual({ processed: 0, passed: 0, failed: 0 });
   });
 
+});
+
+// ── GATE_FAIL_REPORT_MARKER + getLatestGateFailReport ────────────────────────
+
+describe('GATE_FAIL_REPORT_MARKER', () => {
+  it('is a distinct HTML comment marker string', () => {
+    expect(GATE_FAIL_REPORT_MARKER).toMatch(/^<!--.*-->$/);
+    expect(GATE_FAIL_REPORT_MARKER).not.toBe(BOT_COMMENT_MARKER);
+    expect(GATE_FAIL_REPORT_MARKER).not.toBe(ANSWER_COMMENT_MARKER);
+  });
+});
+
+describe('getLatestGateFailReport', () => {
+  it('returns null when no GATE_FAIL_REPORT_MARKER comments exist', () => {
+    const comments: TicketComment[] = [
+      { author: 'bot', body: `${BOT_COMMENT_MARKER}\nSome question`, createdAt: '2026-05-01T10:00:00Z' },
+      { author: 'user', body: 'My answer', createdAt: '2026-05-02T10:00:00Z' },
+    ];
+    expect(getLatestGateFailReport(comments)).toBeNull();
+  });
+
+  it('returns the body of the latest GATE_FAIL_REPORT_MARKER comment', () => {
+    const first: TicketComment = {
+      author: 'bot',
+      body: `${GATE_FAIL_REPORT_MARKER}\n\nFirst report`,
+      createdAt: '2026-05-01T10:00:00Z',
+    };
+    const second: TicketComment = {
+      author: 'bot',
+      body: `${GATE_FAIL_REPORT_MARKER}\n\nSecond report`,
+      createdAt: '2026-05-02T10:00:00Z',
+    };
+    expect(getLatestGateFailReport([first, second])).toBe('Second report');
+  });
+
+  it('returns just the first report when only one exists', () => {
+    const comment: TicketComment = {
+      author: 'bot',
+      body: `${GATE_FAIL_REPORT_MARKER}\n\n## Spec Quality Gate: FAIL\n\nReport text here`,
+      createdAt: '2026-05-01T10:00:00Z',
+    };
+    const result = getLatestGateFailReport([comment]);
+    expect(result).toBe('## Spec Quality Gate: FAIL\n\nReport text here');
+  });
+
+  it('strips the marker from the returned text', () => {
+    const comment: TicketComment = {
+      author: 'bot',
+      body: `${GATE_FAIL_REPORT_MARKER}\n\nReport without marker`,
+      createdAt: '2026-05-01T10:00:00Z',
+    };
+    const result = getLatestGateFailReport([comment]);
+    expect(result).not.toContain(GATE_FAIL_REPORT_MARKER);
+    expect(result).toBe('Report without marker');
+  });
 });

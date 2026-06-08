@@ -15,6 +15,8 @@ export interface RefineQuestion {
   id: string;
   question: string;
   options: RefineQuestionOption[];
+  /** 'gap' = self-resolvable spec correction (read-only in UI, not fed to spec_refine) */
+  kind?: 'gap';
 }
 
 /**
@@ -31,6 +33,15 @@ export interface SpecGateResult {
   cached: boolean;
   /** Set when the ticket can't be evaluated (unconfigured provider, etc.). */
   error?: string;
+  /** Full evaluator report text, capped at 64KB. Present on FAIL; null/absent on PASS or error. */
+  reportText?: string | null;
+}
+
+const MAX_REPORT_TEXT_LEN = 64 * 1024;
+
+export function capReportText(text: string): string {
+  if (text.length <= MAX_REPORT_TEXT_LEN) return text;
+  return text.slice(0, MAX_REPORT_TEXT_LEN) + '\n\n[Report truncated at 64KB]';
 }
 
 /** Raw spec-gate report payload coming back from the ephemeral agent. */
@@ -58,22 +69,36 @@ export function extractGateSummary(report: string): string {
  * fence under a `### Questions` or `### Gaps` heading and parses it as
  * RefineQuestion[]. Falls back to the legacy numbered-list parser (coercing
  * each line to a RefineQuestion with no options) when no valid JSON block is found.
+ * Also parses checkbox items (`- [ ] …`) under `### Gaps` and marks them `kind:'gap'`.
  */
 export function extractQuestions(report: string): RefineQuestion[] {
   if (!report) return [];
 
-  // Try JSON block parser first.
+  // Try JSON block parser first for interactive questions.
   const jsonResult = tryParseJsonBlock(report);
-  if (jsonResult !== null) return jsonResult;
+  // Also extract checkbox gaps regardless (they appear alongside JSON questions).
+  const checkboxGaps = extractCheckboxGaps(report);
 
-  // Fallback: legacy numbered-item parser.
+  if (jsonResult !== null) {
+    // Gaps render above interactive questions in the UI.
+    return [...checkboxGaps, ...jsonResult];
+  }
+
+  // Fallback: numbered-item + checkbox-gap parser.
   const lines = report.split('\n');
   let capture = false;
+  let captureKind: 'question' | 'gap' = 'question';
   const out: RefineQuestion[] = [];
   let idx = 0;
   for (const line of lines) {
-    if (/^### (Questions|Gaps)/i.test(line)) {
+    if (/^### Questions/i.test(line)) {
       capture = true;
+      captureKind = 'question';
+      continue;
+    }
+    if (/^### Gaps/i.test(line)) {
+      capture = true;
+      captureKind = 'gap';
       continue;
     }
     if (/^## /.test(line)) {
@@ -81,9 +106,49 @@ export function extractQuestions(report: string): RefineQuestion[] {
       continue;
     }
     if (!capture) continue;
-    const m = line.match(/^[0-9]+\.\s*(.*)$/);
+    // Numbered items work for both sections.
+    const numbered = line.match(/^[0-9]+\.\s*(.*)$/);
+    if (numbered && numbered[1].trim()) {
+      const item: RefineQuestion = { id: `q${idx + 1}`, question: numbered[1].trim(), options: [] };
+      if (captureKind === 'gap') item.kind = 'gap';
+      out.push(item);
+      idx++;
+      continue;
+    }
+    // Checkbox items (mandated format for Gaps section by buildSpecCheckPrompt).
+    if (captureKind === 'gap') {
+      const checkbox = line.match(/^-\s+\[[ x?]\]\s+(.*)$/);
+      if (checkbox && checkbox[1].trim()) {
+        out.push({ id: `g${idx + 1}`, question: checkbox[1].trim(), options: [], kind: 'gap' });
+        idx++;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * Extract checkbox items (`- [ ] …`) from the `### Gaps` section only.
+ * Used when a JSON block is present so gaps are combined with JSON questions.
+ */
+function extractCheckboxGaps(report: string): RefineQuestion[] {
+  const lines = report.split('\n');
+  let capture = false;
+  const out: RefineQuestion[] = [];
+  let idx = 0;
+  for (const line of lines) {
+    if (/^### Gaps/i.test(line)) {
+      capture = true;
+      continue;
+    }
+    // Stop at any other section heading (## or ###).
+    if (capture && (/^## /.test(line) || /^### /.test(line))) {
+      break;
+    }
+    if (!capture) continue;
+    const m = line.match(/^-\s+\[[ x?]\]\s+(.*)$/);
     if (m && m[1].trim()) {
-      out.push({ id: `q${idx + 1}`, question: m[1].trim(), options: [] });
+      out.push({ id: `g${idx + 1}`, question: m[1].trim(), options: [], kind: 'gap' });
       idx++;
     }
   }
@@ -328,6 +393,7 @@ export async function runSpecCheck(
     gateSummary: extractGateSummary(reportText),
     ticketUrl: url || null,
     cached: false,
+    reportText: passed ? null : capReportText(reportText),
   };
 }
 
@@ -393,6 +459,7 @@ export async function runSpecRefine(
     gateSummary: extractGateSummary(reportText),
     ticketUrl: url || null,
     cached: false,
+    reportText: passed ? null : capReportText(reportText),
   };
 }
 

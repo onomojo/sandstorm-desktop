@@ -29,6 +29,7 @@ const {
   mockSessionMonitor,
   mockSpawnSpecCheck,
   mockSpawnSpecRefine,
+  mockPostComment,
   mockListTicketComments,
   mockDeleteRefinement,
   mockPersistRefinement,
@@ -40,6 +41,7 @@ const {
   const registeredHandlers: Record<string, (...args: unknown[]) => unknown> = {};
   const mockSpawnSpecCheck = vi.fn();
   const mockSpawnSpecRefine = vi.fn();
+  const mockPostComment = vi.fn().mockResolvedValue(undefined);
   const mockListTicketComments = vi.fn().mockResolvedValue([]);
   const mockDeleteRefinement = vi.fn();
   const mockPersistRefinement = vi.fn();
@@ -213,6 +215,7 @@ const {
     mockSessionMonitor,
     mockSpawnSpecCheck,
     mockSpawnSpecRefine,
+    mockPostComment,
     mockListTicketComments,
     mockDeleteRefinement,
     mockPersistRefinement,
@@ -334,7 +337,7 @@ vi.mock('../../src/main/claude/tools', () => ({
 
 vi.mock('../../src/main/control-plane/ticket-comments', () => ({
   listTicketComments: (...args: unknown[]) => mockListTicketComments(...args),
-  postComment: vi.fn().mockResolvedValue(undefined),
+  postComment: (...args: unknown[]) => mockPostComment(...args),
 }));
 
 vi.mock('../../src/main/control-plane/refinement-store', () => ({
@@ -2143,6 +2146,106 @@ describe('IPC Handlers', () => {
       // that expected it to be present.
       expect(registeredHandlers['tickets:discardRefinement']).toBeUndefined();
     });
+  });
+
+  // =========================================================================
+  // FAIL report posting — #569
+  // =========================================================================
+  describe('tickets:specCheckAsync — FAIL report comment posting (#569)', () => {
+    async function runSpecCheckAsyncWithReport(
+      report: string,
+      passed: boolean,
+    ): Promise<void> {
+      let resolveFn!: (v: Record<string, unknown>) => void;
+      mockSpawnSpecCheck.mockReturnValue({
+        promise: new Promise<Record<string, unknown>>((r) => { resolveFn = r; }),
+        cancel: vi.fn(),
+      });
+      const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
+      mockExecFile.mockImplementation(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(new Error('exec-fail'), '', '');
+        },
+      );
+
+      await invokeHandler('tickets:specCheckAsync', 'T-569', '/tmp/proj') as { sessionId: string };
+      mockPostComment.mockClear();
+      mockPersistRefinement.mockClear();
+
+      resolveFn({ passed, report });
+      // Flush multiple ticks: the PASS path has extra awaits (readTicketUrl + fetchTicket).
+      for (let i = 0; i < 5; i++) {
+        await new Promise((r) => setTimeout(r, 0));
+      }
+    }
+
+    it('posts a GATE_FAIL_REPORT_MARKER comment on FAIL with non-empty report', async () => {
+      await runSpecCheckAsyncWithReport('## Spec Quality Gate: FAIL\n\nSome report', false);
+      expect(mockPostComment).toHaveBeenCalledOnce();
+      const [, , body] = mockPostComment.mock.calls[0] as [string, string, string];
+      expect(body).toContain('<!-- sandstorm:gate-fail-report -->');
+      expect(body).toContain('## Spec Quality Gate: FAIL');
+    });
+
+    it('does NOT post a comment on PASS', async () => {
+      await runSpecCheckAsyncWithReport('## Spec Quality Gate: PASS\n\nAll good', true);
+      expect(mockPostComment).not.toHaveBeenCalled();
+    });
+
+    it('does NOT post a comment when report is empty', async () => {
+      await runSpecCheckAsyncWithReport('', false);
+      expect(mockPostComment).not.toHaveBeenCalled();
+    });
+
+    it('gate flow completes successfully even if postComment rejects', async () => {
+      mockPostComment.mockRejectedValueOnce(new Error('network failure'));
+      let resolveFn!: (v: Record<string, unknown>) => void;
+      mockSpawnSpecCheck.mockReturnValue({
+        promise: new Promise<Record<string, unknown>>((r) => { resolveFn = r; }),
+        cancel: vi.fn(),
+      });
+      const mockExecFile = execFile as unknown as ReturnType<typeof vi.fn>;
+      mockExecFile.mockImplementation(
+        (_cmd: unknown, _args: unknown, _opts: unknown, callback: (...a: unknown[]) => void) => {
+          callback(new Error('exec-fail'), '', '');
+        },
+      );
+
+      await invokeHandler('tickets:specCheckAsync', 'T-569-err', '/tmp/proj');
+      resolveFn({ passed: false, report: '## Spec Quality Gate: FAIL\n\nFailed' });
+      // Flush: the .catch() on postComment should absorb the error without
+      // propagating it or crashing the completion handler.
+      await new Promise((r) => setTimeout(r, 0));
+      // persistRefinement(ready) should still have been called
+      const readyCall = mockPersistRefinement.mock.calls.find(
+        (call) => (call[0] as { status: string }).status === 'ready',
+      );
+      expect(readyCall).toBeDefined();
+    });
+
+    it('includes reportText in the persisted result on FAIL', async () => {
+      await runSpecCheckAsyncWithReport('## Spec Quality Gate: FAIL\n\nSome details', false);
+      const readyCall = mockPersistRefinement.mock.calls.find(
+        (call) => (call[0] as { status: string }).status === 'ready',
+      );
+      expect(readyCall).toBeDefined();
+      const session = readyCall![0] as { result?: { reportText?: string } };
+      expect(session.result?.reportText).toContain('## Spec Quality Gate: FAIL');
+    });
+
+    it('truncates reportText to 64KB and appends truncation notice on FAIL', async () => {
+      const hugeReport = 'x'.repeat(64 * 1024 + 100);
+      await runSpecCheckAsyncWithReport(hugeReport, false);
+      const readyCall = mockPersistRefinement.mock.calls.find(
+        (call) => (call[0] as { status: string }).status === 'ready',
+      );
+      expect(readyCall).toBeDefined();
+      const session = readyCall![0] as { result?: { reportText?: string } };
+      const stored = session.result?.reportText ?? '';
+      expect(stored.length).toBeLessThan(hugeReport.length);
+      expect(stored).toContain('[Report truncated at 64KB]');
+    });
+
   });
 
   // =========================================================================

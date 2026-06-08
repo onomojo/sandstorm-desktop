@@ -63,6 +63,7 @@ import {
   extractQuestions,
   extractGateSummary,
   shortBodyHash,
+  capReportText,
   type SpecGateReport,
   type SpecGateResult,
 } from './control-plane/ticket-spec';
@@ -90,7 +91,7 @@ import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
 import { listTicketsWithConfig } from './control-plane/ticket-lister';
 import { listTicketComments, postComment } from './control-plane/ticket-comments';
-import { getLatestUserAnswers, ANSWER_COMMENT_MARKER } from './scheduler/refine-to-comments';
+import { getLatestUserAnswers, ANSWER_COMMENT_MARKER, GATE_FAIL_REPORT_MARKER } from './scheduler/refine-to-comments';
 import { KANBAN_COLUMNS } from '../shared/kanban';
 import os from 'os';
 import { createUsageEngine, clearUsageCache } from './telemetry/usage-engine';
@@ -1324,6 +1325,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           if (body) await specDeps.markSpecReady(ticketId, shortBodyHash(body));
         }
 
+        const cappedReport = capReportText(reportText);
+
         const result: SpecGateResult = rawError
           ? { passed: false, questions: [], gateSummary: '', ticketUrl: url || null, cached: false, error: rawError }
           : {
@@ -1332,12 +1335,18 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
               gateSummary: extractGateSummary(reportText),
               ticketUrl: url || null,
               cached: false,
+              reportText: passed ? null : (cappedReport || null),
             };
 
         const done: RefinementSession = { ...session, status: 'ready', result };
         activeRefinements.set(id, { session: done, cancel: null });
         persistRefinement(done);
         emitRefinementUpdate(done);
+
+        // Best-effort: post FAIL report as a ticket comment so it's visible on GitHub.
+        if (!passed && !rawError && cappedReport) {
+          postComment(ticketId, projectDir, `${GATE_FAIL_REPORT_MARKER}\n\n${cappedReport}`).catch(() => {});
+        }
       })
       .catch((err: unknown) => {
         const entry = activeRefinements.get(id);
