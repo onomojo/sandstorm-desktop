@@ -247,6 +247,10 @@ export function ModelSettingsModal() {
   const [jiraProjectKey, setJiraProjectKey] = useState('');
   const [jiraIssueType, setJiraIssueType] = useState('');
   const [ticketPrefix, setTicketPrefix] = useState('');
+  const [filterMode, setFilterMode] = useState<'assisted' | 'advanced'>('assisted');
+  const [filterOwnership, setFilterOwnership] = useState<'created' | 'assigned'>('created');
+  const [filterOpenOnly, setFilterOpenOnly] = useState(true);
+  const [filterQuery, setFilterQuery] = useState('');
   const [ticketDirty, setTicketDirty] = useState(false);
   const [ticketLoaded, setTicketLoaded] = useState(false);
 
@@ -359,6 +363,10 @@ export function ModelSettingsModal() {
       setJiraProjectKey(config.jira_project_key ?? '');
       setJiraIssueType(config.jira_issue_type ?? '');
       setTicketPrefix(config.ticket_prefix ?? '');
+      setFilterMode(config.filter_mode ?? 'assisted');
+      setFilterOwnership(config.filter_ownership ?? 'created');
+      setFilterOpenOnly(config.filter_open_only ?? true);
+      setFilterQuery(config.filter_query ?? '');
     } else {
       setTicketProvider('github');
       setJiraUrl('');
@@ -367,6 +375,10 @@ export function ModelSettingsModal() {
       setJiraProjectKey('');
       setJiraIssueType('');
       setTicketPrefix('');
+      setFilterMode('assisted');
+      setFilterOwnership('created');
+      setFilterOpenOnly(true);
+      setFilterQuery('');
     }
     setTicketLoaded(true);
     setTicketDirty(false);
@@ -460,6 +472,10 @@ export function ModelSettingsModal() {
         jira_project_key: ticketProvider === 'jira' ? jiraProjectKey.trim() || null : null,
         jira_issue_type: ticketProvider === 'jira' ? jiraIssueType.trim() || null : null,
         ticket_prefix: ticketPrefix.trim() || null,
+        filter_mode: filterMode,
+        filter_ownership: filterOwnership,
+        filter_open_only: filterOpenOnly,
+        filter_query: filterMode === 'advanced' ? filterQuery.trim() || null : null,
       };
       await setProjectTicketConfig(project.directory, config);
       setTicketDirty(false);
@@ -478,6 +494,11 @@ export function ModelSettingsModal() {
         jiraUrl: jiraUrl.trim(),
         jiraUsername: jiraUsername.trim(),
         jiraApiToken: jiraApiToken.trim(),
+        jiraProjectKey: jiraProjectKey.trim() || null,
+        filterMode,
+        filterOwnership,
+        filterOpenOnly,
+        filterQuery: filterMode === 'advanced' ? filterQuery.trim() || null : null,
       });
       setTestConnResult(result);
       if (!result.auth.ok) {
@@ -814,7 +835,7 @@ export function ModelSettingsModal() {
                   {(['github', 'jira'] as const).map((p) => (
                     <button
                       key={p}
-                      onClick={() => { setTicketProvider(p); setTicketDirty(true); }}
+                      onClick={() => { setTicketProvider(p); setFilterQuery(''); setFilterMode('assisted'); setFilterOwnership('created'); setFilterOpenOnly(true); setTicketDirty(true); }}
                       className={`flex-1 px-3 py-2 text-xs font-medium rounded-lg border transition-all ${
                         ticketProvider === p
                           ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
@@ -943,6 +964,86 @@ export function ModelSettingsModal() {
                   </div>
                 </div>
               )}
+
+              <div>
+                <label className="block text-xs font-medium text-sandstorm-text-secondary mb-2">
+                  Backlog Filter
+                </label>
+                <p className="text-[10px] text-sandstorm-muted mb-2">
+                  Controls which tickets appear in the backlog board.
+                </p>
+                <div className="flex gap-2 mb-3">
+                  <button
+                    onClick={() => { setFilterMode('assisted'); setTicketDirty(true); }}
+                    className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all ${
+                      filterMode === 'assisted'
+                        ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
+                        : 'border-sandstorm-border bg-sandstorm-bg text-sandstorm-muted hover:border-sandstorm-border-light'
+                    }`}
+                    data-testid="ticket-filter-mode-assisted"
+                  >
+                    Assisted
+                  </button>
+                  <button
+                    onClick={() => { setFilterMode('advanced'); setTicketDirty(true); }}
+                    className={`flex-1 px-3 py-1.5 text-xs font-medium rounded-lg border transition-all ${
+                      filterMode === 'advanced'
+                        ? 'border-sandstorm-accent bg-sandstorm-accent/10 text-sandstorm-accent'
+                        : 'border-sandstorm-border bg-sandstorm-bg text-sandstorm-muted hover:border-sandstorm-border-light'
+                    }`}
+                    data-testid="ticket-filter-mode-advanced"
+                  >
+                    Advanced
+                  </button>
+                </div>
+
+                {filterMode === 'assisted' && (
+                  <div className="space-y-2">
+                    <div>
+                      <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">
+                        Ownership
+                      </label>
+                      <select
+                        value={filterOwnership}
+                        onChange={(e) => { setFilterOwnership(e.target.value as 'created' | 'assigned'); setTicketDirty(true); }}
+                        className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+                        data-testid="ticket-filter-ownership"
+                      >
+                        <option value="created">Created by me</option>
+                        <option value="assigned">Assigned to me</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="filter-open-only"
+                        checked={filterOpenOnly}
+                        onChange={(e) => { setFilterOpenOnly(e.target.checked); setTicketDirty(true); }}
+                        className="rounded border-sandstorm-border"
+                        data-testid="ticket-filter-open-only"
+                      />
+                      <label htmlFor="filter-open-only" className="text-[11px] text-sandstorm-text-secondary cursor-pointer">
+                        Open only
+                      </label>
+                    </div>
+                  </div>
+                )}
+
+                {filterMode === 'advanced' && (
+                  <div>
+                    <textarea
+                      value={filterQuery}
+                      onChange={(e) => { setFilterQuery(e.target.value); setTicketDirty(true); }}
+                      placeholder={ticketProvider === 'jira'
+                        ? 'JQL query (project clause added automatically)'
+                        : 'GitHub search qualifiers, e.g. assignee:@me is:open'}
+                      rows={3}
+                      className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs font-mono text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent resize-none"
+                      data-testid="ticket-filter-query"
+                    />
+                  </div>
+                )}
+              </div>
 
               <div>
                 <label className="block text-[11px] font-medium text-sandstorm-text-secondary mb-1">

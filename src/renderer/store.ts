@@ -357,6 +357,10 @@ export interface ProjectTicketConfig {
   jira_project_key?: string | null;
   jira_issue_type?: string | null;
   ticket_prefix?: string | null;
+  filter_mode?: 'assisted' | 'advanced' | null;
+  filter_ownership?: 'created' | 'assigned' | null;
+  filter_open_only?: boolean | null;
+  filter_query?: string | null;
 }
 
 export { KANBAN_COLUMNS };
@@ -845,6 +849,11 @@ declare global {
           jiraUrl: string;
           jiraUsername: string;
           jiraApiToken: string;
+          jiraProjectKey?: string | null;
+          filterMode?: 'assisted' | 'advanced' | null;
+          filterOwnership?: 'created' | 'assigned' | null;
+          filterOpenOnly?: boolean | null;
+          filterQuery?: string | null;
           label?: string;
         }) => Promise<{
           auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };

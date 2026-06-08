@@ -357,6 +357,143 @@ describe('ModelSettingsModal', () => {
       });
     });
 
+    describe('Backlog filter controls (#548)', () => {
+      beforeEach(async () => {
+        render(<ModelSettingsModal />);
+        fireEvent.click(screen.getByTestId('model-settings-tab-ticketing'));
+        await waitFor(() => {
+          expect(screen.getByTestId('ticket-filter-mode-assisted')).toBeDefined();
+        });
+      });
+
+      it('renders assisted and advanced mode toggle buttons', () => {
+        expect(screen.getByTestId('ticket-filter-mode-assisted')).toBeDefined();
+        expect(screen.getByTestId('ticket-filter-mode-advanced')).toBeDefined();
+      });
+
+      it('shows ownership dropdown and open-only toggle in assisted mode by default', () => {
+        expect(screen.getByTestId('ticket-filter-ownership')).toBeDefined();
+        expect(screen.getByTestId('ticket-filter-open-only')).toBeDefined();
+        expect(screen.queryByTestId('ticket-filter-query')).toBeNull();
+      });
+
+      it('shows advanced textarea and hides assisted controls when advanced is selected', () => {
+        fireEvent.click(screen.getByTestId('ticket-filter-mode-advanced'));
+        expect(screen.getByTestId('ticket-filter-query')).toBeDefined();
+        expect(screen.queryByTestId('ticket-filter-ownership')).toBeNull();
+        expect(screen.queryByTestId('ticket-filter-open-only')).toBeNull();
+      });
+
+      it('saves filter config via setProjectTicketConfig', async () => {
+        const select = screen.getByTestId('ticket-filter-ownership') as HTMLSelectElement;
+        fireEvent.change(select, { target: { value: 'assigned' } });
+        const checkbox = screen.getByTestId('ticket-filter-open-only') as HTMLInputElement;
+        fireEvent.click(checkbox);
+        fireEvent.click(screen.getByTestId('model-settings-save'));
+        await waitFor(() => {
+          expect(api.projectTicketConfig.set).toHaveBeenCalledWith(
+            '/myapp',
+            expect.objectContaining({
+              filter_mode: 'assisted',
+              filter_ownership: 'assigned',
+              filter_open_only: false,
+            }),
+          );
+        });
+      });
+
+      it('saves advanced query when in advanced mode', async () => {
+        fireEvent.click(screen.getByTestId('ticket-filter-mode-advanced'));
+        fireEvent.change(screen.getByTestId('ticket-filter-query'), { target: { value: 'priority = High' } });
+        fireEvent.click(screen.getByTestId('model-settings-save'));
+        await waitFor(() => {
+          expect(api.projectTicketConfig.set).toHaveBeenCalledWith(
+            '/myapp',
+            expect.objectContaining({
+              filter_mode: 'advanced',
+              filter_query: 'priority = High',
+            }),
+          );
+        });
+      });
+
+      it('loads filter config from getProjectTicketConfig on mount', async () => {
+        api.projectTicketConfig.get.mockResolvedValue({
+          provider: 'github',
+          jira_url: null,
+          jira_username: null,
+          jira_api_token: null,
+          jira_project_key: null,
+          jira_issue_type: null,
+          ticket_prefix: null,
+          filter_mode: 'advanced',
+          filter_ownership: 'assigned',
+          filter_open_only: false,
+          filter_query: 'is:open assignee:@me',
+        });
+        // Re-render to trigger load
+        const { unmount } = render(<ModelSettingsModal />);
+        fireEvent.click(screen.getAllByTestId('model-settings-tab-ticketing')[1]);
+        await waitFor(() => {
+          const queryTextarea = screen.getAllByTestId('ticket-filter-query');
+          expect((queryTextarea[queryTextarea.length - 1] as HTMLTextAreaElement).value).toBe('is:open assignee:@me');
+        });
+        unmount();
+      });
+
+      it('clears filter_query and resets filter_mode to assisted when switching provider', async () => {
+        fireEvent.click(screen.getByTestId('ticket-filter-mode-advanced'));
+        fireEvent.change(screen.getByTestId('ticket-filter-query'), { target: { value: 'some query' } });
+        // Switch to Jira and back to GitHub — both should reset
+        fireEvent.click(screen.getByTestId('ticket-provider-jira'));
+        expect(screen.queryByTestId('ticket-filter-query')).toBeNull();
+        expect(screen.getByTestId('ticket-filter-mode-assisted')).toBeDefined();
+        expect(screen.getByTestId('ticket-filter-ownership')).toBeDefined();
+        // Switch back to advanced and confirm the query was actually cleared
+        fireEvent.click(screen.getByTestId('ticket-filter-mode-advanced'));
+        const queryTextarea = screen.getByTestId('ticket-filter-query') as HTMLTextAreaElement;
+        expect(queryTextarea.value).toBe('');
+      });
+
+      it('resets filterOwnership and filterOpenOnly to defaults when switching provider', async () => {
+        const ownershipSelect = screen.getByTestId('ticket-filter-ownership') as HTMLSelectElement;
+        fireEvent.change(ownershipSelect, { target: { value: 'assigned' } });
+        const checkbox = screen.getByTestId('ticket-filter-open-only') as HTMLInputElement;
+        fireEvent.click(checkbox);
+        expect(ownershipSelect.value).toBe('assigned');
+        expect(checkbox.checked).toBe(false);
+        fireEvent.click(screen.getByTestId('ticket-provider-jira'));
+        const ownershipAfter = screen.getByTestId('ticket-filter-ownership') as HTMLSelectElement;
+        expect(ownershipAfter.value).toBe('created');
+        const checkboxAfter = screen.getByTestId('ticket-filter-open-only') as HTMLInputElement;
+        expect(checkboxAfter.checked).toBe(true);
+      });
+
+      it('renders open-only checkbox as unchecked when loaded from config with filter_open_only: false', async () => {
+        api.projectTicketConfig.get.mockResolvedValue({
+          provider: 'github',
+          jira_url: null,
+          jira_username: null,
+          jira_api_token: null,
+          jira_project_key: null,
+          jira_issue_type: null,
+          ticket_prefix: null,
+          filter_mode: 'assisted',
+          filter_ownership: 'created',
+          filter_open_only: false,
+          filter_query: null,
+        });
+        const { unmount } = render(<ModelSettingsModal />);
+        fireEvent.click(screen.getAllByTestId('model-settings-tab-ticketing')[1]);
+        await waitFor(() => {
+          const checkboxes = screen.getAllByTestId('ticket-filter-open-only');
+          const cb = checkboxes[checkboxes.length - 1] as HTMLInputElement;
+          expect(cb.checked).toBe(false);
+        });
+        unmount();
+      });
+    });
+
     describe('backend selector — project tab', () => {
       it('shows Use Global Default, Claude Code, and OpenCode for project inner backend', async () => {
         render(<ModelSettingsModal />);

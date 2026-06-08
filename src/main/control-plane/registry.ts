@@ -181,6 +181,10 @@ export interface ProjectTicketConfig {
   jira_project_key?: string | null;
   jira_issue_type?: string | null;
   ticket_prefix?: string | null;
+  filter_mode?: 'assisted' | 'advanced' | null;
+  filter_ownership?: 'created' | 'assigned' | null;
+  filter_open_only?: boolean | null;
+  filter_query?: string | null;
 }
 
 export interface SessionMonitorSettingsRecord {
@@ -679,6 +683,15 @@ export class Registry {
       // Mirror selfheal_continue_used in archive so the guard survives archival inspection
       try { this.db.exec('ALTER TABLE stack_history ADD COLUMN selfheal_continue_used INTEGER NOT NULL DEFAULT 0'); } catch { /* exists */ }
       this.setSchemaVersion(23);
+    }
+
+    if (currentVersion < 24) {
+      // Per-project backlog filter config (#548)
+      try { this.db.exec('ALTER TABLE project_ticket_config ADD COLUMN filter_mode TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE project_ticket_config ADD COLUMN filter_ownership TEXT'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE project_ticket_config ADD COLUMN filter_open_only INTEGER'); } catch { /* exists */ }
+      try { this.db.exec('ALTER TABLE project_ticket_config ADD COLUMN filter_query TEXT'); } catch { /* exists */ }
+      this.setSchemaVersion(24);
     }
   }
 
@@ -1463,8 +1476,8 @@ export class Registry {
   getProjectTicketConfig(projectDir: string): ProjectTicketConfig | null {
     const key = `project:${path.resolve(projectDir)}`;
     const row = this.db.prepare(
-      'SELECT provider, jira_url, jira_username, jira_api_token, jira_project_key, jira_issue_type, ticket_prefix FROM project_ticket_config WHERE key = ?'
-    ).get(key) as Omit<ProjectTicketConfig, 'provider'> & { provider: string } | undefined;
+      'SELECT provider, jira_url, jira_username, jira_api_token, jira_project_key, jira_issue_type, ticket_prefix, filter_mode, filter_ownership, filter_open_only, filter_query FROM project_ticket_config WHERE key = ?'
+    ).get(key) as (Omit<ProjectTicketConfig, 'provider' | 'filter_open_only'> & { provider: string; filter_open_only: number | null }) | undefined;
     if (!row) return null;
     return {
       provider: row.provider as TicketProvider,
@@ -1474,6 +1487,10 @@ export class Registry {
       jira_project_key: row.jira_project_key,
       jira_issue_type: row.jira_issue_type,
       ticket_prefix: row.ticket_prefix,
+      filter_mode: (row.filter_mode as 'assisted' | 'advanced' | null) ?? null,
+      filter_ownership: (row.filter_ownership as 'created' | 'assigned' | null) ?? null,
+      filter_open_only: row.filter_open_only != null ? row.filter_open_only !== 0 : null,
+      filter_query: row.filter_query ?? null,
     };
   }
 
@@ -1481,8 +1498,8 @@ export class Registry {
     const key = `project:${path.resolve(projectDir)}`;
     this.db.prepare(
       `INSERT OR REPLACE INTO project_ticket_config
-        (key, provider, jira_url, jira_username, jira_api_token, jira_project_key, jira_issue_type, ticket_prefix)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        (key, provider, jira_url, jira_username, jira_api_token, jira_project_key, jira_issue_type, ticket_prefix, filter_mode, filter_ownership, filter_open_only, filter_query)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
     ).run(
       key,
       config.provider,
@@ -1492,6 +1509,10 @@ export class Registry {
       config.jira_project_key ?? null,
       config.jira_issue_type ?? null,
       config.ticket_prefix ?? null,
+      config.filter_mode ?? null,
+      config.filter_ownership ?? null,
+      config.filter_open_only != null ? (config.filter_open_only ? 1 : 0) : null,
+      config.filter_query ?? null,
     );
   }
 

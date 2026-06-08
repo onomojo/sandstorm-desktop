@@ -1382,6 +1382,75 @@ describe('Registry', () => {
     });
   });
 
+  describe('migration v24 — per-project backlog filter columns (#548)', () => {
+    it('adds filter columns to project_ticket_config on a fresh DB', () => {
+      const db = registry.getDb();
+      const cols = (db.prepare('PRAGMA table_info(project_ticket_config)').all() as { name: string }[]).map(r => r.name);
+      expect(cols).toContain('filter_mode');
+      expect(cols).toContain('filter_ownership');
+      expect(cols).toContain('filter_open_only');
+      expect(cols).toContain('filter_query');
+    });
+
+    it('round-trips all four filter fields through set/get', () => {
+      registry.setProjectTicketConfig('/tmp/filter-test', {
+        provider: 'jira',
+        jira_url: 'https://acme.atlassian.net',
+        jira_username: 'user@acme.com',
+        jira_api_token: 'tok',
+        jira_project_key: 'ACME',
+        filter_mode: 'advanced',
+        filter_ownership: 'assigned',
+        filter_open_only: false,
+        filter_query: 'priority = High',
+      });
+      const config = registry.getProjectTicketConfig('/tmp/filter-test');
+      expect(config).not.toBeNull();
+      expect(config!.filter_mode).toBe('advanced');
+      expect(config!.filter_ownership).toBe('assigned');
+      expect(config!.filter_open_only).toBe(false);
+      expect(config!.filter_query).toBe('priority = High');
+    });
+
+    it('returns null for filter fields when columns are NULL (existing rows preserve behavior)', () => {
+      registry.setProjectTicketConfig('/tmp/filter-null-test', {
+        provider: 'github',
+      });
+      const config = registry.getProjectTicketConfig('/tmp/filter-null-test');
+      expect(config).not.toBeNull();
+      expect(config!.filter_mode).toBeNull();
+      expect(config!.filter_ownership).toBeNull();
+      expect(config!.filter_open_only).toBeNull();
+      expect(config!.filter_query).toBeNull();
+    });
+
+    it('round-trips filter_open_only=true correctly (INTEGER 1)', () => {
+      registry.setProjectTicketConfig('/tmp/filter-open-test', {
+        provider: 'github',
+        filter_open_only: true,
+      });
+      const config = registry.getProjectTicketConfig('/tmp/filter-open-test');
+      expect(config!.filter_open_only).toBe(true);
+    });
+
+    it('is idempotent — running migration twice does not error', async () => {
+      const tmpPath = require('path').join(require('os').tmpdir(), `reg-v24-idem-${Date.now()}.db`);
+      try {
+        const r1 = await (await import('../../src/main/control-plane/registry')).Registry.create(tmpPath);
+        r1.close();
+        // Opening a second time re-runs runMigrations — all try/catch so no throw
+        const r2 = await (await import('../../src/main/control-plane/registry')).Registry.create(tmpPath);
+        const cols = (r2.getDb().prepare('PRAGMA table_info(project_ticket_config)').all() as { name: string }[]).map(r => r.name);
+        expect(cols).toContain('filter_mode');
+        r2.close();
+      } finally {
+        try { require('fs').unlinkSync(tmpPath); } catch { /* ok */ }
+        try { require('fs').unlinkSync(tmpPath + '-wal'); } catch { /* ok */ }
+        try { require('fs').unlinkSync(tmpPath + '-shm'); } catch { /* ok */ }
+      }
+    });
+  });
+
   // ==========================================================================
   // Model Routing CRUD
   // ==========================================================================

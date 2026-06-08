@@ -106,20 +106,66 @@ export async function githubUpdateTicket(ticketId: string, body: string, cwd: st
   });
 }
 
+type FilterConfig = Pick<
+  import('./registry').ProjectTicketConfig,
+  'filter_mode' | 'filter_ownership' | 'filter_open_only' | 'filter_query'
+>;
+
+function buildGithubSearchQuery(config?: FilterConfig): string {
+  const mode = config?.filter_mode ?? 'assisted';
+  if (mode === 'advanced') {
+    const q = config?.filter_query?.trim();
+    if (q) return q;
+  }
+  const parts: string[] = [];
+  parts.push((config?.filter_ownership ?? 'created') === 'assigned' ? 'assignee:@me' : 'author:@me');
+  if (config?.filter_open_only !== false) parts.push('is:open');
+  return parts.join(' ');
+}
+
+function jiraLabelClause(label: string): string {
+  return ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
+}
+
+function buildJiraFilterJql(config: FilterConfig & { jira_project_key?: string | null }): string {
+  const mode = config.filter_mode ?? 'assisted';
+  let jql: string;
+  if (mode === 'advanced' && config.filter_query?.trim()) {
+    // The user's query is wrapped in parens so the AND project clause applies to the whole expression.
+    // Limitation: a query with unmatched/leading-close parens (e.g. "a) OR (b") will break JQL precedence.
+    jql = `(${config.filter_query.trim()})`;
+  } else {
+    const parts: string[] = [];
+    parts.push((config.filter_ownership ?? 'created') === 'assigned'
+      ? 'assignee = currentUser()'
+      : 'reporter = currentUser()');
+    if (config.filter_open_only !== false) parts.push('statusCategory != Done');
+    jql = parts.join(' AND ');
+  }
+  if (config.jira_project_key?.trim()) {
+    const key = config.jira_project_key.trim().replace(/"/g, '\\"');
+    jql += ` AND project = "${key}"`;
+  }
+  return jql;
+}
+
 /**
- * List the authenticated user's open issues for the backlog board.
- * Optionally filter by label. Excludes PRs (gh issue list does so by default).
+ * List issues for the backlog board using gh issue list --search.
+ * Filter config drives ownership and open-only presets, or passes a raw query.
  * Returns { ok: false } on any failure so callers can distinguish empty-success from error.
  */
-export async function githubListTickets(cwd: string, label?: string): Promise<TicketListResult> {
+export async function githubListTickets(cwd: string, label?: string, config?: FilterConfig): Promise<TicketListResult> {
   try {
+    const searchQuery = buildGithubSearchQuery(config);
+    const mode = config?.filter_mode ?? 'assisted';
     const args = [
       'issue', 'list',
-      '--author', '@me',
-      '--state', 'open',
-      '--json', 'number,title,author',
-      '--limit', '100',
+      '--search', searchQuery,
     ];
+    if (mode !== 'advanced' && config?.filter_open_only === false) {
+      args.push('--state', 'all');
+    }
+    args.push('--json', 'number,title,author', '--limit', '100');
     if (label && label.trim()) {
       args.push('--label', label.trim());
     }
@@ -291,8 +337,8 @@ export async function jiraFetchTicket(
 }
 
 /**
- * List the reporting user's not-done issues for the backlog board.
- * Optionally filter by label. Returns { ok: false } on any failure or missing credentials.
+ * List issues for the backlog board using configured filter and always project-scoped.
+ * Returns { ok: false } on any failure or missing credentials.
  */
 export async function jiraListTickets(
   config: ProjectTicketConfig,
@@ -302,9 +348,9 @@ export async function jiraListTickets(
     return { ok: false, error: { reason: 'missing-creds' } };
   }
   try {
-    let jql = 'reporter = currentUser() AND statusCategory != Done';
+    let jql = buildJiraFilterJql(config);
     if (label && label.trim()) {
-      jql += ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
+      jql += jiraLabelClause(label);
     }
     const url =
       `${config.jira_url.replace(/\/$/, '')}/rest/api/3/search/jql` +
@@ -491,7 +537,7 @@ export async function listTicketsWithConfig(
   label?: string,
 ): Promise<TicketListResult> {
   if (config.provider === 'github') {
-    return githubListTickets(cwd, label);
+    return githubListTickets(cwd, label, config);
   }
   return jiraListTickets(config, label);
 }
@@ -578,9 +624,14 @@ export async function testJiraConnection(params: {
   jiraUrl: string;
   jiraUsername: string;
   jiraApiToken: string;
+  jiraProjectKey?: string | null;
+  filterMode?: 'assisted' | 'advanced' | null;
+  filterOwnership?: 'created' | 'assigned' | null;
+  filterOpenOnly?: boolean | null;
+  filterQuery?: string | null;
   label?: string;
 }): Promise<TestJiraConnectionResult> {
-  const { jiraUrl, jiraUsername, jiraApiToken, label } = params;
+  const { jiraUrl, jiraUsername, jiraApiToken, jiraProjectKey, label } = params;
   const auth = Buffer.from(`${jiraUsername}:${jiraApiToken}`).toString('base64');
   const baseUrl = jiraUrl.replace(/\/$/, '');
 
@@ -597,9 +648,15 @@ export async function testJiraConnection(params: {
     };
   }
 
-  let jql = 'reporter = currentUser() AND statusCategory != Done';
+  let jql = buildJiraFilterJql({
+    filter_mode: params.filterMode,
+    filter_ownership: params.filterOwnership,
+    filter_open_only: params.filterOpenOnly,
+    filter_query: params.filterQuery,
+    jira_project_key: jiraProjectKey,
+  });
   if (label && label.trim()) {
-    jql += ` AND labels = "${label.trim().replace(/"/g, '\\"')}"`;
+    jql += jiraLabelClause(label);
   }
   const searchUrl =
     `${baseUrl}/rest/api/3/search/jql` +

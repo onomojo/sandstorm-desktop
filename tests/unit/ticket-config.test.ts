@@ -344,15 +344,58 @@ describe('githubListTickets', () => {
     });
   });
 
-  it('invokes gh with @me open-issue args and no label filter by default', async () => {
+  it('uses --search with default assisted preset (author:@me is:open) when no config', async () => {
     mockExecFileSuccess('[]');
     await githubListTickets('/myproj');
     expect(mockExecFile).toHaveBeenCalledWith(
       'gh',
-      ['issue', 'list', '--author', '@me', '--state', 'open', '--json', 'number,title,author', '--limit', '100'],
+      ['issue', 'list', '--search', 'author:@me is:open', '--json', 'number,title,author', '--limit', '100'],
       expect.objectContaining({ cwd: '/myproj' }),
       expect.any(Function),
     );
+  });
+
+  it('uses author:@me is:open when all filter columns are NULL (null defaults)', async () => {
+    mockExecFileSuccess('[]');
+    await githubListTickets('/myproj', undefined, { filter_mode: null, filter_ownership: null, filter_open_only: null });
+    const args = mockExecFile.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--search') + 1]).toBe('author:@me is:open');
+  });
+
+  it('uses author:@me is:open for assisted created+openOnly', async () => {
+    mockExecFileSuccess('[]');
+    await githubListTickets('/myproj', undefined, { filter_mode: 'assisted', filter_ownership: 'created', filter_open_only: true });
+    const args = mockExecFile.mock.calls[0][1] as string[];
+    expect(args).toContain('--search');
+    expect(args[args.indexOf('--search') + 1]).toBe('author:@me is:open');
+  });
+
+  it('uses assignee:@me is:open for assisted assigned+openOnly', async () => {
+    mockExecFileSuccess('[]');
+    await githubListTickets('/myproj', undefined, { filter_mode: 'assisted', filter_ownership: 'assigned', filter_open_only: true });
+    const args = mockExecFile.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--search') + 1]).toBe('assignee:@me is:open');
+  });
+
+  it('omits is:open when open-only is false in assisted mode', async () => {
+    mockExecFileSuccess('[]');
+    await githubListTickets('/myproj', undefined, { filter_mode: 'assisted', filter_ownership: 'created', filter_open_only: false });
+    const args = mockExecFile.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--search') + 1]).toBe('author:@me');
+  });
+
+  it('passes filter_query verbatim in advanced mode', async () => {
+    mockExecFileSuccess('[]');
+    await githubListTickets('/myproj', undefined, { filter_mode: 'advanced', filter_query: 'assignee:@me label:bug is:open' });
+    const args = mockExecFile.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--search') + 1]).toBe('assignee:@me label:bug is:open');
+  });
+
+  it('falls back to default when advanced mode has empty filter_query', async () => {
+    mockExecFileSuccess('[]');
+    await githubListTickets('/myproj', undefined, { filter_mode: 'advanced', filter_query: '' });
+    const args = mockExecFile.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--search') + 1]).toBe('author:@me is:open');
   });
 
   it('appends --label when a label is provided', async () => {
@@ -462,6 +505,73 @@ describe('jiraListTickets', () => {
     const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
     expect(opts.path).toMatch(/^\/rest\/api\/3\/search\/jql/);
     expect(opts.path).not.toMatch(/\/rest\/api\/2\/search/);
+  });
+
+  it('always includes project = KEY in JQL when jira_project_key is set (bug regression)', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    await jiraListTickets(JIRA_CONFIG);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    expect(decodeURIComponent(opts.path)).toContain('project = "ACME"');
+  });
+
+  it('omits project clause when jira_project_key is empty', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    const cfg: ProjectTicketConfig = { ...JIRA_CONFIG, jira_project_key: null };
+    await jiraListTickets(cfg);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    expect(decodeURIComponent(opts.path)).not.toContain('project =');
+  });
+
+  it('uses reporter = currentUser() and statusCategory != Done by default (null filter columns)', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    const cfg: ProjectTicketConfig = { ...JIRA_CONFIG, filter_mode: null, filter_ownership: null, filter_open_only: null };
+    await jiraListTickets(cfg);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    const jql = decodeURIComponent(opts.path);
+    expect(jql).toContain('reporter = currentUser()');
+    expect(jql).toContain('statusCategory != Done');
+  });
+
+  it('uses assignee = currentUser() in assisted assigned mode', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    const cfg: ProjectTicketConfig = { ...JIRA_CONFIG, filter_mode: 'assisted', filter_ownership: 'assigned', filter_open_only: true };
+    await jiraListTickets(cfg);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    const jql = decodeURIComponent(opts.path);
+    expect(jql).toContain('assignee = currentUser()');
+    expect(jql).toContain('statusCategory != Done');
+    expect(jql).toContain('project = "ACME"');
+  });
+
+  it('omits statusCategory != Done when open-only is false', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    const cfg: ProjectTicketConfig = { ...JIRA_CONFIG, filter_mode: 'assisted', filter_ownership: 'created', filter_open_only: false };
+    await jiraListTickets(cfg);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    const jql = decodeURIComponent(opts.path);
+    expect(jql).not.toContain('statusCategory != Done');
+    expect(jql).toContain('reporter = currentUser()');
+  });
+
+  it('wraps custom JQL in parens and appends project key in advanced mode', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    const cfg: ProjectTicketConfig = { ...JIRA_CONFIG, filter_mode: 'advanced', filter_query: 'priority = High OR assignee = currentUser()' };
+    await jiraListTickets(cfg);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    const jql = decodeURIComponent(opts.path);
+    expect(jql).toContain('(priority = High OR assignee = currentUser())');
+    expect(jql).toContain('AND project = "ACME"');
+  });
+
+  it('falls back to default JQL when advanced mode has empty filter_query', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    const cfg: ProjectTicketConfig = { ...JIRA_CONFIG, filter_mode: 'advanced', filter_query: '' };
+    await jiraListTickets(cfg);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    const jql = decodeURIComponent(opts.path);
+    expect(jql).toContain('reporter = currentUser()');
+    expect(jql).toContain('statusCategory != Done');
+    expect(jql).toContain('project = "ACME"');
   });
 });
 
@@ -787,6 +897,61 @@ describe('testJiraConnection', () => {
       expect(result.jql.count).toBe(2);
       expect(result.jql.hasMore).toBe(false);
     }
+  });
+
+  it('includes project = KEY in JQL when jiraProjectKey is provided', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Alice' })
+        : JSON.stringify({ issues: [] });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+    await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+      jiraProjectKey: 'ACME',
+    });
+    const searchOpts = mockHttpsRequest.mock.calls[1][0] as { path: string };
+    expect(decodeURIComponent(searchOpts.path)).toContain('project = "ACME"');
+  });
+
+  it('omits project clause from JQL when jiraProjectKey is not provided', async () => {
+    let callCount = 0;
+    mockHttpsRequest.mockImplementation((_opts: unknown, callback?: Function) => {
+      callCount++;
+      const body = callCount === 1
+        ? JSON.stringify({ displayName: 'Alice' })
+        : JSON.stringify({ issues: [] });
+      const mockResponse = {
+        statusCode: 200,
+        on: vi.fn((event: string, handler: Function) => {
+          if (event === 'data') handler(body);
+          if (event === 'end') handler();
+        }),
+      };
+      const mockReq = { on: vi.fn().mockReturnThis(), write: vi.fn(), end: vi.fn(), setTimeout: vi.fn().mockReturnThis(), destroy: vi.fn() };
+      if (callback) callback(mockResponse);
+      return mockReq as unknown as ReturnType<typeof https.request>;
+    });
+    await testJiraConnection({
+      jiraUrl: 'https://acme.atlassian.net',
+      jiraUsername: 'user@acme.com',
+      jiraApiToken: 'token',
+    });
+    const searchOpts = mockHttpsRequest.mock.calls[1][0] as { path: string };
+    expect(decodeURIComponent(searchOpts.path)).not.toContain('project =');
   });
 
   it('sets hasMore:true when response contains nextPageToken', async () => {

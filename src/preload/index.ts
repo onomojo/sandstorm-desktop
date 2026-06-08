@@ -235,6 +235,11 @@ export interface SandstormAPI {
       jiraUrl: string;
       jiraUsername: string;
       jiraApiToken: string;
+      jiraProjectKey?: string | null;
+      filterMode?: 'assisted' | 'advanced' | null;
+      filterOwnership?: 'created' | 'assigned' | null;
+      filterOpenOnly?: boolean | null;
+      filterQuery?: string | null;
       label?: string;
     }) => Promise<{
       auth: { ok: true; displayName: string } | { ok: false; status?: number; message: string };
