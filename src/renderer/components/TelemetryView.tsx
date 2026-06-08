@@ -8,6 +8,7 @@ import { StackedBars } from './telemetry/StackedBars';
 import type { TokenClass } from './telemetry/StackedBars';
 import { TOKEN_COLORS, TOKEN_LABELS } from './telemetry/StackedBars';
 import { groupByPipeline, ORCHESTRATOR_TICKET_ID } from './telemetry/utils';
+import { formatTokensCompact } from '../utils/format';
 import { StackedHBar } from './telemetry/StackedHBar';
 
 type RangeOption = '7d' | '30d' | '90d' | 'all';
@@ -98,11 +99,6 @@ function fmt$(n: number): string {
   return `$${n.toFixed(2)}`;
 }
 
-function fmtTokens(n: number): string {
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1_000) return `${(n / 1_000).toFixed(0)}K`;
-  return String(n);
-}
 
 function fmtDelta(curr: number, prev: number): string {
   if (prev === 0) return '—';
@@ -307,11 +303,11 @@ export function TelemetryView() {
           <div className="bg-sandstorm-surface rounded-xl border border-sandstorm-border p-4 flex flex-col gap-2">
             <span className="text-[11px] text-sandstorm-muted uppercase tracking-wider">Tokens</span>
             <span className="text-2xl font-mono font-bold text-sandstorm-text" data-testid="kpi-tokens-total">
-              {telemetrySummary ? fmtTokens(telemetrySummary.tokens.total) : '—'}
+              {telemetrySummary ? formatTokensCompact(telemetrySummary.tokens.total) : '—'}
             </span>
             <span className="text-xs font-mono text-sandstorm-muted" data-testid="kpi-tokens-inout">
               {telemetrySummary
-                ? `in ${fmtTokens(telemetrySummary.tokens.input)} / out ${fmtTokens(telemetrySummary.tokens.output)}`
+                ? `in ${formatTokensCompact(telemetrySummary.tokens.input)} / out ${formatTokensCompact(telemetrySummary.tokens.output)}`
                 : '—'}
             </span>
           </div>
