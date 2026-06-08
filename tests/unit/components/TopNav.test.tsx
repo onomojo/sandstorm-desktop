@@ -306,6 +306,32 @@ describe('TopNav', () => {
     expect(useAppStore.getState().searchQuery).toBe('fix bug');
   });
 
+  it('clear button is not rendered when searchQuery is empty', () => {
+    useAppStore.setState({ searchQuery: '' } as any);
+    render(<TopNav />);
+    expect(screen.queryByTestId('search-clear-btn')).toBeNull();
+  });
+
+  it('clear button is rendered when searchQuery is non-empty', () => {
+    useAppStore.setState({ searchQuery: 'abc' } as any);
+    render(<TopNav />);
+    expect(screen.getByTestId('search-clear-btn')).toBeDefined();
+  });
+
+  it('clicking clear button sets searchQuery to empty string', () => {
+    useAppStore.setState({ searchQuery: 'abc' } as any);
+    render(<TopNav />);
+    fireEvent.click(screen.getByTestId('search-clear-btn'));
+    expect(useAppStore.getState().searchQuery).toBe('');
+  });
+
+  it('clicking clear button returns focus to search input', () => {
+    useAppStore.setState({ searchQuery: 'abc' } as any);
+    render(<TopNav />);
+    fireEvent.click(screen.getByTestId('search-clear-btn'));
+    expect(document.activeElement).toBe(screen.getByTestId('search-input'));
+  });
+
   // ── Identity ──────────────────────────────────────────────────────────────
 
   it('shows Login button when not logged in', async () => {

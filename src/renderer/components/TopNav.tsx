@@ -66,6 +66,14 @@ function SearchIcon() {
   );
 }
 
+function ClearIcon() {
+  return (
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M18 6L6 18M6 6l12 12"/>
+    </svg>
+  );
+}
+
 
 export function TopNav() {
   const {
@@ -90,6 +98,7 @@ export function TopNav() {
 
   const workspaceRef = useRef<HTMLDivElement>(null);
   const viewRef = useRef<HTMLDivElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   const project = activeProject();
 
@@ -256,13 +265,27 @@ export function TopNav() {
               <SearchIcon />
             </span>
             <input
+              ref={searchInputRef}
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder="Search tickets…"
-              className="w-full pl-8 pr-3 py-1.5 text-sm bg-sandstorm-surface border border-sandstorm-border rounded-lg text-sandstorm-text placeholder-sandstorm-muted/60 focus:outline-none focus:border-sandstorm-accent"
+              className="w-full pl-8 pr-8 py-1.5 text-sm bg-sandstorm-surface border border-sandstorm-border rounded-lg text-sandstorm-text placeholder-sandstorm-muted/60 focus:outline-none focus:border-sandstorm-accent"
               data-testid="search-input"
             />
+            {searchQuery.length > 0 && (
+              <button
+                type="button"
+                data-testid="search-clear-btn"
+                onClick={() => {
+                  setSearchQuery('');
+                  searchInputRef.current?.focus();
+                }}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-sandstorm-muted/60 hover:text-sandstorm-text transition-colors"
+              >
+                <ClearIcon />
+              </button>
+            )}
           </div>
         </div>
 
