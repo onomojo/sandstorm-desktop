@@ -966,11 +966,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return registry.getEffectiveBackend(projectDir, surface);
   });
 
-  ipcMain.handle('backendSettings:setSecret', (_event, key: string, surface: 'inner' | 'outer', name: string, value: string) => {
+  ipcMain.handle('backendSettings:setSecret', (_event, scope: string, surface: 'inner' | 'outer', name: string, value: string) => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     registry.setBackendSecret(key, surface, name, value);
   });
 
-  ipcMain.handle('backendSettings:secretStatus', (_event, key: string, surface: 'inner' | 'outer') => {
+  ipcMain.handle('backendSettings:secretStatus', (_event, scope: string, surface: 'inner' | 'outer') => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     return { set: registry.hasBackendSecret(key, surface) };
   });
 

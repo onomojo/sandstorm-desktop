@@ -18,6 +18,7 @@ describe('ModelSettingsModal', () => {
       activeProjectId: null,
       showModelSettings: true,
       globalModelSettings: { inner_model: 'sonnet', outer_model: 'opus' },
+      globalBackendSettings: { inner_backend: 'claude', outer_backend: 'claude', inner_provider: null, inner_model: null, outer_provider: null, outer_model: null },
     });
   });
 
@@ -33,11 +34,20 @@ describe('ModelSettingsModal', () => {
     expect(screen.getByTestId('model-settings-tab-ticketing')).toBeDefined();
   });
 
-  it('defaults to global tab when no project is active', () => {
+  it('defaults to global tab when no project is active', async () => {
     render(<ModelSettingsModal />);
-    expect(screen.getByTestId('global-inner-auto')).toBeDefined();
-    expect(screen.getByTestId('global-inner-sonnet')).toBeDefined();
-    expect(screen.getByTestId('global-inner-opus')).toBeDefined();
+    await waitFor(() => {
+      expect(screen.getByTestId('global-inner-backend-claude')).toBeDefined();
+    });
+  });
+
+  it('shows Claude model buttons on global tab when backend is claude', async () => {
+    render(<ModelSettingsModal />);
+    await waitFor(() => {
+      expect(screen.getByTestId('global-inner-auto')).toBeDefined();
+      expect(screen.getByTestId('global-inner-sonnet')).toBeDefined();
+      expect(screen.getByTestId('global-inner-opus')).toBeDefined();
+    });
   });
 
   it('disables project and ticketing tabs when no project is active', () => {
@@ -59,17 +69,23 @@ describe('ModelSettingsModal', () => {
     expect(useAppStore.getState().showModelSettings).toBe(false);
   });
 
-  it('enables save button when global settings change', () => {
+  it('enables save button when global settings change', async () => {
     render(<ModelSettingsModal />);
     const saveBtn = screen.getByTestId('model-settings-save');
     expect(saveBtn.hasAttribute('disabled')).toBe(true);
 
+    await waitFor(() => {
+      expect(screen.getByTestId('global-inner-opus')).toBeDefined();
+    });
     fireEvent.click(screen.getByTestId('global-inner-opus'));
     expect(saveBtn.hasAttribute('disabled')).toBe(false);
   });
 
   it('calls setGlobal when saving global settings', async () => {
     render(<ModelSettingsModal />);
+    await waitFor(() => {
+      expect(screen.getByTestId('global-inner-opus')).toBeDefined();
+    });
     fireEvent.click(screen.getByTestId('global-inner-opus'));
     fireEvent.click(screen.getByTestId('model-settings-save'));
     await waitFor(() => {
@@ -77,6 +93,160 @@ describe('ModelSettingsModal', () => {
         inner_model: 'opus',
         outer_model: 'opus',
       });
+    });
+  });
+
+  describe('backend selector — global tab', () => {
+    it('shows Claude Code and OpenCode backend options for inner surface', async () => {
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-claude')).toBeDefined();
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+    });
+
+    it('shows Claude Code and OpenCode backend options for outer surface', async () => {
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-outer-backend-claude')).toBeDefined();
+        expect(screen.getByTestId('global-outer-backend-opencode')).toBeDefined();
+      });
+    });
+
+    it('defaults to Claude Code for inner and outer', async () => {
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        const innerClaude = screen.getByTestId('global-inner-backend-claude');
+        expect(innerClaude.className).toContain('sandstorm-accent');
+      });
+    });
+
+    it('hides Claude model buttons and shows OpenCode fields when inner backend is OpenCode', async () => {
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
+      await waitFor(() => {
+        expect(screen.queryByTestId('global-inner-auto')).toBeNull();
+        expect(screen.queryByTestId('global-inner-sonnet')).toBeNull();
+        expect(screen.queryByTestId('global-inner-opus')).toBeNull();
+        expect(screen.getByTestId('global-inner-backend-opencode-fields')).toBeDefined();
+      });
+    });
+
+    it('shows Claude model buttons and hides OpenCode fields when inner backend is Claude Code', async () => {
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+      // Switch to opencode then back
+      fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
+      fireEvent.click(screen.getByTestId('global-inner-backend-claude'));
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-auto')).toBeDefined();
+        expect(screen.queryByTestId('global-inner-backend-opencode-fields')).toBeNull();
+      });
+    });
+
+    it('shows provider, model, and credential fields when OpenCode is selected', async () => {
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-provider')).toBeDefined();
+        expect(screen.getByTestId('global-inner-backend-model')).toBeDefined();
+        expect(screen.getByTestId('global-inner-backend-cred-input')).toBeDefined();
+      });
+    });
+
+    it('credential field does not display stored value — only Set/Not set status', async () => {
+      api.backendSettings.secretStatus.mockResolvedValue({ set: true });
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-cred-status').textContent).toContain('Set');
+        const credInput = screen.getByTestId('global-inner-backend-cred-input') as HTMLInputElement;
+        expect(credInput.value).toBe('');
+      });
+    });
+
+    it('shows Not set status when no credential stored', async () => {
+      api.backendSettings.secretStatus.mockResolvedValue({ set: false });
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-cred-status').textContent).toContain('Not set');
+      });
+    });
+
+    it('calls setGlobal with opencode backend when saving', async () => {
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
+      fireEvent.click(screen.getByTestId('model-settings-save'));
+      await waitFor(() => {
+        expect(api.backendSettings.setGlobal).toHaveBeenCalledWith(
+          expect.objectContaining({ inner_backend: 'opencode' }),
+        );
+      });
+    });
+
+    it('calls setSecret with scope=global when credential is entered', async () => {
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-cred-input')).toBeDefined();
+      });
+      fireEvent.change(screen.getByTestId('global-inner-backend-cred-input'), { target: { value: 'sk-test-key' } });
+      fireEvent.click(screen.getByTestId('model-settings-save'));
+      await waitFor(() => {
+        expect(api.backendSettings.setSecret).toHaveBeenCalledWith('global', 'inner', 'api_key', 'sk-test-key');
+      });
+    });
+
+    it('does not call setSecret when credential input is empty', async () => {
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
+      // Don't fill cred input
+      fireEvent.click(screen.getByTestId('model-settings-save'));
+      await waitFor(() => {
+        expect(api.backendSettings.setGlobal).toHaveBeenCalled();
+      });
+      expect(api.backendSettings.setSecret).not.toHaveBeenCalled();
+    });
+
+    it('provider change does not clear credential status', async () => {
+      api.backendSettings.secretStatus.mockResolvedValue({ set: true });
+      render(<ModelSettingsModal />);
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
+      });
+      fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
+      await waitFor(() => {
+        expect(screen.getByTestId('global-inner-backend-cred-status').textContent).toContain('Set');
+      });
+      // Change provider
+      fireEvent.change(screen.getByTestId('global-inner-backend-provider'), { target: { value: 'openai' } });
+      // Status should still be Set
+      expect(screen.getByTestId('global-inner-backend-cred-status').textContent).toContain('Set');
+      expect(api.backendSettings.setSecret).not.toHaveBeenCalled();
     });
   });
 
@@ -321,6 +491,148 @@ describe('ModelSettingsModal', () => {
           expect(cb.checked).toBe(false);
         });
         unmount();
+      });
+    });
+
+    describe('backend selector — project tab', () => {
+      it('shows Use Global Default, Claude Code, and OpenCode for project inner backend', async () => {
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          expect(screen.getByTestId('project-inner-backend-global')).toBeDefined();
+          expect(screen.getByTestId('project-inner-backend-claude')).toBeDefined();
+          expect(screen.getByTestId('project-inner-backend-opencode')).toBeDefined();
+        });
+      });
+
+      it('shows Use Global Default, Claude Code, and OpenCode for project outer backend', async () => {
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          expect(screen.getByTestId('project-outer-backend-global')).toBeDefined();
+          expect(screen.getByTestId('project-outer-backend-claude')).toBeDefined();
+          expect(screen.getByTestId('project-outer-backend-opencode')).toBeDefined();
+        });
+      });
+
+      it('defaults inner and outer to Use Global Default', async () => {
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          const globalBtn = screen.getByTestId('project-inner-backend-global');
+          expect(globalBtn.className).toContain('sandstorm-accent');
+        });
+      });
+
+      it('hides Claude model buttons and shows OpenCode fields when inner is OpenCode', async () => {
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          expect(screen.getByTestId('project-inner-backend-opencode')).toBeDefined();
+        });
+        fireEvent.click(screen.getByTestId('project-inner-backend-opencode'));
+        await waitFor(() => {
+          expect(screen.queryByTestId('project-inner-global')).toBeNull();
+          expect(screen.queryByTestId('project-inner-sonnet')).toBeNull();
+          expect(screen.getByTestId('project-inner-backend-opencode-fields')).toBeDefined();
+        });
+      });
+
+      it('restores Claude model buttons when switching back from OpenCode to Claude', async () => {
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          expect(screen.getByTestId('project-inner-backend-opencode')).toBeDefined();
+        });
+        fireEvent.click(screen.getByTestId('project-inner-backend-opencode'));
+        fireEvent.click(screen.getByTestId('project-inner-backend-claude'));
+        await waitFor(() => {
+          expect(screen.getByTestId('project-inner-global')).toBeDefined();
+          expect(screen.queryByTestId('project-inner-backend-opencode-fields')).toBeNull();
+        });
+      });
+
+      it('calls setProject with opencode backend when saving', async () => {
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          expect(screen.getByTestId('project-inner-backend-opencode')).toBeDefined();
+        });
+        fireEvent.click(screen.getByTestId('project-inner-backend-opencode'));
+        fireEvent.click(screen.getByTestId('model-settings-save'));
+        await waitFor(() => {
+          expect(api.backendSettings.setProject).toHaveBeenCalledWith(
+            '/myapp',
+            expect.objectContaining({ inner_backend: 'opencode' }),
+          );
+        });
+      });
+
+      it('calls setSecret with scope=projectDir when credential is entered for project', async () => {
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          expect(screen.getByTestId('project-inner-backend-opencode')).toBeDefined();
+        });
+        fireEvent.click(screen.getByTestId('project-inner-backend-opencode'));
+        await waitFor(() => {
+          expect(screen.getByTestId('project-inner-backend-cred-input')).toBeDefined();
+        });
+        fireEvent.change(screen.getByTestId('project-inner-backend-cred-input'), { target: { value: 'sk-proj-key' } });
+        fireEvent.click(screen.getByTestId('model-settings-save'));
+        await waitFor(() => {
+          expect(api.backendSettings.setSecret).toHaveBeenCalledWith('/myapp', 'inner', 'api_key', 'sk-proj-key');
+        });
+      });
+
+      it('effective summary uses getEffective result for backend', async () => {
+        api.backendSettings.getEffective.mockResolvedValue({ backend: 'opencode', provider: 'anthropic', model: 'claude-opus' });
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          const inner = screen.getByTestId('effective-inner');
+          expect(inner.textContent).toContain('OpenCode');
+        });
+      });
+
+      it('effective summary shows claude model when backend resolves to claude', async () => {
+        api.backendSettings.getEffective.mockResolvedValue({ backend: 'claude' });
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          const inner = screen.getByTestId('effective-inner');
+          // Should show the claude model (sonnet or opus), not OpenCode
+          expect(inner.textContent).not.toContain('OpenCode');
+        });
+      });
+
+      it('loads existing project backend settings on mount', async () => {
+        api.backendSettings.getProject.mockResolvedValue({
+          inner_backend: 'opencode',
+          outer_backend: 'global',
+          inner_provider: 'openai',
+          inner_model: 'gpt-4',
+          outer_provider: null,
+          outer_model: null,
+        });
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          const openCodeBtn = screen.getByTestId('project-inner-backend-opencode');
+          expect(openCodeBtn.className).toContain('sandstorm-accent');
+        });
+      });
+
+      it('provider change with credential Set does not invoke setSecret or clear status', async () => {
+        api.backendSettings.secretStatus.mockResolvedValue({ set: true });
+        render(<ModelSettingsModal />);
+        await waitFor(() => {
+          expect(screen.getByTestId('project-inner-backend-opencode')).toBeDefined();
+        });
+        fireEvent.click(screen.getByTestId('project-inner-backend-opencode'));
+        await waitFor(() => {
+          expect(screen.getByTestId('project-inner-backend-cred-status').textContent).toContain('Set');
+        });
+        // Change provider
+        fireEvent.change(screen.getByTestId('project-inner-backend-provider'), { target: { value: 'openai' } });
+        // Status unchanged
+        expect(screen.getByTestId('project-inner-backend-cred-status').textContent).toContain('Set');
+        // Save — should not call setSecret (no new cred value entered)
+        fireEvent.click(screen.getByTestId('model-settings-save'));
+        await waitFor(() => {
+          expect(api.backendSettings.setProject).toHaveBeenCalled();
+        });
+        expect(api.backendSettings.setSecret).not.toHaveBeenCalled();
       });
     });
 

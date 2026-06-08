@@ -113,6 +113,15 @@ export function mockSandstormApi() {
       removeProject: vi.fn().mockResolvedValue(undefined),
       getEffective: vi.fn().mockResolvedValue({ inner_model: 'sonnet', outer_model: 'opus' }),
     },
+    backendSettings: {
+      getGlobal: vi.fn().mockResolvedValue({ inner_backend: 'claude', outer_backend: 'claude', inner_provider: null, inner_model: null, outer_provider: null, outer_model: null }),
+      setGlobal: vi.fn().mockResolvedValue(undefined),
+      getProject: vi.fn().mockResolvedValue(null),
+      setProject: vi.fn().mockResolvedValue(undefined),
+      getEffective: vi.fn().mockResolvedValue({ backend: 'claude' }),
+      setSecret: vi.fn().mockResolvedValue(undefined),
+      secretStatus: vi.fn().mockResolvedValue({ set: false }),
+    },
     projectTicketConfig: {
       get: vi.fn().mockResolvedValue(null),
       set: vi.fn().mockResolvedValue(undefined),
