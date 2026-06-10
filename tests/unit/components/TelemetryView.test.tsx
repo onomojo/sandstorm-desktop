@@ -332,27 +332,41 @@ describe('TelemetryView', () => {
   });
 
   describe('Orchestrator row', () => {
-    it('renders orchestrator as "Orchestrator · ad-hoc" title, not #__orchestrator__', () => {
+    it('does not render orchestrator row when mixed with real tickets', () => {
       setupStore({
         byTicket: [
           { ticketId: '__orchestrator__', model: null, cost: 2.0, tokens: { input: 10, output: 5, cacheCreate: 0, cacheRead: 0, total: 15 }, cacheHit: 0, lifecycle: null, unpriced: false },
+          { ticketId: '42', model: null, cost: 3.0, tokens: { input: 30, output: 15, cacheCreate: 0, cacheRead: 0, total: 45 }, cacheHit: 0, lifecycle: null, unpriced: false },
         ],
       });
       render(<TelemetryView />);
-      const row = screen.getByTestId('ticket-row-__orchestrator__');
-      expect(row.textContent).toContain('Orchestrator · ad-hoc');
-      expect(row.textContent).not.toContain('#__orchestrator__');
+      expect(screen.queryByTestId('ticket-row-__orchestrator__')).toBeNull();
+      expect(screen.getByTestId('ticket-row-42')).toBeDefined();
     });
 
-    it('orchestrator row shows — as displayId', () => {
+    it('shows "No ticket data" empty state when orchestrator is the only entry', () => {
       setupStore({
         byTicket: [
           { ticketId: '__orchestrator__', model: null, cost: 2.0, tokens: { input: 10, output: 5, cacheCreate: 0, cacheRead: 0, total: 15 }, cacheHit: 0, lifecycle: null, unpriced: false },
         ],
       });
       render(<TelemetryView />);
-      const row = screen.getByTestId('ticket-row-__orchestrator__');
-      expect(row.textContent).toContain('—');
+      expect(screen.queryByTestId('ticket-row-__orchestrator__')).toBeNull();
+      expect(screen.getByText('No ticket data')).toBeDefined();
+    });
+
+    it('large orchestrator cost does not appear and does not affect real-ticket bar scaling', () => {
+      setupStore({
+        byTicket: [
+          { ticketId: '__orchestrator__', model: null, cost: 1000.0, tokens: { input: 10, output: 5, cacheCreate: 0, cacheRead: 0, total: 15 }, cacheHit: 0, lifecycle: null, unpriced: false },
+          { ticketId: '55', model: null, cost: 5.0, tokens: { input: 50, output: 25, cacheCreate: 0, cacheRead: 0, total: 75 }, cacheHit: 0, lifecycle: null, unpriced: false },
+        ],
+      });
+      render(<TelemetryView />);
+      expect(screen.queryByTestId('ticket-row-__orchestrator__')).toBeNull();
+      const bar = screen.getByTestId('ticket-bar-55');
+      // bar should be 100% wide (it's the only real ticket, so maxTicketCost === its cost)
+      expect(bar.getAttribute('style')).toContain('width: 100%');
     });
   });
 

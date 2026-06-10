@@ -163,17 +163,18 @@ export function TelemetryView() {
   // Derived: daily cost for sparkline
   const dailyCosts = telemetryDaily.map((d) => d.cost);
 
-  // Derived: per-ticket rows (join with boardTickets for title/column)
-  const ticketRows = telemetryByTicket.map((entry) => {
-    const isOrchestrator = entry.ticketId === ORCHESTRATOR_TICKET_ID;
-    const board = isOrchestrator ? undefined : boardTickets.find((t) => t.ticket_id === entry.ticketId);
-    return {
-      ...entry,
-      title: isOrchestrator ? 'Orchestrator · ad-hoc' : (board?.title ?? `#${entry.ticketId}`),
-      column: isOrchestrator ? undefined : (board?.column as KanbanColumn | undefined),
-      displayId: isOrchestrator ? '—' : `#${entry.ticketId}`,
-    };
-  });
+  // Derived: per-ticket rows (join with boardTickets for title/column), orchestrator excluded
+  const ticketRows = telemetryByTicket
+    .filter((entry) => entry.ticketId !== ORCHESTRATOR_TICKET_ID)
+    .map((entry) => {
+      const board = boardTickets.find((t) => t.ticket_id === entry.ticketId);
+      return {
+        ...entry,
+        title: board?.title ?? `#${entry.ticketId}`,
+        column: board?.column as KanbanColumn | undefined,
+        displayId: `#${entry.ticketId}`,
+      };
+    });
 
   // Sort tickets
   const sortedTickets = [...ticketRows].sort((a, b) => {
