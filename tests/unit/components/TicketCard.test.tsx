@@ -1117,6 +1117,54 @@ describe('TicketCard', () => {
     expect(screen.getByText('2 questions awaiting')).toBeDefined();
   });
 
+  it('refining: question count reflects only interactive questions (regression #587)', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess1',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'ready',
+        phase: 'check',
+        result: {
+          passed: false,
+          questions: [
+            { id: 'q1', question: 'Q1?', options: [] },
+            { id: 'q2', question: 'Q2?', options: [] },
+            { id: 'q3', question: 'Q3?', options: [] },
+          ],
+          gateSummary: '',
+          ticketUrl: null,
+          cached: false,
+        },
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.getByText('3 questions awaiting')).toBeDefined();
+  });
+
+  it('refining: no badge shown when questions array is empty', () => {
+    useAppStore.setState({
+      refinementSessions: [{
+        id: 'sess1',
+        ticketId: '42',
+        projectDir: PROJECT_DIR,
+        status: 'ready',
+        phase: 'check',
+        result: {
+          passed: false,
+          questions: [],
+          gateSummary: '',
+          ticketUrl: null,
+          cached: false,
+        },
+        startedAt: 0,
+      }],
+    });
+    render(<TicketCard ticket={makeTicket('refining') as any} stacks={[]} />);
+    expect(screen.queryByText(/questions awaiting/)).toBeNull();
+  });
+
   // =========================================================================
   // Discard (trash) icon — #446
   // =========================================================================

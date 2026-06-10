@@ -15,8 +15,6 @@ export interface RefineQuestion {
   id: string;
   question: string;
   options: RefineQuestionOption[];
-  /** 'gap' = self-resolvable spec correction (read-only in UI, not fed to spec_refine) */
-  kind?: 'gap';
 }
 
 /**
@@ -66,39 +64,27 @@ export function extractGateSummary(report: string): string {
 
 /**
  * Parses structured questions from a spec gate report. Looks for a ```json
- * fence under a `### Questions` or `### Gaps` heading and parses it as
- * RefineQuestion[]. Falls back to the legacy numbered-list parser (coercing
- * each line to a RefineQuestion with no options) when no valid JSON block is found.
- * Also parses checkbox items (`- [ ] …`) under `### Gaps` and marks them `kind:'gap'`.
+ * fence under a `### Questions` heading and parses it as RefineQuestion[].
+ * Falls back to the legacy numbered-list parser (coercing each line to a
+ * RefineQuestion with no options) when no valid JSON block is found.
+ * Any `### Gaps` sections in the report are ignored entirely.
  */
 export function extractQuestions(report: string): RefineQuestion[] {
   if (!report) return [];
 
-  // Try JSON block parser first for interactive questions.
   const jsonResult = tryParseJsonBlock(report);
-  // Also extract checkbox gaps regardless (they appear alongside JSON questions).
-  const checkboxGaps = extractCheckboxGaps(report);
-
   if (jsonResult !== null) {
-    // Gaps render above interactive questions in the UI.
-    return [...checkboxGaps, ...jsonResult];
+    return jsonResult;
   }
 
-  // Fallback: numbered-item + checkbox-gap parser.
+  // Fallback: numbered-item parser for `### Questions` sections only.
   const lines = report.split('\n');
   let capture = false;
-  let captureKind: 'question' | 'gap' = 'question';
   const out: RefineQuestion[] = [];
   let idx = 0;
   for (const line of lines) {
     if (/^### Questions/i.test(line)) {
       capture = true;
-      captureKind = 'question';
-      continue;
-    }
-    if (/^### Gaps/i.test(line)) {
-      capture = true;
-      captureKind = 'gap';
       continue;
     }
     if (/^## /.test(line)) {
@@ -106,49 +92,9 @@ export function extractQuestions(report: string): RefineQuestion[] {
       continue;
     }
     if (!capture) continue;
-    // Numbered items work for both sections.
     const numbered = line.match(/^[0-9]+\.\s*(.*)$/);
     if (numbered && numbered[1].trim()) {
-      const item: RefineQuestion = { id: `q${idx + 1}`, question: numbered[1].trim(), options: [] };
-      if (captureKind === 'gap') item.kind = 'gap';
-      out.push(item);
-      idx++;
-      continue;
-    }
-    // Checkbox items (mandated format for Gaps section by buildSpecCheckPrompt).
-    if (captureKind === 'gap') {
-      const checkbox = line.match(/^-\s+\[[ x?]\]\s+(.*)$/);
-      if (checkbox && checkbox[1].trim()) {
-        out.push({ id: `g${idx + 1}`, question: checkbox[1].trim(), options: [], kind: 'gap' });
-        idx++;
-      }
-    }
-  }
-  return out;
-}
-
-/**
- * Extract checkbox items (`- [ ] …`) from the `### Gaps` section only.
- * Used when a JSON block is present so gaps are combined with JSON questions.
- */
-function extractCheckboxGaps(report: string): RefineQuestion[] {
-  const lines = report.split('\n');
-  let capture = false;
-  const out: RefineQuestion[] = [];
-  let idx = 0;
-  for (const line of lines) {
-    if (/^### Gaps/i.test(line)) {
-      capture = true;
-      continue;
-    }
-    // Stop at any other section heading (## or ###).
-    if (capture && (/^## /.test(line) || /^### /.test(line))) {
-      break;
-    }
-    if (!capture) continue;
-    const m = line.match(/^-\s+\[[ x?]\]\s+(.*)$/);
-    if (m && m[1].trim()) {
-      out.push({ id: `g${idx + 1}`, question: m[1].trim(), options: [], kind: 'gap' });
+      out.push({ id: `q${idx + 1}`, question: numbered[1].trim(), options: [] });
       idx++;
     }
   }
@@ -156,7 +102,7 @@ function extractCheckboxGaps(report: string): RefineQuestion[] {
 }
 
 /**
- * Locate the first ```json fence following a ### Questions/Gaps heading and
+ * Locate the first ```json fence following a ### Questions heading and
  * parse it as RefineQuestion[]. Returns null on missing block, parse error,
  * or invalid shape.
  */
@@ -167,7 +113,7 @@ function tryParseJsonBlock(report: string): RefineQuestion[] | null {
   const fenceLines: string[] = [];
 
   for (const line of lines) {
-    if (/^### (Questions|Gaps)/i.test(line)) {
+    if (/^### Questions/i.test(line)) {
       inSection = true;
       continue;
     }

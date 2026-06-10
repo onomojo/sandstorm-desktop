@@ -197,51 +197,26 @@ describe('extractQuestions', () => {
     expect(questions[1].options).toEqual([]);
   });
 
-  it('also captures items under a Gaps heading (fallback)', () => {
-    const r = `### Gaps\n1. First gap\n2. Second gap\n## Next\n3. Outside`;
+  it('ignores ### Gaps section entirely — returns only Questions items (regression)', () => {
+    const r = `## Spec Quality Gate: FAIL\n\n### Gaps (if any)\n- [ ] Citation stale — update to line 42\n- [ ] Wrong version check — use < 24\n\n### Questions Requiring User Answers (if any)\n\n\`\`\`json\n[{"id":"q1","question":"Which approach?","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}]\n\`\`\`\n`;
     const questions = extractQuestions(r);
-    expect(questions).toHaveLength(2);
-    expect(questions[0].question).toBe('First gap');
-    expect(questions[0].kind).toBe('gap');
-    expect(questions[1].question).toBe('Second gap');
-    expect(questions[1].kind).toBe('gap');
+    // Gaps section must be completely ignored; only the JSON Questions block counts
+    expect(questions).toHaveLength(1);
+    expect(questions[0].question).toBe('Which approach?');
   });
 
-  it('parses checkbox items under Gaps heading — mandated buildSpecCheckPrompt format (regression)', () => {
-    const r = `## Spec Quality Gate: FAIL\n\n### Gaps (if any)\n- [ ] Citation stale — update to line 42\n- [ ] Wrong version check — use < 24\n\n## Results\n`;
+  it('ignores ### Gaps section when no JSON block is present (fallback regression)', () => {
+    const r = `## Spec Quality Gate: FAIL\n\n### Gaps (if any)\n- [ ] Citation stale — update to line 42\n\n## Results\n`;
     const questions = extractQuestions(r);
-    expect(questions.length).toBeGreaterThan(0);
-    expect(questions[0].question).toBe('Citation stale — update to line 42');
-    expect(questions[0].kind).toBe('gap');
-    expect(questions[1].question).toBe('Wrong version check — use < 24');
-    expect(questions[1].kind).toBe('gap');
+    // Gaps-only report yields no questions
+    expect(questions).toHaveLength(0);
   });
 
-  it('combines checkbox gaps with JSON questions when both are present', () => {
-    const r = `## Spec Quality Gate: FAIL\n\n### Gaps (if any)\n- [ ] Gap item — needs fixing\n\n### Questions Requiring User Answers (if any)\n\n\`\`\`json\n[{"id":"q1","question":"Which approach?","options":[{"id":"a","label":"A"},{"id":"b","label":"B"}]}]\n\`\`\`\n`;
-    const questions = extractQuestions(r);
-    // Gaps appear first, then JSON questions
-    expect(questions.length).toBe(2);
-    expect(questions[0].kind).toBe('gap');
-    expect(questions[0].question).toBe('Gap item — needs fixing');
-    expect(questions[1].kind).toBeUndefined();
-    expect(questions[1].question).toBe('Which approach?');
-  });
-
-  it('marks Questions-section items with no kind (only Gaps items get kind: gap)', () => {
-    const r = `### Questions\n1. What is the approach?\n2. How should we handle it?`;
-    const questions = extractQuestions(r);
-    expect(questions).toHaveLength(2);
-    expect(questions[0].kind).toBeUndefined();
-    expect(questions[1].kind).toBeUndefined();
-  });
-
-  it('also captures JSON block under a Gaps heading', () => {
-    const r = `### Gaps\n\n\`\`\`json\n[{"id":"q1","question":"Gap Q?","options":[{"id":"a","label":"Yes"},{"id":"b","label":"No"}]}]\n\`\`\`\n## Next`;
+  it('RefineQuestion has no kind field (gap concept fully removed)', () => {
+    const r = `### Questions Requiring User Answers\n\n\`\`\`json\n[{"id":"q1","question":"Approach?","options":[{"id":"a","label":"A"}]}]\n\`\`\`\n`;
     const questions = extractQuestions(r);
     expect(questions).toHaveLength(1);
-    expect(questions[0].question).toBe('Gap Q?');
-    expect(questions[0].options).toHaveLength(2);
+    expect(Object.prototype.hasOwnProperty.call(questions[0], 'kind')).toBe(false);
   });
 
   it('returns empty array when no Questions/Gaps heading exists', () => {
