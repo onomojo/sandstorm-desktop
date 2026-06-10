@@ -79,10 +79,9 @@ export function RefineTicketDialog() {
   const sessionError = session?.error ?? null;
 
   // Initialise answers when gate questions change, restoring from draft if available.
-  // Only interactive questions (kind !== 'gap') get answer slots.
   useEffect(() => {
     if (gate && !gate.passed) {
-      const interactive = gate.questions.filter((q) => q.kind !== 'gap');
+      const interactive = gate.questions;
       if (interactive.length === 0) return;
       const normalized = interactive.map((q, i) => normalizeQuestion(q, i));
       // Read draft imperatively to avoid adding refineAnswerDrafts as a reactive dep.
@@ -188,8 +187,7 @@ export function RefineTicketDialog() {
 
   const handleSubmitAnswers = useCallback(async () => {
     if (!session || !projectDir) return;
-    const rawQuestions = (gate?.questions ?? []).filter((q) => q.kind !== 'gap');
-    const questions = rawQuestions.map((q, i) => normalizeQuestion(q, i));
+    const questions = (gate?.questions ?? []).map((q, i) => normalizeQuestion(q, i));
     const combined = combineAnswers(questions, answers);
     setLocalError(null);
     // Update session optimistically to 'running' while we wait
@@ -454,52 +452,35 @@ export function RefineTicketDialog() {
               </div>
             )}
 
-            {showFailState && gate && (() => {
-              const gapItems = gate.questions.filter((q) => q.kind === 'gap');
-              const interactiveQuestions = gate.questions.filter((q) => q.kind !== 'gap');
-              return (
-                <div className="space-y-3" data-testid="refine-fail">
-                  <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5">
-                    Spec gate failed. {gate.gateSummary}
-                  </div>
-                  {gapItems.length > 0 && (
-                    <div data-testid="refine-gap-items">
-                      <div className="text-xs font-medium text-sandstorm-text-secondary mb-1.5">Spec Gaps</div>
-                      <ul className="space-y-1">
-                        {gapItems.map((gap) => (
-                          <li key={gap.id} className="text-xs text-sandstorm-muted flex gap-2" data-testid="refine-gap-item">
-                            <span className="mt-0.5 text-amber-400 shrink-0">•</span>
-                            <span>{gap.question}</span>
-                          </li>
-                        ))}
-                      </ul>
-                    </div>
-                  )}
-                  {interactiveQuestions.length > 0 ? (
-                    <QuestionList
-                      questions={interactiveQuestions.map((q, i) => normalizeQuestion(q, i))}
-                      answers={answers}
-                      onAnswersChange={(next) => {
-                        setAnswers(next);
-                        if (session) setRefineAnswerDraft(session.id, next);
-                      }}
-                      testIdPrefix="refine"
-                    />
-                  ) : gate.reportText ? (
-                    <pre
-                      className="text-xs font-mono text-sandstorm-text bg-sandstorm-bg border border-sandstorm-border rounded-lg p-3 max-h-48 overflow-y-auto whitespace-pre-wrap break-words"
-                      data-testid="refine-report-text"
-                    >
-                      {gate.reportText}
-                    </pre>
-                  ) : (
-                    <div className="text-xs text-sandstorm-muted" data-testid="refine-no-report">
-                      No structured questions parsed. Use Retry to re-run the gate.
-                    </div>
-                  )}
+            {showFailState && gate && (
+              <div className="space-y-3" data-testid="refine-fail">
+                <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5">
+                  Spec gate failed. {gate.gateSummary}
                 </div>
-              );
-            })()}
+                {gate.questions.length > 0 ? (
+                  <QuestionList
+                    questions={gate.questions.map((q, i) => normalizeQuestion(q, i))}
+                    answers={answers}
+                    onAnswersChange={(next) => {
+                      setAnswers(next);
+                      if (session) setRefineAnswerDraft(session.id, next);
+                    }}
+                    testIdPrefix="refine"
+                  />
+                ) : gate.reportText ? (
+                  <pre
+                    className="text-xs font-mono text-sandstorm-text bg-sandstorm-bg border border-sandstorm-border rounded-lg p-3 max-h-48 overflow-y-auto whitespace-pre-wrap break-words"
+                    data-testid="refine-report-text"
+                  >
+                    {gate.reportText}
+                  </pre>
+                ) : (
+                  <div className="text-xs text-sandstorm-muted" data-testid="refine-no-report">
+                    No structured questions parsed. Use Retry to re-run the gate.
+                  </div>
+                )}
+              </div>
+            )}
 
             {(showErrorState) && !confirmingCancel && (
               <div className="text-xs text-sandstorm-muted" data-testid="refine-error-state">
@@ -555,7 +536,7 @@ export function RefineTicketDialog() {
                   </button>
                 )}
 
-                {showFailState && gate && gate.questions.filter((q) => q.kind !== 'gap').length > 0 && (
+                {showFailState && gate && gate.questions.length > 0 && (
                   <button
                     onClick={handleSubmitAnswers}
                     disabled={isSubmitDisabled(answers)}
@@ -566,7 +547,7 @@ export function RefineTicketDialog() {
                   </button>
                 )}
 
-                {showFailState && gate && gate.questions.filter((q) => q.kind !== 'gap').length === 0 && (
+                {showFailState && gate && gate.questions.length === 0 && (
                   <button
                     onClick={handleRetry}
                     className="px-5 py-2 bg-sandstorm-accent hover:bg-sandstorm-accent-hover text-white text-xs font-medium rounded-lg transition-all active:scale-[0.98] shadow-glow"
