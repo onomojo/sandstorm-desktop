@@ -16,6 +16,8 @@ vi.mock('../../src/main/index', () => ({
   },
   registry: {
     getProjectTicketConfig: vi.fn().mockReturnValue({ provider: 'github' }),
+    getEffectiveRoutingFor: vi.fn().mockReturnValue({ backend: 'claude', model: 'sonnet' }),
+    getLegacyEffectiveModels: vi.fn().mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' }),
   },
 }));
 
@@ -189,7 +191,8 @@ describe('MCP tools', () => {
         expect.stringContaining('Fix bug'),
         '/proj',
         1_800_000,
-        { ticketId: '42', stage: 'spec' }
+        { ticketId: '42', stage: 'spec' },
+        expect.anything(),
       );
       expect(result.passed).toBe(true);
       expect(result.report).toContain('PASS');
@@ -562,7 +565,8 @@ describe('MCP tools', () => {
         expect.stringContaining('auth tokens expire silently'),
         '/proj',
         1_800_000,
-        { ticketId: '42', stage: 'refine' }
+        { ticketId: '42', stage: 'refine' },
+        expect.anything(),
       );
       expect(result.passed).toBe(true);
       expect(result.updatedBody).toContain('Better spec');
@@ -923,6 +927,108 @@ describe('MCP tools', () => {
       await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
       const [, , timeoutArg] = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls[0];
       expect(timeoutArg).toBe(0);
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // refine routing — model passthrough tests
+  // -------------------------------------------------------------------------
+  describe('refine routing — model passthrough', () => {
+    beforeEach(() => {
+      _clearTicketBodyCacheForTests();
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: T-99\nbody text');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue('## Spec Quality Gate: PASS\nAll good.');
+      vi.mocked(agentBackend.spawnEphemeralAgent).mockReturnValue({
+        promise: Promise.resolve('## Spec Quality Gate: PASS'),
+        cancel: vi.fn(),
+      });
+      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'sonnet' });
+      vi.mocked(registry.getLegacyEffectiveModels).mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
+    });
+
+    it('handleSpecCheck forwards resolved refine model to runEphemeralAgent', async () => {
+      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'haiku' });
+
+      await handleToolCall('spec_check', { ticketId: 'T-99', projectDir: '/proj' });
+
+      const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[4]).toBe('haiku');
+    });
+
+    it('spawnSpecCheck forwards resolved refine model to spawnEphemeralAgent', async () => {
+      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'opus' });
+
+      spawnSpecCheck('T-99', '/proj');
+      await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
+
+      const calls = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls;
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[5]).toBe('opus');
+    });
+
+    it('falls back to legacy outer model and warns when refine backend is opencode', async () => {
+      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'opencode', model: 'gpt-4' });
+      vi.mocked(registry.getLegacyEffectiveModels).mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await handleToolCall('spec_check', { ticketId: 'T-99', projectDir: '/proj' });
+
+      const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[4]).toBe('opus');
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
+      warnSpy.mockRestore();
+    });
+
+    it('handleSpecRefine initial forwards resolved refine model to runEphemeralAgent', async () => {
+      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'haiku' });
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: FAIL\n\n### Questions Requiring User Answers\n1. What?',
+      );
+
+      await handleToolCall('spec_refine', { ticketId: 'T-99', projectDir: '/proj' });
+
+      const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[4]).toBe('haiku');
+    });
+
+    it('handleSpecRefine answer forwards resolved refine model to runEphemeralAgent', async () => {
+      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'haiku' });
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Updated Ticket Body\n\n# Issue: Updated\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |',
+      );
+      vi.mocked(updateTicketWithConfig).mockResolvedValue(undefined);
+
+      await handleToolCall('spec_refine', { ticketId: 'T-99', projectDir: '/proj', userAnswers: 'some answers' });
+
+      const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[4]).toBe('haiku');
+    });
+
+    it('spawnSpecRefine cold fallback forwards resolved refine model to spawnEphemeralAgent', async () => {
+      _disposeAllRefineSessionsForTests();
+      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'opus' });
+      vi.mocked(agentBackend.spawnEphemeralAgent).mockReturnValue({
+        promise: Promise.resolve(
+          '## Updated Ticket Body\n\n# Issue: Cold\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |',
+        ),
+        cancel: vi.fn(),
+      });
+      vi.mocked(updateTicketWithConfig).mockResolvedValue(undefined);
+
+      const { promise } = spawnSpecRefine('T-99', '/proj', 'Answer text');
+      await promise;
+
+      const calls = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[5]).toBe('opus');
     });
   });
 });

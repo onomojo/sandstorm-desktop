@@ -1079,6 +1079,64 @@ describe('spawnEphemeralAgent — env trim and CLI args (#370)', () => {
 
     backendUnderTest.destroy();
   });
+
+  it('passes --model <model> when model override is provided', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, undefined, undefined, 'claude-opus-4-5');
+
+    const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+    expect(spawnedArgs).toContain('--model');
+    expect(spawnedArgs).toContain('claude-opus-4-5');
+
+    backendUnderTest.destroy();
+  });
+
+  it('does NOT pass --model when model is "auto"', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000, undefined, undefined, 'auto');
+
+    const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+    expect(spawnedArgs).not.toContain('--model');
+
+    backendUnderTest.destroy();
+  });
+
+  it('does NOT pass --model when model param is omitted (legacy behavior unchanged)', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    backendUnderTest.spawnEphemeralAgent('prompt', '/tmp', 5_000);
+
+    const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+    expect(spawnedArgs).not.toContain('--model');
+
+    backendUnderTest.destroy();
+  });
+
+  it('runEphemeralAgent threads model override to spawnEphemeralAgent', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    backendUnderTest.runEphemeralAgent('prompt', '/tmp', 5_000, undefined, 'claude-haiku-4-5');
+
+    const spawnedArgs: string[] = spawnMock.mock.calls[spawnMock.mock.calls.length - 1][1];
+    expect(spawnedArgs).toContain('--model');
+    expect(spawnedArgs).toContain('claude-haiku-4-5');
+
+    backendUnderTest.destroy();
+  });
 });
 
 describe('Outer-Claude session token accumulation (agent:token-usage IPC)', () => {

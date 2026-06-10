@@ -317,6 +317,15 @@ Mark at most one option per question with \`"recommended": true\` when you have 
 `;
 }
 
+function resolveRefineModel(projectDir: string): string | undefined {
+  const routing = registry.getEffectiveRoutingFor(projectDir, 'refine');
+  if (routing.backend === 'opencode') {
+    console.warn('[refine] backend=opencode unsupported for host path; falling back to legacy outer model');
+    return registry.getLegacyEffectiveModels(projectDir).outer_model;
+  }
+  return routing.model;
+}
+
 async function handleSpecCheck(
   ticketId: string,
   projectDir: string
@@ -326,7 +335,7 @@ async function handleSpecCheck(
   const { ctx } = res;
 
   const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' });
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
   return {
@@ -524,13 +533,13 @@ async function handleSpecRefine(
 
   if (!userAnswers) {
     const prompt = buildSpecRefineInitialPrompt(ctx.gate, ctx.ticketBody);
-    const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' });
+    const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, resolveRefineModel(projectDir));
     const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
     return { passed, report: result };
   }
 
   const prompt = buildSpecRefineAnswerPrompt(ctx.gate, ctx.ticketBody, userAnswers);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' });
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, resolveRefineModel(projectDir));
   return applySpecRefineResult(ticketId, projectDir, result, true);
 }
 
@@ -556,7 +565,7 @@ export function spawnSpecCheck(
     if (cancelled) throw new Error('Cancelled');
 
     const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody);
-    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' });
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
 
@@ -651,7 +660,7 @@ export function spawnSpecRefine(
       // No pooled session (timed out, app restarted, etc.) — fall back to a
       // cold ephemeral so the user's answers still produce a result.
       const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(
-        answerPrompt, projectDir, 0, onChunk, { ticketId, stage: 'refine' },
+        answerPrompt, projectDir, 0, onChunk, { ticketId, stage: 'refine' }, resolveRefineModel(projectDir),
       );
       activeDispose = epCancel;
       if (cancelled) { epCancel(); throw new Error('Cancelled'); }

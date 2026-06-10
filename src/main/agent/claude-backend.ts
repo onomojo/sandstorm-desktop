@@ -405,12 +405,14 @@ export class ClaudeBackend implements AgentBackend {
     timeoutMs = 300_000,
     onChunk?: (event: EphemeralStreamEvent) => void,
     attribution?: { ticketId?: string; stage?: string },
+    model?: string,
   ): { promise: Promise<string>; cancel: () => void } {
     const claudeBin = getClaudeBin();
     const args = [
       '-p', prompt,
       '--output-format', 'stream-json',
       '--dangerously-skip-permissions',
+      ...(model && model !== 'auto' ? ['--model', model] : []),
     ];
 
     const spawnedAt = Date.now();
@@ -566,8 +568,9 @@ export class ClaudeBackend implements AgentBackend {
     projectDir: string,
     timeoutMs = 300_000,
     attribution?: { ticketId?: string; stage?: string },
+    model?: string,
   ): Promise<string> {
-    return this.spawnEphemeralAgent(prompt, projectDir, timeoutMs, undefined, attribution).promise;
+    return this.spawnEphemeralAgent(prompt, projectDir, timeoutMs, undefined, attribution, model).promise;
   }
 
   /**

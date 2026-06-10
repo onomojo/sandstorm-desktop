@@ -227,9 +227,10 @@ describe('BackendRouter', () => {
   it('ephemeral calls pass through all arguments', async () => {
     const onChunk = vi.fn();
     const attribution = { ticketId: 'T-1', stage: 'spec' };
-    router.spawnEphemeralAgent('p', '/claude-project', 5000, onChunk, attribution);
+    const model = 'claude-opus-4-5';
+    router.spawnEphemeralAgent('p', '/claude-project', 5000, onChunk, attribution, model);
     expect(claudeFake.spawnEphemeralAgentMock).toHaveBeenCalledWith(
-      'p', '/claude-project', 5000, onChunk, attribution,
+      'p', '/claude-project', 5000, onChunk, attribution, model,
     );
   });
 

@@ -164,10 +164,11 @@ export class BackendRouter implements AgentBackend {
     projectDir: string,
     timeoutMs?: number,
     attribution?: { ticketId?: string; stage?: string },
+    model?: string,
   ): Promise<string> {
     const type = this.selector(projectDir);
     this.lastProjectBackendId = type;
-    return this.getBackend(type).runEphemeralAgent(prompt, projectDir, timeoutMs, attribution);
+    return this.getBackend(type).runEphemeralAgent(prompt, projectDir, timeoutMs, attribution, model);
   }
 
   spawnEphemeralAgent(
@@ -176,10 +177,11 @@ export class BackendRouter implements AgentBackend {
     timeoutMs?: number,
     onChunk?: (event: EphemeralStreamEvent) => void,
     attribution?: { ticketId?: string; stage?: string },
+    model?: string,
   ): { promise: Promise<string>; cancel: () => void } {
     const type = this.selector(projectDir);
     this.lastProjectBackendId = type;
-    return this.getBackend(type).spawnEphemeralAgent(prompt, projectDir, timeoutMs, onChunk, attribution);
+    return this.getBackend(type).spawnEphemeralAgent(prompt, projectDir, timeoutMs, onChunk, attribution, model);
   }
 
   spawnEphemeralSession(

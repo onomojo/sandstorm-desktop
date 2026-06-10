@@ -197,7 +197,7 @@ describe('StackManager.autoResolveConflicts internals', () => {
       expect(dispatchTaskSpy).toHaveBeenCalledWith(
         'stack-1',
         expect.any(String),
-        undefined,
+        expect.anything(),
         expect.objectContaining({ gateApproved: true })
       );
     });
@@ -328,7 +328,7 @@ describe('StackManager.autoResolveConflicts internals', () => {
       expect(dispatchTaskSpy).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
-        undefined,
+        expect.anything(),
         expect.objectContaining({ gateApproved: true })
       );
     });
@@ -377,6 +377,56 @@ describe('StackManager.autoResolveConflicts internals', () => {
       vi.spyOn(registry, 'listStackHistory').mockReturnValue([]);
 
       await expect(manager.autoResolveConflicts(TICKET, PROJECT_DIR)).rejects.toThrow();
+    });
+  });
+
+  // ==========================================================================
+  // merge_conflict routing
+  // ==========================================================================
+  describe('merge_conflict routing', () => {
+    beforeEach(() => {
+      registry.createStack({
+        id: 'stack-1',
+        project: 'test',
+        project_dir: PROJECT_DIR,
+        ticket: TICKET,
+        branch: BRANCH,
+        description: null,
+        status: 'pr_created',
+        runtime: 'docker',
+      });
+      registry.setPullRequest('stack-1', PR_URL, PR_NUMBER);
+      mockGhFn.mockResolvedValue(ghViewJson('CONFLICTING'));
+    });
+
+    it('dispatches with legacy inner model when no routing configured', async () => {
+      await manager.autoResolveConflicts(TICKET, PROJECT_DIR);
+
+      const [, , model] = dispatchTaskSpy.mock.calls[0] as [string, string, string | undefined, ...unknown[]];
+      const legacy = registry.getLegacyEffectiveModels(PROJECT_DIR);
+      expect(model).toBe(legacy.inner_model);
+    });
+
+    it('dispatches with resolved merge_conflict model when routing is configured', async () => {
+      registry.setProjectRouting(PROJECT_DIR, { assignments: { merge_conflict: { backend: 'claude', model: 'haiku' } }, preset: null });
+
+      await manager.autoResolveConflicts(TICKET, PROJECT_DIR);
+
+      const [, , model] = dispatchTaskSpy.mock.calls[0] as [string, string, string | undefined, ...unknown[]];
+      expect(model).toBe('haiku');
+    });
+
+    it('falls back to legacy inner model and logs warning when merge_conflict backend is opencode', async () => {
+      registry.setProjectRouting(PROJECT_DIR, { assignments: { merge_conflict: { backend: 'opencode', model: 'some-opencode-model' } }, preset: null });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      await manager.autoResolveConflicts(TICKET, PROJECT_DIR);
+
+      const [, , model] = dispatchTaskSpy.mock.calls[0] as [string, string, string | undefined, ...unknown[]];
+      const legacy = registry.getLegacyEffectiveModels(PROJECT_DIR);
+      expect(model).toBe(legacy.inner_model);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
+      warnSpy.mockRestore();
     });
   });
 });
