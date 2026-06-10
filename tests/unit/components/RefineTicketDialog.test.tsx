@@ -1746,73 +1746,37 @@ describe('RefineTicketDialog', () => {
       expect(screen.queryByText(/committed to the ticket/i)).toBeNull();
     });
 
-    it('renders gap items as read-only list when questions contain only gaps', () => {
+    it('refine-gap-items testid is absent (gap display removed)', () => {
       useAppStore.setState({
         refinementSessions: [{
           id: 'session-1', ticketId: '310', projectDir: '/proj',
           status: 'ready', phase: 'check', startedAt: Date.now(),
           result: {
             passed: false,
-            questions: [
-              { id: 'g1', question: 'Citation stale — update to line 42', options: [], kind: 'gap' },
-              { id: 'g2', question: 'Wrong version check', options: [], kind: 'gap' },
-            ],
+            questions: MULTI_OPT_QUESTIONS,
             gateSummary: 'Gate=FAIL, questions=2',
             ticketUrl: null,
             cached: false,
-            reportText: 'Full report here',
           },
         }],
         currentRefinementSessionId: 'session-1',
       });
       render(<RefineTicketDialog />);
-      expect(screen.getByTestId('refine-gap-items')).toBeDefined();
-      const gapItems = screen.getAllByTestId('refine-gap-item');
-      expect(gapItems).toHaveLength(2);
-      expect(gapItems[0].textContent).toContain('Citation stale');
-      // No interactive question inputs
-      expect(screen.queryByTestId('refine-answer-0')).toBeNull();
-      // Submit not shown — only Retry
-      expect(screen.queryByTestId('refine-submit-answers')).toBeNull();
-      expect(screen.getByTestId('refine-run-gate')).toBeDefined();
-    });
-
-    it('renders gap items read-only alongside QuestionList for interactive questions', () => {
-      useAppStore.setState({
-        refinementSessions: [{
-          id: 'session-1', ticketId: '310', projectDir: '/proj',
-          status: 'ready', phase: 'check', startedAt: Date.now(),
-          result: {
-            passed: false,
-            questions: [
-              { id: 'g1', question: 'Fix the citation', options: [], kind: 'gap' },
-              ...MULTI_OPT_QUESTIONS,
-            ],
-            gateSummary: 'Gate=FAIL, questions=3',
-            ticketUrl: null,
-            cached: false,
-          },
-        }],
-        currentRefinementSessionId: 'session-1',
-      });
-      render(<RefineTicketDialog />);
-      // Gap items rendered read-only
-      expect(screen.getByTestId('refine-gap-items')).toBeDefined();
-      // Interactive questions rendered in QuestionList
+      expect(screen.queryByTestId('refine-gap-items')).toBeNull();
+      // Interactive questions still render
       expect(screen.getByTestId('refine-answer-0')).toBeDefined();
-      // Submit button shows (interactive questions present)
       expect(screen.getByTestId('refine-submit-answers')).toBeDefined();
     });
 
-    it('Retry button shown when questions are all gaps (no interactive questions)', () => {
+    it('shows Retry when questions array is empty (no interactive questions)', () => {
       useAppStore.setState({
         refinementSessions: [{
           id: 'session-1', ticketId: '310', projectDir: '/proj',
           status: 'ready', phase: 'check', startedAt: Date.now(),
           result: {
             passed: false,
-            questions: [{ id: 'g1', question: 'Fix it', options: [], kind: 'gap' }],
-            gateSummary: 'Gate=FAIL, questions=1',
+            questions: [],
+            gateSummary: 'Gate=FAIL, questions=0',
             ticketUrl: null,
             cached: false,
           },

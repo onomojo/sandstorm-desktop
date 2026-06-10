@@ -292,10 +292,6 @@ Respond in EXACTLY this format (no other text before or after):
 | <criterion name> | PASS/FAIL | <notes> |
 ...
 
-### Gaps (if any)
-- [ ] Specific gap 1 — what needs to be clarified and how to fix it
-...
-
 ### Questions Requiring User Answers (if any)
 
 Every question MUST be phrased as an actionable multiple-choice question — never a statement. Provide 2 or more options when reasonable choices exist.

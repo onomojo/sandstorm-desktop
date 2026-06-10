@@ -909,8 +909,6 @@ export interface RefineQuestion {
   id: string;
   question: string;
   options: RefineQuestionOption[];
-  /** 'gap' = self-resolvable spec correction (read-only in UI, not fed to spec_refine) */
-  kind?: 'gap';
 }
 
 /** Renderer-side mirror of `SpecGateResult` from main/control-plane/ticket-spec.ts. */
