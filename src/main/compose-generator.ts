@@ -446,37 +446,3 @@ export function cleanupLegacyPorts(projectDir: string): { success: boolean; erro
   }
 }
 
-/**
- * Detect whether a sandstorm compose file has the usage mount for transcript ingestion.
- * The mount bridges inner-stack transcripts to the host for telemetry attribution.
- */
-export function hasUsageMount(projectDir: string): boolean {
-  const composePath = path.join(projectDir, '.sandstorm', 'docker-compose.yml');
-  if (!fs.existsSync(composePath)) return false;
-  const content = fs.readFileSync(composePath, 'utf-8');
-  return content.includes('${SANDSTORM_USAGE_DIR}/${SANDSTORM_STACK_ID}:/home/claude/.claude/projects');
-}
-
-/**
- * Add the usage mount to an existing .sandstorm/docker-compose.yml by regenerating it.
- * Idempotent — no-op if the mount is already present.
- * Mirrors cleanupLegacyPorts: re-parses the project compose and regenerates the sandstorm compose.
- */
-export function migrateUsageMount(projectDir: string): { success: boolean; error?: string } {
-  if (hasUsageMount(projectDir)) return { success: true };
-
-  try {
-    const configComposeFile = readComposeFileFromConfig(projectDir);
-    const composeFile = findProjectComposeFile(projectDir, configComposeFile);
-    if (!composeFile) {
-      return { success: false, error: 'No project compose file found' };
-    }
-
-    const analysis = parseProjectCompose(projectDir, composeFile);
-    const yaml = generateComposeYaml(analysis);
-    return saveComposeSetup(projectDir, yaml, false);
-  } catch (err) {
-    const msg = err instanceof Error ? err.message : String(err);
-    return { success: false, error: msg };
-  }
-}
