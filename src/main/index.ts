@@ -9,7 +9,7 @@ import { DockerRuntime } from './runtime/docker';
 import { PodmanRuntime } from './runtime/podman';
 import { ContainerRuntime } from './runtime/types';
 import { DockerConnectionManager } from './runtime/docker-connection';
-import { AgentBackend, ClaudeBackend } from './agent';
+import { AgentBackend, ClaudeBackend, BackendRouter } from './agent';
 import { registerIpcHandlers } from './ipc';
 import { createTray } from './tray';
 import { SessionMonitor } from './control-plane/session-monitor';
@@ -170,9 +170,10 @@ async function initializeApp(): Promise<void> {
   // backend; the renderer reads it via `agent:tokenUsage` / listens to
   // `agent:token-usage:<tabId>` events. No DB persistence — "New Session"
   // resets the counter by design.
-  agentBackend = new ClaudeBackend(
-    undefined,
-    (projectDir) => registry.getEffectiveModels(projectDir).outer_model
+  const modelResolver = (projectDir: string) => registry.getEffectiveModels(projectDir).outer_model;
+  agentBackend = new BackendRouter(
+    { claude: () => new ClaudeBackend(undefined, modelResolver) },
+    (projectDir) => registry.getEffectiveBackend(projectDir, 'outer').backend,
   );
   await agentBackend.initialize();
 
