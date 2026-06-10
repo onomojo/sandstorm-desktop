@@ -252,6 +252,7 @@ export function generateComposeYaml(analysis: ComposeAnalysis): string {
   lines.push('      - GIT_USER_EMAIL');
   lines.push('      - SANDSTORM_PROJECT');
   lines.push('      - SANDSTORM_STACK_ID');
+  lines.push('      - OPENCODE_CONFIG');
   lines.push('    volumes:');
   lines.push('      - ${SANDSTORM_WORKSPACE}:/app');
   lines.push('      - ${SANDSTORM_CONTEXT}:/sandstorm-context:ro');

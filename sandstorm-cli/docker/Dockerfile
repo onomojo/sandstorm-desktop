@@ -57,6 +57,10 @@ RUN useradd -m -s /bin/bash claude && \
 RUN su claude -c "curl -fsSL https://claude.ai/install.sh | bash"
 ENV PATH="/home/claude/.local/bin:$PATH"
 
+# OpenCode CLI (installed as the claude user, pinned to exact version)
+# resolved via 'npm view opencode-ai version' on 2026-06-10; bump deliberately
+RUN su claude -c "npm install -g opencode-ai@1.17.3"
+
 # Pre-install Chrome DevTools MCP server (avoids npx cold-start)
 RUN npm install -g chrome-devtools-mcp@latest
 
@@ -67,6 +71,7 @@ COPY docker/sandstorm-exec /usr/bin/sandstorm-exec
 COPY docker/token-counter.sh /usr/bin/token-counter.sh
 COPY docker/SANDSTORM_INNER.md /usr/bin/SANDSTORM_INNER.md
 COPY docker/review-prompt.md /usr/bin/review-prompt.md
+COPY docker/opencode-config.js /usr/bin/opencode-config.js
 RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh /usr/bin/sandstorm-exec /usr/bin/token-counter.sh
 
 ARG SANDSTORM_APP_VERSION=unknown

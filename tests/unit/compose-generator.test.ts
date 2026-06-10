@@ -264,6 +264,8 @@ describe('compose-generator', () => {
       // Must NOT mount the entire .claude dir — only the projects subpath
       expect(yaml).not.toContain(':/home/claude/.claude\n');
       expect(yaml).not.toContain(':/home/claude/.claude ');
+      // OpenCode config env passthrough (additive; Claude stacks unchanged beyond this line)
+      expect(yaml).toContain('      - OPENCODE_CONFIG');
     });
 
     it('includes network overrides when named networks exist', () => {
