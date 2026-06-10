@@ -52,7 +52,6 @@ import {
   validateComposeYaml,
   hasLegacyPortMappings,
   cleanupLegacyPorts,
-  migrateUsageMount,
 } from './compose-generator';
 import { getDefaultReviewPrompt } from './review-prompt';
 import {
@@ -452,13 +451,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       let networksMigrated = false;
       try {
         networksMigrated = migrateNetworkOverrides(directory);
-      } catch {
-        // Non-critical — don't block migration check
-      }
-
-      // Auto-migrate usage mount so inner-stack transcripts reach the host for telemetry
-      try {
-        migrateUsageMount(directory);
       } catch {
         // Non-critical — don't block migration check
       }
@@ -1580,6 +1572,11 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   ipcMain.handle('pr:draftBody', async (_event, stackId: string) => {
     const stack = await stackManager.getStackWithServices(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
+    const prRouting = registry.getEffectiveRoutingFor(stack.project_dir, 'pr_description');
+    const prModel = prRouting.backend === 'opencode'
+      ? (console.warn('[pr_description] backend=opencode unsupported for host path; falling back to legacy outer model'),
+         registry.getLegacyEffectiveModels(stack.project_dir).outer_model)
+      : prRouting.model;
     return draftPullRequest(
       {
         stackId,
@@ -1588,7 +1585,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       },
       {
         runEphemeral: (prompt, projectDir, timeoutMs) =>
-          agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }),
+          agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }, prModel),
         fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
       },
     );
@@ -1668,6 +1665,11 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
 
     const workspace = workspacePathFor(stack.project_dir, stackId);
+    const prRouting = registry.getEffectiveRoutingFor(stack.project_dir, 'pr_description');
+    const prModel = prRouting.backend === 'opencode'
+      ? (console.warn('[pr_description] backend=opencode unsupported for host path; falling back to legacy outer model'),
+         registry.getLegacyEffectiveModels(stack.project_dir).outer_model)
+      : prRouting.model;
 
     let draft: { title: string; body: string };
     try {
@@ -1675,7 +1677,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         { stackId, workspace, ticket: stack.ticket },
         {
           runEphemeral: (prompt, projectDir, timeoutMs) =>
-            agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }),
+            agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }, prModel),
           fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
         },
       );

@@ -2128,7 +2128,12 @@ export class StackManager {
     ].join('\n');
 
     try {
-      const dispatchResult = await this.dispatchTask(stackId!, resolvePrompt, undefined, {
+      const mcRouting = this.registry.getEffectiveRoutingFor(projectDir, 'merge_conflict');
+      const mcModel = mcRouting.backend === 'opencode'
+        ? (console.warn('[merge_conflict] backend=opencode unsupported for container path; falling back to legacy inner model'),
+           this.registry.getLegacyEffectiveModels(projectDir).inner_model)
+        : mcRouting.model;
+      const dispatchResult = await this.dispatchTask(stackId!, resolvePrompt, mcModel, {
         gateApproved: true,
         skipTicketFetch: true,
       });

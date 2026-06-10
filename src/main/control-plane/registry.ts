@@ -1364,7 +1364,7 @@ export class Registry {
     }
   }
 
-  private getLegacyEffectiveModels(projectDir: string): ModelSettings {
+  getLegacyEffectiveModels(projectDir: string): ModelSettings {
     const global = this.getGlobalModelSettings();
     const project = this.getProjectModelSettings(projectDir);
     if (!project) return global;

@@ -101,8 +101,9 @@ export class FakeAgentBackend implements AgentBackend {
     projectDir: string,
     timeoutMs?: number,
     attribution?: { ticketId?: string; stage?: string },
+    model?: string,
   ): Promise<string> {
-    return this.runEphemeralAgentMock(prompt, projectDir, timeoutMs, attribution);
+    return this.runEphemeralAgentMock(prompt, projectDir, timeoutMs, attribution, model);
   }
 
   spawnEphemeralAgent(
@@ -111,8 +112,9 @@ export class FakeAgentBackend implements AgentBackend {
     timeoutMs?: number,
     onChunk?: (event: EphemeralStreamEvent) => void,
     attribution?: { ticketId?: string; stage?: string },
+    model?: string,
   ): { promise: Promise<string>; cancel: () => void } {
-    return this.spawnEphemeralAgentMock(prompt, projectDir, timeoutMs, onChunk, attribution);
+    return this.spawnEphemeralAgentMock(prompt, projectDir, timeoutMs, onChunk, attribution, model);
   }
 
   spawnEphemeralSession(
