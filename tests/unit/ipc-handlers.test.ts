@@ -85,6 +85,8 @@ const {
     setBackendSecret: vi.fn(),
     hasBackendSecret: vi.fn().mockReturnValue(false),
     getEffectiveRouting: vi.fn().mockReturnValue({}),
+    getEffectiveRoutingFor: vi.fn().mockReturnValue({ backend: 'claude', model: 'haiku' }),
+    getLegacyEffectiveModels: vi.fn().mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' }),
     getProjectRouting: vi.fn().mockReturnValue(null),
     setProjectRouting: vi.fn(),
     removeProjectRouting: vi.fn(),
@@ -141,6 +143,7 @@ const {
     login: vi.fn(),
     syncCredentials: vi.fn(),
     getEphemeralTimingPath: vi.fn().mockReturnValue('/tmp/mock-ephemeral-timing.jsonl'),
+    runEphemeralAgent: vi.fn().mockResolvedValue(''),
   };
 
   const mockDockerConnectionManager = {
@@ -326,6 +329,14 @@ vi.mock('../../src/main/control-plane/ticket-config', () => ({
 
 vi.mock('../../src/main/control-plane/retry-with-backoff', () => ({
   withRetry: vi.fn((fn: () => Promise<unknown>) => fn()),
+}));
+
+const mockDraftPullRequest = vi.fn().mockResolvedValue({ title: 'feat: T-1', body: 'PR body' });
+const mockCreatePullRequest = vi.fn().mockResolvedValue({ url: 'https://gh/pr/1', number: 1 });
+vi.mock('../../src/main/control-plane/pr-creator', () => ({
+  draftPullRequest: (...args: unknown[]) => mockDraftPullRequest(...args),
+  createPullRequest: (...args: unknown[]) => mockCreatePullRequest(...args),
+  workspacePathFor: vi.fn((projectDir: string, stackId: string) => `${projectDir}/.sandstorm/workspaces/${stackId}`),
 }));
 
 vi.mock('../../src/main/claude/tools', () => ({
@@ -2887,6 +2898,116 @@ describe('IPC Handlers', () => {
       const result = await invokeHandler('backendSettings:secretStatus', 'global', 'inner') as Record<string, unknown>;
       expect(Object.keys(result)).toEqual(['set']);
       expect(result['set']).toBe(true);
+    });
+  });
+
+  // =========================================================================
+  // PR description routing
+  // =========================================================================
+  describe('pr_description routing', () => {
+    const STACK = { id: 'stack-1', project_dir: '/proj', ticket: 'T-1', services: [] };
+
+    beforeEach(() => {
+      mockStackManager.getStackWithServices.mockResolvedValue(STACK);
+      mockStackManager.getTaskOutput = vi.fn().mockResolvedValue('');
+      mockDraftPullRequest.mockResolvedValue({ title: 'feat: T-1', body: 'PR body' });
+      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'claude', model: 'haiku' });
+      mockRegistry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
+    });
+
+    it('pr:draftBody forwards resolved pr_description model to runEphemeralAgent', async () => {
+      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'claude', model: 'haiku' });
+      mockAgentBackend.runEphemeralAgent.mockResolvedValue('PR text');
+
+      await invokeHandler('pr:draftBody', 'stack-1');
+
+      const [, deps] = mockDraftPullRequest.mock.calls[0] as [unknown, { runEphemeral: (p: string, d: string, t?: number) => Promise<string> }];
+      await deps.runEphemeral('test prompt', '/proj');
+
+      expect(mockAgentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        'test prompt',
+        '/proj',
+        undefined,
+        expect.objectContaining({ stage: 'pr' }),
+        'haiku',
+      );
+    });
+
+    it('pr:draftBody falls back to legacy outer model and warns when pr_description backend is opencode', async () => {
+      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'opencode', model: 'gpt-4' });
+      mockRegistry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockAgentBackend.runEphemeralAgent.mockResolvedValue('PR text');
+
+      await invokeHandler('pr:draftBody', 'stack-1');
+
+      const [, deps] = mockDraftPullRequest.mock.calls[0] as [unknown, { runEphemeral: (p: string, d: string, t?: number) => Promise<string> }];
+      await deps.runEphemeral('test prompt', '/proj');
+
+      expect(mockAgentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        'test prompt',
+        '/proj',
+        undefined,
+        expect.objectContaining({ stage: 'pr' }),
+        'opus',
+      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
+      warnSpy.mockRestore();
+    });
+
+    it('pr:createAuto forwards resolved pr_description model to runEphemeralAgent', async () => {
+      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'claude', model: 'haiku' });
+      mockAgentBackend.runEphemeralAgent.mockResolvedValue('PR text');
+      mockStackManager.push = vi.fn().mockResolvedValue({ stdout: '', stderr: '' });
+      const { execFile } = await import('child_process');
+      vi.mocked(execFile as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        (_cmd: unknown, _args: unknown, _opts: unknown, cb: (...a: unknown[]) => void) => {
+          cb(null, JSON.stringify({ url: 'https://gh/pr/1', number: 1 }), '');
+          return {} as never;
+        },
+      );
+
+      await invokeHandler('pr:createAuto', 'stack-1');
+
+      const [, deps] = mockDraftPullRequest.mock.calls[0] as [unknown, { runEphemeral: (p: string, d: string, t?: number) => Promise<string> }];
+      await deps.runEphemeral('test prompt', '/proj');
+
+      expect(mockAgentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        'test prompt',
+        '/proj',
+        undefined,
+        expect.objectContaining({ stage: 'pr' }),
+        'haiku',
+      );
+    });
+
+    it('pr:createAuto falls back to legacy outer model and warns when pr_description backend is opencode', async () => {
+      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'opencode', model: 'gpt-4' });
+      mockRegistry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      mockAgentBackend.runEphemeralAgent.mockResolvedValue('PR text');
+      const { execFile } = await import('child_process');
+      vi.mocked(execFile as unknown as ReturnType<typeof vi.fn>).mockImplementation(
+        (_cmd: unknown, _args: unknown, _opts: unknown, cb: (...a: unknown[]) => void) => {
+          cb(null, JSON.stringify({ url: 'https://gh/pr/1', number: 1 }), '');
+          return {} as never;
+        },
+      );
+
+      await invokeHandler('pr:createAuto', 'stack-1');
+
+      const [, deps] = mockDraftPullRequest.mock.calls[0] as [unknown, { runEphemeral: (p: string, d: string, t?: number) => Promise<string> }];
+      await deps.runEphemeral('test prompt', '/proj');
+
+      expect(mockAgentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        'test prompt',
+        '/proj',
+        undefined,
+        expect.objectContaining({ stage: 'pr' }),
+        'opus',
+      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
+      warnSpy.mockRestore();
     });
   });
 });

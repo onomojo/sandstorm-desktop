@@ -67,6 +67,8 @@ function makeRegistry(overrides: Partial<{
   setBoardTicketColumn: () => void;
   listBoardTickets: (dir: string) => unknown[];
   listProjects: () => { directory: string }[];
+  getEffectiveRoutingFor: (dir: string, touchpoint: string) => { backend: string; model: string };
+  getLegacyEffectiveModels: (dir: string) => { inner_model: string; outer_model: string };
 }> = {}) {
   return {
     getDarkFactoryEnabled: vi.fn().mockReturnValue(false),
@@ -75,6 +77,8 @@ function makeRegistry(overrides: Partial<{
     setBoardTicketColumn: vi.fn(),
     listBoardTickets: vi.fn().mockReturnValue([]),
     listProjects: vi.fn().mockReturnValue([]),
+    getEffectiveRoutingFor: vi.fn().mockReturnValue({ backend: 'claude', model: 'sonnet' }),
+    getLegacyEffectiveModels: vi.fn().mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' }),
     ...overrides,
   };
 }
@@ -799,6 +803,8 @@ describe('DarkFactoryOrchestrator', () => {
         expect.stringContaining('resolve'),
         '/proj',
         300_000,
+        undefined,
+        expect.any(String),
       );
       expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', '/proj', 'merged');
     });
@@ -830,6 +836,144 @@ describe('DarkFactoryOrchestrator', () => {
         (c) => c[2] === 'merged',
       );
       expect(mergedCalls).toHaveLength(0);
+    });
+
+    it('passes resolved merge_conflict model to runEphemeralAgent', async () => {
+      registry.getEffectiveRoutingFor.mockReturnValue({ backend: 'claude', model: 'haiku' });
+
+      let viewCallCount = 0;
+      mockExecFile.mockImplementation(
+        (_cmd: unknown, args: string[], _opts: unknown, cb: (...a: unknown[]) => void) => {
+          if ((args as string[]).includes('view')) {
+            viewCallCount++;
+            if (viewCallCount <= 1) {
+              cb(null, JSON.stringify({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }), '');
+            } else {
+              cb(null, JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }), '');
+            }
+          } else {
+            cb(null, '', '');
+          }
+          return {} as never;
+        },
+      );
+
+      orchestrator.handlePrCreated('stack-1', 99);
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(Number),
+        undefined,
+        'haiku',
+      );
+    });
+
+    it('falls back to legacy inner model and warns when merge_conflict backend is opencode', async () => {
+      registry.getEffectiveRoutingFor.mockReturnValue({ backend: 'opencode', model: 'gpt-4' });
+      registry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      let viewCallCount = 0;
+      mockExecFile.mockImplementation(
+        (_cmd: unknown, args: string[], _opts: unknown, cb: (...a: unknown[]) => void) => {
+          if ((args as string[]).includes('view')) {
+            viewCallCount++;
+            if (viewCallCount <= 1) {
+              cb(null, JSON.stringify({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }), '');
+            } else {
+              cb(null, JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }), '');
+            }
+          } else {
+            cb(null, '', '');
+          }
+          return {} as never;
+        },
+      );
+
+      orchestrator.handlePrCreated('stack-1', 99);
+      await new Promise((r) => setTimeout(r, 100));
+
+      expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        expect.any(String),
+        expect.any(String),
+        expect.any(Number),
+        undefined,
+        'sonnet',
+      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
+      warnSpy.mockRestore();
+    });
+  });
+
+  // -------------------------------------------------------------------------
+  // PR description routing
+  // -------------------------------------------------------------------------
+  describe('createPR — pr_description routing', () => {
+    beforeEach(() => {
+      registry.getStack.mockReturnValue({ ticket: 'T-1', project_dir: '/proj' });
+      registry.getDarkFactoryEnabled.mockReturnValue(true);
+      vi.mocked(draftPullRequest).mockResolvedValue({ title: 'feat: T-1', body: 'body' });
+      vi.mocked(createPullRequest).mockResolvedValue({ url: 'https://gh/pr/1', number: 1 });
+      mockExecFile.mockImplementation(
+        (_cmd: unknown, args: string[], _opts: unknown, cb: (...a: unknown[]) => void) => {
+          if ((args as string[]).includes('view')) {
+            cb(null, JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }), '');
+          } else {
+            cb(null, '', '');
+          }
+          return {} as never;
+        },
+      );
+    });
+
+    it('passes resolved pr_description model via runEphemeral closure', async () => {
+      registry.getEffectiveRoutingFor.mockImplementation((_dir: string, touchpoint: string) => {
+        if (touchpoint === 'pr_description') return { backend: 'claude', model: 'haiku' };
+        return { backend: 'claude', model: 'sonnet' };
+      });
+
+      orchestrator.handleTaskCompleted('stack-1', {} as never);
+      await new Promise((r) => setTimeout(r, 50));
+
+      const [, deps] = vi.mocked(draftPullRequest).mock.calls[0] as [unknown, { runEphemeral: (p: string, d: string, t?: number) => Promise<string> }];
+      agentBackend.runEphemeralAgent.mockResolvedValue('draft');
+      await deps.runEphemeral('test prompt', '/proj');
+
+      expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        'test prompt',
+        '/proj',
+        undefined,
+        undefined,
+        'haiku',
+      );
+    });
+
+    it('falls back to legacy outer model and warns when pr_description backend is opencode', async () => {
+      registry.getEffectiveRoutingFor.mockImplementation((_dir: string, touchpoint: string) => {
+        if (touchpoint === 'pr_description') return { backend: 'opencode', model: 'gpt-4' };
+        return { backend: 'claude', model: 'sonnet' };
+      });
+      registry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+
+      orchestrator.handleTaskCompleted('stack-1', {} as never);
+      await new Promise((r) => setTimeout(r, 50));
+
+      const [, deps] = vi.mocked(draftPullRequest).mock.calls[0] as [unknown, { runEphemeral: (p: string, d: string, t?: number) => Promise<string> }];
+      agentBackend.runEphemeralAgent.mockResolvedValue('draft');
+      await deps.runEphemeral('test prompt', '/proj');
+
+      expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
+        'test prompt',
+        '/proj',
+        undefined,
+        undefined,
+        'opus',
+      );
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
+      warnSpy.mockRestore();
     });
   });
 });
