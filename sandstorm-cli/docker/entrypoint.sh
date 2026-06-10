@@ -76,6 +76,10 @@ cat > /tmp/sandstorm-mcp.json << 'MCPEOF'
 }
 MCPEOF
 
+# Write OpenCode config to /tmp/sandstorm-opencode.json (outside workspace, never in git)
+# Always generated; inert for Claude stacks until #477 wires OpenCode dispatch.
+node /usr/bin/opencode-config.js > /tmp/sandstorm-opencode.json
+
 # -------------------------------------------------------------------
 # 3. Set ownership and signal readiness
 # -------------------------------------------------------------------
