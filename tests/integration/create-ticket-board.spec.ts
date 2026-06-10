@@ -193,3 +193,23 @@ test('ticket seeded in backlog does not change column on re-seed (UPSERT preserv
   expect(row.column).toBe('spec_ready');
   expect(row.title).toBe('Updated title');
 });
+
+test('seeded ticket survives immediate deleteClosedEarlyColumnTickets call with empty openIds (create-race regression)', async () => {
+  // Regression for #581: tickets:create seeds the board row, then the
+  // fire-and-forget refreshBoardTickets() call may trigger a sync before
+  // the new issue appears in the provider's API response. The sync must NOT
+  // delete the just-seeded ticket.
+  const result = await app.evaluate(async () => {
+    const { registry } = (globalThis as any).__sandstorm;
+    const dir = '/tmp/integration-test-race';
+    const ticketId = 'RACE-42';
+
+    registry.seedBoardTicket(ticketId, dir, 'Race condition test ticket');
+    const deleted = registry.deleteClosedEarlyColumnTickets(dir, []);
+    const rows = registry.listBoardTickets(dir);
+    return { deleted, ticketIds: rows.map((r: { ticket_id: string }) => r.ticket_id) };
+  });
+
+  expect(result.deleted).toBe(0);
+  expect(result.ticketIds).toContain('RACE-42');
+});

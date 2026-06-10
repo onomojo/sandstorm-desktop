@@ -274,7 +274,8 @@ describe('registry.reconcilePrOpenStuckTickets', () => {
 describe('deleteClosedEarlyColumnTickets', () => {
   it('removes backlog tickets absent from the open-id set', () => {
     registry.seedBoardTicket('open-1', '/proj', 'Open ticket');
-    registry.seedBoardTicket('closed-1', '/proj', 'Closed ticket');
+    // Insert directly so it is not session-protected (simulates a prior-session row)
+    (registry as any).db.prepare('INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)').run('closed-1', '/proj', 'backlog', 'Closed ticket');
     const deleted = registry.deleteClosedEarlyColumnTickets('/proj', ['open-1']);
     const rows = registry.listBoardTickets('/proj');
     expect(deleted).toBe(1);
@@ -283,10 +284,9 @@ describe('deleteClosedEarlyColumnTickets', () => {
   });
 
   it('removes refining and spec_ready tickets absent from the open-id set', () => {
-    registry.seedBoardTicket('r-1', '/proj', 'Refining');
-    registry.setBoardTicketColumn('r-1', '/proj', 'refining');
-    registry.seedBoardTicket('s-1', '/proj', 'Spec ready');
-    registry.setBoardTicketColumn('s-1', '/proj', 'spec_ready');
+    // Insert directly so tickets are not session-protected (simulates prior-session rows)
+    (registry as any).db.prepare('INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)').run('r-1', '/proj', 'refining', 'Refining');
+    (registry as any).db.prepare('INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)').run('s-1', '/proj', 'spec_ready', 'Spec ready');
     const deleted = registry.deleteClosedEarlyColumnTickets('/proj', []);
     expect(deleted).toBe(2);
     expect(registry.listBoardTickets('/proj')).toHaveLength(0);
@@ -303,16 +303,17 @@ describe('deleteClosedEarlyColumnTickets', () => {
   });
 
   it('empty open-id set deletes all early-column rows for the project', () => {
-    registry.seedBoardTicket('a', '/proj', 'A');
-    registry.seedBoardTicket('b', '/proj', 'B');
-    registry.setBoardTicketColumn('b', '/proj', 'refining');
+    // Insert directly so tickets are not session-protected (simulates prior-session rows)
+    (registry as any).db.prepare('INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)').run('a', '/proj', 'backlog', 'A');
+    (registry as any).db.prepare('INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)').run('b', '/proj', 'refining', 'B');
     const deleted = registry.deleteClosedEarlyColumnTickets('/proj', []);
     expect(deleted).toBe(2);
     expect(registry.listBoardTickets('/proj')).toHaveLength(0);
   });
 
   it('is scoped to the given project_dir — does not affect other projects', () => {
-    registry.seedBoardTicket('x', '/alpha', 'Alpha ticket');
+    // Insert 'x' directly so it is not session-protected and can be deleted by cleanup
+    (registry as any).db.prepare('INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)').run('x', '/alpha', 'backlog', 'Alpha ticket');
     registry.seedBoardTicket('y', '/beta', 'Beta ticket');
     const deleted = registry.deleteClosedEarlyColumnTickets('/alpha', []);
     expect(deleted).toBe(1);
@@ -329,8 +330,9 @@ describe('deleteClosedEarlyColumnTickets', () => {
 
   it('returns the correct count matching the number of rows removed', () => {
     registry.seedBoardTicket('t1', '/proj', 'T1');
-    registry.seedBoardTicket('t2', '/proj', 'T2');
-    registry.seedBoardTicket('t3', '/proj', 'T3');
+    // Insert t2 and t3 directly so they are not session-protected and can be deleted
+    (registry as any).db.prepare('INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)').run('t2', '/proj', 'backlog', 'T2');
+    (registry as any).db.prepare('INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)').run('t3', '/proj', 'backlog', 'T3');
     // Only t1 is still open
     const deleted = registry.deleteClosedEarlyColumnTickets('/proj', ['t1']);
     expect(deleted).toBe(2);
@@ -340,7 +342,8 @@ describe('deleteClosedEarlyColumnTickets', () => {
   });
 
   it('a re-seeded ticket after deletion goes back to backlog', () => {
-    registry.seedBoardTicket('reopen-1', '/proj', 'Reopened ticket');
+    // Insert directly so it is not session-protected and can be deleted by cleanup
+    (registry as any).db.prepare('INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)').run('reopen-1', '/proj', 'backlog', 'Reopened ticket');
     // Ticket is closed (not in open set) → deleted
     registry.deleteClosedEarlyColumnTickets('/proj', []);
     expect(registry.listBoardTickets('/proj')).toHaveLength(0);

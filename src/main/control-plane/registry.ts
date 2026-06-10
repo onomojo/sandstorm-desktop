@@ -214,6 +214,7 @@ interface SessionMonitorSettingsRow {
 export class Registry {
   private db: Database.Database;
   private dbPath: string;
+  private sessionProtectedTickets = new Set<string>();
 
   private constructor(db: Database.Database, dbPath: string) {
     this.db = db;
@@ -1546,6 +1547,7 @@ export class Registry {
        VALUES (?, ?, 'backlog', ?)
        ON CONFLICT(ticket_id, project_dir) DO UPDATE SET title = excluded.title`
     ).run(ticketId, normalizedDir, title);
+    this.sessionProtectedTickets.add(`${ticketId}|${normalizedDir}`);
   }
 
   /** Moves a ticket to a new column. Inserts at the target column if the row doesn't exist. */
@@ -1556,6 +1558,7 @@ export class Registry {
        VALUES (?, ?, ?, '')
        ON CONFLICT(ticket_id, project_dir) DO UPDATE SET column = excluded.column, updated_at = datetime('now')`
     ).run(ticketId, normalizedDir, column);
+    this.sessionProtectedTickets.add(`${ticketId}|${normalizedDir}`);
     for (const listener of this._boardTicketMovedListeners) {
       listener(ticketId, normalizedDir, column);
     }
@@ -1628,16 +1631,21 @@ export class Registry {
     );
     const earlyColSql = earlyColumns.map(c => `'${c}'`).join(',');
 
-    if (openTicketIds.length === 0) {
+    const sessionKept = [...this.sessionProtectedTickets]
+      .filter(k => k.endsWith(`|${normalizedDir}`))
+      .map(k => k.split('|')[0]);
+    const effectiveKeepIds = [...new Set([...openTicketIds, ...sessionKept])];
+
+    if (effectiveKeepIds.length === 0) {
       return this.db.prepare(
         `DELETE FROM ticket_board WHERE project_dir = ? AND column IN (${earlyColSql})`
       ).run(normalizedDir).changes;
     }
 
-    const idPlaceholders = openTicketIds.map(() => '?').join(',');
+    const idPlaceholders = effectiveKeepIds.map(() => '?').join(',');
     return this.db.prepare(
       `DELETE FROM ticket_board WHERE project_dir = ? AND column IN (${earlyColSql}) AND ticket_id NOT IN (${idPlaceholders})`
-    ).run(normalizedDir, ...openTicketIds).changes;
+    ).run(normalizedDir, ...effectiveKeepIds).changes;
   }
 
   /** Hard-deletes exactly one ticket_board row. No-op when the row is absent. */
