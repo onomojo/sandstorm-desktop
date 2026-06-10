@@ -50,7 +50,11 @@ test('closed backlog ticket is removed when absent from open-ticket set', async 
     const dir = '/tmp/e2e-sync-cleanup/t1';
 
     registry.seedBoardTicket('OPEN-1', dir, 'Open ticket');
-    registry.seedBoardTicket('CLOSED-1', dir, 'Closed ticket');
+    // Insert CLOSED-1 directly so it is not session-protected (simulates a ticket
+    // that existed in the DB from a prior session, not touched in the current one).
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('CLOSED-1', dir, 'backlog', 'Closed ticket');
 
     const deleted = registry.deleteClosedEarlyColumnTickets(dir, ['OPEN-1']);
     const rows = registry.listBoardTickets(dir);
@@ -67,7 +71,11 @@ test('in_stack ticket is retained even when absent from the open-ticket set', as
     const dir = '/tmp/e2e-sync-cleanup/t2';
 
     registry.setBoardTicketColumn('STARTED-1', dir, 'in_stack');
-    registry.seedBoardTicket('BACKLOG-1', dir, 'Backlog ticket');
+    // Insert BACKLOG-1 directly so it is not session-protected — it should be
+    // cleaned up by the sync since it is absent from the open-ticket list.
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('BACKLOG-1', dir, 'backlog', 'Backlog ticket');
 
     // Sync returns empty — STARTED-1 is absent from fetch but must survive
     const deleted = registry.deleteClosedEarlyColumnTickets(dir, []);
@@ -88,11 +96,17 @@ test('empty successful fetch deletes all early-column rows for the project', asy
     const { registry } = (globalThis as any).__sandstorm;
     const dir = '/tmp/e2e-sync-cleanup/t3';
 
-    registry.seedBoardTicket('A', dir, 'A');
-    registry.seedBoardTicket('B', dir, 'B');
-    registry.setBoardTicketColumn('B', dir, 'refining');
-    registry.seedBoardTicket('C', dir, 'C');
-    registry.setBoardTicketColumn('C', dir, 'spec_ready');
+    // Insert all three tickets directly (no session protection) to simulate rows
+    // that came from a prior session and have no in-session protection.
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('A', dir, 'backlog', 'A');
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('B', dir, 'refining', 'B');
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('C', dir, 'spec_ready', 'C');
 
     const deleted = registry.deleteClosedEarlyColumnTickets(dir, []);
     return { deleted, remaining: registry.listBoardTickets(dir).length };
@@ -107,11 +121,19 @@ test('deleteClosedEarlyColumnTickets returns the correct deleted count (Q7 log v
     const { registry } = (globalThis as any).__sandstorm;
     const dir = '/tmp/e2e-sync-cleanup/t4';
 
+    // K1 and K2 are in the provider's open-ticket list — seed via API (session-protected).
     registry.seedBoardTicket('K1', dir, 'Keep 1');
     registry.seedBoardTicket('K2', dir, 'Keep 2');
-    registry.seedBoardTicket('D1', dir, 'Delete 1');
-    registry.seedBoardTicket('D2', dir, 'Delete 2');
-    registry.seedBoardTicket('D3', dir, 'Delete 3');
+    // D1–D3 are NOT in the open-ticket list and not session-protected — insert directly.
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('D1', dir, 'backlog', 'Delete 1');
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('D2', dir, 'backlog', 'Delete 2');
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('D3', dir, 'backlog', 'Delete 3');
 
     const deleted = registry.deleteClosedEarlyColumnTickets(dir, ['K1', 'K2']);
     const remaining = registry.listBoardTickets(dir).length;
@@ -127,7 +149,10 @@ test('re-seeding a deleted ticket puts it back in backlog', async () => {
     const { registry } = (globalThis as any).__sandstorm;
     const dir = '/tmp/e2e-sync-cleanup/t5';
 
-    registry.seedBoardTicket('REOPEN-1', dir, 'Will be deleted');
+    // Insert directly (not session-protected) to simulate a row from a prior session.
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('REOPEN-1', dir, 'backlog', 'Will be deleted');
     registry.deleteClosedEarlyColumnTickets(dir, []);
 
     // Ticket is "reopened" — re-appears in next sync and is re-seeded
@@ -146,7 +171,10 @@ test('cleanup is scoped to project_dir — sibling projects are unaffected', asy
     const dirA = '/tmp/e2e-sync-cleanup/t6-alpha';
     const dirB = '/tmp/e2e-sync-cleanup/t6-beta';
 
-    registry.seedBoardTicket('ALPHA-1', dirA, 'Alpha ticket');
+    // Insert ALPHA-1 directly (not session-protected) so the sync can delete it.
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('ALPHA-1', dirA, 'backlog', 'Alpha ticket');
     registry.seedBoardTicket('BETA-1', dirB, 'Beta ticket');
 
     const deleted = registry.deleteClosedEarlyColumnTickets(dirA, []);
@@ -173,9 +201,12 @@ test('tickets:list handler: ok:true fetch seeds, cleans up, and logs deletion co
     const { registry } = (globalThis as any).__sandstorm;
     const dir = '/tmp/e2e-sync-cleanup/t7';
 
-    // Seed two tickets as if from a previous sync
+    // IPC-OPEN is already in the provider's open list — seed via API (session-protected).
     registry.seedBoardTicket('IPC-OPEN', dir, 'Still open');
-    registry.seedBoardTicket('IPC-CLOSED', dir, 'Now closed');
+    // IPC-CLOSED is not in the open list and not session-protected — insert directly.
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('IPC-CLOSED', dir, 'backlog', 'Now closed');
 
     // Capture console.log output
     const logs: string[] = [];
@@ -246,4 +277,106 @@ test('tickets:list handler: ok:false fetch leaves all rows intact and emits no l
   expect(result.ticketIds).toContain('PRESERVE-1');
   expect(result.ticketIds).toContain('PRESERVE-2');
   expect(result.deletionLogs).toHaveLength(0);
+});
+
+// ---------------------------------------------------------------------------
+// Session-protection regression tests (#581)
+// ---------------------------------------------------------------------------
+
+test('session-protected ticket survives sync with empty openIds (create-then-sync race)', async () => {
+  const result = await app.evaluate(async () => {
+    const { registry } = (globalThis as any).__sandstorm;
+    const dir = '/tmp/e2e-sync-cleanup/t9';
+
+    registry.seedBoardTicket('RACE-1', dir, 'Just created');
+    const deleted = registry.deleteClosedEarlyColumnTickets(dir, []);
+    const rows = registry.listBoardTickets(dir);
+    return { deleted, ticketIds: rows.map((r: { ticket_id: string }) => r.ticket_id) };
+  });
+
+  expect(result.deleted).toBe(0);
+  expect(result.ticketIds).toContain('RACE-1');
+});
+
+test('ticket moved refining → backlog survives subsequent sync', async () => {
+  const result = await app.evaluate(async () => {
+    const { registry } = (globalThis as any).__sandstorm;
+    const dir = '/tmp/e2e-sync-cleanup/t10';
+
+    registry.seedBoardTicket('MOVED-1', dir, 'Will be moved');
+    registry.setBoardTicketColumn('MOVED-1', dir, 'refining');
+    registry.setBoardTicketColumn('MOVED-1', dir, 'backlog');
+    const deleted = registry.deleteClosedEarlyColumnTickets(dir, []);
+    const rows = registry.listBoardTickets(dir);
+    const ticket = rows.find((r: { ticket_id: string }) => r.ticket_id === 'MOVED-1') as { column: string } | undefined;
+    return { deleted, column: ticket?.column };
+  });
+
+  expect(result.deleted).toBe(0);
+  expect(result.column).toBe('backlog');
+});
+
+test('session protection is scoped per project — unprotected tickets in another project are still deleted', async () => {
+  const result = await app.evaluate(async () => {
+    const { registry } = (globalThis as any).__sandstorm;
+    const dirA = '/tmp/e2e-sync-cleanup/t11-a';
+    const dirB = '/tmp/e2e-sync-cleanup/t11-b';
+
+    registry.seedBoardTicket('PROTECTED-A', dirA, 'Protected in A');
+    // Insert UNPROTECTED-B directly so it has no session protection.
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('UNPROTECTED-B', dirB, 'backlog', 'Unprotected in B');
+
+    const deletedA = registry.deleteClosedEarlyColumnTickets(dirA, []);
+    const deletedB = registry.deleteClosedEarlyColumnTickets(dirB, []);
+
+    return {
+      deletedA,
+      deletedB,
+      remainingA: registry.listBoardTickets(dirA).length,
+      remainingB: registry.listBoardTickets(dirB).length,
+    };
+  });
+
+  expect(result.deletedA).toBe(0);
+  expect(result.deletedB).toBe(1);
+  expect(result.remainingA).toBe(1);
+  expect(result.remainingB).toBe(0);
+});
+
+test('non-protected early-column ticket is still deleted while session-protected one survives', async () => {
+  const result = await app.evaluate(async () => {
+    const { registry } = (globalThis as any).__sandstorm;
+    const dir = '/tmp/e2e-sync-cleanup/t12';
+
+    registry.seedBoardTicket('PROT-1', dir, 'Protected');
+    registry.db.prepare(
+      'INSERT INTO ticket_board (ticket_id, project_dir, column, title) VALUES (?, ?, ?, ?)'
+    ).run('UNPROT-1', dir, 'backlog', 'Unprotected');
+
+    const deleted = registry.deleteClosedEarlyColumnTickets(dir, []);
+    const rows = registry.listBoardTickets(dir);
+    return { deleted, ticketIds: rows.map((r: { ticket_id: string }) => r.ticket_id) };
+  });
+
+  expect(result.deleted).toBe(1);
+  expect(result.ticketIds).toEqual(['PROT-1']);
+});
+
+test('empty openIds with all tickets session-protected deletes nothing (fast-path regression)', async () => {
+  const result = await app.evaluate(async () => {
+    const { registry } = (globalThis as any).__sandstorm;
+    const dir = '/tmp/e2e-sync-cleanup/t13';
+
+    registry.seedBoardTicket('PROT-X', dir, 'Protected X');
+    registry.seedBoardTicket('PROT-Y', dir, 'Protected Y');
+
+    const deleted = registry.deleteClosedEarlyColumnTickets(dir, []);
+    const rows = registry.listBoardTickets(dir);
+    return { deleted, count: rows.length };
+  });
+
+  expect(result.deleted).toBe(0);
+  expect(result.count).toBe(2);
 });
