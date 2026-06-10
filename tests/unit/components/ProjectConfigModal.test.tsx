@@ -8,8 +8,8 @@ import { render, screen, fireEvent, cleanup } from '@testing-library/react';
 afterEach(cleanup);
 
 import { ProjectConfigModal } from '../../../src/renderer/components/ProjectConfigModal';
-import { configPanes } from '../../../src/renderer/components/config/panes';
-import { ConfigPane } from '../../../src/renderer/components/config/types';
+import { buildConfigPanes } from '../../../src/renderer/components/config/panes';
+import { ConfigPane, ConfigPaneContext } from '../../../src/renderer/components/config/types';
 
 function makePane(id: string, label: string, disabled?: boolean): ConfigPane {
   return {
@@ -160,10 +160,30 @@ describe('ProjectConfigModal', () => {
   });
 });
 
-describe('configPanes registry', () => {
-  it('exports exactly four panes in order: models, providers, automation, ticketing', () => {
-    expect(configPanes).toHaveLength(4);
-    expect(configPanes.map((p) => p.id)).toEqual([
+describe('buildConfigPanes registry', () => {
+  function makeCtx(): ConfigPaneContext {
+    return {
+      projectDir: '/test/project',
+      routing: {
+        getEffective: vi.fn().mockResolvedValue({}),
+        getProject: vi.fn().mockResolvedValue(null),
+        setProject: vi.fn().mockResolvedValue(undefined),
+        removeProject: vi.fn().mockResolvedValue(undefined),
+        getGlobal: vi.fn().mockResolvedValue({ assignments: {}, preset: null }),
+        setGlobal: vi.fn().mockResolvedValue(undefined),
+        applyPreset: vi.fn().mockResolvedValue(undefined),
+        getAvailableModels: vi.fn().mockResolvedValue([]),
+      },
+      onDirtyChange: vi.fn(),
+      registerSave: vi.fn(),
+    };
+  }
+
+  it('returns exactly four panes in order: models, providers, automation, ticketing', async () => {
+    const ctx = makeCtx();
+    const panes = await buildConfigPanes(ctx);
+    expect(panes).toHaveLength(4);
+    expect(panes.map((p) => p.id)).toEqual([
       'models',
       'providers',
       'automation',
@@ -171,13 +191,24 @@ describe('configPanes registry', () => {
     ]);
   });
 
-  it('shell renders with configPanes registry without crashing', () => {
+  it('models pane renders the ModelsPane body component', async () => {
+    const ctx = makeCtx();
+    const panes = await buildConfigPanes(ctx);
+    const modelsPane = panes.find((p) => p.id === 'models')!;
+    expect(modelsPane).toBeDefined();
+    render(<>{modelsPane.render()}</>);
+    expect(screen.getByTestId('models-pane')).toBeDefined();
+  });
+
+  it('shell renders with buildConfigPanes registry without crashing', async () => {
+    const ctx = makeCtx();
+    const panes = await buildConfigPanes(ctx);
     expect(() =>
       render(
         <ProjectConfigModal
           open={true}
           title="Config"
-          panes={configPanes}
+          panes={panes}
           onClose={vi.fn()}
           onSave={vi.fn()}
         />
