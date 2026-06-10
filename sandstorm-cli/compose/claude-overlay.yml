@@ -1,0 +1,31 @@
+# Sandstorm claude-service overlay — injected by stack.sh as the LAST -f file
+# on every docker compose invocation. App-owned: ships with the CLI bundle, so
+# every stack always runs the current app version's claude service definition,
+# regardless of how old the project's .sandstorm/docker-compose.yml is.
+#
+# Do not run standalone. Do not copy into project directories.
+services:
+  claude:
+    image: sandstorm-${SANDSTORM_PROJECT_NAME:?set by stack.sh run_compose}-claude
+    build:
+      context: ${SANDSTORM_DIR}
+      dockerfile: docker/Dockerfile
+      args:
+        SANDSTORM_APP_VERSION: ${SANDSTORM_APP_VERSION:-unknown}
+    environment:
+      - GIT_USER_NAME
+      - GIT_USER_EMAIL
+      - SANDSTORM_PROJECT
+      - SANDSTORM_STACK_ID
+    volumes:
+      - ${SANDSTORM_WORKSPACE}:/app
+      - ${SANDSTORM_CONTEXT}:/sandstorm-context:ro
+      - ${SANDSTORM_USAGE_DIR}/${SANDSTORM_STACK_ID}:/home/claude/.claude/projects
+      - /var/run/docker.sock:/var/run/docker.sock
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/.sandstorm-ready"]
+      interval: 3s
+      timeout: 2s
+      retries: 60
+    tty: true
+    stdin_open: true

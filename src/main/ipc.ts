@@ -52,7 +52,6 @@ import {
   validateComposeYaml,
   hasLegacyPortMappings,
   cleanupLegacyPorts,
-  migrateUsageMount,
 } from './compose-generator';
 import { getDefaultReviewPrompt } from './review-prompt';
 import {
@@ -452,13 +451,6 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       let networksMigrated = false;
       try {
         networksMigrated = migrateNetworkOverrides(directory);
-      } catch {
-        // Non-critical — don't block migration check
-      }
-
-      // Auto-migrate usage mount so inner-stack transcripts reach the host for telemetry
-      try {
-        migrateUsageMount(directory);
       } catch {
         // Non-critical — don't block migration check
       }

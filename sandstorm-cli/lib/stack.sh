@@ -164,6 +164,7 @@ COMPOSE_PROJECT="sandstorm-${PROJECT_NAME}-${STACK_ID}"
 CONTAINER_NAME="${COMPOSE_PROJECT}-claude-1"
 
 SANDSTORM_COMPOSE="$PROJECT_ROOT/.sandstorm/docker-compose.yml"
+CLAUDE_OVERLAY="$SANDSTORM_DIR/compose/claude-overlay.yml"
 PROJECT_COMPOSE_FILE="${COMPOSE_FILE:-docker-compose.yml}"
 
 # Workspace directory — the cloned repo for this stack
@@ -226,11 +227,13 @@ run_compose() {
   SANDSTORM_USAGE_DIR="$usage_dir" \
   SANDSTORM_PROJECT="$COMPOSE_PROJECT" \
   SANDSTORM_STACK_ID="$STACK_ID" \
+  SANDSTORM_PROJECT_NAME="$PROJECT_NAME" \
   GIT_USER_NAME="$GIT_AUTHOR_NAME" \
   GIT_USER_EMAIL="$GIT_AUTHOR_EMAIL" \
   docker compose \
     -f "$WORKSPACE_COMPOSE" \
     -f "$SANDSTORM_COMPOSE" \
+    -f "$CLAUDE_OVERLAY" \
     -p "$COMPOSE_PROJECT" \
     "$@"
 }
