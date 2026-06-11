@@ -1487,6 +1487,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     // Fetch from the project's configured ticket provider (built-in, no per-project
     // script). When no provider is configured, skip and return existing board rows.
     let listError: TicketListError | null = null;
+    let fetchedIds: string[] | null = null;
     const config = registry.getProjectTicketConfig(normalizedDir);
     if (config) {
       try {
@@ -1495,8 +1496,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
           for (const ticket of result.tickets) {
             registry.seedBoardTicket(ticket.id, normalizedDir, ticket.title);
           }
-          const openIds = result.tickets.map(t => t.id);
-          const deletedCount = registry.deleteClosedEarlyColumnTickets(normalizedDir, openIds);
+          fetchedIds = result.tickets.map(t => t.id);
+          const deletedCount = registry.deleteClosedEarlyColumnTickets(normalizedDir, fetchedIds);
           if (deletedCount > 0) {
             console.log(`[tickets:list] Removed ${deletedCount} closed early-column ticket(s) from board for project: ${normalizedDir}`);
           }
@@ -1509,7 +1510,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       }
     }
 
-    return { tickets: registry.listBoardTickets(normalizedDir), error: listError };
+    const tickets = fetchedIds !== null
+      ? registry.listBoardTicketsInOrder(normalizedDir, fetchedIds)
+      : registry.listBoardTickets(normalizedDir);
+    return { tickets, error: listError };
   });
 
   ipcMain.handle('tickets:testJiraConnection', async (_event, params: {
