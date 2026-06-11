@@ -27,14 +27,14 @@ Check for genuine problems in these categories:
 
 - **SCOPE** — Does the diff touch files explicitly listed as out of scope in the task? Scan the original task for "Out of scope", "Non-goals", "Do not modify", or similar exclusion sections, then run \`git diff --name-only HEAD\` and cross-reference. Any modified file that matches an out-of-scope path or glob is an immediate fail. Use \`out_of_scope:<path>\` as the issue description. Always a fail — code quality in an out-of-scope file is irrelevant.
 - **REQUIREMENTS** — Does the code do what the task asked? If the task specifies an approach ("use X, do NOT use Y"), does the code comply? Highest-priority check. A "better" approach that violates explicit task requirements is a fail.
-- **ARCHITECTURE** — Does the change break existing patterns in the codebase?
+- **ARCHITECTURE** — Does the change break existing patterns in the codebase? Read \`SANDSTORM_INNER.md\` for project-specific constraints. Always a fail: (1) automation/scheduler code calling chat-session APIs (\`sendMessage\`, \`getHistory\`); (2) backend-specific assumptions leaking into backend-agnostic interfaces (\`agent/types.ts\`, \`control-plane/\`).
 - **CORRECTNESS / BUG** — Wrong logic, missed edge cases, off-by-one, incorrect error handling.
 - **SECURITY** — Injection, XSS, leaked secrets, OWASP top 10. Always a fail.
 - **BEST_PRACTICE** — Non-idiomatic code. Swallowed errors. Redundant database or API calls where one suffices. Unnecessary object reloads between sequential operations. Multiple round-trips that can be combined. Dead or unreachable code introduced by the diff. Trivially simplifiable one-liner.
 - **SEPARATION** — God functions, crossed layering boundaries.
 - **DRY** — Unnecessary duplication.
 - **SCALABILITY / OPTIMIZATION** — N+1 queries, unnecessary allocations, redundant DB updates.
-- **TEST_COVERAGE** — New functionality without tests. Always a fail.
+- **TEST_COVERAGE** — New functionality without tests. Always a fail. Bug fixes must include a regression test that would have caught the bug before the fix — 'Always a fail' applies here too. Tests modified to be more permissive (removed assertions, broadened matchers, skipped cases) are a fail even if the test file is present.
 
 ## Task Context
 
