@@ -81,6 +81,16 @@ describe('buildSpecCheckPrompt', () => {
     expect(prompt).toContain('Self-resolvable');
   });
 
+  it('uses imperative assumption-checking wording', () => {
+    const prompt = buildSpecCheckPrompt(GATE, TICKET);
+    expect(prompt).toContain('Use Read/Grep/Glob now');
+  });
+
+  it('does not contain old passive assumption-checking wording', () => {
+    const prompt = buildSpecCheckPrompt(GATE, TICKET);
+    expect(prompt).not.toContain('state what you would check and whether the assumption appears correct or incorrect based on the information available');
+  });
+
   it('requests a structured report with pass/fail verdict', () => {
     const prompt = buildSpecCheckPrompt(GATE, TICKET);
     expect(prompt).toContain('## Spec Quality Gate: [PASS or FAIL]');
@@ -112,6 +122,16 @@ describe('buildSpecRefineInitialPrompt', () => {
     const prompt = buildSpecRefineInitialPrompt(GATE, TICKET);
     expect(prompt).toContain('Assumption Resolution');
     expect(prompt).toContain('Self-resolvable');
+  });
+
+  it('uses imperative assumption-checking wording', () => {
+    const prompt = buildSpecRefineInitialPrompt(GATE, TICKET);
+    expect(prompt).toContain('Use Read/Grep/Glob now');
+  });
+
+  it('does not contain old passive assumption-checking wording', () => {
+    const prompt = buildSpecRefineInitialPrompt(GATE, TICKET);
+    expect(prompt).not.toContain("State what you'd verify and whether it appears correct or incorrect.");
   });
 });
 

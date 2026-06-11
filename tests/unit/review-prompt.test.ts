@@ -93,6 +93,21 @@ describe('getDefaultReviewPrompt', () => {
     expect(content).toContain('Dead or unreachable code');
   });
 
+  it('TEST_COVERAGE includes regression test requirement for bug fixes', () => {
+    const content = getDefaultReviewPrompt();
+    expect(content).toMatch(/Bug fixes|regression test/);
+  });
+
+  it('TEST_COVERAGE covers weakened or skipped tests', () => {
+    const content = getDefaultReviewPrompt();
+    expect(content).toMatch(/weakened|more permissive/);
+  });
+
+  it('ARCHITECTURE references SANDSTORM_INNER.md', () => {
+    const content = getDefaultReviewPrompt();
+    expect(content).toContain('SANDSTORM_INNER.md');
+  });
+
   it('matches the container-side template byte-for-byte (#291)', () => {
     // Both files seed the review prompt. The .md gets baked into
     // /usr/bin/review-prompt.md in the container image; this .ts

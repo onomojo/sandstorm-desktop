@@ -55,6 +55,7 @@ If it changes existing behavior, how do existing users/projects transition?
 ### Edge Cases
 Are known edge cases called out?
 - List scenarios that could break or behave unexpectedly.
+- **Idempotency**: What happens if the operation runs twice? Address the scenario even if the answer is "second run is a no-op by design."
 
 ### Ambiguity Check
 Are there decision points where the agent would have to guess?
@@ -93,6 +94,12 @@ If the ticket is part of a larger epic or multi-ticket effort:
 - If it cannot point to an acceptance behavior it serves, either the epic's acceptance definition is incomplete or the ticket is scope creep — resolve before dispatch.
 - This is the per-ticket coverage check only. It does NOT require end-to-end or visual verification, and it does NOT replace a whole-epic acceptance review (a green ticket is progress, not proof the whole behavior works assembled).
 - Skip this criterion for standalone tickets with no parent epic.
+
+### Intent Congruence
+Does the proposed approach actually achieve the ticket's stated goal?
+- A ticket can be complete and unambiguous but still describe an approach that undercuts its intent. Evaluate alignment between the *what* (proposed solution) and the *why* (stated goal).
+- If the ticket has no explicit stated goal, derive intent from the problem statement. If intent is ambiguous, it's an Ambiguity Check fail, not an Intent Congruence fail.
+- A proposed solution that resolves the stated problem in a way that undercuts the underlying intent is a fail (e.g., a performance fix that achieves its metric by disabling the feature; a security patch that resolves the finding by removing the protected functionality).
 
 ### All Verification Must Be Automatable
 Every verification item must be executable autonomously with no human involvement:
