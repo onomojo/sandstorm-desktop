@@ -480,6 +480,64 @@ describe('StackManager', () => {
         ['task', 'no-model', '--model', 'sonnet', 'Simple task']
       );
     });
+
+    it('passes --backend opencode and --backend-model when inner backend is opencode with provider+model', async () => {
+      registry.createStack(makeStack('oc-backend'));
+      vi.spyOn(registry, 'getEffectiveBackend').mockReturnValue({
+        backend: 'opencode',
+        provider: 'anthropic',
+        model: 'claude-sonnet-4-6',
+      });
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await manager.dispatchTask('oc-backend', 'Do the work', 'sonnet');
+
+      expect(runCliSpy).toHaveBeenCalledWith(
+        '/proj',
+        ['task', 'oc-backend', '--model', 'sonnet', '--backend', 'opencode', '--backend-model', 'anthropic/claude-sonnet-4-6', 'Do the work']
+      );
+    });
+
+    it('passes --backend opencode without --backend-model when provider/model absent', async () => {
+      registry.createStack(makeStack('oc-no-model'));
+      vi.spyOn(registry, 'getEffectiveBackend').mockReturnValue({
+        backend: 'opencode',
+      });
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await manager.dispatchTask('oc-no-model', 'Do work', 'sonnet');
+
+      const callArgs = runCliSpy.mock.calls[0][1] as string[];
+      expect(callArgs).toContain('--backend');
+      expect(callArgs).toContain('opencode');
+      expect(callArgs).not.toContain('--backend-model');
+    });
+
+    it('does NOT pass --backend when inner backend is claude (default)', async () => {
+      registry.createStack(makeStack('claude-backend'));
+      vi.spyOn(registry, 'getEffectiveBackend').mockReturnValue({
+        backend: 'claude',
+      });
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await manager.dispatchTask('claude-backend', 'Fix bug', 'sonnet');
+
+      const callArgs = runCliSpy.mock.calls[0][1] as string[];
+      expect(callArgs).not.toContain('--backend');
+      expect(callArgs).not.toContain('--backend-model');
+    });
   });
 
   describe('dispatchTask env-friction fixes (spec-gate resume exemption + container auto-start)', () => {

@@ -69,10 +69,12 @@ COPY docker/entrypoint.sh /usr/bin/sandstorm-entrypoint.sh
 COPY docker/task-runner.sh /usr/bin/sandstorm-task-runner.sh
 COPY docker/sandstorm-exec /usr/bin/sandstorm-exec
 COPY docker/token-counter.sh /usr/bin/token-counter.sh
+COPY docker/opencode-token-counter.sh /usr/bin/opencode-token-counter.sh
+COPY docker/opencode-ndjson-parser.sh /usr/bin/opencode-ndjson-parser.sh
 COPY docker/SANDSTORM_INNER.md /usr/bin/SANDSTORM_INNER.md
 COPY docker/review-prompt.md /usr/bin/review-prompt.md
 COPY docker/opencode-config.js /usr/bin/opencode-config.js
-RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh /usr/bin/sandstorm-exec /usr/bin/token-counter.sh
+RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh /usr/bin/sandstorm-exec /usr/bin/token-counter.sh /usr/bin/opencode-token-counter.sh /usr/bin/opencode-ndjson-parser.sh
 
 ARG SANDSTORM_APP_VERSION=unknown
 LABEL sandstorm.app-version=${SANDSTORM_APP_VERSION}
