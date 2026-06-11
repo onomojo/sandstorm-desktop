@@ -67,12 +67,13 @@ RUN npm install -g chrome-devtools-mcp@latest
 # Entrypoint, task runner, helper scripts, and inner Claude instructions
 COPY docker/entrypoint.sh /usr/bin/sandstorm-entrypoint.sh
 COPY docker/task-runner.sh /usr/bin/sandstorm-task-runner.sh
+COPY docker/phase-model-helper.sh /usr/bin/phase-model-helper.sh
 COPY docker/sandstorm-exec /usr/bin/sandstorm-exec
 COPY docker/token-counter.sh /usr/bin/token-counter.sh
 COPY docker/SANDSTORM_INNER.md /usr/bin/SANDSTORM_INNER.md
 COPY docker/review-prompt.md /usr/bin/review-prompt.md
 COPY docker/opencode-config.js /usr/bin/opencode-config.js
-RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh /usr/bin/sandstorm-exec /usr/bin/token-counter.sh
+RUN chmod +x /usr/bin/sandstorm-entrypoint.sh /usr/bin/sandstorm-task-runner.sh /usr/bin/phase-model-helper.sh /usr/bin/sandstorm-exec /usr/bin/token-counter.sh
 
 ARG SANDSTORM_APP_VERSION=unknown
 LABEL sandstorm.app-version=${SANDSTORM_APP_VERSION}
