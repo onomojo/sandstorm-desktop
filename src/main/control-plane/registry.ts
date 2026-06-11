@@ -1618,6 +1618,29 @@ export class Registry {
   }
 
   /**
+   * Returns ticket_board rows for a project ordered by provider fetch position.
+   * Rows present in orderedIds appear first, in that order.
+   * Rows absent from the fetch (closed/filtered-out) are appended after, ordered by created_at ASC.
+   */
+  listBoardTicketsInOrder(
+    projectDir: string,
+    orderedIds: string[],
+  ): { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[] {
+    const allRows = this.listBoardTickets(projectDir);
+    const rowMap = new Map(allRows.map(r => [r.ticket_id, r]));
+    const fetchedSet = new Set(orderedIds);
+    const result: typeof allRows = [];
+    for (const id of orderedIds) {
+      const row = rowMap.get(id);
+      if (row) result.push(row);
+    }
+    for (const row of allRows) {
+      if (!fetchedSet.has(row.ticket_id)) result.push(row);
+    }
+    return result;
+  }
+
+  /**
    * Hard-deletes board tickets in early columns (backlog, refining, spec_ready) whose ticket_id
    * is not in openTicketIds. Called after a successful provider sync to remove closed tickets.
    * Tickets in started columns (in_stack, pr_open, merged) are never touched.

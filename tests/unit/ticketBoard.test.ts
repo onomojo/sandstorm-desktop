@@ -122,6 +122,59 @@ describe('listBoardTickets', () => {
   });
 });
 
+describe('listBoardTicketsInOrder', () => {
+  it('returns tickets in the order of the provided ids', () => {
+    // Seed A, B, C in that created_at order
+    registry.seedBoardTicket('A', '/proj', 'Alpha');
+    registry.seedBoardTicket('B', '/proj', 'Beta');
+    registry.seedBoardTicket('C', '/proj', 'Gamma');
+
+    // Provider returns them in C, A, B order
+    const rows = registry.listBoardTicketsInOrder('/proj', ['C', 'A', 'B']);
+    expect(rows.map(r => r.ticket_id)).toEqual(['C', 'A', 'B']);
+  });
+
+  it('appends board rows absent from the fetch after fetched rows, in created_at ASC order', () => {
+    registry.seedBoardTicket('A', '/proj', 'Alpha');
+    registry.seedBoardTicket('B', '/proj', 'Beta');
+    registry.seedBoardTicket('C', '/proj', 'Gamma');
+
+    // Provider only returns B — A and C are closed/filtered out
+    const rows = registry.listBoardTicketsInOrder('/proj', ['B']);
+    expect(rows.map(r => r.ticket_id)).toEqual(['B', 'A', 'C']);
+  });
+
+  it('preserves the column of a ticket moved to a non-backlog column', () => {
+    registry.seedBoardTicket('T-1', '/proj', 'In-progress');
+    registry.setBoardTicketColumn('T-1', '/proj', 'in_stack');
+    registry.seedBoardTicket('T-2', '/proj', 'Backlog ticket');
+
+    const rows = registry.listBoardTicketsInOrder('/proj', ['T-2', 'T-1']);
+    expect(rows.find(r => r.ticket_id === 'T-1')?.column).toBe('in_stack');
+    expect(rows.find(r => r.ticket_id === 'T-2')?.column).toBe('backlog');
+  });
+
+  it('returns empty array when no tickets exist', () => {
+    const rows = registry.listBoardTicketsInOrder('/proj', ['X', 'Y']);
+    expect(rows).toEqual([]);
+  });
+
+  it('returns all board rows in created_at ASC when orderedIds is empty', () => {
+    registry.seedBoardTicket('A', '/proj', 'Alpha');
+    registry.seedBoardTicket('B', '/proj', 'Beta');
+
+    const rows = registry.listBoardTicketsInOrder('/proj', []);
+    expect(rows.map(r => r.ticket_id)).toEqual(['A', 'B']);
+  });
+
+  it('ignores ids in orderedIds that have no board row', () => {
+    registry.seedBoardTicket('A', '/proj', 'Alpha');
+
+    const rows = registry.listBoardTicketsInOrder('/proj', ['GHOST', 'A']);
+    expect(rows.map(r => r.ticket_id)).toEqual(['A']);
+  });
+});
+
 // --- tickets:create board-seeding simulation ---
 // Simulates the main-process behavior added in #385: after tickets:create
 // resolves, the handler calls registry.seedBoardTicket so the card appears

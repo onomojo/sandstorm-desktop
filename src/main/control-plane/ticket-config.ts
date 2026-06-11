@@ -130,10 +130,21 @@ function jiraLabelClause(label: string): string {
 function buildJiraFilterJql(config: FilterConfig & { jira_project_key?: string | null }): string {
   const mode = config.filter_mode ?? 'assisted';
   let jql: string;
+  let trailingOrderBy: string | null = null;
   if (mode === 'advanced' && config.filter_query?.trim()) {
-    // The user's query is wrapped in parens so the AND project clause applies to the whole expression.
-    // Limitation: a query with unmatched/leading-close parens (e.g. "a) OR (b") will break JQL precedence.
-    jql = `(${config.filter_query.trim()})`;
+    const raw = config.filter_query.trim();
+    // JQL requires ORDER BY to be last. If the user's advanced query ends with ORDER BY ...,
+    // extract it so any appended "AND project = ..." clause is placed before it.
+    // The greedy [\s\S]* matches as much as possible, finding the LAST ORDER BY occurrence.
+    const orderByMatch = raw.match(/^([\s\S]*\S)\s+\b(ORDER\s+BY\b[\s\S]*)$/i);
+    if (orderByMatch) {
+      jql = `(${orderByMatch[1].trim()})`;
+      trailingOrderBy = orderByMatch[2];
+    } else {
+      // The user's query is wrapped in parens so the AND project clause applies to the whole expression.
+      // Limitation: a query with unmatched/leading-close parens (e.g. "a) OR (b") will break JQL precedence.
+      jql = `(${raw})`;
+    }
   } else {
     const parts: string[] = [];
     parts.push((config.filter_ownership ?? 'created') === 'assigned'
@@ -145,6 +156,9 @@ function buildJiraFilterJql(config: FilterConfig & { jira_project_key?: string |
   if (config.jira_project_key?.trim()) {
     const key = config.jira_project_key.trim().replace(/"/g, '\\"');
     jql += ` AND project = "${key}"`;
+  }
+  if (trailingOrderBy) {
+    jql += ` ${trailingOrderBy}`;
   }
   return jql;
 }

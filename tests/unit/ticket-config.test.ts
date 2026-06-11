@@ -391,6 +391,13 @@ describe('githubListTickets', () => {
     expect(args[args.indexOf('--search') + 1]).toBe('assignee:@me label:bug is:open');
   });
 
+  it('passes filter_query containing sort: qualifier verbatim in advanced mode (sort: passthrough regression)', async () => {
+    mockExecFileSuccess('[]');
+    await githubListTickets('/myproj', undefined, { filter_mode: 'advanced', filter_query: 'is:open sort:updated-desc label:bug' });
+    const args = mockExecFile.mock.calls[0][1] as string[];
+    expect(args[args.indexOf('--search') + 1]).toBe('is:open sort:updated-desc label:bug');
+  });
+
   it('falls back to default when advanced mode has empty filter_query', async () => {
     mockExecFileSuccess('[]');
     await githubListTickets('/myproj', undefined, { filter_mode: 'advanced', filter_query: '' });
@@ -572,6 +579,43 @@ describe('jiraListTickets', () => {
     expect(jql).toContain('reporter = currentUser()');
     expect(jql).toContain('statusCategory != Done');
     expect(jql).toContain('project = "ACME"');
+  });
+
+  it('places project clause BEFORE trailing ORDER BY in advanced mode (Jira ORDER BY regression)', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    const cfg: ProjectTicketConfig = {
+      ...JIRA_CONFIG,
+      filter_mode: 'advanced',
+      filter_query: 'status = "Open" ORDER BY created DESC',
+    };
+    await jiraListTickets(cfg);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    // Extract the JQL value from the URL path (before &fields=)
+    const jqlEncoded = opts.path.split('?jql=')[1].split('&')[0];
+    const jql = decodeURIComponent(jqlEncoded);
+    // project clause must come before ORDER BY so the JQL is valid
+    const projectIdx = jql.indexOf('project = "ACME"');
+    const orderByIdx = jql.indexOf('ORDER BY');
+    expect(projectIdx).toBeGreaterThan(-1);
+    expect(orderByIdx).toBeGreaterThan(-1);
+    expect(projectIdx).toBeLessThan(orderByIdx);
+    // ORDER BY must be last in the JQL
+    expect(jql.endsWith('ORDER BY created DESC')).toBe(true);
+  });
+
+  it('handles ORDER BY with multiple sort keys in advanced mode', async () => {
+    mockJiraRequest(JSON.stringify({ issues: [] }));
+    const cfg: ProjectTicketConfig = {
+      ...JIRA_CONFIG,
+      filter_mode: 'advanced',
+      filter_query: 'priority = High ORDER BY created DESC, updated ASC',
+    };
+    await jiraListTickets(cfg);
+    const opts = mockHttpsRequest.mock.calls[0][0] as { path: string };
+    const jqlEncoded = opts.path.split('?jql=')[1].split('&')[0];
+    const jql = decodeURIComponent(jqlEncoded);
+    expect(jql.endsWith('ORDER BY created DESC, updated ASC')).toBe(true);
+    expect(jql.indexOf('project = "ACME"')).toBeLessThan(jql.indexOf('ORDER BY'));
   });
 });
 
