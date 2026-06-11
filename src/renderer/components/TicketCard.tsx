@@ -51,6 +51,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const [showMoveToBacklogDialog, setShowMoveToBacklogDialog] = useState(false);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
   const [recheckMessage, setRecheckMessage] = useState<string | null>(null);
+  const [isContinuing, setIsContinuing] = useState(false);
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
   const stackKey = `${ticket.ticket_id}|${ticket.project_dir}`;
@@ -97,6 +98,19 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const handleResume = () => {
     if (stack) {
       void resumeStackWithContinuation(stack.id, true);
+    }
+  };
+
+  const handleContinue = async () => {
+    if (!stack || isContinuing) return;
+    setIsContinuing(true);
+    try {
+      await window.sandstorm.stacks.selfHealContinue(stack.id);
+      await refreshStacks();
+    } catch (err) {
+      alert(`Failed to continue: ${err}`);
+    } finally {
+      setIsContinuing(false);
     }
   };
 
@@ -391,6 +405,25 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
               data-testid={`ticket-card-in-stack-answer-${ticket.ticket_id}`}
             >
               Answer
+            </button>
+          )}
+          {stack && stack.status === 'failed' && stack.error && (
+            <div
+              className="text-xs text-red-400 bg-red-500/10 border border-red-500/20 rounded-md px-2 py-1.5 break-words"
+              data-testid={`ticket-card-stack-error-${ticket.ticket_id}`}
+              title={stack.error}
+            >
+              {stack.error}
+            </div>
+          )}
+          {stack && stack.status === 'failed' && (
+            <button
+              onClick={() => void handleContinue()}
+              disabled={isContinuing}
+              className="w-full text-xs py-1.5 px-3 rounded-md bg-sandstorm-accent/10 text-sandstorm-accent border border-sandstorm-accent/30 hover:bg-sandstorm-accent/20 transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+              data-testid={`ticket-card-continue-${ticket.ticket_id}`}
+            >
+              {isContinuing ? 'Continuing…' : 'Continue — reset reviews & run 5 more'}
             </button>
           )}
           {stack && (makePrEligible(stack) || prInFlight) && (
