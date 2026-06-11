@@ -58,6 +58,9 @@ export function getStackDuration(
 /** Duration update interval in milliseconds (5 seconds). */
 export const DURATION_UPDATE_INTERVAL = 5000;
 
+// `failed` stays eligible: a failed stack may have partial work worth pushing.
+// The TicketCard surfaces Continue as the primary recovery affordance — Create PR
+// remains as a secondary option for capturing whatever work was completed.
 const PR_ELIGIBLE_STATUSES = new Set([
   'completed',
   'failed',

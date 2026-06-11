@@ -634,6 +634,116 @@ describe('TicketCard', () => {
     expect(screen.queryByTestId('ticket-card-create-pr-42')).toBeNull();
   });
 
+  // =========================================================================
+  // #593 — Failed stack recovery UX on the Kanban card
+  // =========================================================================
+
+  it('in_stack: shows stack error message when stack.status === failed and stack.error is set', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', error: 'verify.sh exited 1', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    const badge = screen.getByTestId('ticket-card-stack-error-42');
+    expect(badge.textContent).toContain('verify.sh exited 1');
+    expect(badge.getAttribute('title')).toBe('verify.sh exited 1');
+  });
+
+  it('in_stack: does not show stack error message when stack.error is null on a failed stack', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', error: null, pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-stack-error-42')).toBeNull();
+  });
+
+  it('in_stack: does not show stack error message when stack.error is empty string on a failed stack', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', error: '', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-stack-error-42')).toBeNull();
+  });
+
+  it('in_stack: does not show stack error message for non-failed statuses even with stack.error set', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', error: 'stale error', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-stack-error-42')).toBeNull();
+  });
+
+  it('in_stack: shows Continue button when stack.status === failed', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', error: 'boom', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    const btn = screen.getByTestId('ticket-card-continue-42');
+    expect(btn.textContent).toContain('Continue — reset reviews & run 5 more');
+  });
+
+  it('in_stack: does not show Continue button when no linked stack', () => {
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[]} />);
+    expect(screen.queryByTestId('ticket-card-continue-42')).toBeNull();
+  });
+
+  it('in_stack: does not show Continue button for non-failed statuses', () => {
+    const nonFailedStatuses = ['running', 'building', 'completed', 'session_paused', 'needs_human', 'pushed'];
+    nonFailedStatuses.forEach((status) => {
+      const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status, pr_url: null, pr_number: null } as any;
+      const { unmount } = render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+      expect(screen.queryByTestId('ticket-card-continue-42')).toBeNull();
+      unmount();
+    });
+  });
+
+  it('in_stack: clicking Continue calls window.sandstorm.stacks.selfHealContinue with stack.id', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', error: 'boom', pr_url: null, pr_number: null } as any;
+    api.stacks.selfHealContinue.mockResolvedValue(undefined);
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-continue-42'));
+    await waitFor(() => expect(api.stacks.selfHealContinue).toHaveBeenCalledWith('s1'));
+  });
+
+  it('in_stack: Continue button is disabled while in-flight and shows Continuing…', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', error: 'boom', pr_url: null, pr_number: null } as any;
+    let resolveContinue!: () => void;
+    api.stacks.selfHealContinue.mockReturnValue(new Promise<void>((r) => { resolveContinue = r; }));
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    const btn = screen.getByTestId('ticket-card-continue-42') as HTMLButtonElement;
+    fireEvent.click(btn);
+    await waitFor(() => expect((screen.getByTestId('ticket-card-continue-42') as HTMLButtonElement).disabled).toBe(true));
+    expect(screen.getByTestId('ticket-card-continue-42').textContent).toContain('Continuing…');
+    await act(async () => {
+      resolveContinue();
+      await Promise.resolve();
+    });
+    await waitFor(() => expect((screen.getByTestId('ticket-card-continue-42') as HTMLButtonElement).disabled).toBe(false));
+  });
+
+  it('in_stack: double-click on Continue calls selfHealContinue only once', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', error: 'boom', pr_url: null, pr_number: null } as any;
+    let resolveContinue!: () => void;
+    api.stacks.selfHealContinue.mockReturnValueOnce(new Promise<void>((r) => { resolveContinue = r; }));
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    const btn = screen.getByTestId('ticket-card-continue-42');
+    fireEvent.click(btn);
+    fireEvent.click(btn);
+    await act(async () => {
+      resolveContinue();
+      await Promise.resolve();
+    });
+    expect(api.stacks.selfHealContinue).toHaveBeenCalledTimes(1);
+  });
+
+  it('in_stack: Continue failure surfaces alert and re-enables the button', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', error: 'boom', pr_url: null, pr_number: null } as any;
+    api.stacks.selfHealContinue.mockRejectedValueOnce(new Error('IPC crash'));
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    fireEvent.click(screen.getByTestId('ticket-card-continue-42'));
+    await waitFor(() => expect(alertSpy).toHaveBeenCalled());
+    expect(alertSpy.mock.calls[0][0]).toContain('IPC crash');
+    expect((screen.getByTestId('ticket-card-continue-42') as HTMLButtonElement).disabled).toBe(false);
+    alertSpy.mockRestore();
+  });
+
+  it('in_stack: failed stack shows Continue alongside Create PR (Create PR remains as secondary option)', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', error: 'boom', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-continue-42')).toBeDefined();
+    expect(screen.getByTestId('ticket-card-create-pr-42')).toBeDefined();
+  });
+
   it('in_stack: shows Answer button when stack.status === needs_human', () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'needs_human', pr_url: null, pr_number: null } as any;
     render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
