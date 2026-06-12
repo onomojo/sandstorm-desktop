@@ -49,6 +49,18 @@ describe('getDefaultSpecQualityGate', () => {
     expect(content).toContain('epic-level acceptance behavior');
   });
 
+  it('includes intent congruence criterion', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('### Intent Congruence');
+    expect(content).toContain('undercuts');
+  });
+
+  it('edge cases criterion includes idempotency lens', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('Idempotency');
+    expect(content).toMatch(/runs twice|idempotency/i);
+  });
+
   it('new criteria do not reintroduce e2e/visual verification', () => {
     const content = getDefaultSpecQualityGate();
     expect(content).not.toContain('### End-to-End Data Flow Verification');

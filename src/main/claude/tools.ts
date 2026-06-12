@@ -264,7 +264,7 @@ ${ticketBody}
 Before evaluating pass/fail, identify every assumption in the ticket (explicit "Assumes..." statements AND implicit assumptions you would make if starting this task).
 
 For each assumption, classify it:
-- **Self-resolvable**: Can be validated by reading code, checking APIs, schemas, or running commands. For these, state what you would check and whether the assumption appears correct or incorrect based on the information available.
+- **Self-resolvable**: Can be validated by reading code, checking APIs, schemas, or running commands. For these, Use Read/Grep/Glob now and report what you found with file:line citations. State the verified fact or confirm the assumption is incorrect with evidence. Describing what you would check without checking is not sufficient.
 - **Requires human input**: Business logic context, domain knowledge, behavioral expectations, product direction, edge case decisions — things the codebase can't answer. For these, formulate a specific question that must be answered before the spec is complete.
 
 ### Phase 2: Evaluation
@@ -355,7 +355,7 @@ ${ticketBody}
 
 ### Phase 1: Assumption Resolution
 Identify every assumption (explicit and implicit). For each:
-- **Self-resolvable** (can check code/APIs/schemas): State what you'd verify and whether it appears correct or incorrect.
+- **Self-resolvable** (can check code/APIs/schemas): Use Read/Grep/Glob now and report what you found with file:line citations. Describing what you would verify without verifying is not sufficient.
 - **Requires human input** (business logic, domain knowledge, product direction): Formulate a specific blocking question.
 
 ### Phase 2: Evaluation

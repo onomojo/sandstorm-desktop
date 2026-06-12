@@ -223,12 +223,16 @@ export class Registry {
 
   static async create(dbPath?: string): Promise<Registry> {
     const resolvedPath =
-      dbPath ?? path.join(app.getPath('userData'), 'sandstorm.db');
+      dbPath ?? (process.env.PLAYWRIGHT_TEST
+        ? ':memory:'
+        : path.join(app.getPath('userData'), 'sandstorm.db'));
 
-    // Ensure directory exists
-    const dir = path.dirname(resolvedPath);
-    if (!fs.existsSync(dir)) {
-      fs.mkdirSync(dir, { recursive: true });
+    // Ensure directory exists (skip for in-memory databases)
+    if (resolvedPath !== ':memory:') {
+      const dir = path.dirname(resolvedPath);
+      if (!fs.existsSync(dir)) {
+        fs.mkdirSync(dir, { recursive: true });
+      }
     }
 
     const db = new Database(resolvedPath);
