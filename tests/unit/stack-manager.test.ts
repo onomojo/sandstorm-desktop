@@ -3,6 +3,8 @@ import { spawnSync } from 'child_process';
 import {
   StackManager,
   sanitizeComposeName,
+  composeProjectNameFor,
+  volumeRemoveArgsForProject,
   referencesGitHubIssue,
   tailBytes,
   TASK_OUTPUT_MAX_BYTES,
@@ -116,6 +118,37 @@ describe('sanitizeComposeName', () => {
   it('handles mixed problematic input', () => {
     expect(sanitizeComposeName('My Cool Stack!!')).toBe('my-cool-stack');
     expect(sanitizeComposeName('  --test@name-- ')).toBe('testname');
+  });
+});
+
+describe('composeProjectNameFor', () => {
+  it('combines project and stackId with sandstorm prefix', () => {
+    expect(composeProjectNameFor('My Cool Project', '36-x')).toBe('sandstorm-my-cool-project-36-x');
+  });
+
+  it('matches the inline expression it replaces', () => {
+    const project = 'My Cool Project';
+    const stackId = '36-x';
+    const inline = `sandstorm-${sanitizeComposeName(project)}-${sanitizeComposeName(stackId)}`;
+    expect(composeProjectNameFor(project, stackId)).toBe(inline);
+  });
+
+  it('sanitizes both segments', () => {
+    expect(composeProjectNameFor('My App!', 'Ticket #1')).toBe('sandstorm-my-app-ticket-1');
+  });
+});
+
+describe('volumeRemoveArgsForProject', () => {
+  it('returns docker volume ls args with correct label filter', () => {
+    expect(volumeRemoveArgsForProject('sandstorm-p-1')).toEqual([
+      'volume', 'ls', '-q', '--filter', 'label=com.docker.compose.project=sandstorm-p-1',
+    ]);
+  });
+
+  it('includes the full compose project name in the filter value', () => {
+    const args = volumeRemoveArgsForProject('sandstorm-my-project-42');
+    const filterArg = args[args.indexOf('--filter') + 1];
+    expect(filterArg).toBe('label=com.docker.compose.project=sandstorm-my-project-42');
   });
 });
 

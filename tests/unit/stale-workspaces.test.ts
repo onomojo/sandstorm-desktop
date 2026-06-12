@@ -364,4 +364,21 @@ describe('Stale Workspace Cleanup', () => {
       expect(fs.existsSync(dir)).toBe(false);
     }
   });
+
+  it('removes workspace dir and returns success even when docker volume commands fail', async () => {
+    // Verifies that a volume-removal failure (e.g. Docker unavailable) does NOT flip success —
+    // dir removal is the sole success criterion per the spec edge case.
+    const workspaceDir = path.join(tmpProjectDir, '.sandstorm', 'workspaces', 'my-stack');
+    fs.mkdirSync(workspaceDir, { recursive: true });
+    fs.writeFileSync(path.join(workspaceDir, 'file.txt'), 'data');
+
+    // In the test environment Docker is unavailable, so removeVolumesForProject will
+    // silently fail (best-effort). The workspace dir should still be removed.
+    const results = await manager.cleanupStaleWorkspaces([workspaceDir]);
+
+    expect(results).toHaveLength(1);
+    expect(results[0].success).toBe(true);
+    expect(results[0].workspacePath).toBe(workspaceDir);
+    expect(fs.existsSync(workspaceDir)).toBe(false);
+  });
 });

@@ -382,6 +382,11 @@ case "$COMMAND" in
       run_compose down -v --rmi local
     fi
 
+    # Safety net: down -v only removes volumes it can resolve from a present
+    # compose file. Sweep any remaining named volumes for this project by label.
+    docker volume ls -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}" \
+      | xargs -r -n1 docker volume rm > /dev/null 2>&1 || true
+
     # Prune dangling images left by previous builds (best effort, see #13)
     docker image prune -f > /dev/null 2>&1 || true
 

@@ -62,4 +62,12 @@ describe('stack.sh overlay wiring', () => {
     expect(overlayPos).toBeGreaterThan(-1);
     expect(overlayPos).toBeGreaterThan(sandstormPos);
   });
+
+  it('contains the label-based volume sweep in the down) case', () => {
+    const stackSh = fs.readFileSync(STACK_SH_PATH, 'utf-8');
+    expect(stackSh).toContain(
+      'docker volume ls -q --filter "label=com.docker.compose.project=${COMPOSE_PROJECT}"'
+    );
+    expect(stackSh).toContain('xargs -r -n1 docker volume rm');
+  });
 });
