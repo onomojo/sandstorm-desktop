@@ -171,6 +171,22 @@ export function sanitizeComposeName(input: string): string {
   return name || 'stack';
 }
 
+/**
+ * Build the Docker Compose project name for a given project/stack pair.
+ * Matches the `COMPOSE_PROJECT` variable in the CLI: "sandstorm-<project>-<stackId>".
+ */
+export function composeProjectNameFor(projectName: string, stackId: string): string {
+  return `sandstorm-${sanitizeComposeName(projectName)}-${sanitizeComposeName(stackId)}`;
+}
+
+/**
+ * Return the docker CLI args to list volumes for a compose project by label.
+ * The returned list is suitable for `spawn('docker', args)`.
+ */
+export function volumeRemoveArgsForProject(composeProjectName: string): string[] {
+  return ['volume', 'ls', '-q', '--filter', `label=com.docker.compose.project=${composeProjectName}`];
+}
+
 // referencesGitHubIssue is removed — use referencesTicket from ticket-fetcher.ts instead.
 // Re-export for backwards compatibility with any external callers.
 export { referencesTicket, referencesTicket as referencesGitHubIssue } from './ticket-fetcher';
@@ -810,7 +826,7 @@ export class StackManager {
     }
 
     const runtime = this.getRuntimeForStack(stack);
-    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
+    const composeProjectName = composeProjectNameFor(stack.project, stack.id);
 
     let containers;
     try {
@@ -1009,6 +1025,33 @@ export class StackManager {
       await this.runCli(stack.project_dir, ['down', stackId]);
     } catch {
       // Best effort — if CLI fails, containers may need manual cleanup
+    }
+    // Defense-in-depth: remove any volumes the CLI may have missed (e.g. when
+    // the workspace compose file was absent and down -v couldn't resolve them).
+    await this.removeVolumesForProject(composeProjectNameFor(stack.project, stackId));
+  }
+
+  private async removeVolumesForProject(composeProjectName: string): Promise<void> {
+    try {
+      const listArgs = volumeRemoveArgsForProject(composeProjectName);
+      const stdout = await new Promise<string>((resolve) => {
+        const child = spawn('docker', listArgs, { stdio: ['ignore', 'pipe', 'pipe'] });
+        let out = '';
+        child.stdout.on('data', (d: Buffer) => (out += d.toString()));
+        child.on('close', () => resolve(out));
+        child.on('error', () => resolve(''));
+      });
+
+      const volumes = stdout.split('\n').map((v) => v.trim()).filter(Boolean);
+      for (const volume of volumes) {
+        await new Promise<void>((resolve) => {
+          const child = spawn('docker', ['volume', 'rm', volume], { stdio: ['ignore', 'pipe', 'pipe'] });
+          child.on('close', () => resolve());
+          child.on('error', () => resolve());
+        });
+      }
+    } catch {
+      // Best effort — volume cleanup must never block teardown
     }
   }
 
@@ -1296,7 +1339,7 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
+    const composeProjectName = composeProjectNameFor(stack.project, stack.id);
     const filterName = service
       ? `${composeProjectName}-${service}`
       : composeProjectName;
@@ -1338,7 +1381,7 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) return { stackId, totalMemory: 0, containers: [] };
 
-    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
+    const composeProjectName = composeProjectNameFor(stack.project, stack.id);
     const runtime = this.getRuntimeForStack(stack);
     const containers = await runtime.listContainers({ name: composeProjectName });
 
@@ -1576,7 +1619,7 @@ export class StackManager {
   // --- Private helpers ---
 
   private async getServices(stack: Stack): Promise<ServiceInfo[]> {
-    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
+    const composeProjectName = composeProjectNameFor(stack.project, stack.id);
     const runtime = this.getRuntimeForStack(stack);
     const containers = await runtime.listContainers({
       name: composeProjectName,
@@ -1666,7 +1709,7 @@ export class StackManager {
 
   private async findClaudeContainer(stack: Stack, runtime?: ContainerRuntime): Promise<Container> {
     const resolvedRuntime = runtime ?? this.getRuntimeForStack(stack);
-    const composeProjectName = `sandstorm-${sanitizeComposeName(stack.project)}-${sanitizeComposeName(stack.id)}`;
+    const composeProjectName = composeProjectNameFor(stack.project, stack.id);
     const containers = await resolvedRuntime.listContainers({
       name: `${composeProjectName}-claude`,
     });
@@ -1775,7 +1818,7 @@ export class StackManager {
         // Check for running containers
         let hasRunningContainers = false;
         try {
-          const composeProjectName = `sandstorm-${sanitizeComposeName(project.name)}-${sanitizeComposeName(stackId)}`;
+          const composeProjectName = composeProjectNameFor(project.name, stackId);
           const containers = await this.dockerRuntime.listContainers({ name: composeProjectName });
           hasRunningContainers = containers.some((c) => c.status === 'running');
         } catch {
@@ -1833,15 +1876,19 @@ export class StackManager {
       try {
         // Validate path is within a registered project's .sandstorm/workspaces/ directory
         const normalized = path.resolve(workspacePath);
-        const isValidPath = projects.some((project) => {
+        const owningProject = projects.find((project) => {
           const allowedDir = path.resolve(path.join(project.directory, '.sandstorm', 'workspaces'));
           return normalized.startsWith(allowedDir + path.sep) || normalized === allowedDir;
         });
 
-        if (!isValidPath) {
+        if (!owningProject) {
           results.push({ workspacePath, success: false, error: 'Path is not within a registered project workspace directory' });
           continue;
         }
+
+        // Remove volumes before the workspace dir (best effort; failure never flips success)
+        const stackId = path.basename(normalized);
+        await this.removeVolumesForProject(composeProjectNameFor(owningProject.name, stackId));
 
         // Use Docker to remove (handles files owned by container users)
         const parentDir = path.dirname(normalized);
