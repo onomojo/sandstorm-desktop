@@ -421,6 +421,7 @@ case "$COMMAND" in
     SYNC_MODE=false
     TICKET=""
     TASK_MODEL=""
+    TASK_MODELS_JSON=""
     TASK_RESUME_SESSION_ID=""
     TASK_BACKEND=""
     TASK_BACKEND_MODEL=""
@@ -429,6 +430,7 @@ case "$COMMAND" in
         --sync) SYNC_MODE=true; shift ;;
         --ticket) TICKET="$2"; shift 2 ;;
         --model) TASK_MODEL="$2"; shift 2 ;;
+        --models-json) TASK_MODELS_JSON="$2"; shift 2 ;;
         --resume) TASK_RESUME_SESSION_ID="$2"; shift 2 ;;
         --backend) TASK_BACKEND="$2"; shift 2 ;;
         --backend-model) TASK_BACKEND_MODEL="$2"; shift 2 ;;
@@ -485,6 +487,12 @@ case "$COMMAND" in
       if [ -n "$TASK_MODEL" ]; then
         echo "$TASK_MODEL" | docker exec -i -u claude "$CONTAINER_NAME" \
           bash -c "cat > /tmp/claude-task-model.txt"
+      fi
+
+      # Write per-phase model map if provided
+      if [ -n "$TASK_MODELS_JSON" ]; then
+        printf '%s' "$TASK_MODELS_JSON" | docker exec -i -u claude "$CONTAINER_NAME" \
+          bash -c "cat > /tmp/claude-task-models.json"
       fi
 
       # Write resume session id file if specified

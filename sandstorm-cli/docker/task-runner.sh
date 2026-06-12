@@ -30,6 +30,16 @@ log_loop() {
   echo "[LOOP] $1"
 }
 
+# Source per-phase model routing helper (defines model_args_for_phase).
+# Tries the installed path first, falls back to the repo source for dev.
+_phase_helper="/usr/bin/phase-model-helper.sh"
+if [ ! -f "$_phase_helper" ]; then
+  _phase_helper="/app/sandstorm-cli/docker/phase-model-helper.sh"
+fi
+# shellcheck source=/dev/null
+source "$_phase_helper"
+unset _phase_helper
+
 # Check if the execution agent emitted a STOP_AND_ASK signal in its output.
 # If found, writes the reason to /tmp/claude-stop-reason.txt and returns 0.
 # Returns 1 if no STOP_AND_ASK found.
@@ -253,7 +263,8 @@ run_review() {
   log_loop "Starting review agent with fresh context..."
 
   # Run claude with separate log files to preserve execution agent logs
-  run_agent "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log review "$iteration" "${MODEL_ARGS[@]}"
+  model_args_for_phase review
+  run_agent "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log review "$iteration" "${RESOLVED_MODEL_ARGS[@]}"
   local review_exit=$?
 
   rm -f "$review_prompt_file"
@@ -365,7 +376,8 @@ run_meta_review() {
     echo "META_VERDICT: NO_VIABLE_PATH means you conclude there is no automatic fix available and the task needs human intervention."
   } > "$meta_prompt_file"
 
-  run_agent "$meta_prompt_file" "$meta_raw_log" "$meta_task_log" "meta_review" "$iteration" "${MODEL_ARGS[@]}"
+  model_args_for_phase meta_review
+  run_agent "$meta_prompt_file" "$meta_raw_log" "$meta_task_log" "meta_review" "$iteration" "${RESOLVED_MODEL_ARGS[@]}"
   local meta_exit=$?
 
   rm -f "$meta_prompt_file"
@@ -512,6 +524,18 @@ while true; do
       rm -f /tmp/claude-task-model.txt
     fi
 
+    # Read per-phase model map if provided (written by stack.sh --models-json).
+    # Falls back to single MODEL_ARGS when absent or malformed.
+    PHASE_MODELS_JSON=""
+    if [ -f /tmp/claude-task-models.json ]; then
+      PHASE_MODELS_JSON=$(cat /tmp/claude-task-models.json 2>/dev/null || true)
+      if ! printf '%s' "$PHASE_MODELS_JSON" | jq . > /dev/null 2>&1; then
+        log_loop "WARNING: /tmp/claude-task-models.json is malformed — ignoring per-phase routing"
+        PHASE_MODELS_JSON=""
+      fi
+      rm -f /tmp/claude-task-models.json
+    fi
+
     # Read resume session id if provided (set by --resume flag in dispatchContinuation)
     RESUME_ARGS=()
     if [ -f /tmp/claude-task-resume.txt ]; then
@@ -577,7 +601,8 @@ while true; do
 
     log_loop "Starting initial execution pass..."
     echo "execution_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
-    run_agent /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${MODEL_ARGS[@]}" "${RESUME_ARGS[@]}"
+    model_args_for_phase execution
+    run_agent /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${RESOLVED_MODEL_ARGS[@]}" "${RESUME_ARGS[@]}"
     EXIT_CODE=${PIPESTATUS[0]}
 
     # Edge Case 6: if --resume failed, fall back to a fresh dispatch with the original prompt
@@ -587,7 +612,7 @@ while true; do
       echo "⚠️ WARNING: Session resume failed (session data unavailable). Starting fresh dispatch." >> /tmp/claude-task.log
       > /tmp/claude-raw.log
       RESUME_ARGS=()
-      run_agent /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${MODEL_ARGS[@]}"
+      run_agent /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${RESOLVED_MODEL_ARGS[@]}"
       EXIT_CODE=${PIPESTATUS[0]}
     fi
 
@@ -812,7 +837,8 @@ while true; do
             echo "  on its own line, then stop immediately. Do not make any further changes."
           } > "$local_fix_prompt"
 
-          run_agent "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log execution "$TOTAL_REVIEW_ITERATIONS" "${MODEL_ARGS[@]}"
+          model_args_for_phase execution
+          run_agent "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log execution "$TOTAL_REVIEW_ITERATIONS" "${RESOLVED_MODEL_ARGS[@]}"
           fix_exit=$?
           echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           rm -f "$local_fix_prompt"
@@ -967,7 +993,8 @@ while true; do
           echo "  on its own line, then stop immediately. Do not make any further changes."
         } > "$local_verify_fix"
 
-        run_agent "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log execution "$((TOTAL_REVIEW_ITERATIONS + 1))" "${MODEL_ARGS[@]}"
+        model_args_for_phase execution
+        run_agent "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log execution "$((TOTAL_REVIEW_ITERATIONS + 1))" "${RESOLVED_MODEL_ARGS[@]}"
         verify_fix_exit=$?
         echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
         rm -f "$local_verify_fix"
