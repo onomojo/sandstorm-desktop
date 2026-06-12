@@ -162,6 +162,59 @@ run_claude() {
   return ${PIPESTATUS[0]}
 }
 
+# Run the OpenCode CLI with NDJSON output, normalizing into the same formatted-text
+# stream that run_claude emits so the dual-loop is backend-agnostic.
+# Args: $1 = prompt file path, $2 = raw log path, $3 = task log path, $4 = phase, $5 = iteration
+# Extra args ($6+) are Claude-specific (model, resume) and are intentionally ignored here.
+run_opencode() {
+  local prompt_file="$1"
+  local raw_log="${2:-/tmp/claude-raw.log}"
+  local task_log="${3:-/tmp/claude-task.log}"
+  local phase="${4:-execution}"
+  local iteration="${5:-1}"
+
+  local token_file="/tmp/claude-tokens-${phase}"
+  local counter_script="/usr/bin/opencode-token-counter.sh"
+  if [ ! -f "$counter_script" ]; then
+    counter_script="/app/sandstorm-cli/docker/opencode-token-counter.sh"
+  fi
+
+  local parser_script="/usr/bin/opencode-ndjson-parser.sh"
+  if [ ! -f "$parser_script" ]; then
+    parser_script="/app/sandstorm-cli/docker/opencode-ndjson-parser.sh"
+  fi
+
+  local oc_args=(run --format json --dangerously-skip-permissions)
+  if [ -n "${OPENCODE_MODEL:-}" ]; then
+    oc_args+=(--model "$OPENCODE_MODEL")
+  fi
+  # Session forwarding: forward-compat plumbing (not populated by this ticket's wiring)
+  if [ -n "${OPENCODE_SESSION_ID:-}" ]; then
+    oc_args+=(--session "$OPENCODE_SESSION_ID")
+  fi
+
+  # Deliver prompt via argv, NOT stdin (stdin can hang in OpenCode headless mode)
+  local prompt_content
+  prompt_content=$(cat "$prompt_file")
+
+  opencode "${oc_args[@]}" "$prompt_content" 2>&1 \
+    | stdbuf -o0 tee -a "$raw_log" \
+    | stdbuf -o0 tee >(bash "$counter_script" "$token_file" "$iteration" "$phase") \
+    | bash "$parser_script" \
+    | stdbuf -o0 tee "$task_log"
+  return ${PIPESTATUS[0]}
+}
+
+# Dispatch to run_claude or run_opencode based on AGENT_BACKEND.
+# Same signature as run_claude — Claude-specific extra args are dropped for OpenCode.
+run_agent() {
+  if [ "${AGENT_BACKEND:-claude}" = "opencode" ]; then
+    run_opencode "$1" "$2" "$3" "$4" "$5"
+  else
+    run_claude "$@"
+  fi
+}
+
 # Check if there are code changes in the workspace.
 check_for_diff() {
   local diff_output
@@ -211,7 +264,7 @@ run_review() {
 
   # Run claude with separate log files to preserve execution agent logs
   model_args_for_phase review
-  run_claude "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log review "$iteration" "${RESOLVED_MODEL_ARGS[@]}"
+  run_agent "$review_prompt_file" /tmp/claude-review-raw.log /tmp/claude-review-task.log review "$iteration" "${RESOLVED_MODEL_ARGS[@]}"
   local review_exit=$?
 
   rm -f "$review_prompt_file"
@@ -324,7 +377,7 @@ run_meta_review() {
   } > "$meta_prompt_file"
 
   model_args_for_phase meta_review
-  run_claude "$meta_prompt_file" "$meta_raw_log" "$meta_task_log" "meta_review" "$iteration" "${RESOLVED_MODEL_ARGS[@]}"
+  run_agent "$meta_prompt_file" "$meta_raw_log" "$meta_task_log" "meta_review" "$iteration" "${RESOLVED_MODEL_ARGS[@]}"
   local meta_exit=$?
 
   rm -f "$meta_prompt_file"
@@ -493,11 +546,32 @@ while true; do
       rm -f /tmp/claude-task-resume.txt
     fi
 
+    # Read agent backend selection (written by stack.sh --backend flag)
+    AGENT_BACKEND="claude"
+    if [ -f /tmp/claude-task-backend.txt ]; then
+      AGENT_BACKEND=$(cat /tmp/claude-task-backend.txt 2>/dev/null | tr -d '[:space:]')
+      [ -n "$AGENT_BACKEND" ] || AGENT_BACKEND="claude"
+      rm -f /tmp/claude-task-backend.txt
+    fi
+    export AGENT_BACKEND
+
+    # Read OpenCode provider/model (written by stack.sh --backend-model flag)
+    OPENCODE_MODEL=""
+    if [ -f /tmp/claude-task-backend-model.txt ]; then
+      OPENCODE_MODEL=$(cat /tmp/claude-task-backend-model.txt 2>/dev/null | tr -d '[:space:]')
+      rm -f /tmp/claude-task-backend-model.txt
+    fi
+    export OPENCODE_MODEL
+
     echo ""
     echo "=========================================="
     echo "  Task: $LABEL"
     if [ ${#MODEL_ARGS[@]} -gt 0 ]; then
       echo "  Model: $TASK_MODEL"
+    fi
+    if [ "$AGENT_BACKEND" = "opencode" ]; then
+      echo "  Backend: opencode"
+      [ -n "$OPENCODE_MODEL" ] && echo "  OpenCode model: $OPENCODE_MODEL"
     fi
     echo "=========================================="
     echo "running" > /tmp/claude-task.status
@@ -528,7 +602,7 @@ while true; do
     log_loop "Starting initial execution pass..."
     echo "execution_started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
     model_args_for_phase execution
-    run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${RESOLVED_MODEL_ARGS[@]}" "${RESUME_ARGS[@]}"
+    run_agent /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${RESOLVED_MODEL_ARGS[@]}" "${RESUME_ARGS[@]}"
     EXIT_CODE=${PIPESTATUS[0]}
 
     # Edge Case 6: if --resume failed, fall back to a fresh dispatch with the original prompt
@@ -538,7 +612,7 @@ while true; do
       echo "⚠️ WARNING: Session resume failed (session data unavailable). Starting fresh dispatch." >> /tmp/claude-task.log
       > /tmp/claude-raw.log
       RESUME_ARGS=()
-      run_claude /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${RESOLVED_MODEL_ARGS[@]}"
+      run_agent /tmp/claude-task-prompt.txt /tmp/claude-raw.log /tmp/claude-task.log execution 1 "${RESOLVED_MODEL_ARGS[@]}"
       EXIT_CODE=${PIPESTATUS[0]}
     fi
 
@@ -764,7 +838,7 @@ while true; do
           } > "$local_fix_prompt"
 
           model_args_for_phase execution
-          run_claude "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log execution "$TOTAL_REVIEW_ITERATIONS" "${RESOLVED_MODEL_ARGS[@]}"
+          run_agent "$local_fix_prompt" /tmp/claude-raw.log /tmp/claude-task.log execution "$TOTAL_REVIEW_ITERATIONS" "${RESOLVED_MODEL_ARGS[@]}"
           fix_exit=$?
           echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
           rm -f "$local_fix_prompt"
@@ -920,7 +994,7 @@ while true; do
         } > "$local_verify_fix"
 
         model_args_for_phase execution
-        run_claude "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log execution "$((TOTAL_REVIEW_ITERATIONS + 1))" "${RESOLVED_MODEL_ARGS[@]}"
+        run_agent "$local_verify_fix" /tmp/claude-raw.log /tmp/claude-task.log execution "$((TOTAL_REVIEW_ITERATIONS + 1))" "${RESOLVED_MODEL_ARGS[@]}"
         verify_fix_exit=$?
         echo "execution_finished_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> /tmp/claude-phase-timing.txt
         rm -f "$local_verify_fix"

@@ -434,8 +434,8 @@ describe('task-runner.sh dual-loop workflow', () => {
   describe('no local keyword outside function scope', () => {
     it('does not use `local` in the outer/inner while loops', () => {
       // Find all `local ` usages and verify they are inside function bodies.
-      // Functions in the script: log_loop, run_claude, check_for_diff, run_review, run_verify, check_for_stop_and_ask
-      const functionNames = ['log_loop', 'run_claude', 'check_for_diff', 'run_review', 'run_verify', 'is_infra_error_only', 'check_for_stop_and_ask', 'check_for_token_limit', 'run_meta_review', 'inject_meta_review_guidance']
+      // Functions in the script: log_loop, run_claude, run_opencode, run_agent, check_for_diff, run_review, run_verify, check_for_stop_and_ask
+      const functionNames = ['log_loop', 'run_claude', 'run_opencode', 'run_agent', 'check_for_diff', 'run_review', 'run_verify', 'is_infra_error_only', 'check_for_stop_and_ask', 'check_for_token_limit', 'run_meta_review', 'inject_meta_review_guidance']
 
       // Collect the line ranges of all function bodies
       const functionRanges: Array<{ start: number; end: number }> = []

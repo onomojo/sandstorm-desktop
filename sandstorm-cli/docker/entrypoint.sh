@@ -160,6 +160,10 @@ echo "  Workspace: /app"
 echo "=========================================="
 echo ""
 
+# OPENCODE_CONFIG must be set before handing off so run_opencode() inherits it.
+# Claude stacks are unaffected (claude ignores this variable).
+export OPENCODE_CONFIG=/tmp/sandstorm-opencode.json
+
 # -------------------------------------------------------------------
 # 4. Start task runner (PID 1 — output goes to docker logs)
 # -------------------------------------------------------------------

@@ -70,6 +70,7 @@ const {
     setProjectTicketConfig: vi.fn(),
     seedBoardTicket: vi.fn(),
     listBoardTickets: vi.fn().mockReturnValue([]),
+    listBoardTicketsInOrder: vi.fn().mockReturnValue([]),
     setBoardTicketColumn: vi.fn(),
     deleteClosedEarlyColumnTickets: vi.fn().mockReturnValue(0),
     deleteBoardTicket: vi.fn(),
@@ -1626,7 +1627,7 @@ describe('IPC Handlers', () => {
         { id: 'T-2', title: 'Second ticket', author: 'bob' },
       ];
       mockListTicketsWithConfig.mockResolvedValueOnce({ ok: true, tickets: providerTickets });
-      mockRegistry.listBoardTickets.mockReturnValue([]);
+      mockRegistry.listBoardTicketsInOrder.mockReturnValueOnce([]);
       mockRegistry.seedBoardTicket.mockClear();
       mockRegistry.deleteClosedEarlyColumnTickets.mockClear();
 
@@ -1637,6 +1638,7 @@ describe('IPC Handlers', () => {
       expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('T-1', '/proj', 'First ticket');
       expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('T-2', '/proj', 'Second ticket');
       expect(mockRegistry.deleteClosedEarlyColumnTickets).toHaveBeenCalledWith('/proj', ['T-1', 'T-2']);
+      expect(mockRegistry.listBoardTicketsInOrder).toHaveBeenCalledWith('/proj', ['T-1', 'T-2']);
     });
 
     it('calls deleteClosedEarlyColumnTickets with empty array on ok:true empty fetch', async () => {
@@ -1672,7 +1674,7 @@ describe('IPC Handlers', () => {
           tickets: [{ id: 'T-1', title: 'Open ticket', author: 'alice' }],
         });
         mockRegistry.deleteClosedEarlyColumnTickets.mockReturnValue(2);
-        mockRegistry.listBoardTickets.mockReturnValue([]);
+        mockRegistry.listBoardTicketsInOrder.mockReturnValueOnce([]);
 
         await invokeHandler('tickets:list', '/proj');
 
@@ -1693,12 +1695,51 @@ describe('IPC Handlers', () => {
         ok: true,
         tickets: [{ id: 'REOPEN-1', title: 'Reopened ticket', author: 'alice' }],
       });
-      mockRegistry.listBoardTickets.mockReturnValue([]);
+      mockRegistry.listBoardTicketsInOrder.mockReturnValueOnce([]);
       mockRegistry.seedBoardTicket.mockClear();
 
       await invokeHandler('tickets:list', '/proj');
 
       expect(mockRegistry.seedBoardTicket).toHaveBeenCalledWith('REOPEN-1', '/proj', 'Reopened ticket');
+    });
+
+    it('preserves provider fetch order — returns tickets in [C,A,B] when provider returns [C,A,B] regardless of DB created_at order', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
+      // Provider returns tickets in C, A, B order (not created_at order A, B, C)
+      mockListTicketsWithConfig.mockResolvedValueOnce({
+        ok: true,
+        tickets: [
+          { id: 'T-C', title: 'C', author: 'alice' },
+          { id: 'T-A', title: 'A', author: 'alice' },
+          { id: 'T-B', title: 'B', author: 'alice' },
+        ],
+      });
+      const orderedBoardRows = [
+        { ticket_id: 'T-C', project_dir: '/proj', column: 'backlog', title: 'C', created_at: '2024-01-03', updated_at: '' },
+        { ticket_id: 'T-A', project_dir: '/proj', column: 'backlog', title: 'A', created_at: '2024-01-01', updated_at: '' },
+        { ticket_id: 'T-B', project_dir: '/proj', column: 'backlog', title: 'B', created_at: '2024-01-02', updated_at: '' },
+      ];
+      mockRegistry.listBoardTicketsInOrder.mockReturnValueOnce(orderedBoardRows);
+
+      const result = await invokeHandler('tickets:list', '/proj') as { tickets: Array<{ ticket_id: string }> };
+
+      expect(mockRegistry.listBoardTicketsInOrder).toHaveBeenCalledWith('/proj', ['T-C', 'T-A', 'T-B']);
+      expect(result.tickets.map(t => t.ticket_id)).toEqual(['T-C', 'T-A', 'T-B']);
+    });
+
+    it('falls back to listBoardTickets when provider fetch throws (does not call listBoardTicketsInOrder)', async () => {
+      mockRegistry.getProjectTicketConfig.mockReturnValueOnce({ provider: 'github' });
+      mockListTicketsWithConfig.mockRejectedValueOnce(new Error('provider unavailable'));
+      const boardRows = [
+        { ticket_id: 'T-1', project_dir: '/proj', column: 'backlog', title: 'First', created_at: '2024-01-01', updated_at: '' },
+      ];
+      mockRegistry.listBoardTickets.mockReturnValueOnce(boardRows);
+      mockRegistry.listBoardTicketsInOrder.mockClear();
+
+      const result = await invokeHandler('tickets:list', '/proj') as { tickets: Array<{ ticket_id: string }> };
+
+      expect(mockRegistry.listBoardTicketsInOrder).not.toHaveBeenCalled();
+      expect(result.tickets.map(t => t.ticket_id)).toEqual(['T-1']);
     });
   });
 

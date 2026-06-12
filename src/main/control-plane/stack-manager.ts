@@ -1037,9 +1037,10 @@ export class StackManager {
       }
 
       try {
-        // Fallback: check if claude process is running
+        // Fallback: check if claude or opencode process is running.
+        // The marker file check above is load-bearing; this is a secondary signal only.
         const psResult = await runtime.exec(containerId, [
-          'pgrep', '-f', 'claude',
+          'pgrep', '-f', 'claude|opencode',
         ]);
         if (psResult.exitCode === 0 && psResult.stdout.trim()) return;
       } catch {
@@ -1136,6 +1137,17 @@ export class StackManager {
       const cliArgs = ['task', stackId];
       if (model) cliArgs.push('--model', model);
       cliArgs.push('--models-json', phaseModelsJson);
+
+      // Resolve the project's effective inner backend and pass it to the CLI
+      // so the runner can dispatch to the correct agent (claude or opencode).
+      const effectiveBackend = this.registry.getEffectiveBackend(stack.project_dir, 'inner');
+      if (effectiveBackend.backend === 'opencode') {
+        cliArgs.push('--backend', 'opencode');
+        if (effectiveBackend.provider && effectiveBackend.model) {
+          cliArgs.push('--backend-model', `${effectiveBackend.provider}/${effectiveBackend.model}`);
+        }
+      }
+
       cliArgs.push(prompt);
       const result = await this.runCli(stack.project_dir, cliArgs);
 
