@@ -386,10 +386,11 @@ describe('StackManager', () => {
       expect(persisted[0].prompt).toBe('Fix the bug');
 
       // Should delegate to CLI `task` command (handles cred sync + user perms)
-      // When no model is specified, the effective default (sonnet) is used
+      // When no model is specified, the effective default (sonnet) is used.
+      // --models-json carries the per-phase routing map (all sonnet with no routing configured).
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
-        ['task', 'dispatch-test', '--model', 'sonnet', 'Fix the bug']
+        ['task', 'dispatch-test', '--model', 'sonnet', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', 'Fix the bug']
       );
     });
 
@@ -435,9 +436,11 @@ describe('StackManager', () => {
       // response no longer echoes it.
       const persisted = registry.getTasksForStack('model-test');
       expect(persisted[0].model).toBe('opus');
+      // Single --model is for attribution; --models-json carries per-phase routing
+      // (registry default is sonnet for all phases when no routing is configured).
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
-        ['task', 'model-test', '--model', 'opus', 'Complex task']
+        ['task', 'model-test', '--model', 'opus', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', 'Complex task']
       );
     });
 
@@ -454,10 +457,10 @@ describe('StackManager', () => {
       // "auto" should resolve to null in the DB (undefined → null via registry)
       const persisted = registry.getTasksForStack('auto-model');
       expect(persisted[0].model).toBeNull();
-      // CLI args should NOT contain --model
+      // Single --model is omitted for 'auto'; --models-json is still sent.
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
-        ['task', 'auto-model', 'Simple task']
+        ['task', 'auto-model', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', 'Simple task']
       );
     });
 
@@ -475,10 +478,76 @@ describe('StackManager', () => {
       // on the registry Task, not echoed in the MCP response.
       const persisted = registry.getTasksForStack('no-model');
       expect(persisted[0].model).toBe('sonnet');
+      // Legacy/no-routing: all phases use the same model as the single task model.
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
-        ['task', 'no-model', '--model', 'sonnet', 'Simple task']
+        ['task', 'no-model', '--model', 'sonnet', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', 'Simple task']
       );
+    });
+
+    it('includes per-phase model map in CLI args', async () => {
+      registry.createStack(makeStack('phase-map-test'));
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await manager.dispatchTask('phase-map-test', 'Fix the bug');
+
+      const [, args] = runCliSpy.mock.calls[0];
+      const jsonIdx = args.indexOf('--models-json');
+      expect(jsonIdx).toBeGreaterThan(-1);
+      const parsed = JSON.parse(args[jsonIdx + 1]);
+      expect(parsed).toHaveProperty('execution');
+      expect(parsed).toHaveProperty('review');
+      expect(parsed).toHaveProperty('meta_review');
+    });
+
+    it('reflects per-phase routing config in models-json', async () => {
+      registry.createStack(makeStack('routing-config-test'));
+      registry.setProjectRouting('/proj', {
+        assignments: {
+          execution:   { backend: 'claude', model: 'haiku' },
+          review:      { backend: 'claude', model: 'opus' },
+          meta_review: { backend: 'claude', model: 'sonnet' },
+        },
+      });
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      await manager.dispatchTask('routing-config-test', 'Complex task');
+
+      const [, args] = runCliSpy.mock.calls[0];
+      const jsonIdx = args.indexOf('--models-json');
+      expect(jsonIdx).toBeGreaterThan(-1);
+      const parsed = JSON.parse(args[jsonIdx + 1]);
+      expect(parsed.execution).toBe('haiku');
+      expect(parsed.review).toBe('opus');
+      expect(parsed.meta_review).toBe('sonnet');
+    });
+
+    it('all phases equal single model for legacy/no-routing dispatch', async () => {
+      registry.createStack(makeStack('legacy-no-routing'));
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      // No routing configured — effective default for all phases is 'sonnet'
+      await manager.dispatchTask('legacy-no-routing', 'Simple task');
+
+      const [, args] = runCliSpy.mock.calls[0];
+      const singleModel = args[args.indexOf('--model') + 1];
+      const jsonIdx = args.indexOf('--models-json');
+      const parsed = JSON.parse(args[jsonIdx + 1]);
+      expect(parsed.execution).toBe(singleModel);
+      expect(parsed.review).toBe(singleModel);
+      expect(parsed.meta_review).toBe(singleModel);
     });
 
     it('passes --backend opencode and --backend-model when inner backend is opencode with provider+model', async () => {
@@ -498,7 +567,7 @@ describe('StackManager', () => {
 
       expect(runCliSpy).toHaveBeenCalledWith(
         '/proj',
-        ['task', 'oc-backend', '--model', 'sonnet', '--backend', 'opencode', '--backend-model', 'anthropic/claude-sonnet-4-6', 'Do the work']
+        ['task', 'oc-backend', '--model', 'sonnet', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', '--backend', 'opencode', '--backend-model', 'anthropic/claude-sonnet-4-6', 'Do the work']
       );
     });
 

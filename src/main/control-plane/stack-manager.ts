@@ -1128,8 +1128,15 @@ export class StackManager {
       // handles credential sync (OAuth), writes files as the correct user
       // (`-u claude`), and creates the trigger file with proper ownership —
       // preventing the infinite-loop and not-logged-in bugs.
+      const phaseModels = this.registry.getContainerPhaseModels(stack.project_dir);
+      const phaseModelsJson = JSON.stringify({
+        execution:   phaseModels.execution.model   || 'auto',
+        review:      phaseModels.review.model      || 'auto',
+        meta_review: phaseModels.meta_review.model || 'auto',
+      });
       const cliArgs = ['task', stackId];
       if (model) cliArgs.push('--model', model);
+      cliArgs.push('--models-json', phaseModelsJson);
 
       // Resolve the project's effective inner backend and pass it to the CLI
       // so the runner can dispatch to the correct agent (claude or opencode).
