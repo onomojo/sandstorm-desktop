@@ -213,7 +213,7 @@ d2('aggregateByTicket lifecycle plumbing', () => {
     makeManifest(stackDir, 'stack-ep', 'T-3');
 
     const ephemeralRecords: EphemeralWeightRecord[] = [
-      { ticketId: 'T-3', stage: 'spec', turnCount: 5 },
+      { ticketId: 'T-3', stage: 'spec', tokens: 5000 },
     ];
 
     const result = aggregateByTicket([makeEntry('s1', 'stack-ep')], [stackDir], [], ephemeralRecords);

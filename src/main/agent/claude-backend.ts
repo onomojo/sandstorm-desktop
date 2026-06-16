@@ -373,6 +373,7 @@ export class ClaudeBackend implements AgentBackend {
     const spawnedAt = Date.now();
     let firstChunkAt: number | null = null;
     let turnCount = 0;
+    let ephemeralTokens = 0;
     let isCancelled = false;
     let timingWritten = false;
 
@@ -417,6 +418,7 @@ export class ClaudeBackend implements AgentBackend {
         exitCode,
         promptChars: prompt.length,
         turnCount,
+        tokens: ephemeralTokens,
         cancelled: isCancelled,
         ...(errorMessage != null ? { errorMessage } : {}),
         ...(attribution?.ticketId != null ? { ticketId: attribution.ticketId } : {}),
@@ -454,7 +456,13 @@ export class ClaudeBackend implements AgentBackend {
         if (!line.trim()) continue;
         try {
           const parsed = JSON.parse(line);
-          if (parsed.type === 'assistant') turnCount += 1;
+          if (parsed.type === 'assistant') {
+            turnCount += 1;
+            const usage = parsed.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            if (usage) {
+              ephemeralTokens += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+            }
+          }
           const events = extractStreamEvents(parsed);
           for (const event of events) {
             if (event.kind === 'text') fullText += event.delta;
@@ -477,7 +485,13 @@ export class ClaudeBackend implements AgentBackend {
       if (outputBuffer.trim()) {
         try {
           const parsed = JSON.parse(outputBuffer);
-          if (parsed.type === 'assistant') turnCount += 1;
+          if (parsed.type === 'assistant') {
+            turnCount += 1;
+            const usage = parsed.usage as { input_tokens?: number; output_tokens?: number } | undefined;
+            if (usage) {
+              ephemeralTokens += (usage.input_tokens ?? 0) + (usage.output_tokens ?? 0);
+            }
+          }
           const events = extractStreamEvents(parsed);
           for (const event of events) {
             if (event.kind === 'text') fullText += event.delta;

@@ -1075,8 +1075,8 @@ describe('createUsageEngine — injected weights produce non-null lifecycle (Q2 
     writeTranscript(stackRoot, 'sess-eph');
 
     const ephemeralRecords: EphemeralWeightRecord[] = [
-      { ticketId: 'TICKET-EPH', stage: 'spec', turnCount: 5 },
-      { ticketId: 'TICKET-EPH', stage: 'pr', turnCount: 2 },
+      { ticketId: 'TICKET-EPH', stage: 'spec', tokens: 5000 },
+      { ticketId: 'TICKET-EPH', stage: 'pr', tokens: 2000 },
     ];
 
     const engine = createUsageEngine([stackRoot], [], ephemeralRecords);
@@ -1100,9 +1100,9 @@ describe('createUsageEngine — injected weights produce non-null lifecycle (Q2 
       { ticket: 'TICKET-BOTH', phase: 'review', totalTokens: 2000 },
     ];
     const ephemeralRecords: EphemeralWeightRecord[] = [
-      { ticketId: 'TICKET-BOTH', stage: 'refine', turnCount: 3 },
-      { ticketId: 'TICKET-BOTH', stage: 'spec', turnCount: 4 },
-      { ticketId: 'TICKET-BOTH', stage: 'pr', turnCount: 2 },
+      { ticketId: 'TICKET-BOTH', stage: 'refine', tokens: 3000 },
+      { ticketId: 'TICKET-BOTH', stage: 'spec', tokens: 4000 },
+      { ticketId: 'TICKET-BOTH', stage: 'pr', tokens: 2000 },
     ];
 
     const engine = createUsageEngine([stackRoot], stepWeights, ephemeralRecords);
