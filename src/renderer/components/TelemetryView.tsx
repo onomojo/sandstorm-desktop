@@ -7,7 +7,7 @@ import { Donut } from './telemetry/Donut';
 import { StackedBars } from './telemetry/StackedBars';
 import type { TokenClass } from './telemetry/StackedBars';
 import { TOKEN_COLORS, TOKEN_LABELS } from './telemetry/StackedBars';
-import { groupByPipeline, ORCHESTRATOR_TICKET_ID } from './telemetry/utils';
+import { groupByLifecycleStage, LIFECYCLE_STAGES, LIFECYCLE_COLORS, ORCHESTRATOR_TICKET_ID } from './telemetry/utils';
 import { formatTokensCompact } from '../utils/format';
 import { StackedHBar } from './telemetry/StackedHBar';
 
@@ -22,16 +22,6 @@ const RANGE_LABELS: Record<RangeOption, string> = {
   all: 'All',
 };
 
-const LIFECYCLE_STAGES: LifecycleStage[] = ['refine', 'spec', 'execution', 'review', 'verify', 'pr'];
-
-const LIFECYCLE_COLORS: Record<LifecycleStage, string> = {
-  refine: '#c9a227',
-  spec: '#4a7fb5',
-  execution: '#7b5ea7',
-  review: '#d4a854',
-  verify: '#4a8c6e',
-  pr: '#e87b5a',
-};
 
 const MODEL_PALETTE = ['#d4a854', '#7b5ea7', '#4a7fb5', '#4a8c6e', '#c9a227', '#e87b5a'];
 
@@ -188,9 +178,9 @@ export function TelemetryView() {
   // Max ticket cost for bar scaling (zero-cost tickets get affordance, not bars)
   const maxTicketCost = sortedTickets.reduce((m, t) => Math.max(m, t.cost), 0);
 
-  // Pipeline groups
-  const pipelineGroups = groupByPipeline(telemetryByTicket, boardTickets);
-  const pipelineTotal = pipelineGroups.reduce((s, g) => s + g.totalCost, 0);
+  // Pipeline stage groups (lifecycle-based)
+  const lifecycleGroups = groupByLifecycleStage(telemetryByTicket);
+  const lifecycleTotal = lifecycleGroups.reduce((s, g) => s + g.totalCost, 0);
 
   // Month-vs-last bar scaling
   const monthMax = Math.max(
@@ -552,23 +542,23 @@ export function TelemetryView() {
         {/* Panel 5: Spend by pipeline stage */}
         <div className="bg-sandstorm-surface rounded-xl border border-sandstorm-border p-4" data-testid="panel-pipeline">
           <div className="text-sm font-medium text-sandstorm-text mb-3">Spend by Pipeline Stage</div>
-          {/* Single 100% stacked bar */}
+          {/* Single 100% stacked bar — verify excluded (always $0) */}
           <div className="mb-3" data-testid="pipeline-bar">
             <StackedHBar
-              segments={pipelineGroups
+              segments={lifecycleGroups
                 .filter((g) => g.totalCost > 0)
                 .map((g) => ({
                   value: g.totalCost,
                   color: g.color,
-                  label: `${g.displayName}: ${fmt$(g.totalCost)} (${pipelineTotal > 0 ? g.pct.toFixed(1) : '0'}%)`,
+                  label: `${g.displayName}: ${fmt$(g.totalCost)} (${lifecycleTotal > 0 ? g.pct.toFixed(1) : '0'}%)`,
                 }))}
               height={16}
             />
           </div>
-          {/* Per-column figure rows */}
+          {/* Per-stage figure rows */}
           <div className="flex flex-col gap-2">
-            {pipelineGroups.map((group) => (
-              <div key={group.column} className="flex items-center gap-3" data-testid={`pipeline-row-${group.column}`}>
+            {lifecycleGroups.map((group) => (
+              <div key={group.stage} className="flex items-center gap-3" data-testid={`pipeline-row-${group.stage}`}>
                 <span
                   className="w-2 h-2 rounded-full shrink-0"
                   style={{ backgroundColor: group.color }}
@@ -576,15 +566,19 @@ export function TelemetryView() {
                 <span className="text-xs text-sandstorm-text-secondary shrink-0 w-24">{group.displayName}</span>
                 {group.totalCost > 0 ? (
                   <>
-                    <span className="text-xs font-mono text-sandstorm-text" data-testid={`pipeline-cost-${group.column}`}>
+                    <span className="text-xs font-mono text-sandstorm-text" data-testid={`pipeline-cost-${group.stage}`}>
                       {fmt$(group.totalCost)}
                     </span>
-                    <span className="text-xs font-mono text-sandstorm-muted" data-testid={`pipeline-pct-${group.column}`}>
-                      {pipelineTotal > 0 ? `${group.pct.toFixed(1)}%` : '0%'}
+                    <span className="text-xs font-mono text-sandstorm-muted" data-testid={`pipeline-pct-${group.stage}`}>
+                      {lifecycleTotal > 0 ? `${group.pct.toFixed(1)}%` : '0%'}
                     </span>
                   </>
+                ) : group.stage === 'verify' ? (
+                  <span className="text-xs text-sandstorm-muted" data-testid="pipeline-empty-verify">
+                    $0 — no LLM spend
+                  </span>
                 ) : (
-                  <span className="text-xs text-sandstorm-muted" data-testid={`pipeline-empty-${group.column}`}>
+                  <span className="text-xs text-sandstorm-muted" data-testid={`pipeline-empty-${group.stage}`}>
                     $0 — not yet started
                   </span>
                 )}

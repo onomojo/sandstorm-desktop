@@ -1,61 +1,58 @@
 import { ORCHESTRATOR_TICKET_ID } from '../../../shared/constants';
-import type { ByTicketEntry } from '@main/telemetry/types';
+import type { ByTicketEntry, LifecycleCosts } from '@main/telemetry/types';
 export { ORCHESTRATOR_TICKET_ID };
-import type { TicketBoardEntry } from '../../store';
-import { KANBAN_COLUMNS } from '../../types/kanban';
-import type { KanbanColumn } from '../../types/kanban';
 
-export const KANBAN_COLUMN_LABELS: Record<KanbanColumn, string> = {
-  backlog: 'Backlog',
-  refining: 'Refining',
-  spec_ready: 'Spec Ready',
-  in_stack: 'In Stack',
-  pr_open: 'PR Open',
-  merged: 'Merged',
+export type LifecycleStage = keyof LifecycleCosts;
+
+export const LIFECYCLE_STAGES: LifecycleStage[] = ['refine', 'spec', 'execution', 'review', 'verify', 'pr'];
+
+export const LIFECYCLE_STAGE_NAMES: Record<LifecycleStage, string> = {
+  refine: 'Refine',
+  spec: 'Spec',
+  execution: 'Execution',
+  review: 'Review',
+  verify: 'Verify',
+  pr: 'PR',
 };
 
-export const KANBAN_COLUMN_COLORS: Record<KanbanColumn, string> = {
-  backlog: '#7a7094',
-  refining: '#c9a227',
-  spec_ready: '#4a7fb5',
-  in_stack: '#c9a227',
-  pr_open: '#7b5ea7',
-  merged: '#4a8c6e',
+export const LIFECYCLE_COLORS: Record<LifecycleStage, string> = {
+  refine: '#c9a227',
+  spec: '#4a7fb5',
+  execution: '#7b5ea7',
+  review: '#d4a854',
+  verify: '#4a8c6e',
+  pr: '#e87b5a',
 };
 
-export interface PipelineGroup {
-  column: KanbanColumn | 'unattributed';
+export interface LifecycleStageGroup {
+  stage: LifecycleStage;
   displayName: string;
   color: string;
   totalCost: number;
   pct: number;
 }
 
-export function groupByPipeline(
-  byTicket: ByTicketEntry[],
-  boardTickets: TicketBoardEntry[],
-): PipelineGroup[] {
-  const costByColumn: Record<string, number> = {};
+export function groupByLifecycleStage(byTicket: ByTicketEntry[]): LifecycleStageGroup[] {
+  const stageTotals: Partial<Record<LifecycleStage, number>> = {};
 
   for (const entry of byTicket) {
     if (entry.ticketId === ORCHESTRATOR_TICKET_ID) continue;
-    const board = boardTickets.find((t) => t.ticket_id === entry.ticketId);
-    const col = board?.column ?? 'unattributed';
-    costByColumn[col] = (costByColumn[col] ?? 0) + entry.cost;
+    if (entry.lifecycle === null) continue;
+
+    for (const stage of LIFECYCLE_STAGES) {
+      stageTotals[stage] = (stageTotals[stage] ?? 0) + entry.lifecycle[stage];
+    }
   }
 
-  const grandTotal = Object.values(costByColumn).reduce((s, v) => s + v, 0);
+  const grandTotal = LIFECYCLE_STAGES.reduce((s, st) => s + (stageTotals[st] ?? 0), 0);
 
-  const columns: Array<KanbanColumn | 'unattributed'> = [...KANBAN_COLUMNS, 'unattributed'];
-
-  return columns.map((col) => {
-    const totalCost = costByColumn[col] ?? 0;
+  return LIFECYCLE_STAGES.map((stage) => {
+    const totalCost = stageTotals[stage] ?? 0;
     const pct = grandTotal > 0 ? (totalCost / grandTotal) * 100 : 0;
-    const isReal = col !== 'unattributed';
     return {
-      column: col,
-      displayName: isReal ? KANBAN_COLUMN_LABELS[col as KanbanColumn] : 'Unattributed',
-      color: isReal ? KANBAN_COLUMN_COLORS[col as KanbanColumn] : '#b8b0cc',
+      stage,
+      displayName: LIFECYCLE_STAGE_NAMES[stage],
+      color: LIFECYCLE_COLORS[stage],
       totalCost,
       pct,
     };

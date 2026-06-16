@@ -291,12 +291,17 @@ describe('TelemetryView', () => {
   });
 
   describe('Pipeline panel', () => {
-    it('renders pipeline rows for kanban columns', () => {
+    it('renders lifecycle stage rows (not kanban column rows)', () => {
       render(<TelemetryView />);
-      // Should have rows for each KANBAN_COLUMN + unattributed
-      expect(screen.getByTestId('pipeline-row-backlog')).toBeDefined();
-      expect(screen.getByTestId('pipeline-row-merged')).toBeDefined();
-      expect(screen.getByTestId('pipeline-row-unattributed')).toBeDefined();
+      expect(screen.getByTestId('pipeline-row-refine')).toBeDefined();
+      expect(screen.getByTestId('pipeline-row-execution')).toBeDefined();
+      expect(screen.getByTestId('pipeline-row-review')).toBeDefined();
+      expect(screen.getByTestId('pipeline-row-verify')).toBeDefined();
+      expect(screen.getByTestId('pipeline-row-pr')).toBeDefined();
+      // Old kanban-column rows must not exist
+      expect(screen.queryByTestId('pipeline-row-merged')).toBeNull();
+      expect(screen.queryByTestId('pipeline-row-backlog')).toBeNull();
+      expect(screen.queryByTestId('pipeline-row-unattributed')).toBeNull();
     });
 
     it('renders a single stacked bar in the pipeline panel', () => {
@@ -305,29 +310,60 @@ describe('TelemetryView', () => {
       expect(pipelineBar.querySelector('[data-testid="stacked-hbar"]')).toBeTruthy();
     });
 
-    it('shows $0 hint for empty columns', () => {
+    it('verify stage renders "$0 — no LLM spend" label', () => {
       render(<TelemetryView />);
-      // backlog has no tickets → empty hint
-      expect(screen.getByTestId('pipeline-empty-backlog').textContent).toContain('$0 — not yet started');
+      // verify is always $0 by design — must show the explicit label, not look like a bug
+      expect(screen.getByTestId('pipeline-empty-verify').textContent).toContain('$0 — no LLM spend');
     });
 
-    it('shows cost for columns with tickets', () => {
+    it('shows summed lifecycle cost across tickets for execution stage', () => {
       render(<TelemetryView />);
-      // ticket 43 is in 'merged' column with cost 4.5
-      expect(screen.getByTestId('pipeline-cost-merged').textContent).toBe('$4.50');
+      // ticket 42 execution=3.0 + ticket 43 execution=2.5 → $5.50
+      expect(screen.getByTestId('pipeline-cost-execution').textContent).toBe('$5.50');
     });
 
-    it('orchestrator entry is excluded from pipeline grouping (not counted in Unattributed)', () => {
+    it('shows summed lifecycle cost for refine stage', () => {
+      render(<TelemetryView />);
+      // ticket 42 refine=1.0 + ticket 43 refine=0.5 → $1.50
+      expect(screen.getByTestId('pipeline-cost-refine').textContent).toBe('$1.50');
+    });
+
+    it('orchestrator entry is excluded from lifecycle stage rollup', () => {
       setupStore({
         byTicket: [
-          { ticketId: '__orchestrator__', model: null, cost: 2.0, tokens: { input: 10, output: 5, cacheCreate: 0, cacheRead: 0, total: 15 }, cacheHit: 0, lifecycle: null, unpriced: false },
+          {
+            ticketId: '__orchestrator__',
+            model: null,
+            cost: 2.0,
+            tokens: { input: 10, output: 5, cacheCreate: 0, cacheRead: 0, total: 15 },
+            cacheHit: 0,
+            lifecycle: { refine: 1.0, spec: 0.5, execution: 0.5, review: 0.0, verify: 0.0, pr: 0.0 },
+            unpriced: false,
+          },
         ],
       });
       render(<TelemetryView />);
-      const unattribRow = screen.getByTestId('pipeline-row-unattributed');
-      // orchestrator is excluded — unattributed row should show empty state
-      expect(unattribRow.textContent).not.toContain('$2.00');
-      expect(unattribRow.textContent).toContain('$0 — not yet started');
+      // orchestrator excluded — all stages should show empty state
+      expect(screen.getByTestId('pipeline-empty-refine').textContent).toContain('$0');
+    });
+
+    it('tickets with null lifecycle are excluded from stage rollup', () => {
+      setupStore({
+        byTicket: [
+          {
+            ticketId: '99',
+            model: null,
+            cost: 5.0,
+            tokens: { input: 50, output: 25, cacheCreate: 0, cacheRead: 0, total: 75 },
+            cacheHit: 0,
+            lifecycle: null,
+            unpriced: false,
+          },
+        ],
+      });
+      render(<TelemetryView />);
+      // null lifecycle excluded — all stages should show empty state
+      expect(screen.getByTestId('pipeline-empty-execution').textContent).toContain('$0');
     });
   });
 
