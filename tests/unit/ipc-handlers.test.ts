@@ -78,6 +78,7 @@ const {
     setDarkFactoryEnabled: vi.fn(),
     getDb: vi.fn().mockReturnValue({}),
     getStepWeightsByTicket: vi.fn().mockReturnValue([]),
+    getTaskPhaseTokensByTicket: vi.fn().mockReturnValue([]),
     getGlobalBackendSettings: vi.fn().mockReturnValue({ inner_backend: 'claude', outer_backend: 'claude', inner_provider: null, inner_model: null, outer_provider: null, outer_model: null }),
     setGlobalBackendSettings: vi.fn(),
     getProjectBackendSettings: vi.fn().mockReturnValue(null),

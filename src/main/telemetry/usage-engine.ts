@@ -15,10 +15,10 @@
 import fs from 'fs';
 import { parseTranscriptRoots, findJSONLFiles, type ParseResult } from './parser';
 import { aggregateSummary, aggregateDaily, aggregateByModel, aggregateSessions, aggregateByTicket } from './aggregator';
-import type { StepWeightRow, EphemeralWeightRecord } from './aggregator';
+import type { StepWeightRow, EphemeralWeightRecord, TaskPhaseWeightRow } from './aggregator';
 import type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry } from './types';
 
-export type { StepWeightRow, EphemeralWeightRecord };
+export type { StepWeightRow, EphemeralWeightRecord, TaskPhaseWeightRow };
 
 export type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry };
 
@@ -96,6 +96,7 @@ export function createUsageEngine(
   roots: string[],
   stepWeights?: StepWeightRow[],
   ephemeralRecords?: EphemeralWeightRecord[],
+  taskPhaseWeights?: TaskPhaseWeightRow[],
 ): UsageEngine {
   const stackRoots = roots.filter((r) => !r.endsWith('/.claude/projects'));
 
@@ -128,7 +129,7 @@ export function createUsageEngine(
             return date >= range.since && date <= range.until;
           })
         : entries;
-      return aggregateByTicket(filtered, stackRoots, stepWeights, ephemeralRecords);
+      return aggregateByTicket(filtered, stackRoots, stepWeights, ephemeralRecords, taskPhaseWeights);
     },
   };
 }

@@ -40,6 +40,7 @@ describe('appendEphemeralTiming', () => {
       exitCode: 0,
       promptChars: 1234,
       turnCount: 3,
+      tokens: 1500,
       cancelled: false,
       ...partial,
     };
@@ -90,6 +91,12 @@ describe('appendEphemeralTiming', () => {
     expect('errorMessage' in records[0]).toBe(false);
   });
 
+  it('round-trips the tokens field correctly', () => {
+    appendEphemeralTiming(sinkPath, sampleRecord({ tokens: 4200 }));
+    const records = readRecords();
+    expect(records[0].tokens).toBe(4200);
+  });
+
   it('swallows write errors silently', () => {
     expect(() => appendEphemeralTiming('/no/such/dir/timing.jsonl', sampleRecord())).not.toThrow();
   });
@@ -105,6 +112,7 @@ describe('appendEphemeralTiming', () => {
     expect(typeof r.elapsedMs).toBe('number');
     expect(typeof r.promptChars).toBe('number');
     expect(typeof r.turnCount).toBe('number');
+    expect(typeof r.tokens).toBe('number');
     expect(typeof r.cancelled).toBe('boolean');
   });
 });

@@ -1230,6 +1230,146 @@ describe('Registry', () => {
     });
   });
 
+  // ===========================================
+  // getTaskPhaseTokensByTicket
+  // ===========================================
+  describe('getTaskPhaseTokensByTicket', () => {
+    beforeEach(() => {
+      registry.createStack(makeStack({ id: 'phase-ticket-stack', ticket: 'TICKET-1' }));
+    });
+
+    it('returns execution and review rows for a ticket with phase tokens', () => {
+      const task = registry.createTask('phase-ticket-stack', 'test task');
+      registry.updateTaskTokens(task.id, 3000, 1500, {
+        executionInput: 2000,
+        executionOutput: 1000,
+        reviewInput: 1000,
+        reviewOutput: 500,
+      });
+
+      const rows = registry.getTaskPhaseTokensByTicket();
+      const exec = rows.find(r => r.ticket === 'TICKET-1' && r.phase === 'execution');
+      const rev = rows.find(r => r.ticket === 'TICKET-1' && r.phase === 'review');
+
+      expect(exec).toBeDefined();
+      expect(exec!.totalTokens).toBe(3000); // 2000 + 1000
+      expect(rev).toBeDefined();
+      expect(rev!.totalTokens).toBe(1500); // 1000 + 500
+    });
+
+    it('excludes stacks with no ticket (ticket IS NULL)', () => {
+      registry.createStack(makeStack({ id: 'no-ticket-stack', ticket: null }));
+      const task = registry.createTask('no-ticket-stack', 'unticketed task');
+      registry.updateTaskTokens(task.id, 1000, 500, {
+        executionInput: 1000,
+        executionOutput: 500,
+        reviewInput: 0,
+        reviewOutput: 0,
+      });
+
+      const rows = registry.getTaskPhaseTokensByTicket();
+      expect(rows.every(r => r.ticket !== null)).toBe(true);
+      // no-ticket-stack should not appear
+      expect(rows.filter(r => r.phase === 'execution').some(r => r.totalTokens === 1500)).toBe(false);
+    });
+
+    it('HAVING > 0 filter excludes zero-token phases', () => {
+      const task = registry.createTask('phase-ticket-stack', 'exec only task');
+      registry.updateTaskTokens(task.id, 2000, 1000, {
+        executionInput: 2000,
+        executionOutput: 1000,
+        reviewInput: 0,
+        reviewOutput: 0,
+      });
+
+      const rows = registry.getTaskPhaseTokensByTicket();
+      const execRows = rows.filter(r => r.ticket === 'TICKET-1' && r.phase === 'execution');
+      const reviewRows = rows.filter(r => r.ticket === 'TICKET-1' && r.phase === 'review');
+
+      expect(execRows).toHaveLength(1);
+      expect(execRows[0].totalTokens).toBe(3000); // 2000 + 1000
+      expect(reviewRows).toHaveLength(0); // excluded by HAVING > 0
+    });
+
+    it('returns separate rows for each ticket (per-ticket union shape)', () => {
+      registry.createStack(makeStack({ id: 'ticket2-stack', ticket: 'TICKET-2' }));
+      const task1 = registry.createTask('phase-ticket-stack', 'task for t1');
+      registry.updateTaskTokens(task1.id, 1000, 500, {
+        executionInput: 600,
+        executionOutput: 400,
+        reviewInput: 300,
+        reviewOutput: 200,
+      });
+      const task2 = registry.createTask('ticket2-stack', 'task for t2');
+      registry.updateTaskTokens(task2.id, 2000, 1000, {
+        executionInput: 1500,
+        executionOutput: 500,
+        reviewInput: 800,
+        reviewOutput: 200,
+      });
+
+      const rows = registry.getTaskPhaseTokensByTicket();
+      const t1exec = rows.find(r => r.ticket === 'TICKET-1' && r.phase === 'execution');
+      const t1rev = rows.find(r => r.ticket === 'TICKET-1' && r.phase === 'review');
+      const t2exec = rows.find(r => r.ticket === 'TICKET-2' && r.phase === 'execution');
+      const t2rev = rows.find(r => r.ticket === 'TICKET-2' && r.phase === 'review');
+
+      expect(t1exec!.totalTokens).toBe(1000); // 600 + 400
+      expect(t1rev!.totalTokens).toBe(500);   // 300 + 200
+      expect(t2exec!.totalTokens).toBe(2000); // 1500 + 500
+      expect(t2rev!.totalTokens).toBe(1000);  // 800 + 200
+    });
+
+    it('sums across multiple tasks on the same ticket', () => {
+      const task1 = registry.createTask('phase-ticket-stack', 'first task');
+      registry.updateTaskTokens(task1.id, 1000, 500, {
+        executionInput: 800,
+        executionOutput: 200,
+        reviewInput: 0,
+        reviewOutput: 0,
+      });
+      const task2 = registry.createTask('phase-ticket-stack', 'second task');
+      registry.updateTaskTokens(task2.id, 2000, 1000, {
+        executionInput: 1500,
+        executionOutput: 500,
+        reviewInput: 700,
+        reviewOutput: 300,
+      });
+
+      const rows = registry.getTaskPhaseTokensByTicket();
+      const exec = rows.find(r => r.ticket === 'TICKET-1' && r.phase === 'execution');
+      const rev = rows.find(r => r.ticket === 'TICKET-1' && r.phase === 'review');
+
+      expect(exec!.totalTokens).toBe(3000); // (800+200) + (1500+500)
+      expect(rev!.totalTokens).toBe(1000);  // (700+300)
+    });
+
+    it('returns empty array when no tickets have phase tokens', () => {
+      const rows = registry.getTaskPhaseTokensByTicket();
+      // phase-ticket-stack has a ticket but no tasks yet with non-zero phase tokens
+      expect(rows.filter(r => r.ticket === 'TICKET-1')).toHaveLength(0);
+    });
+
+    it('row shape has ticket, phase, and totalTokens fields', () => {
+      const task = registry.createTask('phase-ticket-stack', 'shape test');
+      registry.updateTaskTokens(task.id, 500, 250, {
+        executionInput: 400,
+        executionOutput: 100,
+        reviewInput: 200,
+        reviewOutput: 50,
+      });
+
+      const rows = registry.getTaskPhaseTokensByTicket();
+      const row = rows.find(r => r.ticket === 'TICKET-1' && r.phase === 'execution')!;
+      expect(row).toHaveProperty('ticket');
+      expect(row).toHaveProperty('phase');
+      expect(row).toHaveProperty('totalTokens');
+      expect(typeof row.ticket).toBe('string');
+      expect(['execution', 'review']).toContain(row.phase);
+      expect(typeof row.totalTokens).toBe('number');
+    });
+  });
+
   // ---------------------------------------------------------------------------
   // Dark Factory
   // ---------------------------------------------------------------------------

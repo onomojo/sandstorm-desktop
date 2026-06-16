@@ -1410,6 +1410,7 @@ describe('spawnEphemeralAgent — timing record integration', () => {
     expect(record.exitCode).toBe(0);
     expect(record.promptChars).toBe('hello world'.length);
     expect(record.turnCount).toBe(1);
+    expect(record.tokens).toBe(0); // assistant message without usage → 0
     expect(record.cancelled).toBe(false);
     expect(record.errorMessage).toBeUndefined();
     expect(record.firstChunkAt).not.toBeNull();
@@ -1451,8 +1452,39 @@ describe('spawnEphemeralAgent — timing record integration', () => {
     const record = JSON.parse(timingCalls[0][1] as string);
     expect(record.cancelled).toBe(true);
     expect(record.turnCount).toBe(1);
+    expect(record.tokens).toBe(0); // assistant message without usage → 0
     expect(record.firstChunkAt).not.toBeNull();
     expect(record.errorMessage).toBeUndefined();
+
+    backendUnderTest.destroy();
+  });
+
+  it('accumulates input+output tokens from assistant usage fields', async () => {
+    const fs = await import('fs');
+    vi.mocked(fs.appendFileSync).mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    const { promise } = backendUnderTest.spawnEphemeralAgent('test', '/tmp', 5_000, () => {});
+    const proc = spawnedProcesses[spawnedProcesses.length - 1];
+
+    // Two assistant messages with usage
+    proc.stdout.emit('data', Buffer.from(
+      JSON.stringify({ type: 'assistant', message: { content: [] }, usage: { input_tokens: 100, output_tokens: 50 } }) + '\n'
+    ));
+    proc.stdout.emit('data', Buffer.from(
+      JSON.stringify({ type: 'assistant', message: { content: [] }, usage: { input_tokens: 200, output_tokens: 80 } }) + '\n'
+    ));
+    proc.exitCode = 0;
+    proc.emit('close', 0);
+
+    await promise;
+
+    const timingCalls = vi.mocked(fs.appendFileSync).mock.calls.filter((c) =>
+      String(c[0]).endsWith('sandstorm-desktop-ephemeral-timing.jsonl')
+    );
+    const record = JSON.parse(timingCalls[0][1] as string);
+    expect(record.tokens).toBe(430); // (100+50) + (200+80)
+    expect(record.turnCount).toBe(2);
 
     backendUnderTest.destroy();
   });
@@ -1482,6 +1514,7 @@ describe('spawnEphemeralAgent — timing record integration', () => {
     expect(record.cancelled).toBe(true);
     expect(record.firstChunkAt).toBeNull();
     expect(record.turnCount).toBe(0);
+    expect(record.tokens).toBe(0);
     expect(record.errorMessage).toBeUndefined();
 
     backendUnderTest.destroy();
@@ -1507,6 +1540,7 @@ describe('spawnEphemeralAgent — timing record integration', () => {
     expect(record.exitCode).toBeNull();
     expect(record.errorMessage).toBe('ENOENT: claude not found');
     expect(record.turnCount).toBe(0);
+    expect(record.tokens).toBe(0);
     expect(record.firstChunkAt).toBeNull();
     expect(record.cancelled).toBe(false);
 

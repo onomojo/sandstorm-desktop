@@ -11,6 +11,8 @@ import type { DateRange, TokenCounts, TelemetrySummary, DailyEntry, ByModelEntry
 import { ORCHESTRATOR_TICKET_ID } from './types';
 import { computeLifecycleSplit } from './lifecycle-split';
 import type { LifecycleWeights } from './lifecycle-split';
+import type { TaskPhaseWeightRow } from '../control-plane/registry';
+export type { TaskPhaseWeightRow };
 
 /** Per-ticket step weights read from task_token_steps (injected, electron-free). */
 export interface StepWeightRow {
@@ -23,8 +25,9 @@ export interface StepWeightRow {
 export interface EphemeralWeightRecord {
   ticketId: string;
   stage: string;  // 'refine' | 'spec' | 'pr'
-  turnCount: number;
+  tokens: number;  // input_tokens + output_tokens for the spawn (same unit as StepWeightRow)
 }
+
 
 function dateOf(isoTimestamp: string): string {
   return isoTimestamp.slice(0, 10); // YYYY-MM-DD
@@ -292,6 +295,7 @@ export function aggregateByTicket(
   stackRoots: string[],
   stepWeights: StepWeightRow[] = [],
   ephemeralRecords: EphemeralWeightRecord[] = [],
+  taskPhaseWeights: TaskPhaseWeightRow[] = [],
 ): ByTicketEntry[] {
   // Build stackId → ticket map from manifests
   const stackToTicket = new Map<string, string | null>();
@@ -339,19 +343,47 @@ export function aggregateByTicket(
     return w;
   };
 
+  // Build step weight map: ticket -> phase -> tokens (primary source for execution/review)
+  const stepMap = new Map<string, Map<string, number>>();
   for (const row of stepWeights) {
     if (row.phase !== 'execution' && row.phase !== 'review') continue;
-    const w = getWeights(row.ticket);
-    const stage = row.phase as 'execution' | 'review';
-    w[stage] = (w[stage] ?? 0) + row.totalTokens;
+    if (!stepMap.has(row.ticket)) stepMap.set(row.ticket, new Map());
+    const pm = stepMap.get(row.ticket)!;
+    pm.set(row.phase, (pm.get(row.phase) ?? 0) + row.totalTokens);
   }
 
+  // Build backfill map: ticket -> phase -> tokens (fallback from tasks columns)
+  const backfillMap = new Map<string, Map<string, number>>();
+  for (const row of taskPhaseWeights) {
+    if (!backfillMap.has(row.ticket)) backfillMap.set(row.ticket, new Map());
+    const pm = backfillMap.get(row.ticket)!;
+    pm.set(row.phase, (pm.get(row.phase) ?? 0) + row.totalTokens);
+  }
+
+  // Merge execution/review: per (ticket, phase) use step weight if > 0, else backfill
+  const allExecReviewTickets = new Set([...stepMap.keys(), ...backfillMap.keys()]);
+  for (const ticketId of allExecReviewTickets) {
+    const w = getWeights(ticketId);
+    for (const phase of ['execution', 'review'] as const) {
+      const stepTokens = stepMap.get(ticketId)?.get(phase) ?? 0;
+      if (stepTokens > 0) {
+        w[phase] = (w[phase] ?? 0) + stepTokens;
+      } else {
+        const backfillTokens = backfillMap.get(ticketId)?.get(phase) ?? 0;
+        if (backfillTokens > 0) {
+          w[phase] = (w[phase] ?? 0) + backfillTokens;
+        }
+      }
+    }
+  }
+
+  // Ephemeral records contribute refine/spec/pr weights in the same token unit
   for (const rec of ephemeralRecords) {
     if (!rec.ticketId || !rec.stage) continue;
     if (rec.stage !== 'refine' && rec.stage !== 'spec' && rec.stage !== 'pr') continue;
     const w = getWeights(rec.ticketId);
     const stage = rec.stage as 'refine' | 'spec' | 'pr';
-    w[stage] = (w[stage] ?? 0) + rec.turnCount;
+    w[stage] = (w[stage] ?? 0) + rec.tokens;
   }
 
   return [...byTicket.entries()].map(([ticketId, data]) => {

@@ -823,11 +823,12 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stats:telemetry:byTicket', async (_event, range?: DateRange): Promise<ByTicketEntry[]> => {
     const stepWeights = registry.getStepWeightsByTicket();
+    const taskPhaseWeights = registry.getTaskPhaseTokensByTicket();
     const allEphemeral = readEphemeralTimingRecords(agentBackend.getEphemeralTimingPath());
     const ephemeralRecords = allEphemeral
       .filter((r) => r.ticketId != null && r.stage != null)
-      .map((r) => ({ ticketId: r.ticketId!, stage: r.stage!, turnCount: r.turnCount }));
-    return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords).getByTicket(range);
+      .map((r) => ({ ticketId: r.ticketId!, stage: r.stage!, tokens: r.tokens ?? 0 }));
+    return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords, taskPhaseWeights).getByTicket(range);
   });
 
   ipcMain.handle('stats:telemetry:refresh', async () => {

@@ -13,6 +13,13 @@ import {
   type PresetId,
 } from './routing';
 
+/** Per-ticket phase token totals from tasks columns (backfill when task_token_steps absent). */
+export interface TaskPhaseWeightRow {
+  ticket: string;
+  phase: 'execution' | 'review';
+  totalTokens: number;
+}
+
 export interface Stack {
   id: string;
   project: string;
@@ -1073,6 +1080,34 @@ export class Registry {
       WHERE s.ticket IS NOT NULL
       GROUP BY s.ticket, tts.phase
     `).all() as { ticket: string; phase: string; totalTokens: number }[];
+  }
+
+  /**
+   * Return per-ticket phase token totals from the tasks columns as a backfill
+   * source for lifecycle cost splitting. Used when task_token_steps rows are
+   * absent (e.g. container torn down before step file read).
+   *
+   * Shape mirrors getStepWeightsByTicket: one row per (ticket, phase).
+   * Unit: input_tokens + output_tokens (no cache), same as getStepWeightsByTicket.
+   */
+  getTaskPhaseTokensByTicket(): TaskPhaseWeightRow[] {
+    return this.db.prepare(`
+      SELECT s.ticket, 'execution' AS phase,
+             SUM(t.execution_input_tokens + t.execution_output_tokens) AS totalTokens
+      FROM tasks t
+      JOIN stacks s ON s.id = t.stack_id
+      WHERE s.ticket IS NOT NULL
+      GROUP BY s.ticket
+      HAVING SUM(t.execution_input_tokens + t.execution_output_tokens) > 0
+      UNION ALL
+      SELECT s.ticket, 'review' AS phase,
+             SUM(t.review_input_tokens + t.review_output_tokens) AS totalTokens
+      FROM tasks t
+      JOIN stacks s ON s.id = t.stack_id
+      WHERE s.ticket IS NOT NULL
+      GROUP BY s.ticket
+      HAVING SUM(t.review_input_tokens + t.review_output_tokens) > 0
+    `).all() as TaskPhaseWeightRow[];
   }
 
   /**
