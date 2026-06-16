@@ -15,6 +15,7 @@
  *     "exitCode": number | null,
  *     "promptChars": number,
  *     "turnCount": number (count of type:"assistant" records seen),
+ *     "tokens": number (sum of input_tokens + output_tokens across all assistant messages),
  *     "cancelled": boolean,
  *     "errorMessage"?: string (only on startup error)
  *   }
@@ -31,6 +32,7 @@ export interface EphemeralTimingRecord {
   exitCode: number | null;
   promptChars: number;
   turnCount: number;
+  tokens: number;  // input_tokens + output_tokens summed across assistant messages
   cancelled: boolean;
   errorMessage?: string;
   ticketId?: string;  // optional attribution for lifecycle tracking
