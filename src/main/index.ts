@@ -9,7 +9,7 @@ import { DockerRuntime } from './runtime/docker';
 import { PodmanRuntime } from './runtime/podman';
 import { ContainerRuntime } from './runtime/types';
 import { DockerConnectionManager } from './runtime/docker-connection';
-import { AgentBackend, ClaudeBackend, BackendRouter } from './agent';
+import { AgentBackend, ClaudeBackend, OpenCodeBackend, BackendRouter } from './agent';
 import { registerIpcHandlers } from './ipc';
 import { createTray } from './tray';
 import { SessionMonitor } from './control-plane/session-monitor';
@@ -179,7 +179,10 @@ async function initializeApp(): Promise<void> {
     return routing.model;
   };
   agentBackend = new BackendRouter(
-    { claude: () => new ClaudeBackend(undefined, modelResolver) },
+    {
+      claude: () => new ClaudeBackend(undefined, modelResolver),
+      opencode: () => new OpenCodeBackend(),
+    },
     (projectDir) => registry.getEffectiveBackend(projectDir, 'outer').backend,
   );
   await agentBackend.initialize();

@@ -22,7 +22,10 @@ export default defineConfig({
     build: {
       outDir: 'dist/main',
       lib: {
-        entry: resolve(__dirname, 'src/main/index.ts'),
+        entry: {
+          index: resolve(__dirname, 'src/main/index.ts'),
+          'orchestration-mcp-shim': resolve(__dirname, 'src/main/agent/orchestration-mcp-shim.ts'),
+        },
       },
       rollupOptions: {
         output: {
