@@ -5,14 +5,13 @@
  */
 
 import { spawn, ChildProcess } from 'child_process';
-import { createServer, Server } from 'http';
-import { randomUUID } from 'crypto';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { BrowserWindow, shell } from 'electron';
 import { app } from 'electron';
 import { handleToolCall } from '../claude/tools';
+import { acquireBridge, type BridgeHandle } from './bridge-server';
 import { cliDir } from '../index';
 import {
   AgentBackend,
@@ -85,9 +84,7 @@ export class ClaudeBackend implements AgentBackend {
    * the UI — never a cumulative aggregate across sessions.
    */
   private sessionTokens = new Map<string, OuterClaudeSessionTokens>();
-  private bridgeServer: Server | null = null;
-  private bridgePort = 0;
-  private bridgeToken: string;
+  private bridge: BridgeHandle | null = null;
   private mainWindow: BrowserWindow | null = null;
   private logStream: fs.WriteStream | null = null;
   private timeoutMs: number;
@@ -100,7 +97,6 @@ export class ClaudeBackend implements AgentBackend {
     timeoutMs?: number,
     modelResolver?: (projectDir: string) => string
   ) {
-    this.bridgeToken = randomUUID();
     this.timeoutMs = timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.modelResolver = modelResolver;
     this.initLogger();
@@ -196,48 +192,7 @@ export class ClaudeBackend implements AgentBackend {
   }
 
   async initialize(): Promise<void> {
-    await this.startBridgeServer();
-  }
-
-  private startBridgeServer(): Promise<void> {
-    return new Promise((resolve) => {
-      this.bridgeServer = createServer(async (req, res) => {
-        if (req.method !== 'POST' || req.url !== '/tool-call') {
-          res.writeHead(404);
-          res.end();
-          return;
-        }
-
-        const authToken = req.headers['x-auth-token'];
-        if (authToken !== this.bridgeToken) {
-          res.writeHead(403);
-          res.end();
-          return;
-        }
-
-        let body = '';
-        req.on('data', (chunk: Buffer) => {
-          body += chunk;
-        });
-        req.on('end', async () => {
-          try {
-            const { name, input } = JSON.parse(body);
-            const result = await handleToolCall(name, input);
-            res.writeHead(200, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ result }));
-          } catch (err) {
-            res.writeHead(500, { 'Content-Type': 'application/json' });
-            res.end(JSON.stringify({ error: String(err) }));
-          }
-        });
-      });
-
-      this.bridgeServer.listen(0, '127.0.0.1', () => {
-        const addr = this.bridgeServer!.address() as { port: number };
-        this.bridgePort = addr.port;
-        resolve();
-      });
-    });
+    this.bridge = await acquireBridge(handleToolCall);
   }
 
   // --- Session management (AgentBackend interface) ---
@@ -1010,8 +965,8 @@ export class ClaudeBackend implements AgentBackend {
     const emptyPluginDir = this.ensureEmptyPluginCacheDir();
     const env: Record<string, string | undefined> = {
       ...getClaudeEnv(),
-      SANDSTORM_BRIDGE_URL: `http://127.0.0.1:${this.bridgePort}`,
-      SANDSTORM_BRIDGE_TOKEN: this.bridgeToken,
+      SANDSTORM_BRIDGE_URL: this.bridge?.url ?? '',
+      SANDSTORM_BRIDGE_TOKEN: this.bridge?.token ?? '',
       SANDSTORM_SKILLS_DIR: path.join(cliDir, 'skills'),
       CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
       CLAUDE_CODE_PLUGIN_CACHE_DIR: emptyPluginDir,
@@ -1240,7 +1195,8 @@ export class ClaudeBackend implements AgentBackend {
       }
     }
     this.sessions.clear();
-    this.bridgeServer?.close();
+    this.bridge?.release();
+    this.bridge = null;
     this.logStream?.end();
     this.logStream = null;
     // Close all raw-capture listeners (#299). Fire-and-forget — we don't

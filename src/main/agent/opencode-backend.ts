@@ -1,0 +1,605 @@
+/**
+ * OpenCode implementation of AgentBackend.
+ *
+ * Manages an opencode serve process via @opencode-ai/sdk (pinned at 1.17.7),
+ * maps SSE events to the existing renderer IPC channels, and exposes the
+ * Sandstorm orchestration tools to OpenCode via the shared bridge shim.
+ *
+ * SDK types cited from @opencode-ai/sdk@1.17.7:
+ *   - Event (EventSubscribeResponses[200]) — types.gen.d.ts
+ *   - EventMessagePartUpdated, EventSessionIdle, EventSessionError — types.gen.d.ts
+ *   - StepFinishPart, TextPart, ToolPart — types.gen.d.ts
+ *   - OpencodeClient, createOpencodeClient — client.d.ts / sdk.gen.d.ts
+ *   - createOpencodeServer — server.d.ts
+ *   - SessionPromptAsyncData, SessionCreateData — types.gen.d.ts
+ */
+
+import path from 'path';
+import os from 'os';
+import { BrowserWindow } from 'electron';
+import { app } from 'electron';
+// @opencode-ai/sdk is ESM-only — static require() fails in the CJS bundle.
+// All runtime values are imported dynamically inside initialize() so that
+// Vite keeps them as real import() calls (same pattern as node-pty).
+// Only type-level imports are used here; they are erased by tsc at build time.
+import type {
+  OpencodeClient,
+  Event as OpenCodeEvent,
+  EventMessagePartUpdated,
+  EventSessionIdle,
+  EventSessionError,
+  StepFinishPart,
+  TextPart,
+  ToolPart,
+  Part,
+  Config as OpenCodeConfig,
+} from '@opencode-ai/sdk';
+import { handleToolCall } from '../claude/tools';
+import { acquireBridge, type BridgeHandle } from './bridge-server';
+import { generateOuterOpencodeConfig } from '../opencode-config';
+import {
+  type AgentBackend,
+  type ChatMessage,
+  type AuthStatus,
+  type AgentSessionHistory,
+  type OuterClaudeSessionTokens,
+  type StackInfo,
+  type EphemeralStreamEvent,
+  type EphemeralSessionHandle,
+  zeroSessionTokens,
+} from './types';
+import { appendEphemeralTiming, type EphemeralTimingRecord } from './ephemeral-timing';
+import { cliDir } from '../index';
+
+// ---------------------------------------------------------------------------
+// Internal session state
+// ---------------------------------------------------------------------------
+
+interface TabSession {
+  tabId: string;
+  openCodeSessionId: string;
+  /** In-flight session creation promise; guards against concurrent create() calls. */
+  creatingSession: Promise<string> | null;
+  messages: ChatMessage[];
+  processing: boolean;
+  fullResponse: string;
+  projectDir?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function extractEphemeralEvents(parts: Part[]): {
+  text: string;
+  events: EphemeralStreamEvent[];
+} {
+  let text = '';
+  const events: EphemeralStreamEvent[] = [];
+  for (const part of parts) {
+    if (part.type === 'text') {
+      const tp = part as TextPart;
+      if (tp.text) {
+        text += tp.text;
+        events.push({ kind: 'text', delta: tp.text });
+      }
+    } else if (part.type === 'tool') {
+      const tp = part as ToolPart;
+      const name = tp.tool;
+      const summary = `${name}(...)`;
+      events.push({ kind: 'tool_use', name, summary });
+    }
+  }
+  return { text, events };
+}
+
+// ---------------------------------------------------------------------------
+// OpenCodeBackend
+// ---------------------------------------------------------------------------
+
+export class OpenCodeBackend implements AgentBackend {
+  readonly name = 'OpenCode';
+
+  private client: OpencodeClient | null = null;
+  private serverClose: (() => void) | null = null;
+  private bridge: BridgeHandle | null = null;
+  private mainWindow: BrowserWindow | null = null;
+  private ephemeralTimingPath: string;
+
+  // tabId → session state
+  private tabSessions = new Map<string, TabSession>();
+  // openCodeSessionId → tabId (for persistent sessions)
+  private sessionToTab = new Map<string, string>();
+  // per-tab cumulative token totals
+  private sessionTokens = new Map<string, OuterClaudeSessionTokens>();
+
+  // SSE loop abort controller
+  private eventLoopAbort: AbortController | null = null;
+
+  constructor() {
+    this.ephemeralTimingPath = this.resolveEphemeralTimingPath();
+  }
+
+  private resolveEphemeralTimingPath(): string {
+    try {
+      const dir = typeof app !== 'undefined' && app.getPath ? app.getPath('userData') : os.tmpdir();
+      return path.join(dir, 'sandstorm-desktop-ephemeral-timing.jsonl');
+    } catch {
+      return path.join(os.tmpdir(), 'sandstorm-desktop-ephemeral-timing.jsonl');
+    }
+  }
+
+  // --- Lifecycle ---
+
+  async initialize(): Promise<void> {
+    // Acquire shared bridge (idempotent, ref-counted with ClaudeBackend)
+    this.bridge = await acquireBridge(handleToolCall);
+
+    // Dynamic imports: @opencode-ai/sdk is ESM-only and cannot be require()'d.
+    // Vite keeps import() calls as-is in CJS output (same as node-pty pattern),
+    // so these resolve correctly at runtime even though the bundle is CJS.
+    const { createOpencodeClient } = await import('@opencode-ai/sdk');
+    const { createOpencodeServer } = await import('@opencode-ai/sdk/server');
+
+    // Shim is compiled alongside this module in dist/main/
+    const shimPath = path.join(__dirname, 'orchestration-mcp-shim.cjs');
+
+    // Generate the outer config: registers the bridge shim as an MCP server so
+    // OpenCode can call create_stack, dispatch_task, etc. via standard MCP calls.
+    const outerConfig = generateOuterOpencodeConfig({
+      shimPath,
+      bridgeUrl: this.bridge.url,
+      bridgeToken: this.bridge.token,
+      instructionsPath: path.join(cliDir, 'SANDSTORM_OUTER.md'),
+    });
+
+    // Inject bridge credentials into process env so OpenCode agent bash skill
+    // scripts (curl "$SANDSTORM_BRIDGE_URL/tool-call") keep working unchanged.
+    process.env.SANDSTORM_BRIDGE_URL = this.bridge.url;
+    process.env.SANDSTORM_BRIDGE_TOKEN = this.bridge.token;
+
+    // Start OpenCode server, passing the outer config so the bridge shim MCP
+    // is registered and SANDSTORM_BRIDGE_URL/TOKEN flow into the shim env.
+    const sdkConfig: OpenCodeConfig = {
+      mcp: outerConfig.mcp as OpenCodeConfig['mcp'],
+    };
+    const server = await createOpencodeServer({ hostname: '127.0.0.1', config: sdkConfig });
+    this.serverClose = server.close;
+    this.client = createOpencodeClient({ baseUrl: server.url });
+
+    // Kick off the SSE event loop for persistent-session events
+    this.eventLoopAbort = new AbortController();
+    void this.startEventLoop(this.eventLoopAbort.signal);
+  }
+
+  destroy(): void {
+    this.eventLoopAbort?.abort();
+    this.eventLoopAbort = null;
+    this.serverClose?.();
+    this.serverClose = null;
+    this.client = null;
+    this.bridge?.release();
+    this.bridge = null;
+    this.tabSessions.clear();
+    this.sessionToTab.clear();
+    this.sessionTokens.clear();
+  }
+
+  setMainWindow(win: BrowserWindow | null): void {
+    this.mainWindow = win;
+  }
+
+  // --- SSE event loop (persistent sessions only) ---
+
+  private async startEventLoop(signal: AbortSignal): Promise<void> {
+    if (!this.client) return;
+    try {
+      const { stream } = await this.client.event.subscribe();
+      for await (const event of stream) {
+        if (signal.aborted) break;
+        this.dispatchEvent(event as OpenCodeEvent);
+      }
+    } catch {
+      // Stream closed — server may have shut down
+    }
+  }
+
+  private dispatchEvent(event: OpenCodeEvent): void {
+    switch (event.type) {
+      case 'message.part.updated':
+        this.handlePartUpdated(event as EventMessagePartUpdated);
+        break;
+      case 'session.idle':
+        this.handleSessionIdle(event as EventSessionIdle);
+        break;
+      case 'session.error':
+        this.handleSessionError(event as EventSessionError);
+        break;
+      default:
+        break;
+    }
+  }
+
+  private handlePartUpdated(event: EventMessagePartUpdated): void {
+    const { part, delta } = event.properties;
+    const sessionId = part.sessionID;
+    const tabId = this.sessionToTab.get(sessionId);
+    if (!tabId) return;
+
+    const tabSession = this.tabSessions.get(tabId);
+    if (!tabSession) return;
+
+    if (part.type === 'text' && delta) {
+      tabSession.fullResponse += delta;
+      this.mainWindow?.webContents.send(`agent:output:${tabId}`, delta);
+    } else if (part.type === 'tool') {
+      const toolPart = part as ToolPart;
+      const summary = `\n[tool: ${toolPart.tool}]\n`;
+      tabSession.fullResponse += summary;
+      this.mainWindow?.webContents.send(`agent:output:${tabId}`, summary);
+    } else if (part.type === 'step-finish') {
+      this.accumulateTokens(tabId, part as StepFinishPart);
+    }
+  }
+
+  private handleSessionIdle(event: EventSessionIdle): void {
+    const sessionId = event.properties.sessionID;
+    const tabId = this.sessionToTab.get(sessionId);
+    if (!tabId) return;
+
+    const tabSession = this.tabSessions.get(tabId);
+    if (!tabSession) return;
+
+    if (tabSession.fullResponse) {
+      tabSession.messages.push({ role: 'assistant', content: tabSession.fullResponse });
+    }
+    tabSession.fullResponse = '';
+    tabSession.processing = false;
+    this.mainWindow?.webContents.send(`agent:done:${tabId}`);
+  }
+
+  private handleSessionError(event: EventSessionError): void {
+    const sessionId = event.properties.sessionID;
+    if (!sessionId) return;
+
+    const tabId = this.sessionToTab.get(sessionId);
+    if (!tabId) return;
+
+    const tabSession = this.tabSessions.get(tabId);
+    if (tabSession) tabSession.processing = false;
+
+    const errorMsg = this.formatSessionError(event);
+    this.mainWindow?.webContents.send(`agent:error:${tabId}`, errorMsg);
+  }
+
+  private formatSessionError(event: EventSessionError): string {
+    const err = event.properties.error;
+    if (!err) return 'OpenCode session error';
+    if ('message' in err && typeof (err as { message?: string }).message === 'string') {
+      return (err as { message: string }).message;
+    }
+    return JSON.stringify(err);
+  }
+
+  private accumulateTokens(tabId: string, stepPart: StepFinishPart): void {
+    const { tokens } = stepPart;
+    const prev = this.sessionTokens.get(tabId) ?? zeroSessionTokens();
+    const next: OuterClaudeSessionTokens = {
+      input_tokens: prev.input_tokens + tokens.input,
+      output_tokens: prev.output_tokens + tokens.output,
+      cache_creation_input_tokens: prev.cache_creation_input_tokens + tokens.cache.write,
+      cache_read_input_tokens: prev.cache_read_input_tokens + tokens.cache.read,
+    };
+    this.sessionTokens.set(tabId, next);
+    this.mainWindow?.webContents.send(`agent:token-usage:${tabId}`, next);
+  }
+
+  // --- Session management ---
+
+  sendMessage(tabId: string, message: string, projectDir?: string): void {
+    let tabSession = this.tabSessions.get(tabId);
+    if (!tabSession) {
+      tabSession = {
+        tabId,
+        openCodeSessionId: '',
+        creatingSession: null,
+        messages: [],
+        processing: false,
+        fullResponse: '',
+        projectDir,
+      };
+      this.tabSessions.set(tabId, tabSession);
+    }
+    if (projectDir) tabSession.projectDir = projectDir;
+
+    tabSession.messages.push({ role: 'user', content: message });
+
+    if (tabSession.processing) {
+      this.mainWindow?.webContents.send(`agent:queued:${tabId}`);
+    }
+
+    tabSession.processing = true;
+    this.mainWindow?.webContents.send(`agent:user-message:${tabId}`, message);
+
+    if (!this.client) {
+      tabSession.processing = false;
+      this.mainWindow?.webContents.send(`agent:error:${tabId}`, 'Backend not initialized');
+      return;
+    }
+    void this.sendMessageAsync(tabSession, message);
+  }
+
+  private async sendMessageAsync(tabSession: TabSession, message: string): Promise<void> {
+    if (!this.client) return;
+    const { tabId, projectDir } = tabSession;
+
+    try {
+      // Create session on first message, guarding against concurrent creation.
+      // If two sendMessage calls arrive before session.create() resolves, the
+      // second awaits the first's in-flight promise instead of launching a second.
+      if (!tabSession.openCodeSessionId) {
+        if (!tabSession.creatingSession) {
+          tabSession.creatingSession = this.client.session
+            .create({ query: projectDir ? { directory: projectDir } : undefined })
+            .then(({ data: session }) => {
+              if (!session) throw new Error('Failed to create OpenCode session');
+              tabSession.openCodeSessionId = session.id;
+              this.sessionToTab.set(session.id, tabId);
+              return session.id;
+            })
+            .finally(() => {
+              tabSession.creatingSession = null;
+            });
+        }
+        await tabSession.creatingSession;
+      }
+
+      tabSession.fullResponse = '';
+
+      // Send prompt; completion arrives via SSE events
+      await this.client.session.promptAsync({
+        path: { id: tabSession.openCodeSessionId },
+        query: projectDir ? { directory: projectDir } : undefined,
+        body: { parts: [{ type: 'text', text: message }] },
+      });
+    } catch (err) {
+      tabSession.processing = false;
+      const msg = err instanceof Error ? err.message : String(err);
+      this.mainWindow?.webContents.send(`agent:error:${tabId}`, msg);
+    }
+  }
+
+  getHistory(tabId: string): AgentSessionHistory {
+    const tabSession = this.tabSessions.get(tabId);
+    if (!tabSession) return { messages: [], processing: false };
+    return { messages: [...tabSession.messages], processing: tabSession.processing };
+  }
+
+  cancelSession(tabId: string): void {
+    const tabSession = this.tabSessions.get(tabId);
+    if (!tabSession || !this.client) return;
+    if (tabSession.openCodeSessionId && tabSession.processing) {
+      tabSession.processing = false;
+      this.mainWindow?.webContents.send(`agent:done:${tabId}`);
+      void this.client.session
+        .abort({ path: { id: tabSession.openCodeSessionId } })
+        .catch(() => {});
+    }
+  }
+
+  resetSession(tabId: string): void {
+    const tabSession = this.tabSessions.get(tabId);
+    if (tabSession?.openCodeSessionId) {
+      this.sessionToTab.delete(tabSession.openCodeSessionId);
+      void this.deleteOpenCodeSession(tabSession.openCodeSessionId);
+    }
+    this.tabSessions.delete(tabId);
+    this.sessionTokens.delete(tabId);
+    // Push zero tokens so the UI counter resets immediately
+    this.mainWindow?.webContents.send(`agent:token-usage:${tabId}`, zeroSessionTokens());
+  }
+
+  getSessionTokens(tabId: string): OuterClaudeSessionTokens {
+    return this.sessionTokens.get(tabId) ?? zeroSessionTokens();
+  }
+
+  private async deleteOpenCodeSession(sessionId: string): Promise<void> {
+    if (!this.client || !sessionId) return;
+    try {
+      await this.client.session.delete({ path: { id: sessionId } });
+    } catch {
+      // Best effort
+    }
+  }
+
+  // --- Ephemeral agents ---
+
+  getEphemeralTimingPath(): string {
+    return this.ephemeralTimingPath;
+  }
+
+  spawnEphemeralAgent(
+    prompt: string,
+    projectDir: string,
+    timeoutMs = 300_000,
+    onChunk?: (event: EphemeralStreamEvent) => void,
+    attribution?: { ticketId?: string; stage?: string },
+    model?: string,
+  ): { promise: Promise<string>; cancel: () => void } {
+    if (!this.client) {
+      return { promise: Promise.resolve(''), cancel: () => {} };
+    }
+
+    const spawnedAt = Date.now();
+    let cancelled = false;
+    const abortCtrl = new AbortController();
+
+    const runEphemeral = async (): Promise<string> => {
+      const { data: session } = await this.client!.session.create({
+        query: { directory: projectDir },
+      });
+      if (!session) throw new Error('Failed to create ephemeral session');
+
+      try {
+        const { data: response } = await this.client!.session.prompt({
+          path: { id: session.id },
+          query: { directory: projectDir },
+          body: {
+            parts: [{ type: 'text', text: prompt }],
+            ...(model ? { model: { providerID: 'anthropic', modelID: model } } : {}),
+          },
+          signal: abortCtrl.signal,
+        });
+
+        const parts: Part[] = response?.parts ?? [];
+        const { text, events } = extractEphemeralEvents(parts);
+        if (onChunk) {
+          for (const ev of events) onChunk(ev);
+        }
+        return text;
+      } finally {
+        void this.deleteOpenCodeSession(session.id);
+      }
+    };
+
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+    const cancelFn = (): void => {
+      cancelled = true;
+      abortCtrl.abort();
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    };
+
+    const withTimeout = (): Promise<string> =>
+      new Promise<string>((resolve, reject) => {
+        if (timeoutMs > 0) {
+          timeoutHandle = setTimeout(() => {
+            cancelFn();
+            reject(new Error(`Ephemeral agent timed out after ${timeoutMs}ms`));
+          }, timeoutMs);
+        }
+        runEphemeral()
+          .then((text) => {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            if (cancelled) {
+              reject(new Error('Ephemeral agent cancelled'));
+              return;
+            }
+            const closedAt = Date.now();
+            const record: EphemeralTimingRecord = {
+              ts: new Date(closedAt).toISOString(),
+              spawnedAt,
+              firstChunkAt: null,
+              closedAt,
+              elapsedMs: closedAt - spawnedAt,
+              exitCode: 0,
+              promptChars: prompt.length,
+              turnCount: 1,
+              cancelled,
+              ...(attribution?.ticketId != null ? { ticketId: attribution.ticketId } : {}),
+              ...(attribution?.stage != null ? { stage: attribution.stage } : {}),
+            };
+            appendEphemeralTiming(this.ephemeralTimingPath, record);
+            resolve(text);
+          })
+          .catch((err) => {
+            if (timeoutHandle) clearTimeout(timeoutHandle);
+            reject(err instanceof Error ? err : new Error(String(err)));
+          });
+      });
+
+    return { promise: withTimeout(), cancel: cancelFn };
+  }
+
+  runEphemeralAgent(
+    prompt: string,
+    projectDir: string,
+    timeoutMs = 300_000,
+    attribution?: { ticketId?: string; stage?: string },
+    model?: string,
+  ): Promise<string> {
+    return this.spawnEphemeralAgent(prompt, projectDir, timeoutMs, undefined, attribution, model)
+      .promise;
+  }
+
+  spawnEphemeralSession(
+    initialPrompt: string,
+    projectDir: string,
+    timeoutMs = 300_000,
+    onChunk?: (event: EphemeralStreamEvent) => void,
+  ): EphemeralSessionHandle {
+    if (!this.client) {
+      return {
+        initialResult: Promise.resolve(''),
+        sendFollowUp: () => Promise.resolve(''),
+        dispose: () => {},
+      };
+    }
+
+    let openCodeSessionId = '';
+    let isDisposed = false;
+    let initAbortCtrl = new AbortController();
+
+    const sendTurn = async (text: string, signal: AbortSignal): Promise<string> => {
+      if (isDisposed) throw new Error('Session disposed');
+      const { data: response } = await this.client!.session.prompt({
+        path: { id: openCodeSessionId },
+        query: { directory: projectDir },
+        body: { parts: [{ type: 'text', text }] },
+        signal,
+      });
+      const parts: Part[] = response?.parts ?? [];
+      const { text: resultText, events } = extractEphemeralEvents(parts);
+      if (onChunk) {
+        for (const ev of events) onChunk(ev);
+      }
+      return resultText;
+    };
+
+    const dispose = (): void => {
+      if (isDisposed) return;
+      isDisposed = true;
+      initAbortCtrl.abort();
+      if (openCodeSessionId) {
+        void this.deleteOpenCodeSession(openCodeSessionId);
+      }
+    };
+
+    const initialResult = (async (): Promise<string> => {
+      if (!this.client) throw new Error('OpenCodeBackend not initialized');
+      const { data: session } = await this.client.session.create({
+        query: { directory: projectDir },
+      });
+      if (!session) throw new Error('Failed to create ephemeral session');
+      if (isDisposed) {
+        void this.deleteOpenCodeSession(session.id);
+        throw new Error('Session disposed');
+      }
+      openCodeSessionId = session.id;
+      return sendTurn(initialPrompt, initAbortCtrl.signal);
+    })();
+
+    return {
+      initialResult,
+      sendFollowUp: (followUp: string) => {
+        const ctrl = new AbortController();
+        if (isDisposed) return Promise.reject(new Error('Session disposed'));
+        return sendTurn(followUp, ctrl.signal);
+      },
+      dispose,
+    };
+  }
+
+  // --- Auth ---
+
+  async getAuthStatus(): Promise<AuthStatus> {
+    return { loggedIn: false, expired: false };
+  }
+
+  async login(_mainWindow?: BrowserWindow): Promise<{ success: boolean; error?: string }> {
+    return { success: false, error: 'OpenCode auth not yet implemented (#479)' };
+  }
+
+  async syncCredentials(_stacks: StackInfo[]): Promise<void> {
+    // Full credential matrix deferred to #479
+  }
+}

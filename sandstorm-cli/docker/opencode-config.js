@@ -21,7 +21,8 @@ var __toCommonJS = (mod) => __copyProps(__defProp({}, "__esModule", { value: tru
 var opencode_config_exports = {};
 __export(opencode_config_exports, {
   STATIC_INPUTS: () => STATIC_INPUTS,
-  generateOpencodeConfig: () => generateOpencodeConfig
+  generateOpencodeConfig: () => generateOpencodeConfig,
+  generateOuterOpencodeConfig: () => generateOuterOpencodeConfig
 });
 module.exports = __toCommonJS(opencode_config_exports);
 var STATIC_INPUTS = {};
@@ -60,11 +61,35 @@ function generateOpencodeConfig(_inputs) {
     }
   };
 }
+function generateOuterOpencodeConfig(inputs) {
+  const shimMcpServer = {
+    type: "local",
+    command: [process.execPath, inputs.shimPath],
+    environment: {
+      SANDSTORM_BRIDGE_URL: inputs.bridgeUrl,
+      SANDSTORM_BRIDGE_TOKEN: inputs.bridgeToken
+    }
+  };
+  return {
+    model: "anthropic/claude-sonnet-4-6",
+    provider: {
+      anthropic: {
+        apiKey: "{env:ANTHROPIC_API_KEY}"
+      }
+    },
+    permission: "allow",
+    instructions: [inputs.instructionsPath],
+    mcp: {
+      "sandstorm-bridge": shimMcpServer
+    }
+  };
+}
 if (require.main === module) {
   process.stdout.write(JSON.stringify(generateOpencodeConfig(STATIC_INPUTS), null, 2) + "\n");
 }
 // Annotate the CommonJS export names for ESM import in node:
 0 && (module.exports = {
   STATIC_INPUTS,
-  generateOpencodeConfig
+  generateOpencodeConfig,
+  generateOuterOpencodeConfig
 });

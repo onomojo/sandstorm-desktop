@@ -14,7 +14,7 @@
  *    unknown tab → default to 'claude' (back-compat).
  *  - getAuthStatus/login: route to lastProjectBackendId (most-recently resolved
  *    by any sendMessage or ephemeral call); fall back to 'claude'.
- *  - getEphemeralTimingPath: always delegates to claude (OpenCode timing in #478).
+ *  - getEphemeralTimingPath: delegates to claude; OpenCode shares the same timing file via OpenCodeBackend.getEphemeralTimingPath().
  *  - syncCredentials/initialize/destroy/setMainWindow: fan out to all instantiated
  *    backends.
  *  - Ephemeral calls (run/spawn/spawnSession): call selector(projectDir) → delegate.
@@ -48,6 +48,14 @@ export class BackendRouter implements AgentBackend {
   // Stored so newly-instantiated backends receive the current window reference.
   private mainWindow: BrowserWindow | null = null;
 
+  // Set to true after initialize() completes. Ensures lazily-created backends
+  // are initialized immediately on first use rather than left un-initialized.
+  private _initialized = false;
+
+  // Per-type init promise stored when a backend is created post-initialize().
+  // Callers can await this to ensure the backend is ready before use.
+  private readonly _initPromises: Partial<Record<BackendType, Promise<void>>> = {};
+
   readonly name = 'BackendRouter';
 
   constructor(
@@ -74,6 +82,11 @@ export class BackendRouter implements AgentBackend {
         backend.setMainWindow(this.mainWindow);
       }
       this.instances[type] = backend;
+      if (this._initialized) {
+        // Router already initialized — kick off initialization for this lazily-created
+        // backend. Store the promise so callers can await readiness if needed.
+        this._initPromises[type] = backend.initialize();
+      }
     }
     return this.instances[type]!;
   }
@@ -106,6 +119,10 @@ export class BackendRouter implements AgentBackend {
     await Promise.all(
       (Object.values(this.instances) as AgentBackend[]).map(b => b.initialize()),
     );
+    // Set after all current instances are initialized so that getBackend() can
+    // distinguish "during initialize()" from "after initialize() completed" and
+    // avoid double-initializing backends that were created during this call.
+    this._initialized = true;
   }
 
   destroy(): void {
@@ -154,8 +171,8 @@ export class BackendRouter implements AgentBackend {
   // --- Ephemeral agents ---
 
   getEphemeralTimingPath(): string {
-    // Always delegates to claude — OpenCode ephemeral timing is addressed in #478.
-    // Constructs the claude backend without calling initialize() if not yet cached.
+    // Delegates to claude for the shared timing file. OpenCode ephemeral timing
+    // goes to the same file via OpenCodeBackend.getEphemeralTimingPath().
     return this.getBackend('claude').getEphemeralTimingPath();
   }
 

@@ -69,6 +69,13 @@ describe('BackendRouter', () => {
     expect(opencodeFake.initializeMock).toHaveBeenCalledOnce();
   });
 
+  it('lazily-created backend gets initialize() called when router is already initialized', async () => {
+    await router.initialize();
+    // opencode was not instantiated during initialize() — first use creates it
+    router.sendMessage('tab-opencode', 'hi', '/opencode-project');
+    expect(opencodeFake.initializeMock).toHaveBeenCalledOnce();
+  });
+
   it('destroy() fans out to all instantiated backends', async () => {
     await router.initialize();
     router.sendMessage('tab-opencode', 'hi', '/opencode-project');
