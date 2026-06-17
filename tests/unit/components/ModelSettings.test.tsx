@@ -158,7 +158,8 @@ describe('ModelSettingsModal', () => {
       await waitFor(() => {
         expect(screen.getByTestId('global-inner-backend-provider')).toBeDefined();
         expect(screen.getByTestId('global-inner-backend-model')).toBeDefined();
-        expect(screen.getByTestId('global-inner-backend-cred-input')).toBeDefined();
+        // anthropic (default) uses apiKey field
+        expect(screen.getByTestId('global-inner-backend-cred-apiKey')).toBeDefined();
       });
     });
 
@@ -171,7 +172,7 @@ describe('ModelSettingsModal', () => {
       fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
       await waitFor(() => {
         expect(screen.getByTestId('global-inner-backend-cred-status').textContent).toContain('Set');
-        const credInput = screen.getByTestId('global-inner-backend-cred-input') as HTMLInputElement;
+        const credInput = screen.getByTestId('global-inner-backend-cred-apiKey') as HTMLInputElement;
         expect(credInput.value).toBe('');
       });
     });
@@ -202,23 +203,23 @@ describe('ModelSettingsModal', () => {
       });
     });
 
-    it('calls setSecret with scope=global when credential is entered', async () => {
+    it('calls setSecretBundle with scope=global when credential is entered', async () => {
       render(<ModelSettingsModal />);
       await waitFor(() => {
         expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
       });
       fireEvent.click(screen.getByTestId('global-inner-backend-opencode'));
       await waitFor(() => {
-        expect(screen.getByTestId('global-inner-backend-cred-input')).toBeDefined();
+        expect(screen.getByTestId('global-inner-backend-cred-apiKey')).toBeDefined();
       });
-      fireEvent.change(screen.getByTestId('global-inner-backend-cred-input'), { target: { value: 'sk-test-key' } });
+      fireEvent.change(screen.getByTestId('global-inner-backend-cred-apiKey'), { target: { value: 'sk-test-key' } });
       fireEvent.click(screen.getByTestId('model-settings-save'));
       await waitFor(() => {
-        expect(api.backendSettings.setSecret).toHaveBeenCalledWith('global', 'inner', 'api_key', 'sk-test-key');
+        expect(api.backendSettings.setSecretBundle).toHaveBeenCalledWith('global', 'inner', expect.objectContaining({ apiKey: 'sk-test-key' }));
       });
     });
 
-    it('does not call setSecret when credential input is empty', async () => {
+    it('does not call setSecretBundle when credential input is empty', async () => {
       render(<ModelSettingsModal />);
       await waitFor(() => {
         expect(screen.getByTestId('global-inner-backend-opencode')).toBeDefined();
@@ -229,7 +230,7 @@ describe('ModelSettingsModal', () => {
       await waitFor(() => {
         expect(api.backendSettings.setGlobal).toHaveBeenCalled();
       });
-      expect(api.backendSettings.setSecret).not.toHaveBeenCalled();
+      expect(api.backendSettings.setSecretBundle).not.toHaveBeenCalled();
     });
 
     it('provider change does not clear credential status', async () => {
@@ -246,7 +247,7 @@ describe('ModelSettingsModal', () => {
       fireEvent.change(screen.getByTestId('global-inner-backend-provider'), { target: { value: 'openai' } });
       // Status should still be Set
       expect(screen.getByTestId('global-inner-backend-cred-status').textContent).toContain('Set');
-      expect(api.backendSettings.setSecret).not.toHaveBeenCalled();
+      expect(api.backendSettings.setSecretBundle).not.toHaveBeenCalled();
     });
   });
 
@@ -562,19 +563,19 @@ describe('ModelSettingsModal', () => {
         });
       });
 
-      it('calls setSecret with scope=projectDir when credential is entered for project', async () => {
+      it('calls setSecretBundle with scope=projectDir when credential is entered for project', async () => {
         render(<ModelSettingsModal />);
         await waitFor(() => {
           expect(screen.getByTestId('project-inner-backend-opencode')).toBeDefined();
         });
         fireEvent.click(screen.getByTestId('project-inner-backend-opencode'));
         await waitFor(() => {
-          expect(screen.getByTestId('project-inner-backend-cred-input')).toBeDefined();
+          expect(screen.getByTestId('project-inner-backend-cred-apiKey')).toBeDefined();
         });
-        fireEvent.change(screen.getByTestId('project-inner-backend-cred-input'), { target: { value: 'sk-proj-key' } });
+        fireEvent.change(screen.getByTestId('project-inner-backend-cred-apiKey'), { target: { value: 'sk-proj-key' } });
         fireEvent.click(screen.getByTestId('model-settings-save'));
         await waitFor(() => {
-          expect(api.backendSettings.setSecret).toHaveBeenCalledWith('/myapp', 'inner', 'api_key', 'sk-proj-key');
+          expect(api.backendSettings.setSecretBundle).toHaveBeenCalledWith('/myapp', 'inner', expect.objectContaining({ apiKey: 'sk-proj-key' }));
         });
       });
 
@@ -627,12 +628,12 @@ describe('ModelSettingsModal', () => {
         fireEvent.change(screen.getByTestId('project-inner-backend-provider'), { target: { value: 'openai' } });
         // Status unchanged
         expect(screen.getByTestId('project-inner-backend-cred-status').textContent).toContain('Set');
-        // Save — should not call setSecret (no new cred value entered)
+        // Save — should not call setSecretBundle (no new cred value entered)
         fireEvent.click(screen.getByTestId('model-settings-save'));
         await waitFor(() => {
           expect(api.backendSettings.setProject).toHaveBeenCalled();
         });
-        expect(api.backendSettings.setSecret).not.toHaveBeenCalled();
+        expect(api.backendSettings.setSecretBundle).not.toHaveBeenCalled();
       });
     });
 

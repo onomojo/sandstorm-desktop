@@ -1,5 +1,22 @@
+import { buildProviderEntry } from '../shared/opencode-providers';
+
 export interface OpencodeConfigInputs {
-  // Placeholder for future per-task config: #477 adds model selection, #479 adds provider credentials
+  /**
+   * OpenCode provider ID (e.g. 'anthropic', 'amazon-bedrock', 'ollama').
+   * Defaults to 'anthropic' when omitted.
+   */
+  providerId?: string;
+  /**
+   * Credential bundle for the selected provider (field key → value).
+   * When omitted, env-var placeholders are used (container startup path).
+   */
+  bundle?: Record<string, string>;
+  /**
+   * Override model string, e.g. 'anthropic/claude-sonnet-4-6' or
+   * 'amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0'.
+   * Defaults to 'anthropic/claude-sonnet-4-6'.
+   */
+  model?: string;
 }
 
 export interface OuterOpencodeConfigInputs {
@@ -11,6 +28,12 @@ export interface OuterOpencodeConfigInputs {
   bridgeToken: string;
   /** Absolute path to SANDSTORM_OUTER.md (outer orchestrator system prompt) */
   instructionsPath: string;
+  /** Provider ID for the outer agent (defaults to 'anthropic') */
+  providerId?: string;
+  /** Credential bundle for the outer agent's provider */
+  bundle?: Record<string, string>;
+  /** Override model for the outer agent */
+  model?: string;
 }
 
 interface McpServer {
@@ -21,7 +44,13 @@ interface McpServer {
 
 export interface OpencodeConfig {
   model: string;
-  provider: Record<string, { apiKey: string }>;
+  provider: Record<string, {
+    apiKey?: string;
+    baseURL?: string;
+    region?: string;
+    options?: Record<string, unknown>;
+    [key: string]: unknown;
+  }>;
   permission: string;
   instructions: string[];
   mcp: Record<string, McpServer>;
@@ -32,15 +61,20 @@ export const STATIC_INPUTS: OpencodeConfigInputs = {};
 /**
  * Generate the inner OpenCode config (for stack-internal agents).
  * Chrome DevTools MCP only — no bridge shim.
+ *
+ * When bundle is provided, actual credential values are embedded directly.
+ * When bundle is absent, {env:…} placeholders are used — the container
+ * entrypoint passes the vars via compose env passthrough.
  */
-export function generateOpencodeConfig(_inputs: OpencodeConfigInputs): OpencodeConfig {
+export function generateOpencodeConfig(inputs: OpencodeConfigInputs = {}): OpencodeConfig {
+  const providerId = inputs.providerId ?? 'anthropic';
+  const bundle = inputs.bundle ?? {};
+  const { providerKey, config: providerConfig } = buildProviderEntry(providerId, bundle);
+
   return {
-    model: 'anthropic/claude-sonnet-4-6',
+    model: inputs.model ?? 'anthropic/claude-sonnet-4-6',
     provider: {
-      anthropic: {
-        // Concrete var name finalized in #479; {env:…} placeholder keeps auth clean
-        apiKey: '{env:ANTHROPIC_API_KEY}',
-      },
+      [providerKey]: providerConfig,
     },
     permission: 'allow',
     instructions: ['/home/claude/.claude/CLAUDE.md'],
@@ -87,12 +121,14 @@ export function generateOuterOpencodeConfig(inputs: OuterOpencodeConfigInputs): 
     },
   };
 
+  const providerId = inputs.providerId ?? 'anthropic';
+  const bundle = inputs.bundle ?? {};
+  const { providerKey, config: providerConfig } = buildProviderEntry(providerId, bundle);
+
   return {
-    model: 'anthropic/claude-sonnet-4-6',
+    model: inputs.model ?? 'anthropic/claude-sonnet-4-6',
     provider: {
-      anthropic: {
-        apiKey: '{env:ANTHROPIC_API_KEY}',
-      },
+      [providerKey]: providerConfig,
     },
     permission: 'allow',
     instructions: [inputs.instructionsPath],

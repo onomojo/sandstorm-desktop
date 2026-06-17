@@ -82,7 +82,17 @@ vi.mock('../../../src/main/claude/tools', () => ({
 vi.mock('../../../src/main/index', () => ({
   stackManager: {},
   agentBackend: {},
-  registry: {},
+  registry: {
+    getGlobalBackendSettings: vi.fn().mockReturnValue({
+      inner_backend: 'opencode',
+      inner_provider: 'anthropic',
+      inner_model: null,
+      outer_backend: 'claude',
+      outer_provider: null,
+      outer_model: null,
+    }),
+    getBackendSecretBundle: vi.fn().mockReturnValue(null),
+  },
   cliDir: '/tmp/sandstorm-cli',
 }));
 

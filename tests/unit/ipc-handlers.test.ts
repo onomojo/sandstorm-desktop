@@ -2650,6 +2650,8 @@ describe('IPC Handlers', () => {
       'backendSettings:getEffective',
       'backendSettings:setSecret',
       'backendSettings:secretStatus',
+      'backendSettings:setSecretBundle',
+      'backendSettings:getSecretBundle',
       'modelRouting:getEffective',
       'modelRouting:getProject',
       'modelRouting:setProject',

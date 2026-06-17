@@ -705,6 +705,14 @@ export class Registry {
       try { this.db.exec('ALTER TABLE project_ticket_config ADD COLUMN filter_query TEXT'); } catch { /* exists */ }
       this.setSchemaVersion(24);
     }
+
+    if (currentVersion < 25) {
+      // Provider credential matrix (#479): backend_secrets.value now stores a JSON bundle when
+      // name = '__bundle__'. Existing single-field rows (name='api_key', value='sk-…') remain
+      // readable — getBackendSecretBundle treats them as { [name]: value } for backward compat.
+      // No DDL change: columns are unchanged, only value semantics widen.
+      this.setSchemaVersion(25);
+    }
   }
 
   // --- Projects ---
@@ -1878,6 +1886,38 @@ export class Registry {
       'SELECT value FROM backend_secrets WHERE key = ? AND surface = ?'
     ).get(key, surface) as { value: string } | undefined;
     return row?.value ?? null;
+  }
+
+  /**
+   * Store a multi-field credential bundle for a provider.
+   * Serialises the bundle as JSON in the value column with name='__bundle__'.
+   * Supersedes single-field setBackendSecret for multi-field providers (Bedrock, Ollama).
+   */
+  setBackendSecretBundle(key: string, surface: 'inner' | 'outer', bundle: Record<string, string>): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES (?, ?, ?, ?)'
+    ).run(key, surface, '__bundle__', JSON.stringify(bundle));
+  }
+
+  /**
+   * Read the credential bundle for a provider.
+   * Handles both v25 JSON bundles (name='__bundle__') and legacy single-field rows
+   * (written by setBackendSecret) — legacy rows are returned as { [name]: value }.
+   */
+  getBackendSecretBundle(key: string, surface: 'inner' | 'outer'): Record<string, string> | null {
+    const row = this.db.prepare(
+      'SELECT name, value FROM backend_secrets WHERE key = ? AND surface = ?'
+    ).get(key, surface) as { name: string; value: string } | undefined;
+    if (!row) return null;
+    if (row.name === '__bundle__') {
+      try {
+        return JSON.parse(row.value) as Record<string, string>;
+      } catch {
+        return null;
+      }
+    }
+    // Legacy single-field row: treat as { [name]: value }
+    return row.name && row.value ? { [row.name]: row.value } : null;
   }
 
   // --- Session Monitor Settings ---

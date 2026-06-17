@@ -16,6 +16,7 @@
 
 import path from 'path';
 import os from 'os';
+import { spawn } from 'child_process';
 import { BrowserWindow } from 'electron';
 import { app } from 'electron';
 // @opencode-ai/sdk is ESM-only — static require() fails in the CJS bundle.
@@ -494,6 +495,7 @@ export class OpenCodeBackend implements AgentBackend {
               exitCode: 0,
               promptChars: prompt.length,
               turnCount: 1,
+              tokens: 0,
               cancelled,
               ...(attribution?.ticketId != null ? { ticketId: attribution.ticketId } : {}),
               ...(attribution?.stage != null ? { stage: attribution.stage } : {}),
@@ -599,7 +601,56 @@ export class OpenCodeBackend implements AgentBackend {
     return { success: false, error: 'OpenCode auth not yet implemented (#479)' };
   }
 
-  async syncCredentials(_stacks: StackInfo[]): Promise<void> {
-    // Full credential matrix deferred to #479
+  async syncCredentials(stacks: StackInfo[]): Promise<void> {
+    // Dynamic import to avoid a circular dependency at load time.
+    const { registry } = await import('../index');
+
+    const globalSettings = registry.getGlobalBackendSettings();
+    const providerId = globalSettings.inner_provider ?? 'anthropic';
+    const bundle = registry.getBackendSecretBundle('global', 'inner') ?? {};
+
+    for (const stack of stacks) {
+      if (stack.status !== 'running' && stack.status !== 'up') continue;
+      const claudeService = stack.services?.find((s) => s.name === 'claude');
+      if (!claudeService?.containerId) continue;
+
+      try {
+        // 1. Clean auth.json so env-based credentials always take precedence.
+        //    Prevents an OAuth token cached in auth.json from overriding the
+        //    configured env credentials (the OAuth-overrides-config trap).
+        await this.execInContainer(claudeService.containerId, [
+          'bash', '-c',
+          'rm -f ~/.local/share/opencode/auth.json && mkdir -p ~/.local/share/opencode',
+        ]);
+
+        // 2. Write the generated OpenCode config with actual credential values
+        //    directly to the config file the task runner reads.
+        const { generateOpencodeConfig } = await import('../opencode-config');
+        const config = generateOpencodeConfig({ providerId, bundle, model: globalSettings.inner_model ?? undefined });
+        const configJson = JSON.stringify(config, null, 2);
+
+        const writeProc = spawn('docker', [
+          'exec', '-i', '-u', 'claude', claudeService.containerId,
+          'bash', '-c', 'cat > /tmp/sandstorm-opencode.json',
+        ], { stdio: ['pipe', 'ignore', 'ignore'] });
+        writeProc.on('error', () => {});
+        writeProc.stdin.write(configJson);
+        writeProc.stdin.end();
+        await new Promise<void>((resolve) => writeProc.on('close', () => resolve()));
+      } catch {
+        // Best effort per container
+      }
+    }
+  }
+
+  private execInContainer(containerId: string, cmd: string[]): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const proc = spawn('docker', ['exec', '-u', 'claude', containerId, ...cmd], {
+        stdio: ['pipe', 'ignore', 'ignore'],
+      });
+      proc.stdin.end();
+      proc.on('close', () => resolve());
+      proc.on('error', () => resolve());
+    });
   }
 }

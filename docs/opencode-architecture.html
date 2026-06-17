@@ -896,18 +896,100 @@ as container ENV VARS, never baked into the image.
       Ollama — the two most-requested "we can't use Claude Code" cases — are first-class.
     </p>
 
+    <h3>5.1 Credential matrix (first-class providers)</h3>
+
+    <p>
+      The source of truth for which fields each provider needs lives in
+      <code>src/shared/opencode-providers.ts</code> (<code>PROVIDER_METADATA</code>). The UI renders
+      exactly those fields; the config generator reads the same object. This keeps provider knowledge
+      in one place.
+    </p>
+
     <table class="smell-table">
       <thead>
-        <tr><th>Provider</th><th>How model is named</th><th>Credential delivery (container env / config)</th></tr>
+        <tr><th>Provider</th><th>Config key</th><th>Required fields</th><th>Optional fields</th><th>Env passthrough</th></tr>
       </thead>
       <tbody>
-        <tr><td><strong>Anthropic</strong></td><td><code>anthropic/claude-…</code></td><td>OAuth (existing sync) or <code>ANTHROPIC_API_KEY</code></td></tr>
-        <tr><td><strong>OpenAI</strong></td><td><code>openai/gpt-…</code></td><td><code>OPENAI_API_KEY</code></td></tr>
-        <tr><td><strong>Amazon Bedrock</strong></td><td><code>amazon-bedrock/…</code></td><td>AWS chain: <code>AWS_BEARER_TOKEN_BEDROCK</code> or <code>AWS_PROFILE</code> / access keys + <code>region</code></td></tr>
-        <tr><td><strong>Local Ollama</strong></td><td>custom provider, OpenAI-compatible</td><td>base URL <code>http://host:11434/v1</code> — no key</td></tr>
-        <tr><td><strong>OpenRouter / others</strong></td><td><code>openrouter/…</code></td><td>provider <code>apiKey</code> via <code>{env:VAR}</code></td></tr>
+        <tr>
+          <td><strong>Anthropic</strong></td>
+          <td><code>anthropic</code></td>
+          <td><code>apiKey</code></td>
+          <td>—</td>
+          <td><code>ANTHROPIC_API_KEY</code></td>
+        </tr>
+        <tr>
+          <td><strong>Amazon Bedrock</strong></td>
+          <td><code>amazon-bedrock</code></td>
+          <td><code>region</code></td>
+          <td><code>bearerToken</code> <em>or</em> <code>accessKeyId</code> + <code>secretAccessKey</code>; <code>profile</code></td>
+          <td><code>AWS_BEARER_TOKEN_BEDROCK</code>, <code>AWS_ACCESS_KEY_ID</code>, <code>AWS_SECRET_ACCESS_KEY</code>, <code>AWS_REGION</code>, <code>AWS_PROFILE</code></td>
+        </tr>
+        <tr>
+          <td><strong>Ollama</strong></td>
+          <td><code>openai</code> (OpenAI-compatible)</td>
+          <td><code>baseUrl</code></td>
+          <td>—</td>
+          <td>none — config-only</td>
+        </tr>
+        <tr>
+          <td><strong>Other</strong></td>
+          <td>provider ID as-is</td>
+          <td><code>apiKey</code></td>
+          <td>—</td>
+          <td><code>{PROVIDER}_API_KEY</code></td>
+        </tr>
       </tbody>
     </table>
+
+    <p>
+      <strong>Bedrock bearer token precedence.</strong> When both <code>bearerToken</code> and
+      <code>accessKeyId</code>/<code>secretAccessKey</code> are present, the bearer token wins and the
+      access keys are omitted from the generated config. The <code>options</code> block is always nested
+      under the <code>amazon-bedrock</code> provider key.
+    </p>
+
+    <h3>5.2 Config injection flow</h3>
+
+    <p>
+      Credentials are stored as a JSON bundle (name = <code>__bundle__</code>) in the
+      <code>backend_secrets</code> table (schema v25). The
+      <code>OPENCODE_CONFIG</code> env var points to
+      <code>/tmp/sandstorm-opencode.json</code>, which is generated at container startup by
+      <code>opencode-config.js</code> (bundled inside the Docker image). When credentials are configured,
+      <code>syncCredentials</code> overwrites this file with a config that embeds the actual values.
+    </p>
+
+    <p>
+      <strong><code>{env:VAR}</code> fallback.</strong> When no credential bundle is stored,
+      <code>generateOpencodeConfig</code> emits <code>{env:ANTHROPIC_API_KEY}</code> (and equivalent
+      for other providers). OpenCode resolves these placeholders from the container environment at
+      runtime. The compose generator passes all relevant AWS and Anthropic env vars through from the
+      host so ambient credentials (e.g. an IAM instance role or a shell-exported key) work without
+      any UI input.
+    </p>
+
+    <h3>5.3 Clean-auth precedence guard</h3>
+
+    <div class="callout smell">
+      <strong>Credential precedence trap.</strong> A stored OpenCode <code>~/.local/share/opencode/auth.json</code>
+      OAuth token silently overrides keys injected via config — a known upstream behavior. This means
+      a user who previously ran <code>opencode auth</code> inside a container would have their stored
+      OAuth token take precedence over the provider configured in Sandstorm.
+    </div>
+
+    <p>
+      <code>OpenCodeBackend.syncCredentials</code> is called whenever running stacks need credential
+      updates. For each running stack that has a <code>claude</code> service container, it:
+    </p>
+    <ol>
+      <li>Deletes <code>~/.local/share/opencode/auth.json</code> inside the container via <code>docker exec</code>, removing any cached OAuth token.</li>
+      <li>Generates a fresh <code>opencode.json</code> config with the active provider and credential bundle embedded as literal values.</li>
+      <li>Writes the config to <code>/tmp/sandstorm-opencode.json</code> inside the container via <code>docker exec -i … bash -c 'cat &gt; /tmp/sandstorm-opencode.json'</code>.</li>
+    </ol>
+    <p>
+      Result: the configured credentials always take effect deterministically regardless of any prior
+      interactive auth state in the container.
+    </p>
 
     <p>
       <strong>Autonomy.</strong> Inside the sandboxed container we want zero permission prompts, exactly
@@ -916,13 +998,6 @@ as container ENV VARS, never baked into the image.
       <code>"permission": "allow"</code> in the generated config. We use the config form so it also
       covers the server-driven outer path.
     </p>
-
-    <div class="callout smell">
-      <strong>Credential precedence trap.</strong> A stored OpenCode <code>auth.json</code> OAuth token
-      can silently override keys injected via config (known upstream issue). In-container we start from
-      a clean <code>auth.json</code> and inject via env vars so the active credential is deterministic
-      and matches what the user configured in the modal.
-    </div>
 
     <!-- ============================================================= §6 -->
     <h2><span class="num">§ 6</span> Telemetry — stays on the rails</h2>

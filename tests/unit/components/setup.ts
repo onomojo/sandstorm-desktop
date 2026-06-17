@@ -121,6 +121,8 @@ export function mockSandstormApi() {
       getEffective: vi.fn().mockResolvedValue({ backend: 'claude' }),
       setSecret: vi.fn().mockResolvedValue(undefined),
       secretStatus: vi.fn().mockResolvedValue({ set: false }),
+      setSecretBundle: vi.fn().mockResolvedValue(undefined),
+      getSecretBundle: vi.fn().mockResolvedValue(null),
     },
     projectTicketConfig: {
       get: vi.fn().mockResolvedValue(null),
