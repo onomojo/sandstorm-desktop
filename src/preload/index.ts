@@ -154,6 +154,8 @@ export interface SandstormAPI {
     getEffective: (projectDir: string, surface: 'inner' | 'outer') => Promise<{ backend: 'claude' | 'opencode'; provider?: string; model?: string }>;
     setSecret: (scope: 'global' | string, surface: 'inner' | 'outer', name: string, value: string) => Promise<void>;
     secretStatus: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<{ set: boolean }>;
+    setSecretBundle: (scope: 'global' | string, surface: 'inner' | 'outer', bundle: Record<string, string>) => Promise<void>;
+    getSecretBundle: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<Record<string, string> | null>;
   };
   modelRouting: {
     getEffective: (projectDir: string) => Promise<Record<string, { backend: string; model: string }>>;
@@ -407,6 +409,8 @@ const api: SandstormAPI = {
     getEffective: (projectDir, surface) => ipcRenderer.invoke('backendSettings:getEffective', projectDir, surface),
     setSecret: (scope, surface, name, value) => ipcRenderer.invoke('backendSettings:setSecret', scope, surface, name, value),
     secretStatus: (scope, surface) => ipcRenderer.invoke('backendSettings:secretStatus', scope, surface),
+    setSecretBundle: (scope, surface, bundle) => ipcRenderer.invoke('backendSettings:setSecretBundle', scope, surface, bundle),
+    getSecretBundle: (scope, surface) => ipcRenderer.invoke('backendSettings:getSecretBundle', scope, surface),
   },
   modelRouting: {
     getEffective: (projectDir) => ipcRenderer.invoke('modelRouting:getEffective', projectDir),

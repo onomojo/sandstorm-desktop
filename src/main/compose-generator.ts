@@ -253,6 +253,16 @@ export function generateComposeYaml(analysis: ComposeAnalysis): string {
   lines.push('      - SANDSTORM_PROJECT');
   lines.push('      - SANDSTORM_STACK_ID');
   lines.push('      - OPENCODE_CONFIG');
+  // Provider credential passthrough — inherited from host process.env when set.
+  // The stack launcher populates these from the configured backend_secrets bundle
+  // before calling docker compose up. OpenCode resolves {env:…} placeholders in
+  // the generated config against the container's environment at runtime.
+  lines.push('      - ANTHROPIC_API_KEY');
+  lines.push('      - AWS_BEARER_TOKEN_BEDROCK');
+  lines.push('      - AWS_ACCESS_KEY_ID');
+  lines.push('      - AWS_SECRET_ACCESS_KEY');
+  lines.push('      - AWS_REGION');
+  lines.push('      - AWS_PROFILE');
   lines.push('    volumes:');
   lines.push('      - ${SANDSTORM_WORKSPACE}:/app');
   lines.push('      - ${SANDSTORM_CONTEXT}:/sandstorm-context:ro');

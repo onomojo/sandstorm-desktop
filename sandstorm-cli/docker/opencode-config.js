@@ -25,15 +25,56 @@ __export(opencode_config_exports, {
   generateOuterOpencodeConfig: () => generateOuterOpencodeConfig
 });
 module.exports = __toCommonJS(opencode_config_exports);
-var STATIC_INPUTS = {};
-function generateOpencodeConfig(_inputs) {
-  return {
-    model: "anthropic/claude-sonnet-4-6",
-    provider: {
-      anthropic: {
-        // Concrete var name finalized in #479; {env:…} placeholder keeps auth clean
-        apiKey: "{env:ANTHROPIC_API_KEY}"
+
+// src/shared/opencode-providers.ts
+function buildProviderEntry(providerId, bundle) {
+  switch (providerId) {
+    case "anthropic":
+      return {
+        providerKey: "anthropic",
+        config: bundle.apiKey ? { apiKey: bundle.apiKey } : { apiKey: "{env:ANTHROPIC_API_KEY}" }
+      };
+    case "amazon-bedrock": {
+      const options = {};
+      if (bundle.region) options.region = bundle.region;
+      if (bundle.bearerToken) {
+        options.bearerToken = bundle.bearerToken;
+      } else {
+        if (bundle.accessKeyId) options.accessKeyId = bundle.accessKeyId;
+        if (bundle.secretAccessKey) options.secretAccessKey = bundle.secretAccessKey;
+        if (bundle.profile) options.profile = bundle.profile;
       }
+      return {
+        providerKey: "amazon-bedrock",
+        config: Object.keys(options).length > 0 ? { options } : {}
+      };
+    }
+    case "ollama":
+      return {
+        providerKey: "openai",
+        config: {
+          apiKey: "ollama",
+          ...bundle.baseUrl ? { baseURL: bundle.baseUrl } : {}
+        }
+      };
+    default:
+      return {
+        providerKey: providerId,
+        config: bundle.apiKey ? { apiKey: bundle.apiKey } : { apiKey: `{env:${providerId.toUpperCase().replace(/-/g, "_")}_API_KEY}` }
+      };
+  }
+}
+
+// src/main/opencode-config.ts
+var STATIC_INPUTS = {};
+function generateOpencodeConfig(inputs = {}) {
+  const providerId = inputs.providerId ?? "anthropic";
+  const bundle = inputs.bundle ?? {};
+  const { providerKey, config: providerConfig } = buildProviderEntry(providerId, bundle);
+  return {
+    model: inputs.model ?? "anthropic/claude-sonnet-4-6",
+    provider: {
+      [providerKey]: providerConfig
     },
     permission: "allow",
     instructions: ["/home/claude/.claude/CLAUDE.md"],
@@ -70,12 +111,13 @@ function generateOuterOpencodeConfig(inputs) {
       SANDSTORM_BRIDGE_TOKEN: inputs.bridgeToken
     }
   };
+  const providerId = inputs.providerId ?? "anthropic";
+  const bundle = inputs.bundle ?? {};
+  const { providerKey, config: providerConfig } = buildProviderEntry(providerId, bundle);
   return {
-    model: "anthropic/claude-sonnet-4-6",
+    model: inputs.model ?? "anthropic/claude-sonnet-4-6",
     provider: {
-      anthropic: {
-        apiKey: "{env:ANTHROPIC_API_KEY}"
-      }
+      [providerKey]: providerConfig
     },
     permission: "allow",
     instructions: [inputs.instructionsPath],

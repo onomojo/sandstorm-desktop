@@ -491,6 +491,8 @@ interface AppState {
   getEffectiveBackend: (projectDir: string, surface: 'inner' | 'outer') => Promise<{ backend: 'claude' | 'opencode'; provider?: string; model?: string }>;
   setBackendSecret: (scope: 'global' | string, surface: 'inner' | 'outer', value: string) => Promise<void>;
   getBackendSecretStatus: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<{ set: boolean }>;
+  setBackendSecretBundle: (scope: 'global' | string, surface: 'inner' | 'outer', bundle: Record<string, string>) => Promise<void>;
+  getBackendSecretBundle: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<Record<string, string> | null>;
 
   // Project ticket config
   getProjectTicketConfig: (projectDir: string) => Promise<ProjectTicketConfig | null>;
@@ -794,6 +796,8 @@ declare global {
         getEffective: (projectDir: string, surface: 'inner' | 'outer') => Promise<{ backend: 'claude' | 'opencode'; provider?: string; model?: string }>;
         setSecret: (scope: 'global' | string, surface: 'inner' | 'outer', name: string, value: string) => Promise<void>;
         secretStatus: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<{ set: boolean }>;
+        setSecretBundle: (scope: 'global' | string, surface: 'inner' | 'outer', bundle: Record<string, string>) => Promise<void>;
+        getSecretBundle: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<Record<string, string> | null>;
       };
       projectTicketConfig: {
         get: (projectDir: string) => Promise<ProjectTicketConfig | null>;
@@ -1129,6 +1133,14 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   getBackendSecretStatus: async (scope, surface) => {
     return window.sandstorm.backendSettings.secretStatus(scope, surface);
+  },
+
+  setBackendSecretBundle: async (scope, surface, bundle) => {
+    await window.sandstorm.backendSettings.setSecretBundle(scope, surface, bundle);
+  },
+
+  getBackendSecretBundle: async (scope, surface) => {
+    return window.sandstorm.backendSettings.getSecretBundle(scope, surface);
   },
 
   // Project ticket config

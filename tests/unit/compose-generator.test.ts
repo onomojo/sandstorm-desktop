@@ -266,6 +266,13 @@ describe('compose-generator', () => {
       expect(yaml).not.toContain(':/home/claude/.claude ');
       // OpenCode config env passthrough (additive; Claude stacks unchanged beyond this line)
       expect(yaml).toContain('      - OPENCODE_CONFIG');
+      // Provider credential env passthrough
+      expect(yaml).toContain('      - ANTHROPIC_API_KEY');
+      expect(yaml).toContain('      - AWS_BEARER_TOKEN_BEDROCK');
+      expect(yaml).toContain('      - AWS_ACCESS_KEY_ID');
+      expect(yaml).toContain('      - AWS_SECRET_ACCESS_KEY');
+      expect(yaml).toContain('      - AWS_REGION');
+      expect(yaml).toContain('      - AWS_PROFILE');
     });
 
     it('includes network overrides when named networks exist', () => {

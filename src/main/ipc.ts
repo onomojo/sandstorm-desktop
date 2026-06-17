@@ -969,6 +969,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return { set: registry.hasBackendSecret(key, surface) };
   });
 
+  ipcMain.handle('backendSettings:setSecretBundle', (_event, scope: string, surface: 'inner' | 'outer', bundle: Record<string, string>) => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
+    registry.setBackendSecretBundle(key, surface, bundle);
+  });
+
+  ipcMain.handle('backendSettings:getSecretBundle', (_event, scope: string, surface: 'inner' | 'outer') => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
+    return registry.getBackendSecretBundle(key, surface);
+  });
+
   // --- Model Routing ---
 
   ipcMain.handle('modelRouting:getEffective', (_event, projectDir: string) => {

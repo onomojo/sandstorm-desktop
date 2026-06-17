@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAppStore, ModelSettings as ModelSettingsType, ProjectTicketConfig } from '../store';
+import { PROVIDER_METADATA, getProviderMeta } from '../../shared/opencode-providers';
 
 type Tab = 'global' | 'project' | 'ticketing';
 
@@ -33,14 +34,6 @@ const PROJECT_BACKEND_OPTIONS = [
   { id: 'global', label: 'Use Global Default' },
   { id: 'claude', label: 'Claude Code' },
   { id: 'opencode', label: 'OpenCode' },
-] as const;
-
-const OPENCODE_PROVIDERS = [
-  { id: 'anthropic', label: 'Anthropic' },
-  { id: 'openai', label: 'OpenAI' },
-  { id: 'amazon-bedrock', label: 'Amazon Bedrock' },
-  { id: 'ollama', label: 'Ollama' },
-  { id: 'openrouter', label: 'OpenRouter' },
 ] as const;
 
 function ModelButton({
@@ -82,8 +75,8 @@ function BackendSelector({
   onProviderChange,
   model,
   onModelChange,
-  credInput,
-  onCredInputChange,
+  credBundle,
+  onCredBundleChange,
   credSet,
   testId,
 }: {
@@ -94,12 +87,14 @@ function BackendSelector({
   onProviderChange: (v: string) => void;
   model: string;
   onModelChange: (v: string) => void;
-  credInput: string;
-  onCredInputChange: (v: string) => void;
+  credBundle: Record<string, string>;
+  onCredBundleChange: (bundle: Record<string, string>) => void;
   credSet: boolean;
   testId: string;
 }) {
   const options = scope === 'global' ? GLOBAL_BACKEND_OPTIONS : PROJECT_BACKEND_OPTIONS;
+  const providerMeta = getProviderMeta(provider);
+
   return (
     <div className="space-y-2">
       <div className="flex gap-2 flex-wrap">
@@ -125,11 +120,11 @@ function BackendSelector({
             <label className="block text-[10px] font-medium text-sandstorm-text-secondary mb-1">Provider</label>
             <select
               value={provider}
-              onChange={(e) => { onProviderChange(e.target.value); }}
+              onChange={(e) => { onProviderChange(e.target.value); onCredBundleChange({}); }}
               className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
               data-testid={`${testId}-provider`}
             >
-              {OPENCODE_PROVIDERS.map((p) => (
+              {PROVIDER_METADATA.map((p) => (
                 <option key={p.id} value={p.id}>{p.label}</option>
               ))}
             </select>
@@ -140,27 +135,48 @@ function BackendSelector({
               type="text"
               value={model}
               onChange={(e) => { onModelChange(e.target.value); }}
-              placeholder="e.g. claude-sonnet-4-5"
+              placeholder="e.g. anthropic/claude-sonnet-4-6"
               className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
               data-testid={`${testId}-model`}
             />
           </div>
-          <div>
-            <label className="block text-[10px] font-medium text-sandstorm-text-secondary mb-1">
-              API Credential
+          <div className="space-y-1.5" data-testid={`${testId}-cred-fields`}>
+            <label className="block text-[10px] font-medium text-sandstorm-text-secondary">
+              Credentials
               <span className="ml-2 font-normal text-sandstorm-muted" data-testid={`${testId}-cred-status`}>
                 {credSet ? '(Set)' : '(Not set)'}
               </span>
             </label>
-            <input
-              type="password"
-              value={credInput}
-              onChange={(e) => { onCredInputChange(e.target.value); }}
-              placeholder={credSet ? 'Enter new value to update' : 'Enter API key'}
-              className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
-              data-testid={`${testId}-cred-input`}
-              autoComplete="new-password"
-            />
+            {providerMeta ? (
+              providerMeta.fields.map((field) => (
+                <div key={field.key}>
+                  <label className="block text-[10px] text-sandstorm-muted mb-0.5">
+                    {field.label}{field.required ? ' *' : ''}
+                  </label>
+                  <input
+                    type={field.type === 'password' ? 'password' : 'text'}
+                    value={credBundle[field.key] ?? ''}
+                    onChange={(e) => {
+                      onCredBundleChange({ ...credBundle, [field.key]: e.target.value });
+                    }}
+                    placeholder={credSet ? 'Enter new value to update' : (field.placeholder ?? '')}
+                    className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+                    data-testid={`${testId}-cred-${field.key}`}
+                    autoComplete="new-password"
+                  />
+                </div>
+              ))
+            ) : (
+              <input
+                type="password"
+                value={credBundle['apiKey'] ?? ''}
+                onChange={(e) => { onCredBundleChange({ ...credBundle, apiKey: e.target.value }); }}
+                placeholder={credSet ? 'Enter new value to update' : 'Enter API key'}
+                className="w-full bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-1.5 text-xs text-sandstorm-text focus:outline-none focus:ring-1 focus:ring-sandstorm-accent"
+                data-testid={`${testId}-cred-input`}
+                autoComplete="new-password"
+              />
+            )}
           </div>
         </div>
       )}
@@ -189,6 +205,8 @@ export function ModelSettingsModal() {
     getEffectiveBackend,
     setBackendSecret,
     getBackendSecretStatus,
+    setBackendSecretBundle,
+    getBackendSecretBundle,
   } = useAppStore();
 
   const project = activeProject();
@@ -203,12 +221,12 @@ export function ModelSettingsModal() {
   const [globalInnerBackend, setGlobalInnerBackend] = useState<string>(globalBackendSettings.inner_backend ?? 'claude');
   const [globalInnerProvider, setGlobalInnerProvider] = useState<string>(globalBackendSettings.inner_provider ?? 'anthropic');
   const [globalInnerModel, setGlobalInnerModel] = useState<string>(globalBackendSettings.inner_model ?? '');
-  const [globalInnerCredInput, setGlobalInnerCredInput] = useState('');
+  const [globalInnerCredBundle, setGlobalInnerCredBundle] = useState<Record<string, string>>({});
   const [globalInnerCredSet, setGlobalInnerCredSet] = useState(false);
   const [globalOuterBackend, setGlobalOuterBackend] = useState<string>(globalBackendSettings.outer_backend ?? 'claude');
   const [globalOuterProvider, setGlobalOuterProvider] = useState<string>(globalBackendSettings.outer_provider ?? 'anthropic');
   const [globalOuterModel, setGlobalOuterModel] = useState<string>(globalBackendSettings.outer_model ?? '');
-  const [globalOuterCredInput, setGlobalOuterCredInput] = useState('');
+  const [globalOuterCredBundle, setGlobalOuterCredBundle] = useState<Record<string, string>>({});
   const [globalOuterCredSet, setGlobalOuterCredSet] = useState(false);
   const [globalBackendLoaded, setGlobalBackendLoaded] = useState(false);
 
@@ -222,12 +240,12 @@ export function ModelSettingsModal() {
   const [projectInnerBackend, setProjectInnerBackend] = useState<string>('global');
   const [projectInnerProvider, setProjectInnerProvider] = useState<string>('anthropic');
   const [projectInnerModel, setProjectInnerModel] = useState<string>('');
-  const [projectInnerCredInput, setProjectInnerCredInput] = useState('');
+  const [projectInnerCredBundle, setProjectInnerCredBundle] = useState<Record<string, string>>({});
   const [projectInnerCredSet, setProjectInnerCredSet] = useState(false);
   const [projectOuterBackend, setProjectOuterBackend] = useState<string>('global');
   const [projectOuterProvider, setProjectOuterProvider] = useState<string>('anthropic');
   const [projectOuterModel, setProjectOuterModel] = useState<string>('');
-  const [projectOuterCredInput, setProjectOuterCredInput] = useState('');
+  const [projectOuterCredBundle, setProjectOuterCredBundle] = useState<Record<string, string>>({});
   const [projectOuterCredSet, setProjectOuterCredSet] = useState(false);
   const [projectBackendLoaded, setProjectBackendLoaded] = useState(false);
 
@@ -290,6 +308,9 @@ export function ModelSettingsModal() {
     ]);
     setGlobalInnerCredSet(innerStatus.set);
     setGlobalOuterCredSet(outerStatus.set);
+    // Reset bundle inputs so stale values don't persist across reopens
+    setGlobalInnerCredBundle({});
+    setGlobalOuterCredBundle({});
     setGlobalBackendLoaded(true);
   }, [refreshGlobalBackendSettings, getBackendSecretStatus]);
 
@@ -339,6 +360,8 @@ export function ModelSettingsModal() {
     ]);
     setProjectInnerCredSet(innerStatus.set);
     setProjectOuterCredSet(outerStatus.set);
+    setProjectInnerCredBundle({});
+    setProjectOuterCredBundle({});
     setProjectBackendLoaded(true);
   }, [project, getProjectBackendSettings, getBackendSecretStatus]);
 
@@ -404,14 +427,14 @@ export function ModelSettingsModal() {
         outer_provider: globalOuterBackend === 'opencode' ? (globalOuterProvider || null) : null,
         outer_model: globalOuterBackend === 'opencode' ? (globalOuterModel || null) : null,
       });
-      if (globalInnerBackend === 'opencode' && globalInnerCredInput) {
-        await setBackendSecret('global', 'inner', globalInnerCredInput);
-        setGlobalInnerCredInput('');
+      if (globalInnerBackend === 'opencode' && Object.values(globalInnerCredBundle).some(Boolean)) {
+        await setBackendSecretBundle('global', 'inner', globalInnerCredBundle);
+        setGlobalInnerCredBundle({});
         setGlobalInnerCredSet(true);
       }
-      if (globalOuterBackend === 'opencode' && globalOuterCredInput) {
-        await setBackendSecret('global', 'outer', globalOuterCredInput);
-        setGlobalOuterCredInput('');
+      if (globalOuterBackend === 'opencode' && Object.values(globalOuterCredBundle).some(Boolean)) {
+        await setBackendSecretBundle('global', 'outer', globalOuterCredBundle);
+        setGlobalOuterCredBundle({});
         setGlobalOuterCredSet(true);
       }
       setGlobalDirty(false);
@@ -440,14 +463,14 @@ export function ModelSettingsModal() {
         outer_provider: projectOuterBackend === 'opencode' ? (projectOuterProvider || null) : null,
         outer_model: projectOuterBackend === 'opencode' ? (projectOuterModel || null) : null,
       });
-      if (projectInnerBackend === 'opencode' && projectInnerCredInput) {
-        await setBackendSecret(project.directory, 'inner', projectInnerCredInput);
-        setProjectInnerCredInput('');
+      if (projectInnerBackend === 'opencode' && Object.values(projectInnerCredBundle).some(Boolean)) {
+        await setBackendSecretBundle(project.directory, 'inner', projectInnerCredBundle);
+        setProjectInnerCredBundle({});
         setProjectInnerCredSet(true);
       }
-      if (projectOuterBackend === 'opencode' && projectOuterCredInput) {
-        await setBackendSecret(project.directory, 'outer', projectOuterCredInput);
-        setProjectOuterCredInput('');
+      if (projectOuterBackend === 'opencode' && Object.values(projectOuterCredBundle).some(Boolean)) {
+        await setBackendSecretBundle(project.directory, 'outer', projectOuterCredBundle);
+        setProjectOuterCredBundle({});
         setProjectOuterCredSet(true);
       }
       await loadEffectiveBackend();
@@ -606,8 +629,8 @@ export function ModelSettingsModal() {
                   onProviderChange={(v) => { setGlobalInnerProvider(v); setGlobalDirty(true); }}
                   model={globalInnerModel}
                   onModelChange={(v) => { setGlobalInnerModel(v); setGlobalDirty(true); }}
-                  credInput={globalInnerCredInput}
-                  onCredInputChange={(v) => { setGlobalInnerCredInput(v); setGlobalDirty(true); }}
+                  credBundle={globalInnerCredBundle}
+                  onCredBundleChange={(b) => { setGlobalInnerCredBundle(b); setGlobalDirty(true); }}
                   credSet={globalInnerCredSet}
                   testId="global-inner-backend"
                 />
@@ -652,8 +675,8 @@ export function ModelSettingsModal() {
                   onProviderChange={(v) => { setGlobalOuterProvider(v); setGlobalDirty(true); }}
                   model={globalOuterModel}
                   onModelChange={(v) => { setGlobalOuterModel(v); setGlobalDirty(true); }}
-                  credInput={globalOuterCredInput}
-                  onCredInputChange={(v) => { setGlobalOuterCredInput(v); setGlobalDirty(true); }}
+                  credBundle={globalOuterCredBundle}
+                  onCredBundleChange={(b) => { setGlobalOuterCredBundle(b); setGlobalDirty(true); }}
                   credSet={globalOuterCredSet}
                   testId="global-outer-backend"
                 />
@@ -702,8 +725,8 @@ export function ModelSettingsModal() {
                   onProviderChange={(v) => { setProjectInnerProvider(v); setProjectDirty(true); }}
                   model={projectInnerModel}
                   onModelChange={(v) => { setProjectInnerModel(v); setProjectDirty(true); }}
-                  credInput={projectInnerCredInput}
-                  onCredInputChange={(v) => { setProjectInnerCredInput(v); setProjectDirty(true); }}
+                  credBundle={projectInnerCredBundle}
+                  onCredBundleChange={(b) => { setProjectInnerCredBundle(b); setProjectDirty(true); }}
                   credSet={projectInnerCredSet}
                   testId="project-inner-backend"
                 />
@@ -748,8 +771,8 @@ export function ModelSettingsModal() {
                   onProviderChange={(v) => { setProjectOuterProvider(v); setProjectDirty(true); }}
                   model={projectOuterModel}
                   onModelChange={(v) => { setProjectOuterModel(v); setProjectDirty(true); }}
-                  credInput={projectOuterCredInput}
-                  onCredInputChange={(v) => { setProjectOuterCredInput(v); setProjectDirty(true); }}
+                  credBundle={projectOuterCredBundle}
+                  onCredBundleChange={(b) => { setProjectOuterCredBundle(b); setProjectDirty(true); }}
                   credSet={projectOuterCredSet}
                   testId="project-outer-backend"
                 />
