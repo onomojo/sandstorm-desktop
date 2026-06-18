@@ -573,6 +573,55 @@ run_verify() {
   return 1
 }
 
+# _get_task_changed_files
+# Emits the set of files changed or added by the current task (one per line,
+# sorted). Extracted as a standalone function so smoke tests can shadow it.
+_get_task_changed_files() {
+  (cd /app && {
+    git diff --name-only HEAD 2>/dev/null
+    git ls-files --others --exclude-standard 2>/dev/null
+  }) | sort -u
+}
+
+# classify_verify_failure_scope <verify_log>
+# Returns 0 (environmental) when EVERY failing file parsed from TypeScript error
+# lines in <verify_log> is outside the current task's changed-file set.
+# Returns 1 (not environmental) when:
+#   - no TypeScript error paths are parseable (e.g. test-runner failures, infra)
+#   - at least one failing file is in the changed set (agent's own change)
+#   - mixed scope: some failing files in-scope, some out-of-scope
+classify_verify_failure_scope() {
+  local verify_log="${1:-/tmp/claude-verify.log}"
+
+  # Parse TypeScript error lines: path(line,col): error TSxxxx
+  local failing_files
+  failing_files=$(grep -E '\([0-9]+,[0-9]+\): error TS[0-9]+' "$verify_log" 2>/dev/null \
+    | sed -E 's/\([0-9]+,[0-9]+\): error TS[^(].*$//' \
+    | sed 's/[[:space:]]*$//' \
+    | sort -u || true)
+
+  # No parseable paths → cannot classify as environmental; fall through
+  if [ -z "$failing_files" ]; then
+    return 1
+  fi
+
+  # Build changed-file set
+  local changed_files
+  changed_files=$(_get_task_changed_files)
+
+  # If any failing file is in the changed set → NOT environmental
+  while IFS= read -r failing_file; do
+    local normalized
+    normalized=$(echo "$failing_file" | sed 's|^\./||')
+    if echo "$changed_files" | grep -qxF "$normalized"; then
+      return 1
+    fi
+  done <<< "$failing_files"
+
+  # All failing files are outside the changed set → environmental
+  return 0
+}
+
 # ─── Main Loop ──────────────────────────────────────────────────────────────
 
 echo "Waiting for tasks..."
@@ -1000,6 +1049,19 @@ while true; do
 
         # Capture first notable error line for diagnostics (best-effort)
         VERIFY_FAIL_FINGERPRINT=$(grep -m1 -E 'Error|error|FAIL|fail|not found|command not found' /tmp/claude-verify.log 2>/dev/null | head -c 200 || true)
+
+        # If all failing files are outside the task's changed-file set, this is
+        # a pre-existing/environmental failure — classify and halt immediately
+        # rather than retrying or feeding it to the agent (which would cause an
+        # unhelpful STOP_AND_ASK with no questions).
+        if classify_verify_failure_scope /tmp/claude-verify.log; then
+          log_loop "All verify-failing files are outside this task's changed-file set — treating as environmental"
+          log_loop "Failure fingerprint: ${VERIFY_FAIL_FINGERPRINT}"
+          printf 'VERIFY_FAIL_FINGERPRINT: %s\n' "${VERIFY_FAIL_FINGERPRINT}" > /tmp/claude-verify-environmental.txt
+          VERIFY_BLOCKED_ENVIRONMENTAL=1
+          TASK_FAILED=1
+          break
+        fi
 
         if [ $TOTAL_VERIFY_RETRIES -ge $MAX_VERIFY_RETRIES ]; then
           if [ $META_REVIEW_FIRED_VERIFY -eq 0 ]; then
