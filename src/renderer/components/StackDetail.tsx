@@ -330,9 +330,10 @@ export function StackDetail({
 
       {/* Two-column layout: workflow progress (left) + tabs (right) */}
       <div className="flex-1 overflow-hidden flex">
-        {/* Left column: workflow progress panel — always visible */}
+        {/* Left column: workflow progress panel + verify output — always visible */}
         <div className="w-[35%] min-w-[260px] max-w-[380px] border-r border-sandstorm-border flex flex-col overflow-hidden shrink-0">
           <WorkflowProgressPanel progress={effectiveWorkflowProgress} />
+          <VerifyOutputPanel tasks={tasks} />
         </div>
 
         {/* Right column: tabs + content */}
@@ -582,6 +583,46 @@ function TaskHistoryCard({ task }: { task: Task }) {
           )}
         </div>
       )}
+    </div>
+  );
+}
+
+function VerifyOutputPanel({ tasks }: { tasks: Task[] }) {
+  const mostRecent = tasks
+    .slice()
+    .reverse()
+    .find((t) => t.verify_outputs != null);
+
+  if (!mostRecent?.verify_outputs) return null;
+
+  let outputs: string[] = [];
+  try {
+    const parsed = JSON.parse(mostRecent.verify_outputs) as unknown;
+    if (Array.isArray(parsed)) {
+      outputs = (parsed as unknown[]).filter((x): x is string => typeof x === 'string');
+    }
+  } catch {
+    outputs = [mostRecent.verify_outputs];
+  }
+
+  if (outputs.length === 0) return null;
+
+  return (
+    <div className="border-t border-sandstorm-border p-3 shrink-0 overflow-hidden" data-testid="verify-output-panel">
+      <div className="text-[10px] font-semibold uppercase tracking-wider text-sandstorm-muted mb-2">
+        Verify Output
+      </div>
+      <div className="space-y-1.5 max-h-40 overflow-y-auto">
+        {outputs.map((output, i) => (
+          <pre
+            key={i}
+            className="text-[10px] text-sandstorm-text-secondary bg-sandstorm-bg border border-sandstorm-border rounded px-2 py-1.5 whitespace-pre-wrap break-words font-mono overflow-auto"
+            data-testid={`verify-output-item-${i}`}
+          >
+            {output}
+          </pre>
+        ))}
+      </div>
     </div>
   );
 }

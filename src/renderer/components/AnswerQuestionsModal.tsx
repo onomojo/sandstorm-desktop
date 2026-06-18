@@ -15,9 +15,18 @@ export function AnswerQuestionsModal({ stackId, onClose, onResumed }: AnswerQues
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [asking, setAsking] = useState(false);
+  const [hasAsked, setHasAsked] = useState(false);
+  // Bumped to re-trigger the fetch effect after askClarifyingQuestions resolves
+  const [fetchKey, setFetchKey] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
+    setLoading(true);
+    setQuestions(null);
+    setFallbackMessage(null);
+    setAnswers([]);
+
     window.sandstorm.stacks.getNeedsHumanQuestions(stackId)
       .then((raw) => {
         if (cancelled) return;
@@ -46,8 +55,9 @@ export function AnswerQuestionsModal({ stackId, onClose, onResumed }: AnswerQues
         setFallbackMessage(`Could not load questions: ${err instanceof Error ? err.message : String(err)}`);
         setLoading(false);
       });
+
     return () => { cancelled = true; };
-  }, [stackId]);
+  }, [stackId, fetchKey]);
 
   const handleSubmit = useCallback(async () => {
     if (!questions) return;
@@ -62,6 +72,19 @@ export function AnswerQuestionsModal({ stackId, onClose, onResumed }: AnswerQues
       setSubmitting(false);
     }
   }, [stackId, questions, answers, onResumed]);
+
+  const handleAskClarifyingQuestions = useCallback(async () => {
+    setAsking(true);
+    try {
+      await window.sandstorm.stacks.askClarifyingQuestions(stackId);
+      setHasAsked(true);
+      setFetchKey((k) => k + 1);
+    } catch {
+      // Swallow — refetch will show the updated state
+    } finally {
+      setAsking(false);
+    }
+  }, [stackId]);
 
   return (
     <div
@@ -113,6 +136,32 @@ export function AnswerQuestionsModal({ stackId, onClose, onResumed }: AnswerQues
               <div className="text-xs text-sandstorm-muted bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2.5 whitespace-pre-wrap font-mono">
                 {fallbackMessage}
               </div>
+              {hasAsked ? (
+                <div
+                  className="text-xs text-sandstorm-muted bg-sandstorm-bg border border-sandstorm-border rounded-lg px-3 py-2.5"
+                  data-testid="answer-modal-terminal-no-questions"
+                >
+                  The agent did not produce questions. You can close this dialog and re-dispatch the stack manually.
+                </div>
+              ) : (
+                <button
+                  onClick={handleAskClarifyingQuestions}
+                  disabled={asking}
+                  className="w-full px-4 py-2 bg-sandstorm-surface border border-sandstorm-border text-sandstorm-text-secondary text-xs font-medium rounded-lg hover:bg-sandstorm-surface-hover hover:text-sandstorm-text transition-all disabled:opacity-40 disabled:cursor-not-allowed"
+                  data-testid="answer-modal-ask-clarifying"
+                >
+                  {asking ? (
+                    <span className="flex items-center justify-center gap-2">
+                      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" className="animate-spin">
+                        <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="2" strokeDasharray="48" strokeDashoffset="32"/>
+                      </svg>
+                      Asking…
+                    </span>
+                  ) : (
+                    'Ask for clarifying questions'
+                  )}
+                </button>
+              )}
             </div>
           )}
 

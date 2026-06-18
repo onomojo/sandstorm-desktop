@@ -197,10 +197,20 @@ interface CliResult {
   exitCode: number;
 }
 
+export const ASK_CLARIFYING_QUESTIONS_PROMPT =
+  'You previously stopped for human input but produced no questions. ' +
+  'Step 1: Write the specific clarifying questions you need answered to ' +
+  '/tmp/claude-stop-questions.json as a JSON array of objects, each with string fields "id" and "question". ' +
+  'Step 2 (required): After writing that file, re-engage the STOP_AND_ASK halt — ' +
+  'emit a line STOP_AND_ASK: <one-sentence reason> on its own line and stop immediately ' +
+  'without making any further changes. This re-sets the task to needs_human via the harness ' +
+  'so your questions are surfaced to the human. Do not continue the work.';
+
 export class StackManager {
   private onStackUpdate?: () => void;
   private appVersion: string;
   private portProxy?: PortProxy;
+  private askClarifyingInFlight = new Set<string>();
 
   constructor(
     private registry: Registry,
@@ -916,8 +926,8 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    if (stack.status !== 'needs_human' && stack.status !== 'failed') {
-      throw new SandstormError(ErrorCode.INVALID_INPUT, `Stack "${stackId}" is not in a resumable state (needs_human or failed)`);
+    if (stack.status !== 'needs_human' && stack.status !== 'failed' && stack.status !== 'verify_blocked_environmental') {
+      throw new SandstormError(ErrorCode.INVALID_INPUT, `Stack "${stackId}" is not in a resumable state (needs_human, failed, or verify_blocked_environmental)`);
     }
 
     const task = this.registry.getMostRecentTask(stackId);
@@ -968,6 +978,77 @@ export class StackManager {
         this.notifyUpdate();
       }
       throw err;
+    }
+  }
+
+  /**
+   * Resume a needs_human stack to generate clarifying questions.
+   * Resumes the in-container agent with a fixed prompt instructing it to write
+   * /tmp/claude-stop-questions.json and emit STOP_AND_ASK so the harness re-populates
+   * needs_human_questions. If no session_id, falls back to fresh dispatch.
+   * Idempotent: no-op while a resume is already in flight for this stack.
+   */
+  async askClarifyingQuestions(stackId: string): Promise<void> {
+    // In-flight check first — status may have been changed to 'building' by the first call
+    if (this.askClarifyingInFlight.has(stackId)) {
+      return;
+    }
+
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    if (stack.status !== 'needs_human') {
+      throw new SandstormError(ErrorCode.INVALID_INPUT, `Stack "${stackId}" is not in needs_human state`);
+    }
+
+    this.askClarifyingInFlight.add(stackId);
+
+    const task = this.registry.getMostRecentTask(stackId);
+    if (!task) {
+      this.askClarifyingInFlight.delete(stackId);
+      throw new SandstormError(ErrorCode.INTERNAL_ERROR, `No task found for stack "${stackId}"`);
+    }
+
+    this.registry.updateStackStatus(stackId, 'building');
+    this.notifyUpdate();
+    try {
+      await this.ensureStackContainersRunning(stack, stackId);
+    } catch (err) {
+      this.askClarifyingInFlight.delete(stackId);
+      this.registry.updateStackStatus(stackId, 'needs_human');
+      this.notifyUpdate();
+      throw err;
+    }
+
+    try {
+      if (task.session_id) {
+        // Case A: resume in-container session with fixed prompt to trigger STOP_AND_ASK
+        this.registry.reopenTaskForResume(task.id);
+        await this.dispatchContinuation(stack, stackId, { ...task, status: 'running' }, ASK_CLARIFYING_QUESTIONS_PROMPT);
+      } else {
+        // Case B: no session_id — re-dispatch fresh with original prompt
+        // The fixed clarifying-questions prompt does not apply; the original prompt is re-run.
+        this.registry.interruptTask(task.id);
+        try {
+          await this.dispatchTask(stackId, task.prompt, task.model ?? undefined, {
+            skipTicketFetch: true,
+          });
+        } catch (err) {
+          this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
+          this.registry.updateStackStatus(stackId, 'needs_human');
+          this.notifyUpdate();
+          throw err;
+        }
+      }
+    } catch (err) {
+      if (task.session_id) {
+        this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
+        this.registry.updateStackStatus(stackId, 'needs_human');
+        this.notifyUpdate();
+      }
+      throw err;
+    } finally {
+      this.askClarifyingInFlight.delete(stackId);
     }
   }
 

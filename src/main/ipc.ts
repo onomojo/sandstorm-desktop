@@ -1083,6 +1083,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     await stackManager.resumeNeedsHumanStack(stackId, answers);
   });
 
+  ipcMain.handle('stacks:askClarifyingQuestions', async (_event, stackId: string) => {
+    await stackManager.askClarifyingQuestions(stackId);
+  });
+
   ipcMain.handle('stacks:recheckCompleted', async (_event, stackId: string) => {
     return stackManager.recheckCompletedStack(stackId);
   });

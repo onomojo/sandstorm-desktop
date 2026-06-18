@@ -2709,6 +2709,7 @@ describe('IPC Handlers', () => {
       'darkFactory:setEnabled',
       'stacks:getNeedsHumanQuestions',
       'stacks:resumeNeedsHuman',
+      'stacks:askClarifyingQuestions',
       'stacks:selfHealContinue',
       'stacks:restartWithFindings',
       'stacks:recheckCompleted',

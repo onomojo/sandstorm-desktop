@@ -17,6 +17,7 @@ const STATUS_COLORS: Record<string, string> = {
   pr_created: 'bg-violet-400',
   rate_limited: 'bg-orange-400 animate-pulse',
   session_paused: 'bg-orange-400',
+  verify_blocked_environmental: 'bg-orange-400',
 };
 
 const STATUS_LABELS: Record<string, string> = {
@@ -32,6 +33,7 @@ const STATUS_LABELS: Record<string, string> = {
   pr_created: 'PR Open',
   rate_limited: 'Limited',
   session_paused: 'Halted',
+  verify_blocked_environmental: 'Verify Blocked',
 };
 
 const POPOVER_OPEN_DELAY_MS = 150;
@@ -53,6 +55,7 @@ export function StackTableRow({
   const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
   const [recheckMessage, setRecheckMessage] = useState<string | null>(null);
+  const [continuing, setContinuing] = useState(false);
   const rowRef = useRef<HTMLTableRowElement>(null);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -150,6 +153,19 @@ export function StackTableRow({
   const handleAnswer = (e: React.MouseEvent) => {
     e.stopPropagation();
     setShowAnswerModal(true);
+  };
+
+  const handleContinueVerifyBlocked = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    setContinuing(true);
+    try {
+      await window.sandstorm.stacks.resumeNeedsHuman(stack.id, '');
+      await refreshStacks();
+    } catch (err) {
+      alert(`Failed to continue: ${err}`);
+    } finally {
+      setContinuing(false);
+    }
   };
 
   const handleAnswerResumed = async () => {
@@ -275,6 +291,17 @@ export function StackTableRow({
                 title="Answer the agent's questions and resume"
               >
                 Answer
+              </button>
+            )}
+            {stack.status === 'verify_blocked_environmental' && (
+              <button
+                onClick={handleContinueVerifyBlocked}
+                disabled={continuing}
+                className="text-[10px] font-medium px-2 py-0.5 rounded bg-orange-500/10 text-orange-400 border border-orange-500/30 hover:bg-orange-500/20 transition-colors disabled:opacity-40"
+                data-testid={`row-continue-verify-blocked-${stack.id}`}
+                title="Continue past environmental verify block"
+              >
+                {continuing ? '…' : 'Continue'}
               </button>
             )}
             {makePrEligible(stack) && (
