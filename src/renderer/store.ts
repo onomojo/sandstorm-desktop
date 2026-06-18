@@ -721,6 +721,7 @@ declare global {
         cleanupStale: (workspacePaths: string[]) => Promise<CleanupResult[]>;
         getNeedsHumanQuestions: (stackId: string) => Promise<string | null>;
         resumeNeedsHuman: (stackId: string, answers: string) => Promise<void>;
+        askClarifyingQuestions: (stackId: string) => Promise<void>;
         selfHealContinue: (stackId: string) => Promise<void>;
         restartWithFindings: (stackId: string, updatedTicketBody: string) => Promise<{ newStackId: string }>;
         recheckCompleted: (stackId: string) => Promise<{

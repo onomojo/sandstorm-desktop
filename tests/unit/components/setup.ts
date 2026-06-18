@@ -35,6 +35,7 @@ export function mockSandstormApi() {
       cleanupStale: vi.fn().mockResolvedValue([]),
       getNeedsHumanQuestions: vi.fn().mockResolvedValue(null),
       resumeNeedsHuman: vi.fn().mockResolvedValue(undefined),
+      askClarifyingQuestions: vi.fn().mockResolvedValue(undefined),
       selfHealContinue: vi.fn().mockResolvedValue(undefined),
       restartWithFindings: vi.fn().mockResolvedValue({ newStackId: 'feat/123-fix-r2' }),
     },

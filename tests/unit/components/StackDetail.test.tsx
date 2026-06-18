@@ -609,4 +609,61 @@ describe('StackDetail', () => {
       expect(detail.textContent).toContain('Total');
     });
   });
+
+  it('renders verify output panel when most recent task has verify_outputs', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Run tests',
+        model: null,
+        status: 'needs_human',
+        exit_code: null,
+        verify_outputs: JSON.stringify(['tsc: Cannot find module ./Foo', 'Test suite failed']),
+        started_at: new Date().toISOString(),
+        finished_at: null,
+      },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('verify-output-panel')).toBeDefined();
+      expect(screen.getByTestId('verify-output-item-0')).toBeDefined();
+      expect(screen.getByTestId('verify-output-item-1')).toBeDefined();
+    });
+    expect(screen.getByTestId('verify-output-item-0').textContent).toContain('Cannot find module');
+    expect(screen.getByTestId('verify-output-item-1').textContent).toContain('Test suite failed');
+  });
+
+  it('does not render verify output panel when task has null verify_outputs', async () => {
+    api.tasks.list.mockResolvedValue([
+      {
+        id: 1,
+        stack_id: 'detail-stack',
+        prompt: 'Clean task',
+        model: null,
+        status: 'completed',
+        exit_code: 0,
+        verify_outputs: null,
+        started_at: new Date().toISOString(),
+        finished_at: new Date().toISOString(),
+      },
+    ]);
+
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+
+    await waitFor(() => {
+      // tasks loaded
+      expect(api.tasks.list).toHaveBeenCalled();
+    });
+    expect(screen.queryByTestId('verify-output-panel')).toBeNull();
+  });
+
+  it('does not render verify output panel when no tasks are loaded', async () => {
+    api.tasks.list.mockResolvedValue([]);
+    render(<StackDetail stackId="detail-stack" onBack={onBack} />);
+    await waitFor(() => expect(api.tasks.list).toHaveBeenCalled());
+    expect(screen.queryByTestId('verify-output-panel')).toBeNull();
+  });
 });
