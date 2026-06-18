@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Registry } from '../../src/main/control-plane/registry';
-import { TOUCHPOINTS, PRESETS } from '../../src/main/control-plane/routing';
+import { TOUCHPOINTS, PRESETS, CLAUDE_MODELS, OPENCODE_MODELS, getAvailableModels } from '../../src/main/control-plane/routing';
 import type { TouchpointId, PresetId } from '../../src/main/control-plane/routing';
 import fs from 'fs';
 import path from 'path';
@@ -331,6 +331,142 @@ describe('Model Routing', () => {
         const result = registry.getEffectiveRoutingFor('/proj/x', t);
         expect(result.model).toBe('haiku');
       }
+    });
+  });
+
+  // ==========================================================================
+  // OPENCODE_MODELS catalog
+  // ==========================================================================
+  describe('OPENCODE_MODELS catalog', () => {
+    it('has exactly 2 entries', () => {
+      expect(OPENCODE_MODELS).toHaveLength(2);
+    });
+
+    it('all entries have backend:opencode', () => {
+      for (const m of OPENCODE_MODELS) {
+        expect(m.backend).toBe('opencode');
+      }
+    });
+
+    it('includes anthropic and amazon-bedrock providers (no ollama)', () => {
+      const providers = OPENCODE_MODELS.map((m) => m.provider);
+      expect(providers).toContain('anthropic');
+      expect(providers).toContain('amazon-bedrock');
+      expect(providers).not.toContain('ollama');
+    });
+
+    it('all entries have needsKey:true', () => {
+      for (const m of OPENCODE_MODELS) {
+        expect(m.needsKey).toBe(true);
+      }
+    });
+
+    it('model and version use provider-prefixed format', () => {
+      const anthropic = OPENCODE_MODELS.find((m) => m.provider === 'anthropic');
+      expect(anthropic?.model).toBe('anthropic/claude-sonnet-4-6');
+      expect(anthropic?.version).toBe('anthropic/claude-sonnet-4-6');
+
+      const bedrock = OPENCODE_MODELS.find((m) => m.provider === 'amazon-bedrock');
+      expect(bedrock?.model).toBe('amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0');
+      expect(bedrock?.version).toBe('amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0');
+    });
+  });
+
+  // ==========================================================================
+  // getAvailableModels availability logic
+  // ==========================================================================
+  describe('getAvailableModels', () => {
+    it('returns models from both backends', () => {
+      const models = getAvailableModels('/proj/test', () => false);
+      const backends = new Set(models.map((m) => m.backend));
+      expect(backends.has('claude')).toBe(true);
+      expect(backends.has('opencode')).toBe(true);
+    });
+
+    it('Claude entries are exactly 4 and all available:true', () => {
+      const models = getAvailableModels('/proj/test', () => false);
+      const cc = models.filter((m) => m.backend === 'claude');
+      expect(cc).toHaveLength(CLAUDE_MODELS.length);
+      expect(cc).toHaveLength(4);
+      for (const m of cc) {
+        expect(m.available).toBe(true);
+      }
+    });
+
+    it('OpenCode entries are exactly 2 with no ollama', () => {
+      const models = getAvailableModels('/proj/test', () => false);
+      const oc = models.filter((m) => m.backend === 'opencode');
+      expect(oc).toHaveLength(2);
+      expect(oc.map((m) => m.provider)).not.toContain('ollama');
+    });
+
+    it('OpenCode models unavailable when no secrets configured', () => {
+      const models = getAvailableModels('/proj/test', () => false);
+      const oc = models.filter((m) => m.backend === 'opencode');
+      for (const m of oc) {
+        expect(m.available).toBe(false);
+      }
+    });
+
+    it('OpenCode models available when project inner secret configured', () => {
+      const models = getAvailableModels('/proj/test', (key, surface) => {
+        return key === `project:${path.resolve('/proj/test')}` && surface === 'inner';
+      });
+      const oc = models.filter((m) => m.backend === 'opencode');
+      for (const m of oc) {
+        expect(m.available).toBe(true);
+      }
+    });
+
+    it('OpenCode models available when project outer secret configured', () => {
+      const models = getAvailableModels('/proj/test', (key, surface) => {
+        return key === `project:${path.resolve('/proj/test')}` && surface === 'outer';
+      });
+      const oc = models.filter((m) => m.backend === 'opencode');
+      for (const m of oc) {
+        expect(m.available).toBe(true);
+      }
+    });
+
+    it('OpenCode models available when global inner secret configured', () => {
+      const models = getAvailableModels('/proj/test', (key, surface) => {
+        return key === 'global' && surface === 'inner';
+      });
+      const oc = models.filter((m) => m.backend === 'opencode');
+      for (const m of oc) {
+        expect(m.available).toBe(true);
+      }
+    });
+
+    it('OpenCode models available when global outer secret configured', () => {
+      const models = getAvailableModels('/proj/test', (key, surface) => {
+        return key === 'global' && surface === 'outer';
+      });
+      const oc = models.filter((m) => m.backend === 'opencode');
+      for (const m of oc) {
+        expect(m.available).toBe(true);
+      }
+    });
+
+    it('uses path.resolve for the project key', () => {
+      const seenKeys: string[] = [];
+      getAvailableModels('/proj/test', (key) => {
+        seenKeys.push(key);
+        return false;
+      });
+      const projectKeys = seenKeys.filter((k) => k.startsWith('project:'));
+      expect(projectKeys.length).toBeGreaterThan(0);
+      for (const k of projectKeys) {
+        expect(k).toBe(`project:${path.resolve('/proj/test')}`);
+      }
+    });
+
+    it('does not mutate OPENCODE_MODELS constant', () => {
+      const originalAvailable = OPENCODE_MODELS.map((m) => m.available);
+      getAvailableModels('/proj/test', () => true);
+      OPENCODE_MODELS.forEach((m, i) => {
+        expect(m.available).toBe(originalAvailable[i]);
+      });
     });
   });
 });

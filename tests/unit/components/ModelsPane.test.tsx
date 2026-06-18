@@ -26,6 +26,13 @@ const CC_MODELS_WITH_OC_DISABLED = [
   { backend: 'opencode', model: 'gpt-4o', label: 'GPT-4o', version: 'gpt-4o-2024-11', provider: 'openai', available: false },
 ];
 
+const OC_MODELS_REAL = [
+  { backend: 'opencode', model: 'anthropic/claude-sonnet-4-6', label: 'Claude Sonnet 4.6 — Anthropic', version: 'anthropic/claude-sonnet-4-6', provider: 'anthropic', needsKey: true, available: true },
+  { backend: 'opencode', model: 'amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0', label: 'Claude 3.5 Sonnet — Amazon Bedrock', version: 'amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0', provider: 'amazon-bedrock', needsKey: true, available: false },
+];
+
+const CC_MODELS_WITH_OC_REAL = [...CC_MODELS, ...OC_MODELS_REAL];
+
 function makeRouting(overrides: Partial<ModelRoutingApi> = {}): ModelRoutingApi {
   return {
     getEffective: vi.fn().mockResolvedValue({
@@ -304,6 +311,77 @@ describe('ModelsPane', () => {
       expect(unknownOpt.disabled).toBe(true);
       expect(unknownOpt.textContent).toContain('unknown');
       expect(unknownOpt.textContent).toContain('unknown-model-xyz');
+    });
+
+    it('unavailable OC option shows needs-key hint (not #472)', async () => {
+      const routing = makeRouting({
+        getAvailableModels: vi.fn().mockResolvedValue(CC_MODELS_WITH_OC_REAL),
+      });
+      const ctx = makeCtx(routing);
+      await renderPane(ctx);
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('customize-toggle'));
+      });
+
+      const select = screen.getByTestId('model-select-outer') as HTMLSelectElement;
+      const bedrockOption = Array.from(select.options).find(
+        (o) => o.value === 'opencode:amazon-bedrock/anthropic.claude-3-5-sonnet-20241022-v2:0',
+      );
+      expect(bedrockOption).toBeDefined();
+      expect(bedrockOption!.disabled).toBe(true);
+      expect(bedrockOption!.title).toBe('Needs API key — configure in Providers');
+      expect(bedrockOption!.title).not.toContain('#472');
+    });
+
+    it('available OC option has no title attribute', async () => {
+      const routing = makeRouting({
+        getAvailableModels: vi.fn().mockResolvedValue(CC_MODELS_WITH_OC_REAL),
+      });
+      const ctx = makeCtx(routing);
+      await renderPane(ctx);
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('customize-toggle'));
+      });
+
+      const select = screen.getByTestId('model-select-outer') as HTMLSelectElement;
+      const anthropicOption = Array.from(select.options).find(
+        (o) => o.value === 'opencode:anthropic/claude-sonnet-4-6',
+      );
+      expect(anthropicOption).toBeDefined();
+      expect(anthropicOption!.disabled).toBe(false);
+      expect(anthropicOption!.title).toBeFalsy();
+    });
+
+    it('the "#472" string does not appear anywhere in the rendered output', async () => {
+      const routing = makeRouting({
+        getAvailableModels: vi.fn().mockResolvedValue(CC_MODELS_WITH_OC_REAL),
+      });
+      const ctx = makeCtx(routing);
+      await renderPane(ctx);
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('customize-toggle'));
+      });
+
+      expect(document.body.innerHTML).not.toContain('#472');
+    });
+
+    it('OC optgroup renders for each touchpoint when OC models supplied', async () => {
+      const routing = makeRouting({
+        getAvailableModels: vi.fn().mockResolvedValue(CC_MODELS_WITH_OC_REAL),
+      });
+      const ctx = makeCtx(routing);
+      await renderPane(ctx);
+
+      await act(async () => {
+        fireEvent.click(screen.getByTestId('customize-toggle'));
+      });
+
+      for (const touchpoint of ['outer', 'execution', 'review']) {
+        expect(screen.getByTestId(`optgroup-opencode-${touchpoint}`)).toBeDefined();
+      }
     });
   });
 
