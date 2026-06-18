@@ -319,8 +319,8 @@ function ModelsPaneBody({ ctx }: ModelsPaneBodyProps) {
                             value={`opencode:${m.model}`}
                             disabled={!m.available}
                             title={
-                              !m.available
-                                ? 'Enable the OpenCode backend — #472'
+                              m.needsKey && !m.available
+                                ? 'Needs API key — configure in Providers'
                                 : undefined
                             }
                           >
