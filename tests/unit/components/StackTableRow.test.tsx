@@ -473,3 +473,37 @@ describe('StackTableRow popover suppression on actions hover (#316)', () => {
     expect(screen.queryByTestId('stack-row-popover-foo')).toBeNull();
   });
 });
+
+describe('StackTableRow verify_blocked_environmental', () => {
+  beforeEach(() => {
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  it('renders "Verify Blocked" status label', () => {
+    renderRow(makeStack({ status: 'verify_blocked_environmental' }));
+    expect(screen.getByText('Verify Blocked')).toBeDefined();
+  });
+
+  it('renders Continue button for verify_blocked_environmental', () => {
+    renderRow(makeStack({ status: 'verify_blocked_environmental' }));
+    expect(screen.getByTestId('row-continue-verify-blocked-test-stack')).toBeDefined();
+  });
+
+  it('calls resumeNeedsHuman with empty answers when Continue is clicked', async () => {
+    (window.sandstorm.stacks.resumeNeedsHuman as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(undefined);
+    renderRow(makeStack({ status: 'verify_blocked_environmental' }));
+
+    await act(async () => {
+      screen.getByTestId('row-continue-verify-blocked-test-stack').click();
+    });
+
+    expect(window.sandstorm.stacks.resumeNeedsHuman).toHaveBeenCalledWith('test-stack', '');
+  });
+
+  it('does not render Continue button for other statuses', () => {
+    renderRow(makeStack({ status: 'needs_human' }));
+    expect(screen.queryByTestId('row-continue-verify-blocked-test-stack')).toBeNull();
+  });
+});

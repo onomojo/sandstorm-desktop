@@ -218,6 +218,28 @@ interface SessionMonitorSettingsRow {
   polling_disabled: number;
 }
 
+export type EpicStatus = 'running' | 'paused' | 'completed' | 'needs_human';
+export type EpicTaskRole = 'build' | 'reconcile';
+export type EpicTaskOrigin = 'planned' | 'gap';
+
+export interface EpicRunState {
+  epic_id: string;
+  project_dir: string;
+  status: EpicStatus;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface EpicTask {
+  epic_id: string;
+  ticket_id: string;
+  role: EpicTaskRole;
+  origin: EpicTaskOrigin;
+  crit_id: string | null;
+  gap_cycles: number;
+  done: number;
+}
+
 export class Registry {
   private db: Database.Database;
   private dbPath: string;
@@ -712,6 +734,39 @@ export class Registry {
       // readable — getBackendSecretBundle treats them as { [name]: value } for backward compat.
       // No DDL change: columns are unchanged, only value semantics widen.
       this.setSchemaVersion(25);
+    }
+
+    if (currentVersion < 26) {
+      // Epic run-state persistence (#613): durable home for per-epic status, ticket membership,
+      // gap-cycle counters, and the concurrency cap setting.
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS epics (
+          epic_id     TEXT PRIMARY KEY,
+          project_dir TEXT NOT NULL,
+          status      TEXT NOT NULL,
+          created_at  TEXT NOT NULL DEFAULT (datetime('now')),
+          updated_at  TEXT NOT NULL DEFAULT (datetime('now'))
+        );
+      `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS epic_tasks (
+          epic_id    TEXT NOT NULL,
+          ticket_id  TEXT NOT NULL,
+          role       TEXT NOT NULL,
+          origin     TEXT NOT NULL,
+          crit_id    TEXT,
+          gap_cycles INTEGER NOT NULL DEFAULT 0,
+          done       INTEGER NOT NULL DEFAULT 0,
+          PRIMARY KEY (epic_id, ticket_id)
+        );
+      `);
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS project_epic_settings (
+          key   TEXT PRIMARY KEY,
+          value TEXT NOT NULL
+        );
+      `);
+      this.setSchemaVersion(26);
     }
   }
 
@@ -1965,6 +2020,86 @@ export class Registry {
       settings.idleTimeoutMs ?? current.idleTimeoutMs,
       (settings.pollingDisabled ?? current.pollingDisabled) ? 1 : 0,
     );
+  }
+
+  // --- Epic Run State ---
+
+  private static readonly VALID_EPIC_STATUSES: ReadonlySet<string> = new Set(['running', 'paused', 'completed', 'needs_human']);
+
+  getEpicRunState(epicId: string): EpicRunState | null {
+    const row = this.db.prepare(
+      'SELECT epic_id, project_dir, status, created_at, updated_at FROM epics WHERE epic_id = ?'
+    ).get(epicId) as EpicRunState | undefined;
+    return row ?? null;
+  }
+
+  upsertEpicRunState(epicId: string, projectDir: string, status: EpicStatus): void {
+    if (!Registry.VALID_EPIC_STATUSES.has(status)) {
+      throw new Error(`Invalid epic status: ${status}`);
+    }
+    const normalizedDir = path.resolve(projectDir);
+    this.db.prepare(
+      `INSERT INTO epics (epic_id, project_dir, status, updated_at)
+       VALUES (?, ?, ?, datetime('now'))
+       ON CONFLICT(epic_id) DO UPDATE SET
+         status = excluded.status,
+         updated_at = excluded.updated_at`
+    ).run(epicId, normalizedDir, status);
+  }
+
+  getEpicTasks(epicId: string): EpicTask[] {
+    return this.db.prepare(
+      'SELECT epic_id, ticket_id, role, origin, crit_id, gap_cycles, done FROM epic_tasks WHERE epic_id = ?'
+    ).all(epicId) as EpicTask[];
+  }
+
+  upsertEpicTask(
+    epicId: string,
+    ticketId: string,
+    opts: { role: EpicTaskRole; origin: EpicTaskOrigin; critId?: string | null },
+  ): void {
+    this.db.prepare(
+      `INSERT INTO epic_tasks (epic_id, ticket_id, role, origin, crit_id)
+       VALUES (?, ?, ?, ?, ?)
+       ON CONFLICT(epic_id, ticket_id) DO UPDATE SET
+         role = excluded.role,
+         origin = excluded.origin,
+         crit_id = excluded.crit_id`
+    ).run(epicId, ticketId, opts.role, opts.origin, opts.critId ?? null);
+  }
+
+  setEpicTaskDone(epicId: string, ticketId: string): void {
+    this.db.prepare(
+      'UPDATE epic_tasks SET done = 1 WHERE epic_id = ? AND ticket_id = ?'
+    ).run(epicId, ticketId);
+  }
+
+  incrementGapCycles(epicId: string, ticketId: string): number {
+    // Insert-or-increment: if row is missing, creates it at gap_cycles=1.
+    this.db.prepare(
+      `INSERT INTO epic_tasks (epic_id, ticket_id, role, origin, gap_cycles)
+       VALUES (?, ?, 'build', 'gap', 1)
+       ON CONFLICT(epic_id, ticket_id) DO UPDATE SET gap_cycles = gap_cycles + 1`
+    ).run(epicId, ticketId);
+    const row = this.db.prepare(
+      'SELECT gap_cycles FROM epic_tasks WHERE epic_id = ? AND ticket_id = ?'
+    ).get(epicId, ticketId) as { gap_cycles: number };
+    return row.gap_cycles;
+  }
+
+  getEpicMaxParallelStacks(projectDir: string): number {
+    const key = `project:${path.resolve(projectDir)}`;
+    const row = this.db.prepare(
+      'SELECT value FROM project_epic_settings WHERE key = ?'
+    ).get(key) as { value: string } | undefined;
+    return row ? parseInt(row.value, 10) : 3;
+  }
+
+  setEpicMaxParallelStacks(projectDir: string, n: number): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    this.db.prepare(
+      'INSERT OR REPLACE INTO project_epic_settings (key, value) VALUES (?, ?)'
+    ).run(key, String(n));
   }
 
   // --- Cleanup ---

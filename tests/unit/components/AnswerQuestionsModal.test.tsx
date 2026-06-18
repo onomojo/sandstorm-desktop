@@ -126,4 +126,91 @@ describe('AnswerQuestionsModal', () => {
     });
     expect(screen.getByTestId('answer-modal-error').textContent).toContain('Network failure');
   });
+
+  it('renders "Ask for clarifying questions" button in fallback when no questions', async () => {
+    (window.sandstorm.stacks.getNeedsHumanQuestions as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(null);
+    renderModal();
+    await waitFor(() => expect(screen.queryByTestId('answer-modal-loading')).toBeNull());
+    expect(screen.getByTestId('answer-modal-fallback')).toBeDefined();
+    expect(screen.getByTestId('answer-modal-ask-clarifying')).toBeDefined();
+    expect(screen.queryByTestId('answer-modal-submit')).toBeNull();
+  });
+
+  it('calls askClarifyingQuestions and refetches when button is clicked', async () => {
+    (window.sandstorm.stacks.getNeedsHumanQuestions as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(null);
+    (window.sandstorm.stacks.askClarifyingQuestions as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(undefined);
+    renderModal();
+    await waitFor(() => expect(screen.queryByTestId('answer-modal-loading')).toBeNull());
+
+    await act(async () => {
+      screen.getByTestId('answer-modal-ask-clarifying').click();
+    });
+
+    expect(window.sandstorm.stacks.askClarifyingQuestions).toHaveBeenCalledWith('test-stack');
+    expect(window.sandstorm.stacks.getNeedsHumanQuestions).toHaveBeenCalledTimes(2);
+  });
+
+  it('shows terminal message when ask returns still no questions', async () => {
+    (window.sandstorm.stacks.getNeedsHumanQuestions as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(null);
+    (window.sandstorm.stacks.askClarifyingQuestions as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(undefined);
+    renderModal();
+    await waitFor(() => expect(screen.queryByTestId('answer-modal-loading')).toBeNull());
+
+    await act(async () => {
+      screen.getByTestId('answer-modal-ask-clarifying').click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByTestId('answer-modal-terminal-no-questions')).toBeDefined();
+    });
+    expect(screen.queryByTestId('answer-modal-ask-clarifying')).toBeNull();
+  });
+
+  it('shows questions when ask clarifying questions populates them', async () => {
+    (window.sandstorm.stacks.getNeedsHumanQuestions as ReturnType<typeof vi.fn>)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(QUESTIONS_JSON);
+    (window.sandstorm.stacks.askClarifyingQuestions as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(undefined);
+    renderModal();
+    await waitFor(() => expect(screen.queryByTestId('answer-modal-loading')).toBeNull());
+
+    await act(async () => {
+      screen.getByTestId('answer-modal-ask-clarifying').click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('How should we handle it?')).toBeDefined();
+    });
+    expect(screen.queryByTestId('answer-modal-terminal-no-questions')).toBeNull();
+  });
+
+  it('disables "Ask for clarifying questions" button while in flight', async () => {
+    let resolveAsk!: () => void;
+    const askPromise = new Promise<void>((resolve) => { resolveAsk = resolve; });
+    (window.sandstorm.stacks.getNeedsHumanQuestions as ReturnType<typeof vi.fn>)
+      .mockResolvedValue(null);
+    (window.sandstorm.stacks.askClarifyingQuestions as ReturnType<typeof vi.fn>)
+      .mockReturnValue(askPromise);
+    renderModal();
+    await waitFor(() => expect(screen.queryByTestId('answer-modal-loading')).toBeNull());
+
+    act(() => {
+      screen.getByTestId('answer-modal-ask-clarifying').click();
+    });
+
+    // Button should be disabled during in-flight
+    await waitFor(() => {
+      const btn = screen.getByTestId('answer-modal-ask-clarifying') as HTMLButtonElement;
+      expect(btn.disabled).toBe(true);
+    });
+
+    // Resolve the ask
+    await act(async () => { resolveAsk(); });
+  });
 });

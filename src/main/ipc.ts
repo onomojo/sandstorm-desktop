@@ -84,7 +84,7 @@ import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig,
 import { withRetry } from './control-plane/retry-with-backoff';
 import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
-import { CLAUDE_MODELS } from './control-plane/routing';
+import { getAvailableModels } from './control-plane/routing';
 import type { RoutingAssignment, PresetId } from './control-plane/routing';
 import type { EphemeralStreamEvent } from './agent/types';
 import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
@@ -1009,8 +1009,8 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     registry.applyPreset(projectDir, presetId);
   });
 
-  ipcMain.handle('modelRouting:getAvailableModels', (_event, _projectDir: string) => {
-    return CLAUDE_MODELS;
+  ipcMain.handle('modelRouting:getAvailableModels', (_event, projectDir: string) => {
+    return getAvailableModels(projectDir, (key, surface) => registry.hasBackendSecret(key, surface));
   });
 
   // --- Session Monitor ---
@@ -1081,6 +1081,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stacks:resumeNeedsHuman', async (_event, stackId: string, answers: string) => {
     await stackManager.resumeNeedsHumanStack(stackId, answers);
+  });
+
+  ipcMain.handle('stacks:askClarifyingQuestions', async (_event, stackId: string) => {
+    await stackManager.askClarifyingQuestions(stackId);
   });
 
   ipcMain.handle('stacks:recheckCompleted', async (_event, stackId: string) => {

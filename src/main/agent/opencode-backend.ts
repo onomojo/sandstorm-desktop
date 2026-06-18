@@ -96,8 +96,45 @@ function extractEphemeralEvents(parts: Part[]): {
 }
 
 // ---------------------------------------------------------------------------
+// Provider routing helper
+// ---------------------------------------------------------------------------
+
+/**
+ * Derive the { providerID, modelID } pair needed by the SDK session body from
+ * an EffectiveBackend.
+ *
+ * Split rules (mirrors the stored combined-model-string format):
+ *   - model contains '/': split on first '/' → providerID = left, modelID = right
+ *   - model set but no '/': providerID = effective.provider ?? 'anthropic', modelID = whole string
+ *   - model unset: return null → caller omits the `model` field from the body
+ */
+function splitModel(effective: { provider?: string; model?: string }): { providerID: string; modelID: string } | null {
+  if (!effective.model) return null;
+  const slashIdx = effective.model.indexOf('/');
+  if (slashIdx !== -1) {
+    return {
+      providerID: effective.model.slice(0, slashIdx),
+      modelID: effective.model.slice(slashIdx + 1),
+    };
+  }
+  return {
+    providerID: effective.provider ?? 'anthropic',
+    modelID: effective.model,
+  };
+}
+
+// ---------------------------------------------------------------------------
 // OpenCodeBackend
 // ---------------------------------------------------------------------------
+
+// Minimal interface for the registry methods this class needs. Avoids a
+// static import of the full registry module (which would create a circular
+// dependency at load time — same reason syncCredentials uses a dynamic import).
+interface RegistryRef {
+  getGlobalBackendSettings(): { outer_provider: string | null; outer_model: string | null };
+  getBackendSecretBundle(key: string, surface: 'inner' | 'outer'): Record<string, string> | null;
+  getEffectiveBackend(projectDir: string, surface: 'inner' | 'outer'): { backend: string; provider?: string; model?: string };
+}
 
 export class OpenCodeBackend implements AgentBackend {
   readonly name = 'OpenCode';
@@ -107,6 +144,9 @@ export class OpenCodeBackend implements AgentBackend {
   private bridge: BridgeHandle | null = null;
   private mainWindow: BrowserWindow | null = null;
   private ephemeralTimingPath: string;
+  // Cached registry reference — populated once in initialize() to avoid
+  // repeated dynamic imports (and concurrent-import races) in the hot path.
+  private registryRef: RegistryRef | null = null;
 
   // tabId → session state
   private tabSessions = new Map<string, TabSession>();
@@ -143,6 +183,18 @@ export class OpenCodeBackend implements AgentBackend {
     const { createOpencodeClient } = await import('@opencode-ai/sdk');
     const { createOpencodeServer } = await import('@opencode-ai/sdk/server');
 
+    // Resolve global outer provider/model/bundle from registry.
+    // initialize() runs at app startup before any project is selected, so we use
+    // global settings. Dynamic import avoids a circular dependency at load time
+    // (mirrors the syncCredentials pattern for the inner surface). Cache the
+    // reference so hot-path methods (sendMessageAsync etc.) don't re-import.
+    const { registry } = await import('../index');
+    this.registryRef = registry as RegistryRef;
+    const globalSettings = registry.getGlobalBackendSettings();
+    const providerId = globalSettings.outer_provider ?? undefined;
+    const bundle = registry.getBackendSecretBundle('global', 'outer') ?? undefined;
+    const model = globalSettings.outer_model ?? undefined;
+
     // Shim is compiled alongside this module in dist/main/
     const shimPath = path.join(__dirname, 'orchestration-mcp-shim.cjs');
 
@@ -153,6 +205,9 @@ export class OpenCodeBackend implements AgentBackend {
       bridgeUrl: this.bridge.url,
       bridgeToken: this.bridge.token,
       instructionsPath: path.join(cliDir, 'SANDSTORM_OUTER.md'),
+      providerId,
+      bundle,
+      model,
     });
 
     // Inject bridge credentials into process env so OpenCode agent bash skill
@@ -160,10 +215,17 @@ export class OpenCodeBackend implements AgentBackend {
     process.env.SANDSTORM_BRIDGE_URL = this.bridge.url;
     process.env.SANDSTORM_BRIDGE_TOKEN = this.bridge.token;
 
-    // Start OpenCode server, passing the outer config so the bridge shim MCP
-    // is registered and SANDSTORM_BRIDGE_URL/TOKEN flow into the shim env.
+    // Forward full config (mcp + provider) so non-Anthropic provider credentials
+    // and baseURL reach the opencode serve process.
+    // NOTE: the outer opencode serve is a single app-wide process whose provider
+    // credentials come from global settings. A project that overrides outer_provider
+    // to a provider whose credentials exist only at project scope (not global) will
+    // route per-session to that provider but the server config may lack its credentials,
+    // surfacing an auth error via agent:error. Full per-project outer credential
+    // isolation is a follow-up task.
     const sdkConfig: OpenCodeConfig = {
       mcp: outerConfig.mcp as OpenCodeConfig['mcp'],
+      provider: outerConfig.provider as OpenCodeConfig['provider'],
     };
     const server = await createOpencodeServer({ hostname: '127.0.0.1', config: sdkConfig });
     this.serverClose = server.close;
@@ -182,6 +244,7 @@ export class OpenCodeBackend implements AgentBackend {
     this.client = null;
     this.bridge?.release();
     this.bridge = null;
+    this.registryRef = null;
     this.tabSessions.clear();
     this.sessionToTab.clear();
     this.sessionTokens.clear();
@@ -358,11 +421,19 @@ export class OpenCodeBackend implements AgentBackend {
 
       tabSession.fullResponse = '';
 
+      // Resolve per-session model routing from the project's effective backend config.
+      const modelParts = (projectDir && this.registryRef)
+        ? splitModel(this.registryRef.getEffectiveBackend(projectDir, 'outer'))
+        : null;
+
       // Send prompt; completion arrives via SSE events
       await this.client.session.promptAsync({
         path: { id: tabSession.openCodeSessionId },
         query: projectDir ? { directory: projectDir } : undefined,
-        body: { parts: [{ type: 'text', text: message }] },
+        body: {
+          parts: [{ type: 'text', text: message }],
+          ...(modelParts ? { model: modelParts } : {}),
+        },
       });
     } catch (err) {
       tabSession.processing = false;
@@ -443,12 +514,17 @@ export class OpenCodeBackend implements AgentBackend {
       if (!session) throw new Error('Failed to create ephemeral session');
 
       try {
+        // Resolve per-session model routing from the project's effective backend config.
+        const modelParts = this.registryRef
+          ? splitModel(this.registryRef.getEffectiveBackend(projectDir, 'outer'))
+          : null;
+
         const { data: response } = await this.client!.session.prompt({
           path: { id: session.id },
           query: { directory: projectDir },
           body: {
             parts: [{ type: 'text', text: prompt }],
-            ...(model ? { model: { providerID: 'anthropic', modelID: model } } : {}),
+            ...(modelParts ? { model: modelParts } : {}),
           },
           signal: abortCtrl.signal,
         });
@@ -541,13 +617,18 @@ export class OpenCodeBackend implements AgentBackend {
     let openCodeSessionId = '';
     let isDisposed = false;
     let initAbortCtrl = new AbortController();
+    // Resolved once in initialResult and reused for all subsequent sendTurn calls.
+    let resolvedModelParts: { providerID: string; modelID: string } | null = null;
 
     const sendTurn = async (text: string, signal: AbortSignal): Promise<string> => {
       if (isDisposed) throw new Error('Session disposed');
       const { data: response } = await this.client!.session.prompt({
         path: { id: openCodeSessionId },
         query: { directory: projectDir },
-        body: { parts: [{ type: 'text', text }] },
+        body: {
+          parts: [{ type: 'text', text }],
+          ...(resolvedModelParts ? { model: resolvedModelParts } : {}),
+        },
         signal,
       });
       const parts: Part[] = response?.parts ?? [];
@@ -569,6 +650,12 @@ export class OpenCodeBackend implements AgentBackend {
 
     const initialResult = (async (): Promise<string> => {
       if (!this.client) throw new Error('OpenCodeBackend not initialized');
+
+      // Resolve model once for the session lifetime from effective backend config.
+      resolvedModelParts = this.registryRef
+        ? splitModel(this.registryRef.getEffectiveBackend(projectDir, 'outer'))
+        : null;
+
       const { data: session } = await this.client.session.create({
         query: { directory: projectDir },
       });

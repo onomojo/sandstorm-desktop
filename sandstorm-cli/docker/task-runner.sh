@@ -460,6 +460,74 @@ is_infra_error_only() {
   return 1  # Unknown failure — treat as real
 }
 
+# Pure comparison: returns 0 (install needed) when hashes differ, 1 (skip) when they match.
+needs_node_modules_reconcile() {
+  local current_hash="$1"
+  local stored_hash="$2"
+  if [ "$current_hash" = "$stored_hash" ]; then
+    return 1  # hashes match — skip install
+  fi
+  return 0    # hashes differ — install needed
+}
+
+# Reconcile the app container's node_modules against the committed package-lock.json.
+# Detects drift via lockfile hash; reconciles only when node_modules is a Docker named
+# volume (not a host bind mount). Serializes concurrent runs with flock on the volume.
+# Returns: 0 = up-to-date or skipped, 2 = infrastructure error (halt)
+reconcile_app_node_modules() {
+  local verify_log="$1"
+
+  # No lockfile — not an npm project or lockfile missing, skip
+  if [ ! -f /app/package-lock.json ]; then
+    return 0
+  fi
+
+  # Read mountinfo from app container; skip if app service is unreachable
+  local mountinfo
+  mountinfo=$(sandstorm-exec app cat /proc/self/mountinfo 2>/dev/null) || return 0
+
+  # Extract the mount source for /app/node_modules from mountinfo
+  # mountinfo format: mountid parentid major:minor root mountpoint mountopts [opts] - fstype source superopts
+  local nm_source
+  nm_source=$(echo "$mountinfo" | awk '$5 == "/app/node_modules" { for(i=1;i<=NF;i++) if($i=="-") { print $(i+2); break } }')
+
+  # Reconcile only when node_modules is a Docker named volume (source under /var/lib/docker/volumes/)
+  # Bind-mounted node_modules (host paths) are skipped to avoid mutating the user's working tree
+  if [ -z "$nm_source" ] || ! echo "$nm_source" | grep -q '^/var/lib/docker/volumes/'; then
+    log_loop "node_modules reconcile: not a named volume (source: ${nm_source:-absent}), skipping"
+    return 0
+  fi
+
+  # Hash the committed lockfile; compare to the marker stored in the named volume
+  local current_hash
+  current_hash=$(sha256sum /app/package-lock.json | awk '{print $1}')
+
+  local stored_hash
+  stored_hash=$(sandstorm-exec app cat /app/node_modules/.sandstorm-lock-hash 2>/dev/null || true)
+
+  # Idempotency: skip install when node_modules are already up to date
+  if ! needs_node_modules_reconcile "$current_hash" "$stored_hash"; then
+    log_loop "node_modules reconcile: up-to-date (hash match), skipping npm ci"
+    return 0
+  fi
+
+  log_loop "node_modules reconcile: drift detected — running npm ci in app container..."
+
+  # Run npm ci in the app container; flock on the named volume file serializes concurrent stacks
+  if ! sandstorm-exec app bash -c "flock /app/node_modules/.sandstorm-reconcile-lock npm ci" >> "$verify_log" 2>&1; then
+    log_loop "node_modules reconcile: npm ci failed — infrastructure error, halting"
+    echo "VERIFY_FAIL"
+    tail -n 50 "$verify_log"
+    return 2
+  fi
+
+  # Persist the new hash into the named volume so the next run is a no-op
+  sandstorm-exec app bash -c "echo '$current_hash' > /app/node_modules/.sandstorm-lock-hash" 2>/dev/null || true
+
+  log_loop "node_modules reconcile: npm ci complete, marker updated"
+  return 0
+}
+
 # Run verification using the project's .sandstorm/verify.sh script.
 # Returns: 0 = all pass (or no verify.sh), 1 = failure (retryable), 2 = infrastructure error (halt)
 run_verify() {
@@ -474,6 +542,13 @@ run_verify() {
   fi
 
   log_loop "Running verification suite (.sandstorm/verify.sh)..."
+
+  # Reconcile app container node_modules before verify to fix stale image-baked deps
+  reconcile_app_node_modules "$verify_log"
+  local reconcile_result=$?
+  if [ $reconcile_result -ne 0 ]; then
+    return $reconcile_result
+  fi
 
   # Run the project's verify script, redirect all output to log only
   (cd /app && bash "$verify_script" 2>&1) >> "$verify_log"
@@ -496,6 +571,55 @@ run_verify() {
   tail -n 50 "$verify_log"
   log_loop "Verify: FAILED (exit code $exit_code)"
   return 1
+}
+
+# _get_task_changed_files
+# Emits the set of files changed or added by the current task (one per line,
+# sorted). Extracted as a standalone function so smoke tests can shadow it.
+_get_task_changed_files() {
+  (cd /app && {
+    git diff --name-only HEAD 2>/dev/null
+    git ls-files --others --exclude-standard 2>/dev/null
+  }) | sort -u
+}
+
+# classify_verify_failure_scope <verify_log>
+# Returns 0 (environmental) when EVERY failing file parsed from TypeScript error
+# lines in <verify_log> is outside the current task's changed-file set.
+# Returns 1 (not environmental) when:
+#   - no TypeScript error paths are parseable (e.g. test-runner failures, infra)
+#   - at least one failing file is in the changed set (agent's own change)
+#   - mixed scope: some failing files in-scope, some out-of-scope
+classify_verify_failure_scope() {
+  local verify_log="${1:-/tmp/claude-verify.log}"
+
+  # Parse TypeScript error lines: path(line,col): error TSxxxx
+  local failing_files
+  failing_files=$(grep -E '\([0-9]+,[0-9]+\): error TS[0-9]+' "$verify_log" 2>/dev/null \
+    | sed -E 's/\([0-9]+,[0-9]+\): error TS[^(].*$//' \
+    | sed 's/[[:space:]]*$//' \
+    | sort -u || true)
+
+  # No parseable paths → cannot classify as environmental; fall through
+  if [ -z "$failing_files" ]; then
+    return 1
+  fi
+
+  # Build changed-file set
+  local changed_files
+  changed_files=$(_get_task_changed_files)
+
+  # If any failing file is in the changed set → NOT environmental
+  while IFS= read -r failing_file; do
+    local normalized
+    normalized=$(echo "$failing_file" | sed 's|^\./||')
+    if echo "$changed_files" | grep -qxF "$normalized"; then
+      return 1
+    fi
+  done <<< "$failing_files"
+
+  # All failing files are outside the changed set → environmental
+  return 0
 }
 
 # ─── Main Loop ──────────────────────────────────────────────────────────────
@@ -925,6 +1049,19 @@ while true; do
 
         # Capture first notable error line for diagnostics (best-effort)
         VERIFY_FAIL_FINGERPRINT=$(grep -m1 -E 'Error|error|FAIL|fail|not found|command not found' /tmp/claude-verify.log 2>/dev/null | head -c 200 || true)
+
+        # If all failing files are outside the task's changed-file set, this is
+        # a pre-existing/environmental failure — classify and halt immediately
+        # rather than retrying or feeding it to the agent (which would cause an
+        # unhelpful STOP_AND_ASK with no questions).
+        if classify_verify_failure_scope /tmp/claude-verify.log; then
+          log_loop "All verify-failing files are outside this task's changed-file set — treating as environmental"
+          log_loop "Failure fingerprint: ${VERIFY_FAIL_FINGERPRINT}"
+          printf 'VERIFY_FAIL_FINGERPRINT: %s\n' "${VERIFY_FAIL_FINGERPRINT}" > /tmp/claude-verify-environmental.txt
+          VERIFY_BLOCKED_ENVIRONMENTAL=1
+          TASK_FAILED=1
+          break
+        fi
 
         if [ $TOTAL_VERIFY_RETRIES -ge $MAX_VERIFY_RETRIES ]; then
           if [ $META_REVIEW_FIRED_VERIFY -eq 0 ]; then
