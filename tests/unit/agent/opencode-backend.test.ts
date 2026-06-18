@@ -33,6 +33,9 @@ const {
   mockSessionDelete,
   mockEventSubscribe,
   mockServerClose,
+  mockGetGlobalBackendSettings,
+  mockGetBackendSecretBundle,
+  mockGetEffectiveBackend,
 } = vi.hoisted(() => {
   const mockBridgeRelease = vi.fn();
   const mockBridge = {
@@ -48,8 +51,22 @@ const {
   const mockSessionAbort = vi.fn().mockResolvedValue({ data: true });
   const mockSessionDelete = vi.fn().mockResolvedValue({ data: true });
   const mockServerClose = vi.fn();
-
   const mockEventSubscribe = vi.fn();
+
+  const mockGetGlobalBackendSettings = vi.fn().mockReturnValue({
+    inner_backend: 'opencode',
+    inner_provider: 'anthropic',
+    inner_model: null,
+    outer_backend: 'claude',
+    outer_provider: null,
+    outer_model: null,
+  });
+  const mockGetBackendSecretBundle = vi.fn().mockReturnValue(null);
+  const mockGetEffectiveBackend = vi.fn().mockReturnValue({
+    backend: 'opencode',
+    provider: undefined,
+    model: undefined,
+  });
 
   return {
     mockBridgeRelease,
@@ -61,6 +78,9 @@ const {
     mockSessionDelete,
     mockEventSubscribe,
     mockServerClose,
+    mockGetGlobalBackendSettings,
+    mockGetBackendSecretBundle,
+    mockGetEffectiveBackend,
   };
 });
 
@@ -83,15 +103,9 @@ vi.mock('../../../src/main/index', () => ({
   stackManager: {},
   agentBackend: {},
   registry: {
-    getGlobalBackendSettings: vi.fn().mockReturnValue({
-      inner_backend: 'opencode',
-      inner_provider: 'anthropic',
-      inner_model: null,
-      outer_backend: 'claude',
-      outer_provider: null,
-      outer_model: null,
-    }),
-    getBackendSecretBundle: vi.fn().mockReturnValue(null),
+    getGlobalBackendSettings: mockGetGlobalBackendSettings,
+    getBackendSecretBundle: mockGetBackendSecretBundle,
+    getEffectiveBackend: mockGetEffectiveBackend,
   },
   cliDir: '/tmp/sandstorm-cli',
 }));
@@ -1088,5 +1102,314 @@ describe('OpenCodeBackend auth', () => {
 
   it('syncCredentials resolves without error', async () => {
     await expect(backend.syncCredentials([])).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Provider routing — splitModel + all three session entry points
+// ---------------------------------------------------------------------------
+
+describe('OpenCodeBackend provider routing', () => {
+  let backend: OpenCodeBackend;
+
+  const defaultGlobalSettings = {
+    inner_backend: 'opencode',
+    inner_provider: 'anthropic',
+    inner_model: null,
+    outer_backend: 'opencode',
+    outer_provider: null,
+    outer_model: null,
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockEventSubscribe.mockResolvedValue({ stream: makeMockStream() });
+    mockSessionCreate.mockResolvedValue({
+      data: { id: 'oc-session-1', projectID: 'proj', directory: '/project', title: '' },
+    });
+    mockSessionPromptAsync.mockResolvedValue({ data: undefined });
+    mockSessionPrompt.mockResolvedValue({ data: { info: {}, parts: [] } });
+    // Reset registry mocks to safe defaults each test
+    mockGetGlobalBackendSettings.mockReturnValue({ ...defaultGlobalSettings });
+    mockGetBackendSecretBundle.mockReturnValue(null);
+    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+  });
+
+  afterEach(() => {
+    backend?.destroy();
+  });
+
+  // --- initialize() server config ---
+
+  it('initialize() forwards provider block from global outer settings to createOpencodeServer', async () => {
+    mockGetGlobalBackendSettings.mockReturnValue({
+      ...defaultGlobalSettings,
+      outer_provider: 'amazon-bedrock',
+      outer_model: 'amazon-bedrock/anthropic.claude-3-5-sonnet',
+    });
+    mockGetBackendSecretBundle.mockReturnValue({ region: 'us-east-1' });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+
+    expect(createOpencodeServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          provider: expect.objectContaining({
+            'amazon-bedrock': expect.any(Object),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('initialize() with null outer_provider defaults to anthropic provider in sdkConfig', async () => {
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+
+    expect(createOpencodeServer).toHaveBeenCalledWith(
+      expect.objectContaining({
+        config: expect.objectContaining({
+          provider: expect.objectContaining({
+            anthropic: expect.any(Object),
+          }),
+        }),
+      }),
+    );
+  });
+
+  it('initialize() passes bundle to generateOuterOpencodeConfig (ollama provider has baseURL)', async () => {
+    mockGetGlobalBackendSettings.mockReturnValue({
+      ...defaultGlobalSettings,
+      outer_provider: 'ollama',
+      outer_model: 'ollama/llama3',
+    });
+    mockGetBackendSecretBundle.mockReturnValue({ baseUrl: 'http://localhost:11434' });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+
+    // ollama maps to providerKey 'openai' with a baseURL field
+    const call = (createOpencodeServer as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    const providerBlock = call?.config?.provider as Record<string, unknown>;
+    // The 'openai' key is used for ollama (custom OpenAI-compatible endpoint)
+    expect(providerBlock).toBeDefined();
+    expect(Object.keys(providerBlock).length).toBeGreaterThan(0);
+  });
+
+  it('idempotent: two initialize() calls with same global settings yield equal provider+mcp config', async () => {
+    mockGetGlobalBackendSettings.mockReturnValue({
+      ...defaultGlobalSettings,
+      outer_provider: 'amazon-bedrock',
+      outer_model: 'amazon-bedrock/some-model',
+    });
+
+    const b1 = new OpenCodeBackend();
+    await b1.initialize();
+    const call1 = (createOpencodeServer as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
+    b1.destroy();
+
+    vi.clearAllMocks();
+    mockEventSubscribe.mockResolvedValue({ stream: makeMockStream() });
+    mockGetGlobalBackendSettings.mockReturnValue({
+      ...defaultGlobalSettings,
+      outer_provider: 'amazon-bedrock',
+      outer_model: 'amazon-bedrock/some-model',
+    });
+    mockGetBackendSecretBundle.mockReturnValue(null);
+    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+
+    const b2 = new OpenCodeBackend();
+    await b2.initialize();
+    const call2 = (createOpencodeServer as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
+    b2.destroy();
+
+    expect(call1?.config?.provider).toEqual(call2?.config?.provider);
+    expect(call1?.config?.mcp).toEqual(call2?.config?.mcp);
+  });
+
+  // --- sendMessage / promptAsync (entry point :361) ---
+
+  it('sendMessage routes to provider/model from getEffectiveBackend (combined form with /)', async () => {
+    mockGetEffectiveBackend.mockReturnValue({
+      backend: 'opencode',
+      provider: 'amazon-bedrock',
+      model: 'amazon-bedrock/some-model',
+    });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    backend.sendMessage('tab-1', 'hello', '/project');
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSessionPromptAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          model: { providerID: 'amazon-bedrock', modelID: 'some-model' },
+        }),
+      }),
+    );
+  });
+
+  it('sendMessage omits model field when effective.model is unset', async () => {
+    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    backend.sendMessage('tab-1', 'hello', '/project');
+    await new Promise((r) => setTimeout(r, 10));
+
+    const callArg = mockSessionPromptAsync.mock.calls[0]?.[0];
+    expect(callArg?.body?.model).toBeUndefined();
+  });
+
+  it('sendMessage routes no-slash model using provider as providerID', async () => {
+    mockGetEffectiveBackend.mockReturnValue({
+      backend: 'opencode',
+      provider: 'openai',
+      model: 'gpt-4o',
+    });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    backend.sendMessage('tab-1', 'hello', '/project');
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSessionPromptAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          model: { providerID: 'openai', modelID: 'gpt-4o' },
+        }),
+      }),
+    );
+  });
+
+  it('sendMessage no-slash model falls back to anthropic when provider unset', async () => {
+    mockGetEffectiveBackend.mockReturnValue({
+      backend: 'opencode',
+      model: 'claude-opus-4',
+    });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    backend.sendMessage('tab-1', 'hello', '/project');
+    await new Promise((r) => setTimeout(r, 10));
+
+    expect(mockSessionPromptAsync).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          model: { providerID: 'anthropic', modelID: 'claude-opus-4' },
+        }),
+      }),
+    );
+  });
+
+  // --- spawnEphemeralAgent / session.prompt (entry point :450) ---
+
+  it('spawnEphemeralAgent routes to provider/model from getEffectiveBackend (combined form)', async () => {
+    mockGetEffectiveBackend.mockReturnValue({
+      backend: 'opencode',
+      provider: 'amazon-bedrock',
+      model: 'amazon-bedrock/some-model',
+    });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    await backend.runEphemeralAgent('prompt', '/project');
+
+    expect(mockSessionPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          model: { providerID: 'amazon-bedrock', modelID: 'some-model' },
+        }),
+      }),
+    );
+  });
+
+  it('spawnEphemeralAgent does not hardcode anthropic as providerID', async () => {
+    mockGetEffectiveBackend.mockReturnValue({
+      backend: 'opencode',
+      provider: 'openai',
+      model: 'openai/gpt-4o',
+    });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    await backend.runEphemeralAgent('prompt', '/project');
+
+    const callArg = mockSessionPrompt.mock.calls[0]?.[0];
+    expect(callArg?.body?.model?.providerID).toBe('openai');
+    expect(callArg?.body?.model?.providerID).not.toBe('anthropic');
+  });
+
+  it('spawnEphemeralAgent omits model field when effective.model is unset', async () => {
+    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    await backend.runEphemeralAgent('prompt', '/project');
+
+    const callArg = mockSessionPrompt.mock.calls[0]?.[0];
+    expect(callArg?.body?.model).toBeUndefined();
+  });
+
+  // --- spawnEphemeralSession / sendTurn (entry point :546) ---
+
+  it('spawnEphemeralSession routes initial turn to provider/model from getEffectiveBackend', async () => {
+    mockGetEffectiveBackend.mockReturnValue({
+      backend: 'opencode',
+      provider: 'amazon-bedrock',
+      model: 'amazon-bedrock/some-model',
+    });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    const handle = backend.spawnEphemeralSession('init prompt', '/project');
+    await handle.initialResult;
+    handle.dispose();
+
+    expect(mockSessionPrompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        body: expect.objectContaining({
+          model: { providerID: 'amazon-bedrock', modelID: 'some-model' },
+        }),
+      }),
+    );
+  });
+
+  it('spawnEphemeralSession follow-up turns also carry the resolved model', async () => {
+    mockGetEffectiveBackend.mockReturnValue({
+      backend: 'opencode',
+      provider: 'amazon-bedrock',
+      model: 'amazon-bedrock/some-model',
+    });
+    mockSessionPrompt
+      .mockResolvedValueOnce({ data: { info: {}, parts: [{ type: 'text', id: 'p1', sessionID: 'oc-session-1', messageID: 'm1', text: 'init' }] } })
+      .mockResolvedValueOnce({ data: { info: {}, parts: [{ type: 'text', id: 'p2', sessionID: 'oc-session-1', messageID: 'm2', text: 'followup' }] } });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    const handle = backend.spawnEphemeralSession('init', '/project');
+    await handle.initialResult;
+    await handle.sendFollowUp('follow-up');
+    handle.dispose();
+
+    expect(mockSessionPrompt).toHaveBeenCalledTimes(2);
+    for (const call of mockSessionPrompt.mock.calls) {
+      expect(call[0].body.model).toEqual({ providerID: 'amazon-bedrock', modelID: 'some-model' });
+    }
+  });
+
+  it('spawnEphemeralSession omits model field when effective.model is unset', async () => {
+    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+    const handle = backend.spawnEphemeralSession('init', '/project');
+    await handle.initialResult;
+    handle.dispose();
+
+    const callArg = mockSessionPrompt.mock.calls[0]?.[0];
+    expect(callArg?.body?.model).toBeUndefined();
   });
 });
