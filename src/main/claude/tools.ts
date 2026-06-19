@@ -11,6 +11,7 @@ import { stackManager, agentBackend, registry } from '../index';
 import { fetchTicketWithConfig, updateTicketWithConfig } from '../control-plane/ticket-config';
 import type { ProjectTicketConfig } from '../control-plane/registry';
 import { getDefaultSpecQualityGate } from '../spec-quality-gate';
+import { showNotification } from '../tray';
 import {
   createSchedule,
   listSchedules,
@@ -313,13 +314,12 @@ Mark at most one option per question with \`"recommended": true\` when you have 
 `;
 }
 
-function resolveRefineModel(projectDir: string): string | undefined {
-  const routing = registry.getEffectiveRoutingFor(projectDir, 'refine');
-  if (routing.backend === 'opencode') {
-    console.warn('[refine] backend=opencode unsupported for host path; falling back to legacy outer model');
-    return registry.getLegacyEffectiveModels(projectDir).outer_model;
-  }
-  return routing.model;
+/**
+ * Resolve the touchpoint descriptor for the 'refine' touchpoint.
+ * Returns null when credentials are missing (caller must surface a needs-key outcome).
+ */
+function getRefineDescriptor(projectDir: string) {
+  return registry.getEffectiveTouchpointDescriptor(projectDir, 'refine');
 }
 
 async function handleSpecCheck(
@@ -330,8 +330,14 @@ async function handleSpecCheck(
   if (!res.ok) return res.result;
   const { ctx } = res;
 
+  const descriptor = getRefineDescriptor(projectDir);
+  if (descriptor.backend === 'opencode' && descriptor.credentials === null) {
+    showNotification('Refine blocked', `Ticket ${ticketId}: provider ${descriptor.provider} needs an API key`);
+    return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
+  }
+
   const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, undefined, 'refine');
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
   return {
@@ -527,15 +533,21 @@ async function handleSpecRefine(
   if (!res.ok) return res.result;
   const { ctx } = res;
 
+  const descriptor = getRefineDescriptor(projectDir);
+  if (descriptor.backend === 'opencode' && descriptor.credentials === null) {
+    showNotification('Refine blocked', `Ticket ${ticketId}: provider ${descriptor.provider} needs an API key`);
+    return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
+  }
+
   if (!userAnswers) {
     const prompt = buildSpecRefineInitialPrompt(ctx.gate, ctx.ticketBody);
-    const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, resolveRefineModel(projectDir));
+    const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, undefined, 'refine');
     const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
     return { passed, report: result };
   }
 
   const prompt = buildSpecRefineAnswerPrompt(ctx.gate, ctx.ticketBody, userAnswers);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, resolveRefineModel(projectDir));
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, undefined, 'refine');
   return applySpecRefineResult(ticketId, projectDir, result, true);
 }
 
@@ -560,8 +572,14 @@ export function spawnSpecCheck(
     if (!res.ok) return res.result;
     if (cancelled) throw new Error('Cancelled');
 
+    const descriptor = getRefineDescriptor(projectDir);
+    if (descriptor.backend === 'opencode' && descriptor.credentials === null) {
+      showNotification('Refine blocked', `Ticket ${ticketId}: provider ${descriptor.provider} needs an API key`);
+      return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
+    }
+
     const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody);
-    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' }, undefined, 'refine');
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
 
@@ -633,6 +651,12 @@ export function spawnSpecRefine(
     if (!res.ok) return res.result;
     if (cancelled) throw new Error('Cancelled');
 
+    const descriptor = getRefineDescriptor(projectDir);
+    if (descriptor.backend === 'opencode' && descriptor.credentials === null) {
+      showNotification('Refine blocked', `Ticket ${ticketId}: provider ${descriptor.provider} needs an API key`);
+      return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
+    }
+
     const key = refineSessionKey(projectDir, ticketId);
 
     if (userAnswers) {
@@ -656,7 +680,7 @@ export function spawnSpecRefine(
       // No pooled session (timed out, app restarted, etc.) — fall back to a
       // cold ephemeral so the user's answers still produce a result.
       const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(
-        answerPrompt, projectDir, 0, onChunk, { ticketId, stage: 'refine' }, resolveRefineModel(projectDir),
+        answerPrompt, projectDir, 0, onChunk, { ticketId, stage: 'refine' }, undefined, 'refine',
       );
       activeDispose = epCancel;
       if (cancelled) { epCancel(); throw new Error('Cancelled'); }

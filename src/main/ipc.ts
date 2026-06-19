@@ -1623,11 +1623,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   ipcMain.handle('pr:draftBody', async (_event, stackId: string) => {
     const stack = await stackManager.getStackWithServices(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
-    const prRouting = registry.getEffectiveRoutingFor(stack.project_dir, 'pr_description');
-    const prModel = prRouting.backend === 'opencode'
-      ? (console.warn('[pr_description] backend=opencode unsupported for host path; falling back to legacy outer model'),
-         registry.getLegacyEffectiveModels(stack.project_dir).outer_model)
-      : prRouting.model;
+    const prDescriptor = registry.getEffectiveTouchpointDescriptor(stack.project_dir, 'pr_description');
+    if (prDescriptor.backend === 'opencode' && prDescriptor.credentials === null) {
+      return { status: 'needs_key' as const, backend: prDescriptor.backend, provider: prDescriptor.provider };
+    }
     return draftPullRequest(
       {
         stackId,
@@ -1636,7 +1635,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       },
       {
         runEphemeral: (prompt, projectDir, timeoutMs) =>
-          agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }, prModel),
+          agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }, undefined, 'pr_description'),
         fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
       },
     );
@@ -1716,11 +1715,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
 
     const workspace = workspacePathFor(stack.project_dir, stackId);
-    const prRouting = registry.getEffectiveRoutingFor(stack.project_dir, 'pr_description');
-    const prModel = prRouting.backend === 'opencode'
-      ? (console.warn('[pr_description] backend=opencode unsupported for host path; falling back to legacy outer model'),
-         registry.getLegacyEffectiveModels(stack.project_dir).outer_model)
-      : prRouting.model;
+    const prDescriptor = registry.getEffectiveTouchpointDescriptor(stack.project_dir, 'pr_description');
+    if (prDescriptor.backend === 'opencode' && prDescriptor.credentials === null) {
+      return { status: 'needs_key' as const, backend: prDescriptor.backend, provider: prDescriptor.provider };
+    }
 
     let draft: { title: string; body: string };
     try {
@@ -1728,7 +1726,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         { stackId, workspace, ticket: stack.ticket },
         {
           runEphemeral: (prompt, projectDir, timeoutMs) =>
-            agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }, prModel),
+            agentBackend.runEphemeralAgent(prompt, projectDir, timeoutMs, { ticketId: stack.ticket ?? undefined, stage: 'pr' }, undefined, 'pr_description'),
           fetchTaskTail: (id) => stackManager.getTaskOutput(id, 50).catch(() => ''),
         },
       );

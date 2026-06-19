@@ -2,6 +2,10 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { handleToolCall, validateProjectDir, _clearTicketBodyCacheForTests, _disposeAllRefineSessionsForTests, spawnSpecRefine, spawnSpecCheck } from '../../src/main/claude/tools';
 import type { EphemeralSessionHandle } from '../../src/main/agent/types';
 
+vi.mock('../../src/main/tray', () => ({
+  showNotification: vi.fn(),
+}));
+
 // Mock the stackManager, agentBackend, and registry imports
 vi.mock('../../src/main/index', () => ({
   stackManager: {
@@ -18,6 +22,7 @@ vi.mock('../../src/main/index', () => ({
     getProjectTicketConfig: vi.fn().mockReturnValue({ provider: 'github' }),
     getEffectiveRoutingFor: vi.fn().mockReturnValue({ backend: 'claude', model: 'sonnet' }),
     getLegacyEffectiveModels: vi.fn().mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' }),
+    getEffectiveTouchpointDescriptor: vi.fn().mockReturnValue({ backend: 'claude', provider: 'anthropic', model: 'sonnet', credentials: {} }),
   },
 }));
 
@@ -192,7 +197,8 @@ describe('MCP tools', () => {
         '/proj',
         1_800_000,
         { ticketId: '42', stage: 'spec' },
-        expect.anything(),
+        undefined,
+        'refine',
       );
       expect(result.passed).toBe(true);
       expect(result.report).toContain('PASS');
@@ -566,7 +572,8 @@ describe('MCP tools', () => {
         '/proj',
         1_800_000,
         { ticketId: '42', stage: 'refine' },
-        expect.anything(),
+        undefined,
+        'refine',
       );
       expect(result.passed).toBe(true);
       expect(result.updatedBody).toContain('Better spec');
@@ -931,9 +938,9 @@ describe('MCP tools', () => {
   });
 
   // -------------------------------------------------------------------------
-  // refine routing — model passthrough tests
+  // refine routing — touchpoint dispatch tests
   // -------------------------------------------------------------------------
-  describe('refine routing — model passthrough', () => {
+  describe('refine routing — touchpoint dispatch', () => {
     beforeEach(() => {
       _clearTicketBodyCacheForTests();
       vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: T-99\nbody text');
@@ -942,48 +949,46 @@ describe('MCP tools', () => {
         promise: Promise.resolve('## Spec Quality Gate: PASS'),
         cancel: vi.fn(),
       });
-      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'sonnet' });
-      vi.mocked(registry.getLegacyEffectiveModels).mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
+      vi.mocked(registry.getEffectiveTouchpointDescriptor).mockReturnValue({ backend: 'claude', provider: 'anthropic', model: 'sonnet', credentials: {} });
     });
 
-    it('handleSpecCheck forwards resolved refine model to runEphemeralAgent', async () => {
-      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'haiku' });
-
+    it('handleSpecCheck passes touchpoint "refine" to runEphemeralAgent', async () => {
       await handleToolCall('spec_check', { ticketId: 'T-99', projectDir: '/proj' });
 
       const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
       expect(calls.length).toBeGreaterThan(0);
       const lastCall = calls[calls.length - 1];
-      expect(lastCall[4]).toBe('haiku');
+      expect(lastCall[4]).toBeUndefined(); // model not passed directly
+      expect(lastCall[5]).toBe('refine');  // touchpoint passed
     });
 
-    it('spawnSpecCheck forwards resolved refine model to spawnEphemeralAgent', async () => {
-      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'opus' });
-
+    it('spawnSpecCheck passes touchpoint "refine" to spawnEphemeralAgent', async () => {
       spawnSpecCheck('T-99', '/proj');
       await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
 
       const calls = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls;
       const lastCall = calls[calls.length - 1];
-      expect(lastCall[5]).toBe('opus');
+      expect(lastCall[5]).toBeUndefined(); // model not passed directly
+      expect(lastCall[6]).toBe('refine');  // touchpoint passed
     });
 
-    it('falls back to legacy outer model and warns when refine backend is opencode', async () => {
-      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'opencode', model: 'gpt-4' });
-      vi.mocked(registry.getLegacyEffectiveModels).mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    it('shows needs_key notification and does NOT run agent when opencode backend has no credentials', async () => {
+      const { showNotification } = await import('../../src/main/tray');
+      vi.mocked(registry.getEffectiveTouchpointDescriptor).mockReturnValue({
+        backend: 'opencode', provider: 'openai', model: 'gpt-4o', credentials: null,
+      });
 
-      await handleToolCall('spec_check', { ticketId: 'T-99', projectDir: '/proj' });
+      const result = await handleToolCall('spec_check', { ticketId: 'T-99', projectDir: '/proj' });
 
-      const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
-      const lastCall = calls[calls.length - 1];
-      expect(lastCall[4]).toBe('opus');
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
-      warnSpy.mockRestore();
+      expect(vi.mocked(showNotification)).toHaveBeenCalledWith(
+        'Refine blocked',
+        expect.stringContaining('openai'),
+      );
+      expect(agentBackend.runEphemeralAgent).not.toHaveBeenCalled();
+      expect(result).toMatchObject({ status: 'needs_key', backend: 'opencode', provider: 'openai' });
     });
 
-    it('handleSpecRefine initial forwards resolved refine model to runEphemeralAgent', async () => {
-      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'haiku' });
+    it('handleSpecRefine initial passes touchpoint "refine" to runEphemeralAgent', async () => {
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Spec Quality Gate: FAIL\n\n### Questions Requiring User Answers\n1. What?',
       );
@@ -993,11 +998,11 @@ describe('MCP tools', () => {
       const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
       expect(calls.length).toBeGreaterThan(0);
       const lastCall = calls[calls.length - 1];
-      expect(lastCall[4]).toBe('haiku');
+      expect(lastCall[4]).toBeUndefined(); // model not passed
+      expect(lastCall[5]).toBe('refine');
     });
 
-    it('handleSpecRefine answer forwards resolved refine model to runEphemeralAgent', async () => {
-      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'haiku' });
+    it('handleSpecRefine answer passes touchpoint "refine" to runEphemeralAgent', async () => {
       vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
         '## Updated Ticket Body\n\n# Issue: Updated\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |',
       );
@@ -1008,12 +1013,12 @@ describe('MCP tools', () => {
       const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
       expect(calls.length).toBeGreaterThan(0);
       const lastCall = calls[calls.length - 1];
-      expect(lastCall[4]).toBe('haiku');
+      expect(lastCall[4]).toBeUndefined();
+      expect(lastCall[5]).toBe('refine');
     });
 
-    it('spawnSpecRefine cold fallback forwards resolved refine model to spawnEphemeralAgent', async () => {
+    it('spawnSpecRefine cold fallback passes touchpoint "refine" to spawnEphemeralAgent', async () => {
       _disposeAllRefineSessionsForTests();
-      vi.mocked(registry.getEffectiveRoutingFor).mockReturnValue({ backend: 'claude', model: 'opus' });
       vi.mocked(agentBackend.spawnEphemeralAgent).mockReturnValue({
         promise: Promise.resolve(
           '## Updated Ticket Body\n\n# Issue: Cold\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |',
@@ -1028,7 +1033,8 @@ describe('MCP tools', () => {
       const calls = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls;
       expect(calls.length).toBeGreaterThan(0);
       const lastCall = calls[calls.length - 1];
-      expect(lastCall[5]).toBe('opus');
+      expect(lastCall[5]).toBeUndefined(); // model not passed
+      expect(lastCall[6]).toBe('refine');
     });
   });
 });

@@ -230,6 +230,11 @@ describe('Model Routing', () => {
       expect(registry.getProjectRouting('/proj/a')).toBeNull();
     });
 
+    it('getStoredProviderKeys returns providers stored under a scope', () => {
+      registry.setProviderSecretBundle('global', 'openai', { api_key: 'sk-test' });
+      expect(registry.getStoredProviderKeys('global')).toEqual(['openai']);
+    });
+
     it('different projects have independent routing', () => {
       registry.setProjectRouting('/proj/a', { preset: 'budget' });
       registry.setProjectRouting('/proj/b', { preset: 'max_quality' });

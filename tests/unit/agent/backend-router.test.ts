@@ -10,6 +10,7 @@ import { BackendRouter } from '../../../src/main/agent/backend-router';
 import { FakeAgentBackend } from './agent-backend-conformance.test';
 import type { AgentBackend } from '../../../src/main/agent/types';
 import type { BackendType } from '../../../src/main/control-plane/backend-resolution';
+import type { TouchpointId } from '../../../src/main/control-plane/routing';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -27,6 +28,20 @@ function makeRouter(
       opencode: () => opencodeBackend,
     },
     selector,
+  );
+}
+
+type TestDescriptor = { backend: BackendType; provider: string; model: string; credentials: Record<string, string> | null };
+
+function makeRouterWithDescriptor(
+  claudeBackend: AgentBackend,
+  opencodeBackend: AgentBackend,
+  descriptorSelector: (projectDir: string, touchpoint: TouchpointId) => TestDescriptor,
+): BackendRouter {
+  return new BackendRouter(
+    { claude: () => claudeBackend, opencode: () => opencodeBackend },
+    () => 'claude', // outer selector always says claude (all-claude project)
+    descriptorSelector,
   );
 }
 
@@ -334,5 +349,89 @@ describe('BackendRouter', () => {
     expect(claudeFake.getHistory('tab-z').messages[0].content).toBe('test message');
     claudeOnly.resetSession('tab-z');
     expect(claudeFake.getHistory('tab-z').messages).toHaveLength(0);
+  });
+
+  // --- Touchpoint-aware ephemeral routing via descriptorSelector ---
+
+  describe('touchpoint-aware ephemeral routing', () => {
+    let claudeFakeTp: FakeAgentBackend;
+    let opencodeFakeTp: FakeAgentBackend;
+
+    beforeEach(() => {
+      claudeFakeTp = new FakeAgentBackend('Claude-tp');
+      opencodeFakeTp = new FakeAgentBackend('OpenCode-tp');
+    });
+
+    it('routes runEphemeralAgent to opencode when pr_description descriptor says opencode', async () => {
+      const descriptor: TestDescriptor = {
+        backend: 'opencode', provider: 'openai', model: 'gpt-4o', credentials: {},
+      };
+      const router = makeRouterWithDescriptor(claudeFakeTp, opencodeFakeTp, () => descriptor);
+
+      await router.runEphemeralAgent('draft PR', '/project', undefined, undefined, undefined, 'pr_description');
+
+      expect(opencodeFakeTp.runEphemeralAgentMock).toHaveBeenCalledOnce();
+      expect(claudeFakeTp.runEphemeralAgentMock).not.toHaveBeenCalled();
+      // model is encoded as "providerID/modelID" for OpenCode
+      expect(opencodeFakeTp.runEphemeralAgentMock).toHaveBeenCalledWith(
+        'draft PR', '/project', undefined, undefined, 'openai/gpt-4o',
+      );
+    });
+
+    it('routes spawnEphemeralAgent to opencode with providerID/modelID encoding', async () => {
+      const descriptor: TestDescriptor = {
+        backend: 'opencode', provider: 'anthropic', model: 'claude-3-5-sonnet', credentials: {},
+      };
+      const router = makeRouterWithDescriptor(claudeFakeTp, opencodeFakeTp, () => descriptor);
+
+      const { promise } = router.spawnEphemeralAgent(
+        'resolve conflict', '/project', undefined, undefined, undefined, undefined, 'merge_conflict',
+      );
+      await promise;
+
+      expect(opencodeFakeTp.spawnEphemeralAgentMock).toHaveBeenCalledOnce();
+      expect(opencodeFakeTp.spawnEphemeralAgentMock).toHaveBeenCalledWith(
+        'resolve conflict', '/project', undefined, undefined, undefined, 'anthropic/claude-3-5-sonnet',
+      );
+    });
+
+    it('routes to claude and passes descriptor.model when touchpoint descriptor says claude', async () => {
+      const descriptor: TestDescriptor = {
+        backend: 'claude', provider: 'anthropic', model: 'haiku', credentials: {},
+      };
+      const router = makeRouterWithDescriptor(claudeFakeTp, opencodeFakeTp, () => descriptor);
+
+      await router.runEphemeralAgent('refine spec', '/project', undefined, undefined, undefined, 'refine');
+
+      expect(claudeFakeTp.runEphemeralAgentMock).toHaveBeenCalledOnce();
+      expect(opencodeFakeTp.runEphemeralAgentMock).not.toHaveBeenCalled();
+      expect(claudeFakeTp.runEphemeralAgentMock).toHaveBeenCalledWith(
+        'refine spec', '/project', undefined, undefined, 'haiku',
+      );
+    });
+
+    it('falls back to outer selector when no touchpoint is provided (all-claude regression)', async () => {
+      // Descriptor says opencode, but no touchpoint passed → selector() rules
+      const descriptor: TestDescriptor = {
+        backend: 'opencode', provider: 'openai', model: 'gpt-4o', credentials: {},
+      };
+      const router = makeRouterWithDescriptor(claudeFakeTp, opencodeFakeTp, () => descriptor);
+
+      await router.runEphemeralAgent('prompt', '/project'); // no touchpoint arg
+
+      expect(claudeFakeTp.runEphemeralAgentMock).toHaveBeenCalledOnce();
+      expect(opencodeFakeTp.runEphemeralAgentMock).not.toHaveBeenCalled();
+    });
+
+    it('passes correct projectDir and touchpoint to the descriptorSelector', async () => {
+      const descriptorSpy = vi.fn<[string, TouchpointId], TestDescriptor>().mockReturnValue({
+        backend: 'claude', provider: 'anthropic', model: 'sonnet', credentials: {},
+      });
+      const router = makeRouterWithDescriptor(claudeFakeTp, opencodeFakeTp, descriptorSpy);
+
+      await router.runEphemeralAgent('prompt', '/myproject', undefined, undefined, undefined, 'pr_description');
+
+      expect(descriptorSpy).toHaveBeenCalledWith('/myproject', 'pr_description');
+    });
   });
 });
