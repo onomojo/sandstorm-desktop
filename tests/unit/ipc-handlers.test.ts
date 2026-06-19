@@ -86,8 +86,12 @@ const {
     getEffectiveBackend: vi.fn().mockReturnValue({ backend: 'claude' }),
     setBackendSecret: vi.fn(),
     hasBackendSecret: vi.fn().mockReturnValue(false),
+    hasProviderSecret: vi.fn().mockReturnValue(false),
+    getProviderSecretBundle: vi.fn().mockReturnValue(null),
+    setProviderSecretBundle: vi.fn(),
+    removeProviderSecret: vi.fn(),
     getEffectiveRouting: vi.fn().mockReturnValue({}),
-    getEffectiveRoutingFor: vi.fn().mockReturnValue({ backend: 'claude', model: 'haiku' }),
+    getEffectiveRoutingFor: vi.fn().mockReturnValue({ backend: 'claude', provider: 'anthropic', model: 'haiku' }),
     getLegacyEffectiveModels: vi.fn().mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' }),
     getProjectRouting: vi.fn().mockReturnValue(null),
     setProjectRouting: vi.fn(),
@@ -2660,6 +2664,12 @@ describe('IPC Handlers', () => {
       'modelRouting:setGlobal',
       'modelRouting:applyPreset',
       'modelRouting:getAvailableModels',
+      'providerSecrets:status',
+      'providerSecrets:get',
+      'providerSecrets:getBundle',
+      'providerSecrets:set',
+      'providerSecrets:setBundle',
+      'providerSecrets:remove',
       'runtime:available',
       'session:getState',
       'session:getSettings',
@@ -2943,6 +2953,103 @@ describe('IPC Handlers', () => {
       const result = await invokeHandler('backendSettings:secretStatus', 'global', 'inner') as Record<string, unknown>;
       expect(Object.keys(result)).toEqual(['set']);
       expect(result['set']).toBe(true);
+    });
+  });
+
+  // =========================================================================
+  // providerSecrets handlers
+  // =========================================================================
+  describe('providerSecrets handlers', () => {
+    describe('providerSecrets:status', () => {
+      it('returns { set: false } when no provider secret stored (global scope)', async () => {
+        mockRegistry.hasProviderSecret.mockReturnValueOnce(false);
+        const result = await invokeHandler('providerSecrets:status', 'global', 'anthropic');
+        expect(mockRegistry.hasProviderSecret).toHaveBeenCalledWith('global', 'anthropic');
+        expect(result).toEqual({ set: false });
+      });
+
+      it('returns { set: true } when provider secret exists', async () => {
+        mockRegistry.hasProviderSecret.mockReturnValueOnce(true);
+        const result = await invokeHandler('providerSecrets:status', 'global', 'anthropic');
+        expect(result).toEqual({ set: true });
+      });
+
+      it('derives key="project:<resolved>" for project scope', async () => {
+        const projectDir = '/some/project';
+        const pathMod = require('path');
+        const expectedKey = `project:${pathMod.resolve(projectDir)}`;
+        mockRegistry.hasProviderSecret.mockReturnValueOnce(true);
+        const result = await invokeHandler('providerSecrets:status', projectDir, 'amazon-bedrock');
+        expect(mockRegistry.hasProviderSecret).toHaveBeenCalledWith(expectedKey, 'amazon-bedrock');
+        expect(result).toEqual({ set: true });
+      });
+    });
+
+    describe('providerSecrets:getBundle', () => {
+      it('returns null when no bundle stored', async () => {
+        mockRegistry.getProviderSecretBundle.mockReturnValueOnce(null);
+        const result = await invokeHandler('providerSecrets:getBundle', 'global', 'anthropic');
+        expect(mockRegistry.getProviderSecretBundle).toHaveBeenCalledWith('global', 'anthropic');
+        expect(result).toBeNull();
+      });
+
+      it('returns bundle when stored', async () => {
+        const bundle = { api_key: 'sk-test' };
+        mockRegistry.getProviderSecretBundle.mockReturnValueOnce(bundle);
+        const result = await invokeHandler('providerSecrets:getBundle', 'global', 'anthropic');
+        expect(result).toEqual(bundle);
+      });
+    });
+
+    describe('providerSecrets:get', () => {
+      it('is an alias for getBundle — returns the bundle', async () => {
+        const bundle = { api_key: 'sk-alias' };
+        mockRegistry.getProviderSecretBundle.mockReturnValueOnce(bundle);
+        const result = await invokeHandler('providerSecrets:get', 'global', 'anthropic');
+        expect(result).toEqual(bundle);
+      });
+    });
+
+    describe('providerSecrets:setBundle', () => {
+      it('calls registry.setProviderSecretBundle with key and provider (global scope)', async () => {
+        const bundle = { api_key: 'sk-new' };
+        const result = await invokeHandler('providerSecrets:setBundle', 'global', 'anthropic', bundle);
+        expect(mockRegistry.setProviderSecretBundle).toHaveBeenCalledWith('global', 'anthropic', bundle);
+        expect(result).toBeUndefined();
+      });
+
+      it('derives key="project:<resolved>" for project scope', async () => {
+        const projectDir = '/my/proj';
+        const pathMod = require('path');
+        const expectedKey = `project:${pathMod.resolve(projectDir)}`;
+        const bundle = { aws_key: 'bedrock-key' };
+        await invokeHandler('providerSecrets:setBundle', projectDir, 'amazon-bedrock', bundle);
+        expect(mockRegistry.setProviderSecretBundle).toHaveBeenCalledWith(expectedKey, 'amazon-bedrock', bundle);
+      });
+    });
+
+    describe('providerSecrets:set', () => {
+      it('is an alias for setBundle — calls registry.setProviderSecretBundle', async () => {
+        const bundle = { api_key: 'sk-set' };
+        await invokeHandler('providerSecrets:set', 'global', 'anthropic', bundle);
+        expect(mockRegistry.setProviderSecretBundle).toHaveBeenCalledWith('global', 'anthropic', bundle);
+      });
+    });
+
+    describe('providerSecrets:remove', () => {
+      it('calls registry.removeProviderSecret with key and provider', async () => {
+        const result = await invokeHandler('providerSecrets:remove', 'global', 'anthropic');
+        expect(mockRegistry.removeProviderSecret).toHaveBeenCalledWith('global', 'anthropic');
+        expect(result).toBeUndefined();
+      });
+
+      it('derives key="project:<resolved>" for project scope', async () => {
+        const projectDir = '/my/proj';
+        const pathMod = require('path');
+        const expectedKey = `project:${pathMod.resolve(projectDir)}`;
+        await invokeHandler('providerSecrets:remove', projectDir, 'anthropic');
+        expect(mockRegistry.removeProviderSecret).toHaveBeenCalledWith(expectedKey, 'anthropic');
+      });
     });
   });
 

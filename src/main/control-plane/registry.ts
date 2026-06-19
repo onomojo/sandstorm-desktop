@@ -11,6 +11,7 @@ import {
   type TouchpointId,
   type RoutingAssignment,
   type PresetId,
+  type AgentBackendKind,
 } from './routing';
 
 /** Per-ticket phase token totals from tasks columns (backfill when task_token_steps absent). */
@@ -767,6 +768,93 @@ export class Registry {
         );
       `);
       this.setSchemaVersion(26);
+    }
+
+    if (currentVersion < 27) {
+      // Per-touchpoint provider credential store (#638)
+      this.db.exec(`
+        CREATE TABLE IF NOT EXISTS provider_secrets (
+          key      TEXT NOT NULL,
+          provider TEXT NOT NULL,
+          value    TEXT NOT NULL,
+          PRIMARY KEY (key, provider)
+        );
+      `);
+
+      // Migrate backend_secrets + opencode_settings → provider_secrets.
+      // For each scope key and surface, read the bundle and the configured provider,
+      // then write to provider_secrets keyed by (key, provider).
+      // Conflict rule: if both surfaces resolve to the same provider with differing bundles,
+      // outer wins and a warning is logged.
+      const secretKeys = this.db.prepare(
+        'SELECT DISTINCT key FROM backend_secrets'
+      ).all() as Array<{ key: string }>;
+
+      for (const { key } of secretKeys) {
+        const staged: Record<string, Record<string, string>> = {};
+        for (const surface of ['inner', 'outer'] as const) {
+          const bundle = this.getBackendSecretBundle(key, surface);
+          if (!bundle) continue;
+          const ocRow = this.db.prepare(
+            'SELECT provider FROM opencode_settings WHERE key = ? AND surface = ?'
+          ).get(key, surface) as { provider: string | null } | undefined;
+          const provider = ocRow?.provider ?? 'anthropic';
+          if (staged[provider]) {
+            const existingStr = JSON.stringify(staged[provider]);
+            const newStr = JSON.stringify(bundle);
+            if (existingStr !== newStr && surface === 'outer') {
+              console.warn(
+                `[migration v27] Provider '${provider}' key '${key}': conflict — outer bundle wins over inner`
+              );
+              staged[provider] = bundle;
+            }
+          } else {
+            staged[provider] = bundle;
+          }
+        }
+        for (const [provider, bundle] of Object.entries(staged)) {
+          this.db.prepare(
+            'INSERT OR REPLACE INTO provider_secrets (key, provider, value) VALUES (?, ?, ?)'
+          ).run(key, provider, JSON.stringify(bundle));
+        }
+      }
+
+      // Update stored routing assignments to include provider.
+      // claude → 'anthropic'; opencode → check opencode_settings for the surface, fallback 'anthropic'.
+      const outerTouchpoints = new Set(['outer', 'refine', 'pr_description']);
+      const routingRows = this.db.prepare(
+        'SELECT key, assignments FROM model_routing'
+      ).all() as Array<{ key: string; assignments: string }>;
+
+      for (const row of routingRows) {
+        try {
+          const assignments = JSON.parse(row.assignments || '{}') as Record<
+            string,
+            { backend: string; model: string; provider?: string }
+          >;
+          let changed = false;
+          for (const [touchpoint, assignment] of Object.entries(assignments)) {
+            if (!assignment.provider) {
+              if (assignment.backend === 'claude') {
+                assignment.provider = 'anthropic';
+              } else {
+                const surface = outerTouchpoints.has(touchpoint) ? 'outer' : 'inner';
+                const ocRow = this.db.prepare(
+                  'SELECT provider FROM opencode_settings WHERE key = ? AND surface = ?'
+                ).get(row.key, surface) as { provider: string | null } | undefined;
+                assignment.provider = ocRow?.provider ?? 'anthropic';
+              }
+              changed = true;
+            }
+          }
+          if (changed) {
+            this.db.prepare('UPDATE model_routing SET assignments = ? WHERE key = ?')
+              .run(JSON.stringify(assignments), row.key);
+          }
+        } catch { /* skip malformed rows */ }
+      }
+
+      this.setSchemaVersion(27);
     }
   }
 
@@ -1553,9 +1641,9 @@ export class Registry {
     const legacy = this.getLegacyEffectiveModels(projectDir);
     const outerTouchpoints: TouchpointId[] = ['outer', 'refine', 'pr_description'];
     if (outerTouchpoints.includes(touchpoint)) {
-      return { backend: 'claude', model: legacy.outer_model };
+      return { backend: 'claude', provider: 'anthropic', model: legacy.outer_model };
     }
-    return { backend: 'claude', model: legacy.inner_model };
+    return { backend: 'claude', provider: 'anthropic', model: legacy.inner_model };
   }
 
   getEffectiveRouting(projectDir: string): Record<TouchpointId, RoutingAssignment> {
@@ -1973,6 +2061,56 @@ export class Registry {
     }
     // Legacy single-field row: treat as { [name]: value }
     return row.name && row.value ? { [row.name]: row.value } : null;
+  }
+
+  // --- Provider Secrets ---
+
+  hasProviderSecret(key: string, provider: string): boolean {
+    const row = this.db.prepare(
+      'SELECT 1 FROM provider_secrets WHERE key = ? AND provider = ?'
+    ).get(key, provider);
+    return row != null;
+  }
+
+  getProviderSecretBundle(key: string, provider: string): Record<string, string> | null {
+    const row = this.db.prepare(
+      'SELECT value FROM provider_secrets WHERE key = ? AND provider = ?'
+    ).get(key, provider) as { value: string } | undefined;
+    if (!row) return null;
+    try {
+      return JSON.parse(row.value) as Record<string, string>;
+    } catch {
+      return null;
+    }
+  }
+
+  setProviderSecretBundle(key: string, provider: string, bundle: Record<string, string>): void {
+    this.db.prepare(
+      'INSERT OR REPLACE INTO provider_secrets (key, provider, value) VALUES (?, ?, ?)'
+    ).run(key, provider, JSON.stringify(bundle));
+  }
+
+  removeProviderSecret(key: string, provider: string): void {
+    this.db.prepare(
+      'DELETE FROM provider_secrets WHERE key = ? AND provider = ?'
+    ).run(key, provider);
+  }
+
+  getEffectiveTouchpointDescriptor(
+    projectDir: string,
+    touchpoint: TouchpointId,
+  ): { backend: AgentBackendKind; provider: string; model: string; credentials: Record<string, string> | null } {
+    const assignment = this.getEffectiveRoutingFor(projectDir, touchpoint);
+    const projectKey = `project:${path.resolve(projectDir)}`;
+    const credentials =
+      this.getProviderSecretBundle(projectKey, assignment.provider) ??
+      this.getProviderSecretBundle('global', assignment.provider);
+    return {
+      backend: assignment.backend,
+      provider: assignment.provider,
+      model: assignment.model,
+      credentials,
+    };
   }
 
   // --- Session Monitor Settings ---
