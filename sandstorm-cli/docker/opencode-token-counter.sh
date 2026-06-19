@@ -4,11 +4,15 @@
 # Reads NDJSON lines from stdin, extracts token counts from step_finish events,
 # and appends one line per event to the output file.
 #
-# Token mapping from OpenCode step_finish:
-#   tokens.input  → in
-#   tokens.output → out
-#   tokens.cache_write (or 0 when absent) → cc
-#   tokens.cache_read (preferred) or tokens.cache (single field) → cr
+# Verified real schema (opencode-ai@1.17.7, captured 2026-06-18):
+#   step_finish line: { "type": "step_finish", …, "part": { …, "tokens": {
+#     "input": N, "output": N, "cache": { "write": N, "read": N } } } }
+#
+# Token mapping:
+#   .part.tokens.input        → in
+#   .part.tokens.output       → out
+#   .part.tokens.cache.write  → cc (cache write / creation)
+#   .part.tokens.cache.read   → cr (cache read / hit)
 #
 # Usage: opencode-token-counter.sh <output-file> [iteration] [phase]
 #
@@ -23,12 +27,10 @@ PHASE="${3:-}"
 while IFS= read -r line; do
   case "$line" in
     *'"type":"step_finish"'*|*'"type": "step_finish"'*)
-      in_tokens=$(echo "$line" | jq -r '.tokens.input // 0' 2>/dev/null)
-      out_tokens=$(echo "$line" | jq -r '.tokens.output // 0' 2>/dev/null)
-      # cache_write maps to cc; if absent, 0
-      cc_tokens=$(echo "$line" | jq -r '(.tokens.cache_write // 0)' 2>/dev/null)
-      # cache_read takes priority over single cache field; both fall back to 0
-      cr_tokens=$(echo "$line" | jq -r '(.tokens.cache_read // .tokens.cache // 0)' 2>/dev/null)
+      in_tokens=$(echo "$line" | jq -r '.part.tokens.input // 0' 2>/dev/null)
+      out_tokens=$(echo "$line" | jq -r '.part.tokens.output // 0' 2>/dev/null)
+      cc_tokens=$(echo "$line" | jq -r '(.part.tokens.cache.write // 0)' 2>/dev/null)
+      cr_tokens=$(echo "$line" | jq -r '(.part.tokens.cache.read // 0)' 2>/dev/null)
 
       if [ "${in_tokens:-0}" -gt 0 ] || [ "${out_tokens:-0}" -gt 0 ] 2>/dev/null; then
         entry="{\"in\":${in_tokens:-0},\"out\":${out_tokens:-0},\"cc\":${cc_tokens:-0},\"cr\":${cr_tokens:-0}"

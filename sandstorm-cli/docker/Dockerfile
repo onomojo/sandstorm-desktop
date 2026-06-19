@@ -59,7 +59,7 @@ ENV PATH="/home/claude/.local/bin:$PATH"
 
 # OpenCode CLI (installed as the claude user, pinned to exact version)
 # resolved via 'npm view opencode-ai version' on 2026-06-10; bump deliberately
-RUN npm install -g opencode-ai@1.17.3
+RUN npm install -g opencode-ai@1.17.7
 
 # Pre-install Chrome DevTools MCP server (avoids npx cold-start)
 RUN npm install -g chrome-devtools-mcp@latest
