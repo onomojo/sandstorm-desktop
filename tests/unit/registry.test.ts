@@ -1688,4 +1688,198 @@ describe('Registry', () => {
     });
   });
 
+  // ==========================================================================
+  // provider_secrets CRUD
+  // ==========================================================================
+  describe('provider_secrets CRUD', () => {
+    it('hasProviderSecret returns false when nothing stored', () => {
+      expect(registry.hasProviderSecret('global', 'anthropic')).toBe(false);
+    });
+
+    it('setProviderSecretBundle / getProviderSecretBundle round-trip', () => {
+      registry.setProviderSecretBundle('global', 'anthropic', { api_key: 'sk-test' });
+      expect(registry.hasProviderSecret('global', 'anthropic')).toBe(true);
+      expect(registry.getProviderSecretBundle('global', 'anthropic')).toEqual({ api_key: 'sk-test' });
+    });
+
+    it('getProviderSecretBundle returns null when key not found', () => {
+      expect(registry.getProviderSecretBundle('global', 'no-such-provider')).toBeNull();
+    });
+
+    it('setProviderSecretBundle overwrites existing bundle (upsert)', () => {
+      registry.setProviderSecretBundle('global', 'anthropic', { api_key: 'sk-old' });
+      registry.setProviderSecretBundle('global', 'anthropic', { api_key: 'sk-new' });
+      expect(registry.getProviderSecretBundle('global', 'anthropic')).toEqual({ api_key: 'sk-new' });
+    });
+
+    it('removeProviderSecret deletes the entry', () => {
+      registry.setProviderSecretBundle('global', 'anthropic', { api_key: 'sk-test' });
+      registry.removeProviderSecret('global', 'anthropic');
+      expect(registry.hasProviderSecret('global', 'anthropic')).toBe(false);
+      expect(registry.getProviderSecretBundle('global', 'anthropic')).toBeNull();
+    });
+
+    it('removeProviderSecret on non-existent key is a no-op', () => {
+      expect(() => registry.removeProviderSecret('global', 'ghost')).not.toThrow();
+    });
+
+    it('provider secrets are scoped by (key, provider) independently', () => {
+      const projectKey = `project:${path.resolve('/proj/x')}`;
+      registry.setProviderSecretBundle('global', 'anthropic', { api_key: 'global-sk' });
+      registry.setProviderSecretBundle(projectKey, 'anthropic', { api_key: 'project-sk' });
+      registry.setProviderSecretBundle('global', 'amazon-bedrock', { aws_key: 'bedrock-key' });
+      expect(registry.getProviderSecretBundle('global', 'anthropic')).toEqual({ api_key: 'global-sk' });
+      expect(registry.getProviderSecretBundle(projectKey, 'anthropic')).toEqual({ api_key: 'project-sk' });
+      expect(registry.getProviderSecretBundle('global', 'amazon-bedrock')).toEqual({ aws_key: 'bedrock-key' });
+    });
+
+    it('stores multi-field bundles correctly', () => {
+      const bundle = { access_key: 'AKIA123', secret_key: 'abc456', region: 'us-east-1' };
+      registry.setProviderSecretBundle('global', 'amazon-bedrock', bundle);
+      expect(registry.getProviderSecretBundle('global', 'amazon-bedrock')).toEqual(bundle);
+    });
+  });
+
+  // ==========================================================================
+  // migration v27 — provider_secrets table and credential migration (#638)
+  // ==========================================================================
+  describe('migration v27 — provider_secrets (#638)', () => {
+    it('creates provider_secrets table with correct columns', () => {
+      const db = registry.getDb();
+      const cols = (db.prepare('PRAGMA table_info(provider_secrets)').all() as { name: string }[]).map(r => r.name);
+      expect(cols).toContain('key');
+      expect(cols).toContain('provider');
+      expect(cols).toContain('value');
+    });
+
+    it('migrates inner bundle to provider_secrets using opencode_settings provider', async () => {
+      const tmpPath = path.join(os.tmpdir(), `reg-v27-inner-${Date.now()}.db`);
+      try {
+        // Simulate a pre-v27 DB by opening it fresh (all migrations run), resetting
+        // schema_version to 26, dropping provider_secrets, adding test data, then re-opening.
+        const r1 = await Registry.create(tmpPath);
+        const db1 = r1.getDb();
+        db1.exec('DROP TABLE IF EXISTS provider_secrets');
+        db1.exec("DELETE FROM schema_version WHERE version = 27");
+        db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'inner', '__bundle__', ?)").run(JSON.stringify({ api_key: 'sk-inner' }));
+        db1.prepare("INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'inner', 'anthropic', NULL)").run();
+        r1.close();
+
+        const r2 = await Registry.create(tmpPath);
+        expect(r2.hasProviderSecret('global', 'anthropic')).toBe(true);
+        expect(r2.getProviderSecretBundle('global', 'anthropic')).toEqual({ api_key: 'sk-inner' });
+        r2.close();
+      } finally {
+        for (const suffix of ['', '-wal', '-shm']) {
+          try { fs.unlinkSync(tmpPath + suffix); } catch { /* ok */ }
+        }
+      }
+    });
+
+    it('migrates a legacy single-field backend_secrets row as a bundle', async () => {
+      const tmpPath = path.join(os.tmpdir(), `reg-v27-legacy-${Date.now()}.db`);
+      try {
+        const r1 = await Registry.create(tmpPath);
+        const db1 = r1.getDb();
+        db1.exec('DROP TABLE IF EXISTS provider_secrets');
+        db1.exec("DELETE FROM schema_version WHERE version = 27");
+        // Legacy single-field row (written by old setBackendSecret)
+        db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'inner', 'api_key', 'sk-legacy')").run();
+        db1.prepare("INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'inner', 'anthropic', NULL)").run();
+        r1.close();
+
+        const r2 = await Registry.create(tmpPath);
+        expect(r2.hasProviderSecret('global', 'anthropic')).toBe(true);
+        // Legacy single-field becomes { api_key: 'sk-legacy' }
+        expect(r2.getProviderSecretBundle('global', 'anthropic')).toEqual({ api_key: 'sk-legacy' });
+        r2.close();
+      } finally {
+        for (const suffix of ['', '-wal', '-shm']) {
+          try { fs.unlinkSync(tmpPath + suffix); } catch { /* ok */ }
+        }
+      }
+    });
+
+    it('outer bundle wins when both surfaces map to same provider with conflicting bundles', async () => {
+      const tmpPath = path.join(os.tmpdir(), `reg-v27-conflict-${Date.now()}.db`);
+      try {
+        const r1 = await Registry.create(tmpPath);
+        const db1 = r1.getDb();
+        db1.exec('DROP TABLE IF EXISTS provider_secrets');
+        db1.exec("DELETE FROM schema_version WHERE version = 27");
+        // Both surfaces → anthropic provider, but different bundles
+        db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'inner', '__bundle__', ?)").run(JSON.stringify({ api_key: 'sk-inner' }));
+        db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'outer', '__bundle__', ?)").run(JSON.stringify({ api_key: 'sk-outer' }));
+        db1.prepare("INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'inner', 'anthropic', NULL)").run();
+        db1.prepare("INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'outer', 'anthropic', NULL)").run();
+        r1.close();
+
+        const r2 = await Registry.create(tmpPath);
+        // Outer wins
+        expect(r2.getProviderSecretBundle('global', 'anthropic')).toEqual({ api_key: 'sk-outer' });
+        r2.close();
+      } finally {
+        for (const suffix of ['', '-wal', '-shm']) {
+          try { fs.unlinkSync(tmpPath + suffix); } catch { /* ok */ }
+        }
+      }
+    });
+
+    it('migration is idempotent — running v27 twice does not error or duplicate', async () => {
+      const tmpPath = path.join(os.tmpdir(), `reg-v27-idem-${Date.now()}.db`);
+      try {
+        const r1 = await Registry.create(tmpPath);
+        r1.close();
+        // Second open re-runs migrate() but v27 guard fires only if version < 27
+        const r2 = await Registry.create(tmpPath);
+        // provider_secrets table still exists and is functional
+        r2.setProviderSecretBundle('global', 'anthropic', { api_key: 'sk' });
+        expect(r2.hasProviderSecret('global', 'anthropic')).toBe(true);
+        r2.close();
+      } finally {
+        for (const suffix of ['', '-wal', '-shm']) {
+          try { fs.unlinkSync(tmpPath + suffix); } catch { /* ok */ }
+        }
+      }
+    });
+
+    it('null surface provider falls back to anthropic during migration', async () => {
+      const tmpPath = path.join(os.tmpdir(), `reg-v27-nullprovider-${Date.now()}.db`);
+      try {
+        const r1 = await Registry.create(tmpPath);
+        const db1 = r1.getDb();
+        db1.exec('DROP TABLE IF EXISTS provider_secrets');
+        db1.exec("DELETE FROM schema_version WHERE version = 27");
+        // backend_secrets with no corresponding opencode_settings row → provider = null → falls back to anthropic
+        db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'inner', '__bundle__', ?)").run(JSON.stringify({ api_key: 'sk-fallback' }));
+        // No opencode_settings row → provider resolves to null → 'anthropic'
+        r1.close();
+
+        const r2 = await Registry.create(tmpPath);
+        expect(r2.hasProviderSecret('global', 'anthropic')).toBe(true);
+        expect(r2.getProviderSecretBundle('global', 'anthropic')).toEqual({ api_key: 'sk-fallback' });
+        r2.close();
+      } finally {
+        for (const suffix of ['', '-wal', '-shm']) {
+          try { fs.unlinkSync(tmpPath + suffix); } catch { /* ok */ }
+        }
+      }
+    });
+
+    it('v27 guard: migration does not re-run after schema version is 27', async () => {
+      const tmpPath = path.join(os.tmpdir(), `reg-v27-guard-${Date.now()}.db`);
+      try {
+        const r1 = await Registry.create(tmpPath);
+        const db1 = r1.getDb();
+        const versionRow = db1.prepare('SELECT MAX(version) as v FROM schema_version').get() as { v: number };
+        expect(versionRow.v).toBeGreaterThanOrEqual(27);
+        r1.close();
+      } finally {
+        for (const suffix of ['', '-wal', '-shm']) {
+          try { fs.unlinkSync(tmpPath + suffix); } catch { /* ok */ }
+        }
+      }
+    });
+  });
+
 });

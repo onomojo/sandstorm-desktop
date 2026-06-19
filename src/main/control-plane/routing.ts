@@ -23,6 +23,7 @@ export type AgentBackendKind = 'claude' | 'opencode';
 
 export interface RoutingAssignment {
   backend: AgentBackendKind;
+  provider: string;
   model: string;
 }
 
@@ -30,31 +31,31 @@ export type PresetId = 'max_quality' | 'balanced' | 'budget';
 
 export const PRESETS: Record<PresetId, Record<TouchpointId, RoutingAssignment>> = {
   balanced: {
-    outer:          { backend: 'claude', model: 'opus' },
-    refine:         { backend: 'claude', model: 'sonnet' },
-    execution:      { backend: 'claude', model: 'sonnet' },
-    review:         { backend: 'claude', model: 'opus' },
-    meta_review:    { backend: 'claude', model: 'opus' },
-    merge_conflict: { backend: 'claude', model: 'sonnet' },
-    pr_description: { backend: 'claude', model: 'haiku' },
+    outer:          { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    refine:         { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
+    execution:      { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
+    review:         { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    meta_review:    { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    merge_conflict: { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
+    pr_description: { backend: 'claude', provider: 'anthropic', model: 'haiku' },
   },
   max_quality: {
-    outer:          { backend: 'claude', model: 'opus' },
-    refine:         { backend: 'claude', model: 'opus' },
-    execution:      { backend: 'claude', model: 'opus' },
-    review:         { backend: 'claude', model: 'opus' },
-    meta_review:    { backend: 'claude', model: 'opus' },
-    merge_conflict: { backend: 'claude', model: 'opus' },
-    pr_description: { backend: 'claude', model: 'sonnet' },
+    outer:          { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    refine:         { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    execution:      { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    review:         { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    meta_review:    { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    merge_conflict: { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    pr_description: { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
   },
   budget: {
-    outer:          { backend: 'claude', model: 'sonnet' },
-    refine:         { backend: 'claude', model: 'haiku' },
-    execution:      { backend: 'claude', model: 'haiku' },
-    review:         { backend: 'claude', model: 'sonnet' },
-    meta_review:    { backend: 'claude', model: 'sonnet' },
-    merge_conflict: { backend: 'claude', model: 'haiku' },
-    pr_description: { backend: 'claude', model: 'haiku' },
+    outer:          { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
+    refine:         { backend: 'claude', provider: 'anthropic', model: 'haiku' },
+    execution:      { backend: 'claude', provider: 'anthropic', model: 'haiku' },
+    review:         { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
+    meta_review:    { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
+    merge_conflict: { backend: 'claude', provider: 'anthropic', model: 'haiku' },
+    pr_description: { backend: 'claude', provider: 'anthropic', model: 'haiku' },
   },
 };
 
@@ -98,17 +99,14 @@ export const OPENCODE_MODELS: AvailableModel[] = [
 
 export function getAvailableModels(
   projectDir: string,
-  hasBackendSecret: (key: string, surface: 'inner' | 'outer') => boolean,
+  hasProviderSecret: (key: string, provider: string) => boolean,
 ): AvailableModel[] {
   const projectKey = `project:${path.resolve(projectDir)}`;
-  const ocAvailable =
-    hasBackendSecret(projectKey, 'inner') ||
-    hasBackendSecret(projectKey, 'outer') ||
-    hasBackendSecret('global', 'inner') ||
-    hasBackendSecret('global', 'outer');
-
   return [
     ...CLAUDE_MODELS,
-    ...OPENCODE_MODELS.map((m) => ({ ...m, available: ocAvailable })),
+    ...OPENCODE_MODELS.map((m) => ({
+      ...m,
+      available: hasProviderSecret(projectKey, m.provider) || hasProviderSecret('global', m.provider),
+    })),
   ];
 }

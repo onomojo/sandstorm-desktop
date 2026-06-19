@@ -1010,7 +1010,39 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   ipcMain.handle('modelRouting:getAvailableModels', (_event, projectDir: string) => {
-    return getAvailableModels(projectDir, (key, surface) => registry.hasBackendSecret(key, surface));
+    return getAvailableModels(projectDir, (key, provider) => registry.hasProviderSecret(key, provider));
+  });
+
+  // --- Provider Secrets ---
+
+  ipcMain.handle('providerSecrets:status', (_event, scope: string, provider: string) => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
+    return { set: registry.hasProviderSecret(key, provider) };
+  });
+
+  ipcMain.handle('providerSecrets:get', (_event, scope: string, provider: string) => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
+    return registry.getProviderSecretBundle(key, provider);
+  });
+
+  ipcMain.handle('providerSecrets:getBundle', (_event, scope: string, provider: string) => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
+    return registry.getProviderSecretBundle(key, provider);
+  });
+
+  ipcMain.handle('providerSecrets:set', (_event, scope: string, provider: string, bundle: Record<string, string>) => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
+    registry.setProviderSecretBundle(key, provider, bundle);
+  });
+
+  ipcMain.handle('providerSecrets:setBundle', (_event, scope: string, provider: string, bundle: Record<string, string>) => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
+    registry.setProviderSecretBundle(key, provider, bundle);
+  });
+
+  ipcMain.handle('providerSecrets:remove', (_event, scope: string, provider: string) => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
+    registry.removeProviderSecret(key, provider);
   });
 
   // --- Session Monitor ---

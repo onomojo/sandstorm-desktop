@@ -128,13 +128,13 @@ describe('Model Routing', () => {
     it('layer 5: legacy fallback from model_settings for outer touchpoints', () => {
       registry.setGlobalModelSettings({ outer_model: 'haiku' });
       const result = registry.getEffectiveRoutingFor('/proj/no-routing', 'outer');
-      expect(result).toEqual({ backend: 'claude', model: 'haiku' });
+      expect(result).toEqual({ backend: 'claude', provider: 'anthropic', model: 'haiku' });
     });
 
     it('layer 5: legacy fallback from model_settings for inner touchpoints', () => {
       registry.setGlobalModelSettings({ inner_model: 'opus' });
       const result = registry.getEffectiveRoutingFor('/proj/no-routing', 'execution');
-      expect(result).toEqual({ backend: 'claude', model: 'opus' });
+      expect(result).toEqual({ backend: 'claude', provider: 'anthropic', model: 'opus' });
     });
 
     it('partial project assignment: unassigned touchpoints fall through to global', () => {
@@ -408,40 +408,41 @@ describe('Model Routing', () => {
       }
     });
 
-    it('OpenCode models available when project inner secret configured', () => {
-      const models = getAvailableModels('/proj/test', (key, surface) => {
-        return key === `project:${path.resolve('/proj/test')}` && surface === 'inner';
+    it('OpenCode anthropic model available when project has anthropic provider secret', () => {
+      const projectKey = `project:${path.resolve('/proj/test')}`;
+      const models = getAvailableModels('/proj/test', (key, provider) => {
+        return key === projectKey && provider === 'anthropic';
       });
       const oc = models.filter((m) => m.backend === 'opencode');
-      for (const m of oc) {
-        expect(m.available).toBe(true);
-      }
+      const anthropicModel = oc.find((m) => m.provider === 'anthropic');
+      const bedrockModel = oc.find((m) => m.provider === 'amazon-bedrock');
+      expect(anthropicModel?.available).toBe(true);
+      expect(bedrockModel?.available).toBe(false);
     });
 
-    it('OpenCode models available when project outer secret configured', () => {
-      const models = getAvailableModels('/proj/test', (key, surface) => {
-        return key === `project:${path.resolve('/proj/test')}` && surface === 'outer';
+    it('OpenCode amazon-bedrock model available when project has amazon-bedrock provider secret', () => {
+      const projectKey = `project:${path.resolve('/proj/test')}`;
+      const models = getAvailableModels('/proj/test', (key, provider) => {
+        return key === projectKey && provider === 'amazon-bedrock';
       });
       const oc = models.filter((m) => m.backend === 'opencode');
-      for (const m of oc) {
-        expect(m.available).toBe(true);
-      }
+      const anthropicModel = oc.find((m) => m.provider === 'anthropic');
+      const bedrockModel = oc.find((m) => m.provider === 'amazon-bedrock');
+      expect(anthropicModel?.available).toBe(false);
+      expect(bedrockModel?.available).toBe(true);
     });
 
-    it('OpenCode models available when global inner secret configured', () => {
-      const models = getAvailableModels('/proj/test', (key, surface) => {
-        return key === 'global' && surface === 'inner';
+    it('OpenCode models available when global provider secret configured', () => {
+      const models = getAvailableModels('/proj/test', (key, provider) => {
+        return key === 'global' && provider === 'anthropic';
       });
       const oc = models.filter((m) => m.backend === 'opencode');
-      for (const m of oc) {
-        expect(m.available).toBe(true);
-      }
+      const anthropicModel = oc.find((m) => m.provider === 'anthropic');
+      expect(anthropicModel?.available).toBe(true);
     });
 
-    it('OpenCode models available when global outer secret configured', () => {
-      const models = getAvailableModels('/proj/test', (key, surface) => {
-        return key === 'global' && surface === 'outer';
-      });
+    it('all OpenCode models available when all provider secrets configured', () => {
+      const models = getAvailableModels('/proj/test', () => true);
       const oc = models.filter((m) => m.backend === 'opencode');
       for (const m of oc) {
         expect(m.available).toBe(true);
@@ -467,6 +468,58 @@ describe('Model Routing', () => {
       OPENCODE_MODELS.forEach((m, i) => {
         expect(m.available).toBe(originalAvailable[i]);
       });
+    });
+  });
+
+  // ==========================================================================
+  // getEffectiveTouchpointDescriptor
+  // ==========================================================================
+  describe('getEffectiveTouchpointDescriptor', () => {
+    it('returns backend, provider, model, and credentials for a claude touchpoint', () => {
+      const desc = registry.getEffectiveTouchpointDescriptor('/proj/test', 'execution');
+      expect(desc.backend).toBe('claude');
+      expect(desc.provider).toBe('anthropic');
+      expect(typeof desc.model).toBe('string');
+      expect(desc.credentials).toBeNull(); // no secrets stored yet
+    });
+
+    it('returns credentials:null when no provider secret stored', () => {
+      const desc = registry.getEffectiveTouchpointDescriptor('/proj/test', 'outer');
+      expect(desc.credentials).toBeNull();
+    });
+
+    it('returns project-level credentials when stored', () => {
+      const projectKey = `project:${path.resolve('/proj/creds')}`;
+      registry.setProviderSecretBundle(projectKey, 'anthropic', { api_key: 'proj-sk-123' });
+      const desc = registry.getEffectiveTouchpointDescriptor('/proj/creds', 'execution');
+      expect(desc.credentials).toEqual({ api_key: 'proj-sk-123' });
+    });
+
+    it('falls back to global credentials when no project-level secret', () => {
+      registry.setProviderSecretBundle('global', 'anthropic', { api_key: 'global-sk-456' });
+      const desc = registry.getEffectiveTouchpointDescriptor('/proj/no-creds', 'execution');
+      expect(desc.credentials).toEqual({ api_key: 'global-sk-456' });
+    });
+
+    it('project credentials take precedence over global', () => {
+      const projectKey = `project:${path.resolve('/proj/precedence')}`;
+      registry.setProviderSecretBundle('global', 'anthropic', { api_key: 'global-sk' });
+      registry.setProviderSecretBundle(projectKey, 'anthropic', { api_key: 'project-sk' });
+      const desc = registry.getEffectiveTouchpointDescriptor('/proj/precedence', 'execution');
+      expect(desc.credentials).toEqual({ api_key: 'project-sk' });
+    });
+
+    it('all touchpoints resolve to a descriptor with required fields', () => {
+      for (const touchpoint of TOUCHPOINTS) {
+        const desc = registry.getEffectiveTouchpointDescriptor('/proj/all', touchpoint);
+        expect(desc).toHaveProperty('backend');
+        expect(desc).toHaveProperty('provider');
+        expect(desc).toHaveProperty('model');
+        expect(desc).toHaveProperty('credentials');
+        expect(typeof desc.backend).toBe('string');
+        expect(typeof desc.provider).toBe('string');
+        expect(typeof desc.model).toBe('string');
+      }
     });
   });
 });
