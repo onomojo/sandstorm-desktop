@@ -95,6 +95,7 @@ const {
     getEffectiveRouting: vi.fn().mockReturnValue({}),
     getEffectiveRoutingFor: vi.fn().mockReturnValue({ backend: 'claude', provider: 'anthropic', model: 'haiku' }),
     getLegacyEffectiveModels: vi.fn().mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' }),
+    getEffectiveTouchpointDescriptor: vi.fn().mockReturnValue({ backend: 'claude', provider: 'anthropic', model: 'haiku', credentials: {} }),
     getProjectRouting: vi.fn().mockReturnValue(null),
     setProjectRouting: vi.fn(),
     removeProjectRouting: vi.fn(),
@@ -3094,12 +3095,10 @@ describe('IPC Handlers', () => {
       mockStackManager.getStackWithServices.mockResolvedValue(STACK);
       mockStackManager.getTaskOutput = vi.fn().mockResolvedValue('');
       mockDraftPullRequest.mockResolvedValue({ title: 'feat: T-1', body: 'PR body' });
-      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'claude', model: 'haiku' });
-      mockRegistry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
+      mockRegistry.getEffectiveTouchpointDescriptor.mockReturnValue({ backend: 'claude', provider: 'anthropic', model: 'haiku', credentials: {} });
     });
 
-    it('pr:draftBody forwards resolved pr_description model to runEphemeralAgent', async () => {
-      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'claude', model: 'haiku' });
+    it('pr:draftBody passes touchpoint "pr_description" to runEphemeralAgent', async () => {
       mockAgentBackend.runEphemeralAgent.mockResolvedValue('PR text');
 
       await invokeHandler('pr:draftBody', 'stack-1');
@@ -3112,34 +3111,21 @@ describe('IPC Handlers', () => {
         '/proj',
         undefined,
         expect.objectContaining({ stage: 'pr' }),
-        'haiku',
-      );
-    });
-
-    it('pr:draftBody falls back to legacy outer model and warns when pr_description backend is opencode', async () => {
-      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'opencode', model: 'gpt-4' });
-      mockRegistry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      mockAgentBackend.runEphemeralAgent.mockResolvedValue('PR text');
-
-      await invokeHandler('pr:draftBody', 'stack-1');
-
-      const [, deps] = mockDraftPullRequest.mock.calls[0] as [unknown, { runEphemeral: (p: string, d: string, t?: number) => Promise<string> }];
-      await deps.runEphemeral('test prompt', '/proj');
-
-      expect(mockAgentBackend.runEphemeralAgent).toHaveBeenCalledWith(
-        'test prompt',
-        '/proj',
         undefined,
-        expect.objectContaining({ stage: 'pr' }),
-        'opus',
+        'pr_description',
       );
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
-      warnSpy.mockRestore();
     });
 
-    it('pr:createAuto forwards resolved pr_description model to runEphemeralAgent', async () => {
-      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'claude', model: 'haiku' });
+    it('pr:draftBody returns needs_key when opencode backend has no credentials', async () => {
+      mockRegistry.getEffectiveTouchpointDescriptor.mockReturnValue({ backend: 'opencode', provider: 'openai', model: 'gpt-4o', credentials: null });
+
+      const result = await invokeHandler('pr:draftBody', 'stack-1');
+
+      expect(result).toMatchObject({ status: 'needs_key', backend: 'opencode', provider: 'openai' });
+      expect(mockDraftPullRequest).not.toHaveBeenCalled();
+    });
+
+    it('pr:createAuto passes touchpoint "pr_description" to runEphemeralAgent', async () => {
       mockAgentBackend.runEphemeralAgent.mockResolvedValue('PR text');
       mockStackManager.push = vi.fn().mockResolvedValue({ stdout: '', stderr: '' });
       const { execFile } = await import('child_process');
@@ -3160,37 +3146,18 @@ describe('IPC Handlers', () => {
         '/proj',
         undefined,
         expect.objectContaining({ stage: 'pr' }),
-        'haiku',
+        undefined,
+        'pr_description',
       );
     });
 
-    it('pr:createAuto falls back to legacy outer model and warns when pr_description backend is opencode', async () => {
-      mockRegistry.getEffectiveRoutingFor.mockReturnValue({ backend: 'opencode', model: 'gpt-4' });
-      mockRegistry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
-      mockAgentBackend.runEphemeralAgent.mockResolvedValue('PR text');
-      const { execFile } = await import('child_process');
-      vi.mocked(execFile as unknown as ReturnType<typeof vi.fn>).mockImplementation(
-        (_cmd: unknown, _args: unknown, _opts: unknown, cb: (...a: unknown[]) => void) => {
-          cb(null, JSON.stringify({ url: 'https://gh/pr/1', number: 1 }), '');
-          return {} as never;
-        },
-      );
+    it('pr:createAuto returns needs_key when opencode backend has no credentials', async () => {
+      mockRegistry.getEffectiveTouchpointDescriptor.mockReturnValue({ backend: 'opencode', provider: 'openai', model: 'gpt-4o', credentials: null });
 
-      await invokeHandler('pr:createAuto', 'stack-1');
+      const result = await invokeHandler('pr:createAuto', 'stack-1');
 
-      const [, deps] = mockDraftPullRequest.mock.calls[0] as [unknown, { runEphemeral: (p: string, d: string, t?: number) => Promise<string> }];
-      await deps.runEphemeral('test prompt', '/proj');
-
-      expect(mockAgentBackend.runEphemeralAgent).toHaveBeenCalledWith(
-        'test prompt',
-        '/proj',
-        undefined,
-        expect.objectContaining({ stage: 'pr' }),
-        'opus',
-      );
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
-      warnSpy.mockRestore();
+      expect(result).toMatchObject({ status: 'needs_key', backend: 'opencode', provider: 'openai' });
+      expect(mockDraftPullRequest).not.toHaveBeenCalled();
     });
   });
 });

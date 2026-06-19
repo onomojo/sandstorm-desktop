@@ -206,11 +206,11 @@ export class DarkFactoryOrchestrator {
 
     const workspace = workspacePathFor(projectDir, stackId);
 
-    const prRouting = this.registry.getEffectiveRoutingFor(projectDir, 'pr_description');
-    const prModel = prRouting.backend === 'opencode'
-      ? (console.warn('[pr_description] backend=opencode unsupported for host path; falling back to legacy outer model'),
-         this.registry.getLegacyEffectiveModels(projectDir).outer_model)
-      : prRouting.model;
+    const prDescriptor = this.registry.getEffectiveTouchpointDescriptor(projectDir, 'pr_description');
+    if (prDescriptor.backend === 'opencode' && prDescriptor.credentials === null) {
+      showNotification('Dark factory: PR draft blocked', `Ticket ${ticketId}: provider ${prDescriptor.provider} needs an API key`);
+      return;
+    }
 
     let draft: { title: string; body: string };
     try {
@@ -218,7 +218,7 @@ export class DarkFactoryOrchestrator {
         { stackId, workspace, ticket: stack.ticket },
         {
           runEphemeral: (prompt, dir, timeoutMs) =>
-            this.agentBackend.runEphemeralAgent(prompt, dir, timeoutMs, undefined, prModel),
+            this.agentBackend.runEphemeralAgent(prompt, dir, timeoutMs, undefined, undefined, 'pr_description'),
           fetchTaskTail: (id) => this.stackManager.getTaskOutput(id, 50).catch(() => ''),
         },
       );
@@ -337,12 +337,12 @@ export class DarkFactoryOrchestrator {
           `Merge the base branch (main) into the PR branch, resolve all conflicts, and push the result. ` +
           `Use git fetch origin, git merge origin/main, resolve conflicts, git add, git commit, then git push.`;
 
-        const mcRouting = this.registry.getEffectiveRoutingFor(projectDir, 'merge_conflict');
-        const mcModel = mcRouting.backend === 'opencode'
-          ? (console.warn('[merge_conflict] backend=opencode unsupported for host path; falling back to legacy inner model'),
-             this.registry.getLegacyEffectiveModels(projectDir).inner_model)
-          : mcRouting.model;
-        await this.agentBackend.runEphemeralAgent(prompt, projectDir, 300_000, undefined, mcModel);
+        const mcDescriptor = this.registry.getEffectiveTouchpointDescriptor(projectDir, 'merge_conflict');
+        if (mcDescriptor.backend === 'opencode' && mcDescriptor.credentials === null) {
+          showNotification('Dark factory: merge-conflict blocked', `Ticket ${ticketId}: provider ${mcDescriptor.provider} needs an API key`);
+          return false;
+        }
+        await this.agentBackend.runEphemeralAgent(prompt, projectDir, 300_000, undefined, undefined, 'merge_conflict');
 
         // Push the resolved state
         await this.stackManager.push(stackId, `fix: resolve merge conflicts for PR #${prNumber}`);

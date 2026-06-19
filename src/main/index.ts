@@ -184,6 +184,7 @@ async function initializeApp(): Promise<void> {
       opencode: () => new OpenCodeBackend(),
     },
     (projectDir) => registry.getEffectiveBackend(projectDir, 'outer').backend,
+    (projectDir, touchpoint) => registry.getEffectiveTouchpointDescriptor(projectDir, touchpoint),
   );
   await agentBackend.initialize();
 

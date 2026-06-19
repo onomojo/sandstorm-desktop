@@ -31,10 +31,19 @@ import type {
   StackInfo,
 } from './types';
 import type { BackendType } from '../control-plane/backend-resolution';
+import type { TouchpointId } from '../control-plane/routing';
+
+type TouchpointDescriptor = {
+  backend: BackendType;
+  provider: string;
+  model: string;
+  credentials: Record<string, string> | null;
+};
 
 export class BackendRouter implements AgentBackend {
   private readonly factories: Partial<Record<BackendType, () => AgentBackend>>;
   private readonly selector: (projectDir: string) => BackendType;
+  private readonly descriptorSelector?: (projectDir: string, touchpoint: TouchpointId) => TouchpointDescriptor;
   private readonly instances: Partial<Record<BackendType, AgentBackend>> = {};
 
   // tabId → backend type. Sticky until resetSession clears it.
@@ -61,9 +70,11 @@ export class BackendRouter implements AgentBackend {
   constructor(
     factories: Partial<Record<BackendType, () => AgentBackend>>,
     selector: (projectDir: string) => BackendType,
+    descriptorSelector?: (projectDir: string, touchpoint: TouchpointId) => TouchpointDescriptor,
   ) {
     this.factories = factories;
     this.selector = selector;
+    this.descriptorSelector = descriptorSelector;
   }
 
   /**
@@ -182,10 +193,10 @@ export class BackendRouter implements AgentBackend {
     timeoutMs?: number,
     attribution?: { ticketId?: string; stage?: string },
     model?: string,
+    touchpoint?: string,
   ): Promise<string> {
-    const type = this.selector(projectDir);
-    this.lastProjectBackendId = type;
-    return this.getBackend(type).runEphemeralAgent(prompt, projectDir, timeoutMs, attribution, model);
+    const { type, resolvedModel } = this.resolveEphemeralRouting(projectDir, touchpoint, model);
+    return this.getBackend(type).runEphemeralAgent(prompt, projectDir, timeoutMs, attribution, resolvedModel);
   }
 
   spawnEphemeralAgent(
@@ -195,10 +206,35 @@ export class BackendRouter implements AgentBackend {
     onChunk?: (event: EphemeralStreamEvent) => void,
     attribution?: { ticketId?: string; stage?: string },
     model?: string,
+    touchpoint?: string,
   ): { promise: Promise<string>; cancel: () => void } {
+    const { type, resolvedModel } = this.resolveEphemeralRouting(projectDir, touchpoint, model);
+    return this.getBackend(type).spawnEphemeralAgent(prompt, projectDir, timeoutMs, onChunk, attribution, resolvedModel);
+  }
+
+  /**
+   * Resolve backend type and model string for an ephemeral call.
+   * When a touchpoint is provided and a descriptorSelector is wired, uses the
+   * per-touchpoint descriptor for routing. For OpenCode, encodes the model as
+   * "providerID/modelID" so OpenCodeBackend.splitModel can decode it correctly.
+   * Falls back to the outer selector when no touchpoint is supplied.
+   */
+  private resolveEphemeralRouting(
+    projectDir: string,
+    touchpoint?: string,
+    model?: string,
+  ): { type: BackendType; resolvedModel: string | undefined } {
+    if (touchpoint && this.descriptorSelector) {
+      const desc = this.descriptorSelector(projectDir, touchpoint as TouchpointId);
+      this.lastProjectBackendId = desc.backend;
+      const resolvedModel = desc.backend === 'opencode'
+        ? `${desc.provider}/${desc.model}`
+        : desc.model;
+      return { type: desc.backend, resolvedModel };
+    }
     const type = this.selector(projectDir);
     this.lastProjectBackendId = type;
-    return this.getBackend(type).spawnEphemeralAgent(prompt, projectDir, timeoutMs, onChunk, attribution, model);
+    return { type, resolvedModel: model };
   }
 
   spawnEphemeralSession(

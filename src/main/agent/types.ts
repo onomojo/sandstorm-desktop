@@ -123,6 +123,7 @@ export interface AgentBackend {
     timeoutMs?: number,
     attribution?: { ticketId?: string; stage?: string },
     model?: string,
+    touchpoint?: string,
   ): Promise<string>;
 
   /** Spawn a cancellable one-shot agent process; returns a promise and a cancel function */
@@ -133,6 +134,7 @@ export interface AgentBackend {
     onChunk?: (event: EphemeralStreamEvent) => void,
     attribution?: { ticketId?: string; stage?: string },
     model?: string,
+    touchpoint?: string,
   ): { promise: Promise<string>; cancel: () => void };
 
   /**

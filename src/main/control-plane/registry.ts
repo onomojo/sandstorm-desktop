@@ -2157,6 +2157,13 @@ export class Registry {
     ).run(key, provider);
   }
 
+  getStoredProviderKeys(scope: string): string[] {
+    const rows = this.db.prepare(
+      'SELECT provider FROM provider_secrets WHERE key = ?'
+    ).all(scope) as { provider: string }[];
+    return rows.map(r => r.provider);
+  }
+
   getEffectiveTouchpointDescriptor(
     projectDir: string,
     touchpoint: TouchpointId,

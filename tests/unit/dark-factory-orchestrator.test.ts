@@ -69,6 +69,7 @@ function makeRegistry(overrides: Partial<{
   listProjects: () => { directory: string }[];
   getEffectiveRoutingFor: (dir: string, touchpoint: string) => { backend: string; model: string };
   getLegacyEffectiveModels: (dir: string) => { inner_model: string; outer_model: string };
+  getEffectiveTouchpointDescriptor: (dir: string, touchpoint: string) => { backend: string; provider: string; model: string; credentials: Record<string, string> | null };
 }> = {}) {
   return {
     getDarkFactoryEnabled: vi.fn().mockReturnValue(false),
@@ -79,6 +80,7 @@ function makeRegistry(overrides: Partial<{
     listProjects: vi.fn().mockReturnValue([]),
     getEffectiveRoutingFor: vi.fn().mockReturnValue({ backend: 'claude', model: 'sonnet' }),
     getLegacyEffectiveModels: vi.fn().mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' }),
+    getEffectiveTouchpointDescriptor: vi.fn().mockReturnValue({ backend: 'claude', provider: 'anthropic', model: 'sonnet', credentials: {} }),
     ...overrides,
   };
 }
@@ -804,7 +806,8 @@ describe('DarkFactoryOrchestrator', () => {
         '/proj',
         300_000,
         undefined,
-        expect.any(String),
+        undefined,
+        'merge_conflict',
       );
       expect(registry.setBoardTicketColumn).toHaveBeenCalledWith('T-1', '/proj', 'merged');
     });
@@ -838,8 +841,10 @@ describe('DarkFactoryOrchestrator', () => {
       expect(mergedCalls).toHaveLength(0);
     });
 
-    it('passes resolved merge_conflict model to runEphemeralAgent', async () => {
-      registry.getEffectiveRoutingFor.mockReturnValue({ backend: 'claude', model: 'haiku' });
+    it('passes merge_conflict touchpoint to runEphemeralAgent', async () => {
+      registry.getEffectiveTouchpointDescriptor.mockReturnValue({
+        backend: 'claude', provider: 'anthropic', model: 'haiku', credentials: {},
+      });
 
       let viewCallCount = 0;
       mockExecFile.mockImplementation(
@@ -866,25 +871,20 @@ describe('DarkFactoryOrchestrator', () => {
         expect.any(String),
         expect.any(Number),
         undefined,
-        'haiku',
+        undefined,
+        'merge_conflict',
       );
     });
 
-    it('falls back to legacy inner model and warns when merge_conflict backend is opencode', async () => {
-      registry.getEffectiveRoutingFor.mockReturnValue({ backend: 'opencode', model: 'gpt-4' });
-      registry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    it('blocks and notifies when merge_conflict backend needs API key', async () => {
+      registry.getEffectiveTouchpointDescriptor.mockReturnValue({
+        backend: 'opencode', provider: 'openai', model: 'gpt-4', credentials: null,
+      });
 
-      let viewCallCount = 0;
       mockExecFile.mockImplementation(
         (_cmd: unknown, args: string[], _opts: unknown, cb: (...a: unknown[]) => void) => {
           if ((args as string[]).includes('view')) {
-            viewCallCount++;
-            if (viewCallCount <= 1) {
-              cb(null, JSON.stringify({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }), '');
-            } else {
-              cb(null, JSON.stringify({ mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }), '');
-            }
+            cb(null, JSON.stringify({ mergeable: 'CONFLICTING', mergeStateStatus: 'DIRTY' }), '');
           } else {
             cb(null, '', '');
           }
@@ -895,15 +895,11 @@ describe('DarkFactoryOrchestrator', () => {
       orchestrator.handlePrCreated('stack-1', 99);
       await new Promise((r) => setTimeout(r, 100));
 
-      expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
-        expect.any(String),
-        expect.any(String),
-        expect.any(Number),
-        undefined,
-        'sonnet',
+      expect(agentBackend.runEphemeralAgent).not.toHaveBeenCalled();
+      expect(vi.mocked(showNotification)).toHaveBeenCalledWith(
+        expect.stringContaining('merge-conflict blocked'),
+        expect.stringContaining('openai'),
       );
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
-      warnSpy.mockRestore();
     });
   });
 
@@ -928,11 +924,8 @@ describe('DarkFactoryOrchestrator', () => {
       );
     });
 
-    it('passes resolved pr_description model via runEphemeral closure', async () => {
-      registry.getEffectiveRoutingFor.mockImplementation((_dir: string, touchpoint: string) => {
-        if (touchpoint === 'pr_description') return { backend: 'claude', model: 'haiku' };
-        return { backend: 'claude', model: 'sonnet' };
-      });
+    it('passes pr_description touchpoint via runEphemeral closure', async () => {
+      // default descriptor: backend=claude, credentials={}
 
       orchestrator.handleTaskCompleted('stack-1', {} as never);
       await new Promise((r) => setTimeout(r, 50));
@@ -946,34 +939,24 @@ describe('DarkFactoryOrchestrator', () => {
         '/proj',
         undefined,
         undefined,
-        'haiku',
+        undefined,
+        'pr_description',
       );
     });
 
-    it('falls back to legacy outer model and warns when pr_description backend is opencode', async () => {
-      registry.getEffectiveRoutingFor.mockImplementation((_dir: string, touchpoint: string) => {
-        if (touchpoint === 'pr_description') return { backend: 'opencode', model: 'gpt-4' };
-        return { backend: 'claude', model: 'sonnet' };
+    it('blocks and notifies when pr_description backend needs API key', async () => {
+      registry.getEffectiveTouchpointDescriptor.mockReturnValue({
+        backend: 'opencode', provider: 'openai', model: 'gpt-4', credentials: null,
       });
-      registry.getLegacyEffectiveModels.mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' });
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       orchestrator.handleTaskCompleted('stack-1', {} as never);
       await new Promise((r) => setTimeout(r, 50));
 
-      const [, deps] = vi.mocked(draftPullRequest).mock.calls[0] as [unknown, { runEphemeral: (p: string, d: string, t?: number) => Promise<string> }];
-      agentBackend.runEphemeralAgent.mockResolvedValue('draft');
-      await deps.runEphemeral('test prompt', '/proj');
-
-      expect(agentBackend.runEphemeralAgent).toHaveBeenCalledWith(
-        'test prompt',
-        '/proj',
-        undefined,
-        undefined,
-        'opus',
+      expect(vi.mocked(draftPullRequest)).not.toHaveBeenCalled();
+      expect(vi.mocked(showNotification)).toHaveBeenCalledWith(
+        expect.stringContaining('PR draft blocked'),
+        expect.stringContaining('openai'),
       );
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
-      warnSpy.mockRestore();
     });
   });
 });

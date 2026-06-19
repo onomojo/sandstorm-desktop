@@ -36,6 +36,8 @@ const {
   mockGetGlobalBackendSettings,
   mockGetBackendSecretBundle,
   mockGetEffectiveBackend,
+  mockGetStoredProviderKeys,
+  mockGetProviderSecretBundle,
 } = vi.hoisted(() => {
   const mockBridgeRelease = vi.fn();
   const mockBridge = {
@@ -67,6 +69,8 @@ const {
     provider: undefined,
     model: undefined,
   });
+  const mockGetStoredProviderKeys = vi.fn().mockReturnValue([]);
+  const mockGetProviderSecretBundle = vi.fn().mockReturnValue(null);
 
   return {
     mockBridgeRelease,
@@ -81,6 +85,8 @@ const {
     mockGetGlobalBackendSettings,
     mockGetBackendSecretBundle,
     mockGetEffectiveBackend,
+    mockGetStoredProviderKeys,
+    mockGetProviderSecretBundle,
   };
 });
 
@@ -106,6 +112,8 @@ vi.mock('../../../src/main/index', () => ({
     getGlobalBackendSettings: mockGetGlobalBackendSettings,
     getBackendSecretBundle: mockGetBackendSecretBundle,
     getEffectiveBackend: mockGetEffectiveBackend,
+    getStoredProviderKeys: mockGetStoredProviderKeys,
+    getProviderSecretBundle: mockGetProviderSecretBundle,
   },
   cliDir: '/tmp/sandstorm-cli',
 }));
@@ -1102,6 +1110,84 @@ describe('OpenCodeBackend auth', () => {
 
   it('syncCredentials resolves without error', async () => {
     await expect(backend.syncCredentials([])).resolves.toBeUndefined();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// syncCredentials — server restart when provider signature changes
+// ---------------------------------------------------------------------------
+
+describe('OpenCodeBackend syncCredentials provider restart', () => {
+  let backend: OpenCodeBackend;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockEventSubscribe.mockResolvedValue({ stream: makeMockStream() });
+    mockSessionCreate.mockResolvedValue({
+      data: { id: 'oc-session-1', projectID: 'proj', directory: '/project', title: '' },
+    });
+    mockGetStoredProviderKeys.mockReturnValue([]);
+    mockGetProviderSecretBundle.mockReturnValue(null);
+    mockGetGlobalBackendSettings.mockReturnValue({
+      inner_backend: 'opencode',
+      inner_provider: 'anthropic',
+      inner_model: null,
+      outer_backend: 'claude',
+      outer_provider: null,
+      outer_model: null,
+    });
+    mockGetBackendSecretBundle.mockReturnValue(null);
+  });
+
+  afterEach(() => {
+    backend?.destroy();
+    // Restore defaults so other describe blocks are unaffected
+    mockGetStoredProviderKeys.mockReturnValue([]);
+    mockGetProviderSecretBundle.mockReturnValue(null);
+  });
+
+  it('syncCredentials restarts opencode server when provider signature changes', async () => {
+    // Initialize with no stored providers — signature is '{}'
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+
+    const callCountAfterInit = (createOpencodeServer as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Simulate a new provider being stored since initialize() ran
+    mockGetStoredProviderKeys.mockReturnValue(['openai']);
+    mockGetProviderSecretBundle.mockReturnValue({ api_key: 'sk-test' });
+
+    // Provide a fresh server response for the restart call
+    (createOpencodeServer as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      url: 'http://127.0.0.1:18766',
+      close: mockServerClose,
+    });
+    mockEventSubscribe.mockResolvedValue({ stream: makeMockStream() });
+
+    await backend.syncCredentials([]);
+
+    // Server should have been created a second time
+    expect(createOpencodeServer).toHaveBeenCalledTimes(callCountAfterInit + 1);
+
+    // The restart call must include the new provider in its config
+    const restartCall = (createOpencodeServer as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[0];
+    expect(restartCall?.config?.provider).toHaveProperty('openai');
+  });
+
+  it('syncCredentials does not restart server when provider signature is unchanged', async () => {
+    // Initialize with openai already stored
+    mockGetStoredProviderKeys.mockReturnValue(['openai']);
+    mockGetProviderSecretBundle.mockReturnValue({ api_key: 'sk-test' });
+
+    backend = new OpenCodeBackend();
+    await backend.initialize();
+
+    const callCountAfterInit = (createOpencodeServer as ReturnType<typeof vi.fn>).mock.calls.length;
+
+    // Same provider keys — signature unchanged
+    await backend.syncCredentials([]);
+
+    expect(createOpencodeServer).toHaveBeenCalledTimes(callCountAfterInit);
   });
 });
 

@@ -361,6 +361,7 @@ export class ClaudeBackend implements AgentBackend {
     onChunk?: (event: EphemeralStreamEvent) => void,
     attribution?: { ticketId?: string; stage?: string },
     model?: string,
+    _touchpoint?: string,
   ): { promise: Promise<string>; cancel: () => void } {
     const claudeBin = getClaudeBin();
     const args = [
@@ -538,6 +539,7 @@ export class ClaudeBackend implements AgentBackend {
     timeoutMs = 300_000,
     attribution?: { ticketId?: string; stage?: string },
     model?: string,
+    _touchpoint?: string,
   ): Promise<string> {
     return this.spawnEphemeralAgent(prompt, projectDir, timeoutMs, undefined, attribution, model).promise;
   }
