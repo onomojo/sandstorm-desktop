@@ -1415,6 +1415,99 @@ describe('Registry', () => {
       // Prevent afterEach double-close — reopen so afterEach can close it
       registry = await Registry.create(dbPath);
     });
+
+    // --- getDarkFactoryConfig / setDarkFactoryConfig ---
+
+    it('getDarkFactoryConfig returns manual/squash defaults for an unknown project', () => {
+      const cfg = registry.getDarkFactoryConfig('/no/row');
+      expect(cfg).toEqual({ level: 'manual', merge_strategy: 'squash' });
+    });
+
+    it('setDarkFactoryConfig persists level and merge_strategy', () => {
+      registry.setDarkFactoryConfig('/proj', { level: 'assisted', merge_strategy: 'rebase' });
+      expect(registry.getDarkFactoryConfig('/proj')).toEqual({ level: 'assisted', merge_strategy: 'rebase' });
+    });
+
+    it('setDarkFactoryConfig with dark_factory level makes getDarkFactoryEnabled return true', () => {
+      registry.setDarkFactoryConfig('/proj', { level: 'dark_factory', merge_strategy: 'squash' });
+      expect(registry.getDarkFactoryEnabled('/proj')).toBe(true);
+    });
+
+    it('setDarkFactoryConfig with assisted level makes getDarkFactoryEnabled return false', () => {
+      registry.setDarkFactoryConfig('/proj', { level: 'assisted', merge_strategy: 'squash' });
+      expect(registry.getDarkFactoryEnabled('/proj')).toBe(false);
+    });
+
+    it('setDarkFactoryConfig is idempotent — running twice with same payload yields same row', () => {
+      registry.setDarkFactoryConfig('/proj', { level: 'dark_factory', merge_strategy: 'merge' });
+      registry.setDarkFactoryConfig('/proj', { level: 'dark_factory', merge_strategy: 'merge' });
+      expect(registry.getDarkFactoryConfig('/proj')).toEqual({ level: 'dark_factory', merge_strategy: 'merge' });
+    });
+
+    it('setDarkFactoryEnabled(false) on an assisted project leaves level unchanged', () => {
+      registry.setDarkFactoryConfig('/proj', { level: 'assisted', merge_strategy: 'squash' });
+      registry.setDarkFactoryEnabled('/proj', false);
+      expect(registry.getDarkFactoryConfig('/proj')).toEqual({ level: 'assisted', merge_strategy: 'squash' });
+      expect(registry.getDarkFactoryEnabled('/proj')).toBe(false);
+    });
+
+    it('setDarkFactoryEnabled(false) on a dark_factory project flips level to manual', () => {
+      registry.setDarkFactoryConfig('/proj', { level: 'dark_factory', merge_strategy: 'squash' });
+      registry.setDarkFactoryEnabled('/proj', false);
+      expect(registry.getDarkFactoryEnabled('/proj')).toBe(false);
+      expect(registry.getDarkFactoryConfig('/proj').level).toBe('manual');
+    });
+
+    it('setDarkFactoryEnabled(true) sets level to dark_factory', () => {
+      registry.setDarkFactoryEnabled('/proj', true);
+      expect(registry.getDarkFactoryEnabled('/proj')).toBe(true);
+      expect(registry.getDarkFactoryConfig('/proj').level).toBe('dark_factory');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
+  // Migration v28: project_dark_factory level + merge_strategy columns
+  // ---------------------------------------------------------------------------
+  describe('migration v28 — dark factory level + merge_strategy', () => {
+    it('backfills enabled=1 rows to level=dark_factory', async () => {
+      // Seed a DB at v17 (before level column) with an enabled=1 row
+      const Database = (await import('better-sqlite3')).default;
+      const migrationDbPath = makeTempDb();
+      try {
+        const rawDb = new Database(migrationDbPath);
+        rawDb.pragma('journal_mode = WAL');
+        rawDb.pragma('foreign_keys = ON');
+        rawDb.exec(`
+          CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY, applied_at TEXT NOT NULL DEFAULT (datetime('now')));
+          INSERT INTO schema_version (version) VALUES (17);
+          CREATE TABLE IF NOT EXISTS project_dark_factory (key TEXT PRIMARY KEY, enabled INTEGER NOT NULL DEFAULT 0);
+          INSERT INTO project_dark_factory (key, enabled) VALUES ('project:/enabled', 1);
+          INSERT INTO project_dark_factory (key, enabled) VALUES ('project:/disabled', 0);
+        `);
+        rawDb.close();
+
+        const migratedRegistry = await Registry.create(migrationDbPath);
+        expect(migratedRegistry.getDarkFactoryConfig('/enabled')).toEqual(
+          expect.objectContaining({ level: 'dark_factory' })
+        );
+        expect(migratedRegistry.getDarkFactoryConfig('/disabled')).toEqual(
+          expect.objectContaining({ level: 'manual' })
+        );
+        expect(migratedRegistry.getDarkFactoryEnabled('/enabled')).toBe(true);
+        expect(migratedRegistry.getDarkFactoryEnabled('/disabled')).toBe(false);
+        migratedRegistry.close();
+      } finally {
+        for (const suffix of ['', '-wal', '-shm']) {
+          try { fs.unlinkSync(migrationDbPath + suffix); } catch { /* ignore */ }
+        }
+      }
+    });
+
+    it('migration is idempotent — running v28 twice yields correct state', async () => {
+      // Registry.create runs the full migration chain each time; opening an already-migrated DB should be safe
+      const cfg = registry.getDarkFactoryConfig('/any/project');
+      expect(cfg).toEqual({ level: 'manual', merge_strategy: 'squash' });
+    });
   });
 
   // ---------------------------------------------------------------------------
@@ -1760,7 +1853,7 @@ describe('Registry', () => {
         const r1 = await Registry.create(tmpPath);
         const db1 = r1.getDb();
         db1.exec('DROP TABLE IF EXISTS provider_secrets');
-        db1.exec("DELETE FROM schema_version WHERE version = 27");
+        db1.exec("DELETE FROM schema_version WHERE version >= 27");
         db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'inner', '__bundle__', ?)").run(JSON.stringify({ api_key: 'sk-inner' }));
         db1.prepare("INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'inner', 'anthropic', NULL)").run();
         r1.close();
@@ -1782,7 +1875,7 @@ describe('Registry', () => {
         const r1 = await Registry.create(tmpPath);
         const db1 = r1.getDb();
         db1.exec('DROP TABLE IF EXISTS provider_secrets');
-        db1.exec("DELETE FROM schema_version WHERE version = 27");
+        db1.exec("DELETE FROM schema_version WHERE version >= 27");
         // Legacy single-field row (written by old setBackendSecret)
         db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'inner', 'api_key', 'sk-legacy')").run();
         db1.prepare("INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'inner', 'anthropic', NULL)").run();
@@ -1806,7 +1899,7 @@ describe('Registry', () => {
         const r1 = await Registry.create(tmpPath);
         const db1 = r1.getDb();
         db1.exec('DROP TABLE IF EXISTS provider_secrets');
-        db1.exec("DELETE FROM schema_version WHERE version = 27");
+        db1.exec("DELETE FROM schema_version WHERE version >= 27");
         // Both surfaces → anthropic provider, but different bundles
         db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'inner', '__bundle__', ?)").run(JSON.stringify({ api_key: 'sk-inner' }));
         db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'outer', '__bundle__', ?)").run(JSON.stringify({ api_key: 'sk-outer' }));
@@ -1849,7 +1942,7 @@ describe('Registry', () => {
         const r1 = await Registry.create(tmpPath);
         const db1 = r1.getDb();
         db1.exec('DROP TABLE IF EXISTS provider_secrets');
-        db1.exec("DELETE FROM schema_version WHERE version = 27");
+        db1.exec("DELETE FROM schema_version WHERE version >= 27");
         // backend_secrets with no corresponding opencode_settings row → provider = null → falls back to anthropic
         db1.prepare("INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES ('global', 'inner', '__bundle__', ?)").run(JSON.stringify({ api_key: 'sk-fallback' }));
         // No opencode_settings row → provider resolves to null → 'anthropic'

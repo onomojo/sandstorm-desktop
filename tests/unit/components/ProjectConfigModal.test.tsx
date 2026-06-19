@@ -174,6 +174,14 @@ describe('buildConfigPanes registry', () => {
         applyPreset: vi.fn().mockResolvedValue(undefined),
         getAvailableModels: vi.fn().mockResolvedValue([]),
       },
+      darkFactory: {
+        getConfig: vi.fn().mockResolvedValue({ level: 'manual', merge_strategy: 'squash' }),
+        setConfig: vi.fn().mockResolvedValue(undefined),
+      },
+      ticketing: {
+        get: vi.fn().mockResolvedValue(null),
+        set: vi.fn().mockResolvedValue(undefined),
+      },
       onDirtyChange: vi.fn(),
       registerSave: vi.fn(),
     };

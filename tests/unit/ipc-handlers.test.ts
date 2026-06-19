@@ -76,6 +76,8 @@ const {
     deleteBoardTicket: vi.fn(),
     getDarkFactoryEnabled: vi.fn().mockReturnValue(false),
     setDarkFactoryEnabled: vi.fn(),
+    getDarkFactoryConfig: vi.fn().mockReturnValue({ level: 'manual', merge_strategy: 'squash' }),
+    setDarkFactoryConfig: vi.fn(),
     getDb: vi.fn().mockReturnValue({}),
     getStepWeightsByTicket: vi.fn().mockReturnValue([]),
     getTaskPhaseTokensByTicket: vi.fn().mockReturnValue([]),
@@ -2022,6 +2024,33 @@ describe('IPC Handlers', () => {
     });
   });
 
+  describe('darkFactory:getConfig', () => {
+    it('returns the config object from registry', async () => {
+      mockRegistry.getDarkFactoryConfig.mockReturnValue({ level: 'assisted', merge_strategy: 'squash' });
+      const result = await invokeHandler('darkFactory:getConfig', '/proj');
+      expect(result).toEqual({ level: 'assisted', merge_strategy: 'squash' });
+      expect(mockRegistry.getDarkFactoryConfig).toHaveBeenCalledWith('/proj');
+    });
+
+    it('returns manual/squash defaults for a new project', async () => {
+      mockRegistry.getDarkFactoryConfig.mockReturnValue({ level: 'manual', merge_strategy: 'squash' });
+      const result = await invokeHandler('darkFactory:getConfig', '/new-proj');
+      expect(result).toEqual({ level: 'manual', merge_strategy: 'squash' });
+    });
+  });
+
+  describe('darkFactory:setConfig', () => {
+    it('calls setDarkFactoryConfig on registry with the given config', async () => {
+      await invokeHandler('darkFactory:setConfig', '/proj', { level: 'dark_factory', merge_strategy: 'squash' });
+      expect(mockRegistry.setDarkFactoryConfig).toHaveBeenCalledWith('/proj', { level: 'dark_factory', merge_strategy: 'squash' });
+    });
+
+    it('persists assisted + rebase config', async () => {
+      await invokeHandler('darkFactory:setConfig', '/proj', { level: 'assisted', merge_strategy: 'rebase' });
+      expect(mockRegistry.setDarkFactoryConfig).toHaveBeenCalledWith('/proj', { level: 'assisted', merge_strategy: 'rebase' });
+    });
+  });
+
   // =========================================================================
   // PR Auto-Resolve
   // =========================================================================
@@ -2717,6 +2746,8 @@ describe('IPC Handlers', () => {
       'projectTicketConfig:set',
       'darkFactory:getEnabled',
       'darkFactory:setEnabled',
+      'darkFactory:getConfig',
+      'darkFactory:setConfig',
       'stacks:getNeedsHumanQuestions',
       'stacks:resumeNeedsHuman',
       'stacks:askClarifyingQuestions',
