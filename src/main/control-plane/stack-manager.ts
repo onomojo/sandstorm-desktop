@@ -2,6 +2,7 @@ import { spawn, execSync, execFile } from 'child_process';
 import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
+import os from 'os';
 import { Registry, Stack, StackHistoryRecord, Task, TokenUsage } from './registry';
 import { PortAllocator, ServicePort } from './port-allocator';
 import { PortProxy } from './port-proxy';
@@ -333,6 +334,36 @@ export class StackManager {
       );
       child.on('error', reject);
     });
+  }
+
+  /**
+   * Run a CLI `task` dispatch, passing the prompt via a temp `--file` rather
+   * than as a positional CLI argument.
+   *
+   * A dispatch prompt is the ticket body plus up to ~1 MB of inlined external
+   * references (see resolveTicketReferences). Passed as a single argv entry it
+   * overflows Linux's per-argument limit (MAX_ARG_STRLEN = 128 KB) and makes
+   * `spawn` throw `E2BIG` on the host before the CLI even runs. The CLI's
+   * `task` command already accepts `--file <path>` and reads the prompt from
+   * it, so route large prompts through a temp file. No size limit applies to
+   * file contents.
+   *
+   * `cliArgs` must contain every flag EXCEPT the positional prompt; the prompt
+   * is appended as `--file <tmp>`.
+   */
+  private async runCliTaskFile(
+    projectDir: string,
+    cliArgs: string[],
+    prompt: string
+  ): Promise<CliResult> {
+    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sandstorm-task-'));
+    const tmpFile = path.join(tmpDir, 'prompt.txt');
+    await fs.promises.writeFile(tmpFile, prompt, 'utf-8');
+    try {
+      return await this.runCli(projectDir, [...cliArgs, '--file', tmpFile]);
+    } finally {
+      fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+    }
   }
 
   /**
@@ -755,9 +786,8 @@ export class StackManager {
 
     const cliArgs = ['task', stackId, '--resume', task.session_id!];
     if (task.model) cliArgs.push('--model', task.model);
-    cliArgs.push(continuationPrompt);
 
-    const result = await this.runCli(stack.project_dir, cliArgs);
+    const result = await this.runCliTaskFile(stack.project_dir, cliArgs, continuationPrompt);
     if (result.exitCode !== 0) {
       this.registry.updateStackStatus(stackId, 'session_paused');
       this.notifyUpdate();
@@ -799,9 +829,8 @@ export class StackManager {
 
     const cliArgs = ['task', stackId, '--resume', task.session_id!];
     if (task.model) cliArgs.push('--model', task.model);
-    cliArgs.push(investigationPrompt);
 
-    const result = await this.runCli(stack.project_dir, cliArgs);
+    const result = await this.runCliTaskFile(stack.project_dir, cliArgs, investigationPrompt);
     if (result.exitCode !== 0) {
       this.registry.updateStackStatus(stackId, 'needs_human');
       this.notifyUpdate();
@@ -1290,8 +1319,7 @@ export class StackManager {
       cliArgs.push('--models-json', phaseModelsJson);
       cliArgs.push('--phase-routing-json', phaseRoutingJson);
 
-      cliArgs.push(prompt);
-      const result = await this.runCli(stack.project_dir, cliArgs);
+      const result = await this.runCliTaskFile(stack.project_dir, cliArgs, prompt);
 
       if (result.exitCode !== 0) {
         throw new SandstormError(
