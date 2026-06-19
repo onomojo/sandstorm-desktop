@@ -420,11 +420,14 @@ describe('StackManager', () => {
 
       // Should delegate to CLI `task` command (handles cred sync + user perms)
       // When no model is specified, the effective default (sonnet) is used.
-      // --models-json carries the per-phase routing map (all sonnet with no routing configured).
-      expect(runCliSpy).toHaveBeenCalledWith(
-        '/proj',
-        ['task', 'dispatch-test', '--model', 'sonnet', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', 'Fix the bug']
-      );
+      // --models-json carries the per-phase model map; --phase-routing-json carries full routing.
+      const [, callArgs] = runCliSpy.mock.calls[0];
+      expect(callArgs[0]).toBe('task');
+      expect(callArgs[1]).toBe('dispatch-test');
+      expect(callArgs).toContain('--model');
+      expect(callArgs).toContain('--models-json');
+      expect(callArgs).toContain('--phase-routing-json');
+      expect(callArgs[callArgs.length - 1]).toBe('Fix the bug');
     });
 
     it('throws when dispatching to non-existent stack', async () => {
@@ -469,12 +472,13 @@ describe('StackManager', () => {
       // response no longer echoes it.
       const persisted = registry.getTasksForStack('model-test');
       expect(persisted[0].model).toBe('opus');
-      // Single --model is for attribution; --models-json carries per-phase routing
-      // (registry default is sonnet for all phases when no routing is configured).
-      expect(runCliSpy).toHaveBeenCalledWith(
-        '/proj',
-        ['task', 'model-test', '--model', 'opus', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', 'Complex task']
-      );
+      // Single --model is for attribution; --models-json and --phase-routing-json carry per-phase routing.
+      const [, callArgs] = runCliSpy.mock.calls[0];
+      expect(callArgs).toContain('--model');
+      expect(callArgs[callArgs.indexOf('--model') + 1]).toBe('opus');
+      expect(callArgs).toContain('--models-json');
+      expect(callArgs).toContain('--phase-routing-json');
+      expect(callArgs[callArgs.length - 1]).toBe('Complex task');
     });
 
     it('resolves "auto" model to undefined and omits from CLI args', async () => {
@@ -490,11 +494,12 @@ describe('StackManager', () => {
       // "auto" should resolve to null in the DB (undefined → null via registry)
       const persisted = registry.getTasksForStack('auto-model');
       expect(persisted[0].model).toBeNull();
-      // Single --model is omitted for 'auto'; --models-json is still sent.
-      expect(runCliSpy).toHaveBeenCalledWith(
-        '/proj',
-        ['task', 'auto-model', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', 'Simple task']
-      );
+      // Single --model is omitted for 'auto'; --models-json and --phase-routing-json are still sent.
+      const [, callArgs] = runCliSpy.mock.calls[0];
+      expect(callArgs).not.toContain('--model');
+      expect(callArgs).toContain('--models-json');
+      expect(callArgs).toContain('--phase-routing-json');
+      expect(callArgs[callArgs.length - 1]).toBe('Simple task');
     });
 
     it('uses effective default model when not provided', async () => {
@@ -511,11 +516,13 @@ describe('StackManager', () => {
       // on the registry Task, not echoed in the MCP response.
       const persisted = registry.getTasksForStack('no-model');
       expect(persisted[0].model).toBe('sonnet');
-      // Legacy/no-routing: all phases use the same model as the single task model.
-      expect(runCliSpy).toHaveBeenCalledWith(
-        '/proj',
-        ['task', 'no-model', '--model', 'sonnet', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', 'Simple task']
-      );
+      // Legacy/no-routing: --models-json and --phase-routing-json are sent alongside --model.
+      const [, callArgs] = runCliSpy.mock.calls[0];
+      expect(callArgs).toContain('--model');
+      expect(callArgs[callArgs.indexOf('--model') + 1]).toBe('sonnet');
+      expect(callArgs).toContain('--models-json');
+      expect(callArgs).toContain('--phase-routing-json');
+      expect(callArgs[callArgs.length - 1]).toBe('Simple task');
     });
 
     it('includes per-phase model map in CLI args', async () => {
@@ -577,18 +584,29 @@ describe('StackManager', () => {
       const [, args] = runCliSpy.mock.calls[0];
       const singleModel = args[args.indexOf('--model') + 1];
       const jsonIdx = args.indexOf('--models-json');
-      const parsed = JSON.parse(args[jsonIdx + 1]);
-      expect(parsed.execution).toBe(singleModel);
-      expect(parsed.review).toBe(singleModel);
-      expect(parsed.meta_review).toBe(singleModel);
+      const modelsJson = JSON.parse(args[jsonIdx + 1]);
+      expect(modelsJson.execution).toBe(singleModel);
+      expect(modelsJson.review).toBe(singleModel);
+      expect(modelsJson.meta_review).toBe(singleModel);
+
+      // --phase-routing-json should carry backend+provider+model per phase
+      const routingIdx = args.indexOf('--phase-routing-json');
+      expect(routingIdx).toBeGreaterThan(-1);
+      const routing = JSON.parse(args[routingIdx + 1]);
+      expect(routing.execution.model).toBe(singleModel);
+      expect(routing.review.model).toBe(singleModel);
+      expect(routing.meta_review.model).toBe(singleModel);
     });
 
-    it('passes --backend opencode and --backend-model when inner backend is opencode with provider+model', async () => {
+    it('includes opencode backend in --phase-routing-json when execution phase is opencode', async () => {
       registry.createStack(makeStack('oc-backend'));
-      vi.spyOn(registry, 'getEffectiveBackend').mockReturnValue({
-        backend: 'opencode',
-        provider: 'anthropic',
-        model: 'claude-sonnet-4-6',
+      // Configure opencode routing for all inner phases
+      registry.setProjectRouting('/proj', {
+        assignments: {
+          execution:   { backend: 'opencode', provider: 'anthropic', model: 'claude-sonnet-4-6' },
+          review:      { backend: 'opencode', provider: 'anthropic', model: 'claude-sonnet-4-6' },
+          meta_review: { backend: 'opencode', provider: 'anthropic', model: 'claude-sonnet-4-6' },
+        },
       });
       const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
         stdout: 'Task dispatched.',
@@ -598,16 +616,26 @@ describe('StackManager', () => {
 
       await manager.dispatchTask('oc-backend', 'Do the work', 'sonnet');
 
-      expect(runCliSpy).toHaveBeenCalledWith(
-        '/proj',
-        ['task', 'oc-backend', '--model', 'sonnet', '--models-json', '{"execution":"sonnet","review":"sonnet","meta_review":"sonnet"}', '--backend', 'opencode', '--backend-model', 'anthropic/claude-sonnet-4-6', 'Do the work']
-      );
+      const callArgs = runCliSpy.mock.calls[0][1] as string[];
+      expect(callArgs).toContain('--phase-routing-json');
+      const routingJson = callArgs[callArgs.indexOf('--phase-routing-json') + 1];
+      const routing = JSON.parse(routingJson);
+      expect(routing.execution.backend).toBe('opencode');
+      expect(routing.execution.provider).toBe('anthropic');
+      expect(routing.execution.model).toBe('claude-sonnet-4-6');
+      // Old --backend/--backend-model flags are superseded by --phase-routing-json
+      expect(callArgs).not.toContain('--backend');
+      expect(callArgs).not.toContain('--backend-model');
     });
 
-    it('passes --backend opencode without --backend-model when provider/model absent', async () => {
-      registry.createStack(makeStack('oc-no-model'));
-      vi.spyOn(registry, 'getEffectiveBackend').mockReturnValue({
-        backend: 'opencode',
+    it('includes all phases in --phase-routing-json for mixed backend stacks', async () => {
+      registry.createStack(makeStack('mixed-backend'));
+      registry.setProjectRouting('/proj', {
+        assignments: {
+          execution:   { backend: 'opencode', provider: 'openrouter', model: 'llama' },
+          review:      { backend: 'claude', provider: 'anthropic', model: 'opus' },
+          meta_review: { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
+        },
       });
       const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
         stdout: 'Task dispatched.',
@@ -615,19 +643,19 @@ describe('StackManager', () => {
         exitCode: 0,
       });
 
-      await manager.dispatchTask('oc-no-model', 'Do work', 'sonnet');
+      await manager.dispatchTask('mixed-backend', 'Do work');
 
       const callArgs = runCliSpy.mock.calls[0][1] as string[];
-      expect(callArgs).toContain('--backend');
-      expect(callArgs).toContain('opencode');
-      expect(callArgs).not.toContain('--backend-model');
+      const routingJson = callArgs[callArgs.indexOf('--phase-routing-json') + 1];
+      const routing = JSON.parse(routingJson);
+      expect(routing.execution.backend).toBe('opencode');
+      expect(routing.execution.provider).toBe('openrouter');
+      expect(routing.review.backend).toBe('claude');
+      expect(routing.meta_review.backend).toBe('claude');
     });
 
-    it('does NOT pass --backend when inner backend is claude (default)', async () => {
+    it('always includes --phase-routing-json (never falls back to --backend/--backend-model)', async () => {
       registry.createStack(makeStack('claude-backend'));
-      vi.spyOn(registry, 'getEffectiveBackend').mockReturnValue({
-        backend: 'claude',
-      });
       const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
         stdout: 'Task dispatched.',
         stderr: '',
@@ -637,6 +665,7 @@ describe('StackManager', () => {
       await manager.dispatchTask('claude-backend', 'Fix bug', 'sonnet');
 
       const callArgs = runCliSpy.mock.calls[0][1] as string[];
+      expect(callArgs).toContain('--phase-routing-json');
       expect(callArgs).not.toContain('--backend');
       expect(callArgs).not.toContain('--backend-model');
     });

@@ -43,7 +43,7 @@ export const LIVENESS_STALL_THRESHOLD_MS = 5 * 60_000;
 
 /** Terminal statuses used by the liveness check's idempotency guard */
 const LIVENESS_TERMINAL_STATUSES = new Set([
-  'completed', 'failed', 'needs_human', 'verify_blocked_environmental', 'token_limited',
+  'completed', 'failed', 'needs_human', 'needs_key', 'verify_blocked_environmental', 'token_limited',
 ]);
 
 export class TaskWatcher extends EventEmitter {
@@ -785,6 +785,36 @@ export class TaskWatcher extends EventEmitter {
           task, stackId, 'needs_human', 1, containerId,
           'Investigation returned unknown state — needs human review'
         );
+        return;
+      }
+
+      if (status === 'needs_key') {
+        // Stale-poll guard: wait until "running" has been seen (same pattern as other terminal statuses).
+        // needs_key is written before "running" so the guard is lenient — accept after MAX_STALE_POLLS.
+        if (!this.seenRunning.get(stackId)) {
+          const staleCount = (this.stalePollCounts.get(stackId) ?? 0) + 1;
+          this.stalePollCounts.set(stackId, staleCount);
+          if (staleCount < MAX_STALE_POLLS) {
+            this.schedulePoll(stackId, containerId, this.pollInterval);
+            return;
+          }
+        }
+        let keyReason = 'A phase provider has no credentials configured — add credentials in provider settings';
+        try {
+          const reasonResult = await runtime.exec(containerId, ['cat', '/tmp/claude-task-needs-key.txt']);
+          if (reasonResult.stdout.trim()) keyReason = reasonResult.stdout.trim();
+        } catch { /* best effort */ }
+        this.registry.completeTaskNeedsKey(task.id, keyReason);
+        const needsKeyTask = {
+          ...task,
+          status: 'needs_key' as const,
+          exit_code: 1,
+          warnings: keyReason,
+          finished_at: new Date().toISOString(),
+        };
+        this.emit('task:failed', { stackId, task: needsKeyTask });
+        this.onStatusChange?.();
+        this.unwatch(stackId);
         return;
       }
 

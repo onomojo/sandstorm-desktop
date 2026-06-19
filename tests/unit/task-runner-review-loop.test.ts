@@ -435,7 +435,7 @@ describe('task-runner.sh dual-loop workflow', () => {
     it('does not use `local` in the outer/inner while loops', () => {
       // Find all `local ` usages and verify they are inside function bodies.
       // Functions in the script: log_loop, run_claude, run_opencode, run_agent, check_for_diff, run_review, run_verify, check_for_stop_and_ask
-      const functionNames = ['log_loop', 'run_claude', 'run_opencode', 'run_agent', 'check_for_diff', 'run_review', 'run_verify', 'is_infra_error_only', 'check_for_stop_and_ask', 'check_for_token_limit', 'run_meta_review', 'inject_meta_review_guidance', 'needs_node_modules_reconcile', 'reconcile_app_node_modules', '_get_task_changed_files', 'classify_verify_failure_scope']
+      const functionNames = ['log_loop', 'run_claude', 'run_opencode', 'run_agent', 'check_all_phase_credentials', 'check_for_diff', 'run_review', 'run_verify', 'is_infra_error_only', 'check_for_stop_and_ask', 'check_for_token_limit', 'run_meta_review', 'inject_meta_review_guidance', 'needs_node_modules_reconcile', 'reconcile_app_node_modules', '_get_task_changed_files', 'classify_verify_failure_scope']
 
       // Collect the line ranges of all function bodies
       const functionRanges: Array<{ start: number; end: number }> = []
@@ -1193,6 +1193,96 @@ describe('SANDSTORM_INNER.md workflow section', () => {
 
   it('explains the needs_human stack status', () => {
     expect(innerMd).toContain('needs_human')
+  })
+})
+
+// ── Per-phase backend routing (issue #639 / MR-14) ──────────────────────────
+
+const phaseModelHelperPath = resolve(__dirname, '../../sandstorm-cli/docker/phase-model-helper.sh')
+const phaseModelHelper = readFileSync(phaseModelHelperPath, 'utf-8')
+
+describe('per-phase backend/provider routing (#639)', () => {
+  describe('task-runner.sh PHASE_ROUTING_JSON plumbing', () => {
+    it('reads /tmp/claude-task-phase-routing.json when present', () => {
+      expect(taskRunner).toContain('claude-task-phase-routing.json')
+    })
+
+    it('exports PHASE_ROUTING_JSON', () => {
+      expect(taskRunner).toContain('export PHASE_ROUTING_JSON')
+    })
+
+    it('validates phase-routing-json is valid JSON before using it', () => {
+      // Malformed JSON is discarded with a warning
+      expect(taskRunner).toContain('claude-task-phase-routing.json is malformed')
+    })
+
+    it('has check_all_phase_credentials function', () => {
+      expect(taskRunner).toContain('check_all_phase_credentials()')
+    })
+
+    it('check_all_phase_credentials checks execution, review and meta_review phases', () => {
+      const fnStart = taskRunner.indexOf('check_all_phase_credentials()')
+      const fnEnd = taskRunner.indexOf('\n}', fnStart)
+      const fnBody = taskRunner.substring(fnStart, fnEnd)
+      expect(fnBody).toContain('execution')
+      expect(fnBody).toContain('review')
+      expect(fnBody).toContain('meta_review')
+    })
+
+    it('check_all_phase_credentials checks for opencode config file existence', () => {
+      const fnStart = taskRunner.indexOf('check_all_phase_credentials()')
+      const fnEnd = taskRunner.indexOf('\n}', fnStart)
+      const fnBody = taskRunner.substring(fnStart, fnEnd)
+      expect(fnBody).toContain('sandstorm-opencode-')
+      expect(fnBody).toContain('! -f')
+    })
+
+    it('writes needs_key status when phase credentials are missing', () => {
+      expect(taskRunner).toContain('needs_key')
+      expect(taskRunner).toContain('TASK_NEEDS_KEY')
+    })
+
+    it('writes /tmp/claude-task-needs-key.txt with reason on needs_key', () => {
+      expect(taskRunner).toContain('claude-task-needs-key.txt')
+    })
+
+    it('restores OPENCODE_CONFIG after each opencode phase invocation', () => {
+      const fnStart = taskRunner.indexOf('run_agent()')
+      const fnEnd = taskRunner.indexOf('\n}', fnStart)
+      const fnBody = taskRunner.substring(fnStart, fnEnd)
+      expect(fnBody).toContain('_saved_oc_config')
+      expect(fnBody).toContain('OPENCODE_CONFIG="${_saved_oc_config}"')
+    })
+
+    it('sets per-phase OPENCODE_CONFIG from PHASE_ROUTING_JSON provider', () => {
+      const fnStart = taskRunner.indexOf('run_agent()')
+      const fnEnd = taskRunner.indexOf('\n}', fnStart)
+      const fnBody = taskRunner.substring(fnStart, fnEnd)
+      expect(fnBody).toContain('/tmp/sandstorm-opencode-')
+    })
+
+    it('falls back to global AGENT_BACKEND when PHASE_ROUTING_JSON is absent', () => {
+      const fnStart = taskRunner.indexOf('run_agent()')
+      const fnEnd = taskRunner.indexOf('\n}', fnStart)
+      const fnBody = taskRunner.substring(fnStart, fnEnd)
+      expect(fnBody).toContain('AGENT_BACKEND:-claude')
+    })
+  })
+
+  describe('phase-model-helper.sh OpenCode passthrough', () => {
+    it('does not drop OpenCode provider/model values (no longer warns or falls back)', () => {
+      // The old code had a warning: "requires OpenCode backend (not available)"
+      expect(phaseModelHelper).not.toContain('requires OpenCode backend (not available)')
+    })
+
+    it('sets RESOLVED_MODEL_ARGS=() for OpenCode provider/model values', () => {
+      // When model contains '/', it's an opencode model — no claude --model arg needed
+      const slashCheckIdx = phaseModelHelper.indexOf('"/"*')
+      expect(slashCheckIdx).toBeGreaterThan(-1)
+      // After the slash check, the code should set RESOLVED_MODEL_ARGS=()
+      const afterCheck = phaseModelHelper.substring(slashCheckIdx)
+      expect(afterCheck.substring(0, 200)).toContain('RESOLVED_MODEL_ARGS=()')
+    })
   })
 })
 
