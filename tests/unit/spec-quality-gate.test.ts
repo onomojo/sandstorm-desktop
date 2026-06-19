@@ -27,7 +27,7 @@ describe('getDefaultSpecQualityGate', () => {
     const content = getDefaultSpecQualityGate();
     expect(content).toContain('### Assumptions — Zero Unresolved');
     expect(content).toContain('Assumptions are ambiguity');
-    expect(content).toContain('MUST NOT pass with unresolved assumptions');
+    expect(content).toContain('MUST NOT pass while any assumption is *unresolved*');
   });
 
   it('includes dependency contracts criterion', () => {
@@ -78,6 +78,34 @@ describe('getDefaultSpecQualityGate', () => {
     const content = getDefaultSpecQualityGate();
     expect(content).toContain('### Verify Before Asking');
     expect(content).toContain('file:line');
+  });
+
+  it('includes the Decision Altitude section with the altitude filter', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('## Decision Altitude');
+    expect(content).toContain(
+      'a different answer would change observable behavior, system architecture,',
+    );
+    // Non-asking examples are enumerated as decide-and-record.
+    expect(content).toContain('symbol / variable naming');
+    expect(content).toContain('non-behavioral constants');
+  });
+
+  it('Assumptions criterion defines all three resolution types', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('three** legal resolutions');
+    expect(content).toContain('**Verified fact**');
+    expect(content).toContain('**Decision-significant question**');
+    expect(content).toContain('**Decided-and-recorded**');
+    // Decided-and-recorded still counts as resolved (pin-everything invariant).
+    expect(content).toContain('"Decided-and-recorded" counts as resolved');
+  });
+
+  it('includes the Epic Context — treat as givens criterion', () => {
+    const content = getDefaultSpecQualityGate();
+    expect(content).toContain('### Epic Context — treat as givens');
+    expect(content).toContain('already-decided given');
+    expect(content).toContain('MUST NOT surface a question whose answer is already in the epic context');
   });
 
   it('starts with a markdown heading', () => {

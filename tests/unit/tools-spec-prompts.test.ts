@@ -172,6 +172,60 @@ describe('buildSpecRefineAnswerPrompt', () => {
   });
 });
 
+describe('spec-gate builders — Decision Altitude + decide-and-record', () => {
+  const ALTITUDE = 'a different answer would change observable behavior, system architecture, product intent, or a cross-ticket contract';
+  const DECIDE_RECORD = 'Implementation discretion — decide and record';
+  const GUARD = 'Do NOT emit a user question for these';
+
+  const builders: Array<[string, () => string]> = [
+    ['buildSpecCheckPrompt', () => buildSpecCheckPrompt(GATE, TICKET)],
+    ['buildSpecRefineInitialPrompt', () => buildSpecRefineInitialPrompt(GATE, TICKET)],
+    ['buildSpecRefineAnswerPrompt', () => buildSpecRefineAnswerPrompt(GATE, TICKET, ANSWERS)],
+  ];
+
+  for (const [name, build] of builders) {
+    describe(name, () => {
+      it('includes the altitude filter, decide-and-record path, and the discretion guard', () => {
+        const prompt = build();
+        expect(prompt).toContain(ALTITUDE);
+        expect(prompt).toContain(DECIDE_RECORD);
+        expect(prompt).toContain(GUARD);
+      });
+    });
+  }
+});
+
+const EPIC_CONTEXT = "This ticket's role in the epic: role=build, serves acceptance criterion=crit-7\n\n# Parent Epic\n\nEpic body verbatim.";
+
+describe('spec-gate builders — Epic Context plumbing', () => {
+  const epicBuilders: Array<[string, (epic?: string) => string]> = [
+    ['buildSpecCheckPrompt', (epic) => buildSpecCheckPrompt(GATE, TICKET, undefined, epic)],
+    ['buildSpecRefineInitialPrompt', (epic) => buildSpecRefineInitialPrompt(GATE, TICKET, epic)],
+    ['buildSpecRefineAnswerPrompt', (epic) => buildSpecRefineAnswerPrompt(GATE, TICKET, ANSWERS, epic)],
+  ];
+
+  for (const [name, build] of epicBuilders) {
+    describe(name, () => {
+      it('inserts the Epic Context section and role/crit line when epicContext is passed', () => {
+        const prompt = build(EPIC_CONTEXT);
+        expect(prompt).toContain('## Epic Context (already-decided givens — do NOT re-litigate)');
+        expect(prompt).toContain("This ticket's role in the epic: role=build, serves acceptance criterion=crit-7");
+        expect(prompt).toContain('Epic body verbatim.');
+        // Phase-1 instruction to treat the epic as fixed givens is present.
+        expect(prompt).toContain('Treat every contract, vocabulary term, and acceptance decision in it as a fixed given');
+      });
+
+      it('omits the Epic Context section when epicContext is not passed (no regression)', () => {
+        const prompt = build(undefined);
+        // The gate criteria text mentions "### Epic Context" as a criterion, so
+        // assert against the unique injected block header instead.
+        expect(prompt).not.toContain('## Epic Context (already-decided givens — do NOT re-litigate)');
+        expect(prompt).not.toContain('Treat every contract, vocabulary term, and acceptance decision in it as a fixed given');
+      });
+    });
+  }
+});
+
 describe('built-in gate verification policy', () => {
   it('gate is always non-empty (resolveSpecContext always has a gate)', () => {
     expect(GATE).toBeTruthy();
