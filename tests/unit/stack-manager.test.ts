@@ -427,7 +427,35 @@ describe('StackManager', () => {
       expect(callArgs).toContain('--model');
       expect(callArgs).toContain('--models-json');
       expect(callArgs).toContain('--phase-routing-json');
-      expect(callArgs[callArgs.length - 1]).toBe('Fix the bug');
+      // Prompt is passed via --file (temp file), NOT as a positional argv entry,
+      // so large prompts can't overflow MAX_ARG_STRLEN and throw spawn E2BIG.
+      expect(callArgs).toContain('--file');
+      expect(callArgs).not.toContain('Fix the bug');
+      expect(callArgs[callArgs.length - 1]).toMatch(/prompt\.txt$/);
+    });
+
+    it('regression (E2BIG): a >128KB prompt never reaches argv', async () => {
+      registry.createStack(makeStack('huge-prompt'));
+      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
+        stdout: 'Task dispatched.',
+        stderr: '',
+        exitCode: 0,
+      });
+
+      // A prompt large enough that, as a single argv entry, it would overflow
+      // Linux's 128KB MAX_ARG_STRLEN and make spawn throw E2BIG on the host.
+      const hugePrompt = 'x'.repeat(200 * 1024);
+      await manager.dispatchTask('huge-prompt', hugePrompt);
+
+      const [, callArgs] = runCliSpy.mock.calls[0];
+      // No single argv entry approaches the 128KB ceiling, and the prompt
+      // content is absent from argv entirely — it goes through --file.
+      expect(callArgs.every((a) => a.length < 128 * 1024)).toBe(true);
+      expect(callArgs.some((a) => a.includes(hugePrompt))).toBe(false);
+      expect(callArgs).toContain('--file');
+      // The full prompt is still persisted to the registry intact.
+      const persisted = registry.getTasksForStack('huge-prompt');
+      expect(persisted[0].prompt).toBe(hugePrompt);
     });
 
     it('throws when dispatching to non-existent stack', async () => {
@@ -478,7 +506,8 @@ describe('StackManager', () => {
       expect(callArgs[callArgs.indexOf('--model') + 1]).toBe('opus');
       expect(callArgs).toContain('--models-json');
       expect(callArgs).toContain('--phase-routing-json');
-      expect(callArgs[callArgs.length - 1]).toBe('Complex task');
+      expect(callArgs).toContain('--file');
+      expect(callArgs).not.toContain('Complex task');
     });
 
     it('resolves "auto" model to undefined and omits from CLI args', async () => {
@@ -499,7 +528,8 @@ describe('StackManager', () => {
       expect(callArgs).not.toContain('--model');
       expect(callArgs).toContain('--models-json');
       expect(callArgs).toContain('--phase-routing-json');
-      expect(callArgs[callArgs.length - 1]).toBe('Simple task');
+      expect(callArgs).toContain('--file');
+      expect(callArgs).not.toContain('Simple task');
     });
 
     it('uses effective default model when not provided', async () => {
@@ -522,7 +552,8 @@ describe('StackManager', () => {
       expect(callArgs[callArgs.indexOf('--model') + 1]).toBe('sonnet');
       expect(callArgs).toContain('--models-json');
       expect(callArgs).toContain('--phase-routing-json');
-      expect(callArgs[callArgs.length - 1]).toBe('Simple task');
+      expect(callArgs).toContain('--file');
+      expect(callArgs).not.toContain('Simple task');
     });
 
     it('includes per-phase model map in CLI args', async () => {
