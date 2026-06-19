@@ -1,3 +1,0 @@
-{"type":"tool_use","name":"bash","input":{"command":"npm test"}}
-{"type":"text","content":"Tests are passing."}
-{"type":"step_finish","result":"All tests passed.","tokens":{"input":500,"output":100,"cache":50}}

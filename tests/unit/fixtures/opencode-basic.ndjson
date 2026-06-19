@@ -1,4 +1,0 @@
-{"type":"text","content":"Analyzing the task..."}
-{"type":"tool_use","name":"read_file","input":{"path":"src/main.ts"}}
-{"type":"text","content":"The implementation looks correct."}
-{"type":"step_finish","result":"Task completed successfully.","tokens":{"input":1234,"output":567,"cache_read":100,"cache_write":0}}
