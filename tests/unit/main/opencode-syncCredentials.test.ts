@@ -23,15 +23,13 @@ vi.mock('child_process', async (importOriginal) => {
 // Mock the '../index' import to return a fake registry
 vi.mock('../../../src/main/index', () => ({
   registry: {
-    getGlobalBackendSettings: vi.fn().mockReturnValue({
-      inner_backend: 'opencode',
-      inner_provider: 'anthropic',
-      inner_model: null,
-      outer_backend: 'claude',
-      outer_provider: null,
-      outer_model: null,
+    getEffectiveTouchpointDescriptor: vi.fn().mockImplementation((_projectDir: string, touchpoint: string) => {
+      if (touchpoint === 'execution') {
+        return { backend: 'opencode', provider: 'anthropic', model: 'claude-sonnet-4-6', credentials: { apiKey: 'sk-test-key' } };
+      }
+      // review and meta_review default to claude
+      return { backend: 'claude', provider: 'anthropic', model: 'opus', credentials: null };
     }),
-    getBackendSecretBundle: vi.fn().mockReturnValue({ apiKey: 'sk-test-bedrock' }),
   },
   cliDir: '/fake/cli',
 }));
@@ -40,7 +38,7 @@ vi.mock('../../../src/main/index', () => ({
 vi.mock('../../../src/main/opencode-config', () => ({
   generateOpencodeConfig: vi.fn().mockReturnValue({
     model: 'anthropic/claude-sonnet-4-6',
-    provider: { anthropic: { apiKey: 'sk-test-bedrock' } },
+    provider: { anthropic: { apiKey: 'sk-test-key' } },
     permission: 'allow',
     instructions: ['/home/claude/.claude/CLAUDE.md'],
     mcp: {},
@@ -71,7 +69,7 @@ describe('OpenCodeBackend.syncCredentials', () => {
   it('skips stacks with no claude service', async () => {
     const { spawn } = await import('child_process');
     const stacks: StackInfo[] = [
-      { status: 'running', services: [{ name: 'app', status: 'running', containerId: 'cid1' }] },
+      { status: 'running', project_dir: '/proj', services: [{ name: 'app', status: 'running', containerId: 'cid1' }] },
     ];
     await backend.syncCredentials(stacks);
     expect(spawn).not.toHaveBeenCalled();
@@ -80,12 +78,11 @@ describe('OpenCodeBackend.syncCredentials', () => {
   it('calls docker exec to clean auth.json for running stacks', async () => {
     const { spawn } = await import('child_process');
     const stacks: StackInfo[] = [
-      { status: 'running', services: [{ name: 'claude', status: 'running', containerId: 'abc123' }] },
+      { status: 'running', project_dir: '/proj', services: [{ name: 'claude', status: 'running', containerId: 'abc123' }] },
     ];
     await backend.syncCredentials(stacks);
 
     const calls = (spawn as ReturnType<typeof vi.fn>).mock.calls;
-    // Should have been called at least once for auth.json cleanup
     expect(calls.length).toBeGreaterThanOrEqual(1);
 
     // First call should be the auth.json cleanup
@@ -98,17 +95,17 @@ describe('OpenCodeBackend.syncCredentials', () => {
     expect(scriptArg).toContain('rm -f');
   });
 
-  it('writes generated config to /tmp/sandstorm-opencode.json', async () => {
+  it('writes generated config to /tmp/sandstorm-opencode-<provider>.json', async () => {
     const { spawn } = await import('child_process');
     const stacks: StackInfo[] = [
-      { status: 'up', services: [{ name: 'claude', status: 'running', containerId: 'def456' }] },
+      { status: 'up', project_dir: '/proj', services: [{ name: 'claude', status: 'running', containerId: 'def456' }] },
     ];
     await backend.syncCredentials(stacks);
 
     const calls = (spawn as ReturnType<typeof vi.fn>).mock.calls;
-    // Second docker exec should write the config file
+    // A docker exec should write the provider-specific config file
     const configWriteCall = calls.find(([, args]: [string, string[]]) =>
-      args.some((a: string) => a.includes('sandstorm-opencode.json')),
+      args.some((a: string) => a.includes('sandstorm-opencode-anthropic.json')),
     );
     expect(configWriteCall).toBeDefined();
     const [, args] = configWriteCall;
@@ -116,32 +113,76 @@ describe('OpenCodeBackend.syncCredentials', () => {
     expect(args).toContain('def456');
   });
 
-  it('proceeds with empty bundle when no credentials are stored', async () => {
-    const { registry } = await import('../../../src/main/index');
-    (registry.getBackendSecretBundle as ReturnType<typeof vi.fn>).mockReturnValueOnce(null);
-
+  it('skips writing config when stack has no project_dir', async () => {
+    const { spawn } = await import('child_process');
     const stacks: StackInfo[] = [
       { status: 'running', services: [{ name: 'claude', status: 'running', containerId: 'ghi789' }] },
     ];
-    // Should not throw
+    // Should not throw, and no provider config should be written (no project_dir to look up routing)
     await expect(backend.syncCredentials(stacks)).resolves.toBeUndefined();
+    const calls = (spawn as ReturnType<typeof vi.fn>).mock.calls;
+    const configWriteCall = calls.find(([, args]: [string, string[]]) =>
+      args.some((a: string) => a.includes('sandstorm-opencode-')),
+    );
+    expect(configWriteCall).toBeUndefined();
   });
 
-  it('selects non-Anthropic active credential when provider is bedrock', async () => {
+  it('skips provider config when credentials are null (signals needs_key to task runner)', async () => {
     const { registry } = await import('../../../src/main/index');
-    (registry.getGlobalBackendSettings as ReturnType<typeof vi.fn>).mockReturnValueOnce({
-      inner_backend: 'opencode',
-      inner_provider: 'amazon-bedrock',
-      inner_model: null,
-    });
-    (registry.getBackendSecretBundle as ReturnType<typeof vi.fn>).mockReturnValueOnce({
-      region: 'us-east-1',
-      bearerToken: 'bt-bedrock-active',
+    // All phases return null credentials
+    (registry.getEffectiveTouchpointDescriptor as ReturnType<typeof vi.fn>).mockReturnValue({
+      backend: 'opencode', provider: 'amazon-bedrock', model: null, credentials: null,
     });
 
     const { generateOpencodeConfig } = await import('../../../src/main/opencode-config');
     const stacks: StackInfo[] = [
-      { status: 'running', services: [{ name: 'claude', status: 'running', containerId: 'jkl012' }] },
+      { status: 'running', project_dir: '/proj', services: [{ name: 'claude', status: 'running', containerId: 'jkl012' }] },
+    ];
+    await backend.syncCredentials(stacks);
+
+    // generateOpencodeConfig should NOT be called (no credentials → no config file)
+    expect(generateOpencodeConfig).not.toHaveBeenCalled();
+  });
+
+  it('writes one config per distinct provider across phases', async () => {
+    const { registry } = await import('../../../src/main/index');
+    // execution + review both use amazon-bedrock; meta_review uses a different provider
+    (registry.getEffectiveTouchpointDescriptor as ReturnType<typeof vi.fn>).mockImplementation((_: string, tp: string) => {
+      if (tp === 'meta_review') {
+        return { backend: 'opencode', provider: 'openrouter', model: 'llama', credentials: { apiKey: 'or-key' } };
+      }
+      return { backend: 'opencode', provider: 'amazon-bedrock', model: 'claude-sonnet', credentials: { region: 'us-east-1' } };
+    });
+
+    const { spawn } = await import('child_process');
+    const stacks: StackInfo[] = [
+      { status: 'running', project_dir: '/proj', services: [{ name: 'claude', status: 'running', containerId: 'mno345' }] },
+    ];
+    await backend.syncCredentials(stacks);
+
+    const calls = (spawn as ReturnType<typeof vi.fn>).mock.calls;
+    const bedrockCall = calls.find(([, args]: [string, string[]]) =>
+      args.some((a: string) => a.includes('sandstorm-opencode-amazon-bedrock.json')),
+    );
+    const orCall = calls.find(([, args]: [string, string[]]) =>
+      args.some((a: string) => a.includes('sandstorm-opencode-openrouter.json')),
+    );
+    expect(bedrockCall).toBeDefined();
+    expect(orCall).toBeDefined();
+  });
+
+  it('selects non-Anthropic active credential when provider is bedrock', async () => {
+    const { registry } = await import('../../../src/main/index');
+    (registry.getEffectiveTouchpointDescriptor as ReturnType<typeof vi.fn>).mockReturnValue({
+      backend: 'opencode',
+      provider: 'amazon-bedrock',
+      model: 'claude-sonnet-3-5',
+      credentials: { region: 'us-east-1', bearerToken: 'bt-bedrock-active' },
+    });
+
+    const { generateOpencodeConfig } = await import('../../../src/main/opencode-config');
+    const stacks: StackInfo[] = [
+      { status: 'running', project_dir: '/proj', services: [{ name: 'claude', status: 'running', containerId: 'jkl012' }] },
     ];
     await backend.syncCredentials(stacks);
 

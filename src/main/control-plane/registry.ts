@@ -57,6 +57,7 @@ export type StackStatus =
   | 'completed'
   | 'failed'
   | 'needs_human'
+  | 'needs_key'
   | 'verify_blocked_environmental'
   | 'idle'
   | 'stopped'
@@ -71,7 +72,7 @@ export interface Task {
   prompt: string;
   model: string | null;
   resolved_model: string | null;
-  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'needs_human';
+  status: 'running' | 'completed' | 'failed' | 'interrupted' | 'needs_human' | 'needs_key';
   exit_code: number | null;
   warnings: string | null;
   session_id: string | null;
@@ -1030,6 +1031,19 @@ export class Registry {
       "SELECT branch FROM stack_history WHERE ticket = ? AND branch IS NOT NULL"
     ).all(ticketId) as { branch: string }[];
     return [...active, ...history].map((r) => r.branch);
+  }
+
+  completeTaskNeedsKey(taskId: number, reason: string): void {
+    this.db.prepare(
+      "UPDATE tasks SET status = 'needs_key', exit_code = 1, warnings = ?, finished_at = datetime('now') WHERE id = ?"
+    ).run(reason, taskId);
+
+    const task = this.db.prepare(
+      'SELECT stack_id FROM tasks WHERE id = ?'
+    ).get(taskId) as { stack_id: string } | undefined;
+    if (task) {
+      this.updateStackStatus(task.stack_id, 'needs_key');
+    }
   }
 
   completeTaskVerifyBlockedEnvironmental(taskId: number, reason: string): void {

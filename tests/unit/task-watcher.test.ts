@@ -1498,4 +1498,54 @@ describe('TaskWatcher', () => {
     const stack = registry.getStack('watch-stack');
     expect(stack?.status).toBe('verify_blocked_environmental');
   });
+
+  it('emits task:failed and records needs_key status when phase has no credentials', async () => {
+    const keyReason = "Phase 'execution' requires provider 'openrouter' but no credentials are configured.";
+    const runtime: ContainerRuntime = {
+      name: 'mock',
+      composeUp: vi.fn(),
+      composeDown: vi.fn(),
+      listContainers: vi.fn().mockResolvedValue([]),
+      inspect: vi.fn(),
+      logs: vi.fn(),
+      exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
+        const cmdStr = cmd.join(' ');
+        if (cmdStr.includes('/tmp/claude-task.status')) {
+          // Transition: running → needs_key (seenRunning=true bypasses stale poll guard)
+          const callCount = (runtime.exec as ReturnType<typeof vi.fn>).mock.calls.length;
+          return { exitCode: 0, stdout: callCount <= 2 ? 'running' : 'needs_key', stderr: '' };
+        }
+        if (cmdStr.includes('/tmp/claude-task-needs-key.txt')) {
+          return { exitCode: 0, stdout: keyReason, stderr: '' };
+        }
+        return { exitCode: 0, stdout: '', stderr: '' };
+      }),
+      isAvailable: vi.fn().mockResolvedValue(true),
+      version: vi.fn().mockResolvedValue('Mock 1.0'),
+    };
+
+    const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
+    registry.createTask('watch-stack', 'test task');
+
+    const failedPromise = new Promise<void>((resolve) => {
+      watcher.on('task:failed', ({ stackId, task }) => {
+        expect(stackId).toBe('watch-stack');
+        expect(task.status).toBe('needs_key');
+        expect(task.warnings).toBe(keyReason);
+        resolve();
+      });
+    });
+
+    watcher.watch('watch-stack', 'container-123');
+    await failedPromise;
+    watcher.unwatchAll();
+
+    await new Promise((r) => setTimeout(r, 50));
+    const updatedTask = registry.getMostRecentTask('watch-stack');
+    expect(updatedTask?.status).toBe('needs_key');
+    expect(updatedTask?.warnings).toBe(keyReason);
+
+    const stack = registry.getStack('watch-stack');
+    expect(stack?.status).toBe('needs_key');
+  });
 });

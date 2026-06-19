@@ -205,14 +205,70 @@ run_opencode() {
   return ${PIPESTATUS[0]}
 }
 
-# Dispatch to run_claude or run_opencode based on AGENT_BACKEND.
-# Same signature as run_claude — Claude-specific extra args are dropped for OpenCode.
+# Dispatch to run_claude or run_opencode based on per-phase routing from PHASE_ROUTING_JSON.
+# Falls back to global AGENT_BACKEND when PHASE_ROUTING_JSON is absent (backward compat).
+# Same signature as run_claude — phase is $4.
 run_agent() {
-  if [ "${AGENT_BACKEND:-claude}" = "opencode" ]; then
-    run_opencode "$1" "$2" "$3" "$4" "$5"
-  else
-    run_claude "$@"
+  local prompt_file="$1"
+  local raw_log="${2:-/tmp/claude-raw.log}"
+  local task_log="${3:-/tmp/claude-task.log}"
+  local phase="${4:-execution}"
+  local iteration="${5:-1}"
+  shift 5 2>/dev/null || shift $#
+  local extra_args=("$@")
+
+  # Resolve per-phase backend and provider from routing JSON (fall back to global AGENT_BACKEND)
+  local backend="${AGENT_BACKEND:-claude}"
+  local provider=""
+  local phase_model=""
+  if [ -n "${PHASE_ROUTING_JSON:-}" ]; then
+    local _b _p _m
+    _b=$(printf '%s' "$PHASE_ROUTING_JSON" | jq -r --arg ph "$phase" '.[$ph].backend // empty' 2>/dev/null || true)
+    _p=$(printf '%s' "$PHASE_ROUTING_JSON" | jq -r --arg ph "$phase" '.[$ph].provider // empty' 2>/dev/null || true)
+    _m=$(printf '%s' "$PHASE_ROUTING_JSON" | jq -r --arg ph "$phase" '.[$ph].model // empty' 2>/dev/null || true)
+    [ -n "$_b" ] && backend="$_b"
+    [ -n "$_p" ] && provider="$_p"
+    [ -n "$_m" ] && phase_model="$_m"
   fi
+
+  if [ "$backend" = "opencode" ]; then
+    local config_file="/tmp/sandstorm-opencode-${provider}.json"
+    local _saved_oc_config="${OPENCODE_CONFIG:-}"
+    local _saved_oc_model="${OPENCODE_MODEL:-}"
+    export OPENCODE_CONFIG="$config_file"
+    [ -n "$phase_model" ] && export OPENCODE_MODEL="$phase_model"
+    run_opencode "$prompt_file" "$raw_log" "$task_log" "$phase" "$iteration"
+    local _ret=$?
+    export OPENCODE_CONFIG="${_saved_oc_config}"
+    export OPENCODE_MODEL="${_saved_oc_model}"
+    return $_ret
+  else
+    run_claude "$prompt_file" "$raw_log" "$task_log" "$phase" "$iteration" "${extra_args[@]}"
+  fi
+}
+
+# Check all phases in PHASE_ROUTING_JSON for missing credentials.
+# An opencode phase without /tmp/sandstorm-opencode-<provider>.json present means
+# the provider has no credentials configured (needs_key).
+# Sets global TASK_NEEDS_KEY=1 and writes /tmp/claude-task-needs-key.txt on failure.
+check_all_phase_credentials() {
+  TASK_NEEDS_KEY=0
+  if [ -z "${PHASE_ROUTING_JSON:-}" ]; then return; fi
+  local phase backend provider config_file
+  for phase in execution review meta_review; do
+    backend=$(printf '%s' "$PHASE_ROUTING_JSON" | jq -r --arg p "$phase" '.[$p].backend // empty' 2>/dev/null || true)
+    provider=$(printf '%s' "$PHASE_ROUTING_JSON" | jq -r --arg p "$phase" '.[$p].provider // empty' 2>/dev/null || true)
+    if [ "$backend" = "opencode" ] && [ -n "$provider" ]; then
+      config_file="/tmp/sandstorm-opencode-${provider}.json"
+      if [ ! -f "$config_file" ]; then
+        log_loop "Phase '$phase' requires provider '$provider' but no credentials are configured (needs_key)"
+        TASK_NEEDS_KEY=1
+        printf "Phase '%s' requires provider '%s' but no credentials are configured.\n" "$phase" "$provider" \
+          > /tmp/claude-task-needs-key.txt
+        return
+      fi
+    fi
+  done
 }
 
 # Check if there are code changes in the workspace.
@@ -687,6 +743,19 @@ while true; do
     fi
     export OPENCODE_MODEL
 
+    # Read per-phase routing JSON (written by stack.sh --phase-routing-json).
+    # Supersedes --backend/--backend-model for per-phase backend+provider+model selection.
+    PHASE_ROUTING_JSON=""
+    if [ -f /tmp/claude-task-phase-routing.json ]; then
+      PHASE_ROUTING_JSON=$(cat /tmp/claude-task-phase-routing.json 2>/dev/null || true)
+      if ! printf '%s' "$PHASE_ROUTING_JSON" | jq . > /dev/null 2>&1; then
+        log_loop "WARNING: /tmp/claude-task-phase-routing.json is malformed — ignoring per-phase routing"
+        PHASE_ROUTING_JSON=""
+      fi
+      rm -f /tmp/claude-task-phase-routing.json
+    fi
+    export PHASE_ROUTING_JSON
+
     echo ""
     echo "=========================================="
     echo "  Task: $LABEL"
@@ -698,6 +767,25 @@ while true; do
       [ -n "$OPENCODE_MODEL" ] && echo "  OpenCode model: $OPENCODE_MODEL"
     fi
     echo "=========================================="
+
+    # Credentials check: fail fast if any phase lacks required provider credentials
+    check_all_phase_credentials
+    if [ "${TASK_NEEDS_KEY:-0}" -eq 1 ]; then
+      rm -f /tmp/claude-task-prompt.txt
+      echo 1 > /tmp/claude-task.exit
+      echo "needs_key" > /tmp/claude-task.status
+      rm -f /tmp/claude-task.pid
+      echo ""
+      echo "=========================================="
+      echo "  Task finished — NEEDS KEY"
+      echo "  $(cat /tmp/claude-task-needs-key.txt 2>/dev/null)"
+      echo "=========================================="
+      echo ""
+      echo "ready" > /tmp/claude-ready
+      echo "Waiting for tasks..."
+      continue
+    fi
+
     echo "running" > /tmp/claude-task.status
     echo $$ > /tmp/claude-task.pid
 

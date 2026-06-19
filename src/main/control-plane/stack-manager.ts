@@ -13,6 +13,7 @@ import { referencesTicket } from './ticket-fetcher';
 import { resolveTicketReferences, renderResolvedReferences } from './ticket-references';
 import { workspacePathFor } from './pr-creator';
 import { parseTokenUsage } from './token-parser';
+import type { TouchpointId } from './routing';
 
 const execFileAsync = promisify(execFile);
 
@@ -1184,7 +1185,13 @@ export class StackManager {
     stackId: string,
     prompt: string,
     model?: string,
-    opts?: { gateApproved?: boolean; forceBypass?: boolean; skipTicketFetch?: boolean }
+    opts?: {
+      gateApproved?: boolean;
+      forceBypass?: boolean;
+      skipTicketFetch?: boolean;
+      /** Override which touchpoint drives the execution phase routing (default: 'execution'). */
+      executionTouchpoint?: TouchpointId;
+    }
   ): Promise<DispatchTaskResult> {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
@@ -1261,25 +1268,27 @@ export class StackManager {
       // handles credential sync (OAuth), writes files as the correct user
       // (`-u claude`), and creates the trigger file with proper ownership —
       // preventing the infinite-loop and not-logged-in bugs.
-      const phaseModels = this.registry.getContainerPhaseModels(stack.project_dir);
+      const execTouchpoint = opts?.executionTouchpoint ?? 'execution';
+      const execDesc = this.registry.getEffectiveTouchpointDescriptor(stack.project_dir, execTouchpoint);
+      const reviewDesc = this.registry.getEffectiveTouchpointDescriptor(stack.project_dir, 'review');
+      const metaDesc = this.registry.getEffectiveTouchpointDescriptor(stack.project_dir, 'meta_review');
+
+      // --models-json: kept for backward-compat single-backend stacks
       const phaseModelsJson = JSON.stringify({
-        execution:   phaseModels.execution.model   || 'auto',
-        review:      phaseModels.review.model      || 'auto',
-        meta_review: phaseModels.meta_review.model || 'auto',
+        execution:   execDesc.model   || 'auto',
+        review:      reviewDesc.model || 'auto',
+        meta_review: metaDesc.model   || 'auto',
+      });
+      // --phase-routing-json: per-phase backend+provider+model for mixed-backend stacks
+      const phaseRoutingJson = JSON.stringify({
+        execution:   { backend: execDesc.backend,   provider: execDesc.provider,   model: execDesc.model   || 'auto' },
+        review:      { backend: reviewDesc.backend, provider: reviewDesc.provider, model: reviewDesc.model || 'auto' },
+        meta_review: { backend: metaDesc.backend,   provider: metaDesc.provider,   model: metaDesc.model   || 'auto' },
       });
       const cliArgs = ['task', stackId];
       if (model) cliArgs.push('--model', model);
       cliArgs.push('--models-json', phaseModelsJson);
-
-      // Resolve the project's effective inner backend and pass it to the CLI
-      // so the runner can dispatch to the correct agent (claude or opencode).
-      const effectiveBackend = this.registry.getEffectiveBackend(stack.project_dir, 'inner');
-      if (effectiveBackend.backend === 'opencode') {
-        cliArgs.push('--backend', 'opencode');
-        if (effectiveBackend.provider && effectiveBackend.model) {
-          cliArgs.push('--backend-model', `${effectiveBackend.provider}/${effectiveBackend.model}`);
-        }
-      }
+      cliArgs.push('--phase-routing-json', phaseRoutingJson);
 
       cliArgs.push(prompt);
       const result = await this.runCli(stack.project_dir, cliArgs);
@@ -2284,14 +2293,10 @@ export class StackManager {
     ].join('\n');
 
     try {
-      const mcRouting = this.registry.getEffectiveRoutingFor(projectDir, 'merge_conflict');
-      const mcModel = mcRouting.backend === 'opencode'
-        ? (console.warn('[merge_conflict] backend=opencode unsupported for container path; falling back to legacy inner model'),
-           this.registry.getLegacyEffectiveModels(projectDir).inner_model)
-        : mcRouting.model;
-      const dispatchResult = await this.dispatchTask(stackId!, resolvePrompt, mcModel, {
+      const dispatchResult = await this.dispatchTask(stackId!, resolvePrompt, undefined, {
         gateApproved: true,
         skipTicketFetch: true,
+        executionTouchpoint: 'merge_conflict',
       });
 
       const terminalTask = await this.awaitTaskCompletion(stackId!, dispatchResult.id);
