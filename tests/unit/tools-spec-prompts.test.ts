@@ -17,6 +17,11 @@ vi.mock('../../src/main/control-plane/ticket-config', () => ({
   updateTicketWithConfig: vi.fn(),
 }));
 
+vi.mock('../../src/main/control-plane/ticket-references', () => ({
+  resolveTicketReferences: vi.fn().mockResolvedValue([]),
+  renderResolvedReferences: vi.fn().mockReturnValue(''),
+}));
+
 vi.mock('../../src/main/control-plane/registry', () => ({}));
 
 vi.mock('../../src/main/scheduler', () => ({
@@ -187,5 +192,47 @@ describe('built-in gate verification policy', () => {
 
   it('gate does not require automated visual verification', () => {
     expect(GATE).not.toContain('### Automated Visual Verification');
+  });
+
+  it('gate allows external design/reference links (not treated as incomplete spec)', () => {
+    expect(GATE).toContain('design/reference material');
+    expect(GATE).toContain('Resolved References');
+  });
+
+  it('gate still requires code contracts to be committed artifacts', () => {
+    expect(GATE).toContain('CODE contracts only');
+    expect(GATE).toContain('committed type/interface');
+  });
+
+  it('gate treats broken referenced links as a FAIL', () => {
+    expect(GATE).toContain('broken or unreachable referenced link');
+    expect(GATE).toContain('FAIL');
+  });
+});
+
+describe('buildSpecCheckPrompt — with resolved references', () => {
+  const GIST_URL = 'https://gist.github.com/user/abc123unique';
+  const REFS_SECTION = `## Resolved References\n\n### ${GIST_URL}\n\n\`\`\`\nmockup content\n\`\`\`\n`;
+
+  it('includes resolved references content when section is provided', () => {
+    const prompt = buildSpecCheckPrompt(GATE, TICKET, REFS_SECTION);
+    expect(prompt).toContain(GIST_URL);
+    expect(prompt).toContain('mockup content');
+  });
+
+  it('does not include specific reference URLs when section is not provided', () => {
+    const prompt = buildSpecCheckPrompt(GATE, TICKET);
+    expect(prompt).not.toContain(GIST_URL);
+  });
+
+  it('does not include specific reference URLs when empty string provided', () => {
+    const prompt = buildSpecCheckPrompt(GATE, TICKET, '');
+    expect(prompt).not.toContain(GIST_URL);
+  });
+
+  it('still embeds gate and ticket when references are present', () => {
+    const prompt = buildSpecCheckPrompt(GATE, TICKET, REFS_SECTION);
+    expect(prompt).toContain(GATE);
+    expect(prompt).toContain(TICKET);
   });
 });

@@ -10,6 +10,7 @@ import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
 import { fetchRawBodyWithConfig, fetchTicketWithConfig, updateTicketWithConfig } from './ticket-config';
 import { referencesTicket } from './ticket-fetcher';
+import { resolveTicketReferences, renderResolvedReferences } from './ticket-references';
 import { workspacePathFor } from './pr-creator';
 import { parseTokenUsage } from './token-parser';
 
@@ -1227,6 +1228,14 @@ export class StackManager {
           prompt = `${ticketContext}\n\n---\n\n## Task\n\n${prompt}`;
         }
       }
+    }
+
+    // Resolve any external references (gists, mockups, docs) cited in the prompt
+    // and append their content so the inner agent has the full spec without egress.
+    const references = await resolveTicketReferences(prompt);
+    const referencesSection = renderResolvedReferences(references);
+    if (referencesSection) {
+      prompt = `${prompt}\n\n---\n\n${referencesSection}`;
     }
 
     const task = this.registry.createTask(stackId, prompt, model);
