@@ -282,6 +282,8 @@ export interface SandstormAPI {
   darkFactory: {
     getEnabled: (projectDir: string) => Promise<boolean>;
     setEnabled: (projectDir: string, enabled: boolean) => Promise<void>;
+    getConfig: (projectDir: string) => Promise<{ level: string; merge_strategy: string }>;
+    setConfig: (projectDir: string, config: { level: string; merge_strategy: string }) => Promise<void>;
   };
   telemetry: {
     summary: (range: { since: string; until: string }) => Promise<unknown>;
@@ -530,6 +532,8 @@ const api: SandstormAPI = {
   darkFactory: {
     getEnabled: (projectDir) => ipcRenderer.invoke('darkFactory:getEnabled', projectDir),
     setEnabled: (projectDir, enabled) => ipcRenderer.invoke('darkFactory:setEnabled', projectDir, enabled),
+    getConfig: (projectDir) => ipcRenderer.invoke('darkFactory:getConfig', projectDir),
+    setConfig: (projectDir, config) => ipcRenderer.invoke('darkFactory:setConfig', projectDir, config),
   },
   telemetry: {
     summary: (range) => ipcRenderer.invoke('stats:telemetry:summary', range),

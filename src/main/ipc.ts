@@ -1787,6 +1787,14 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
+  ipcMain.handle('darkFactory:getConfig', (_event, projectDir: string) => {
+    return registry.getDarkFactoryConfig(projectDir);
+  });
+
+  ipcMain.handle('darkFactory:setConfig', (_event, projectDir: string, config: { level: string; merge_strategy: string }) => {
+    registry.setDarkFactoryConfig(projectDir, config);
+  });
+
   ipcMain.handle('pr:autoResolve', async (_event, ticketId: string, projectDir: string) => {
     return stackManager.autoResolveConflicts(ticketId, projectDir);
   });

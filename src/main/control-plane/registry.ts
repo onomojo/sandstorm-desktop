@@ -856,6 +856,25 @@ export class Registry {
 
       this.setSchemaVersion(27);
     }
+
+    if (currentVersion < 28) {
+      // Add level and merge_strategy columns to project_dark_factory.
+      // Backfill runs once inside the level-column guard (idempotent: never re-runs after columns exist).
+      let levelColumnAdded = false;
+      try {
+        this.db.exec("ALTER TABLE project_dark_factory ADD COLUMN level TEXT NOT NULL DEFAULT 'manual'");
+        levelColumnAdded = true;
+      } catch { /* Column already exists */ }
+      if (levelColumnAdded) {
+        this.db.exec(
+          "UPDATE project_dark_factory SET level = CASE WHEN enabled = 1 THEN 'dark_factory' ELSE 'manual' END"
+        );
+      }
+      try {
+        this.db.exec("ALTER TABLE project_dark_factory ADD COLUMN merge_strategy TEXT NOT NULL DEFAULT 'squash'");
+      } catch { /* Column already exists */ }
+      this.setSchemaVersion(28);
+    }
   }
 
   // --- Projects ---
@@ -1716,15 +1735,43 @@ export class Registry {
 
   getDarkFactoryEnabled(projectDir: string): boolean {
     const key = `project:${path.resolve(projectDir)}`;
-    const row = this.db.prepare('SELECT enabled FROM project_dark_factory WHERE key = ?').get(key) as { enabled: number } | undefined;
-    return row ? row.enabled === 1 : false;
+    const row = this.db.prepare('SELECT level FROM project_dark_factory WHERE key = ?').get(key) as { level: string } | undefined;
+    return row ? row.level === 'dark_factory' : false;
   }
 
   setDarkFactoryEnabled(projectDir: string, enabled: boolean): void {
     const key = `project:${path.resolve(projectDir)}`;
+    if (enabled) {
+      this.db.prepare(
+        `INSERT INTO project_dark_factory (key, enabled, level, merge_strategy) VALUES (?, 1, 'dark_factory', 'squash')
+         ON CONFLICT(key) DO UPDATE SET enabled = 1, level = 'dark_factory'`
+      ).run(key);
+    } else {
+      const current = this.db.prepare('SELECT level FROM project_dark_factory WHERE key = ?').get(key) as { level: string } | undefined;
+      if (!current) {
+        this.db.prepare(
+          `INSERT INTO project_dark_factory (key, enabled, level, merge_strategy) VALUES (?, 0, 'manual', 'squash')`
+        ).run(key);
+      } else if (current.level === 'dark_factory') {
+        this.db.prepare(`UPDATE project_dark_factory SET enabled = 0, level = 'manual' WHERE key = ?`).run(key);
+      }
+      // If level is 'assisted', leave it unchanged — getDarkFactoryEnabled already returns false for non-dark_factory levels
+    }
+  }
+
+  getDarkFactoryConfig(projectDir: string): { level: string; merge_strategy: string } {
+    const key = `project:${path.resolve(projectDir)}`;
+    const row = this.db.prepare('SELECT level, merge_strategy FROM project_dark_factory WHERE key = ?').get(key) as { level: string; merge_strategy: string } | undefined;
+    return row ? { level: row.level, merge_strategy: row.merge_strategy } : { level: 'manual', merge_strategy: 'squash' };
+  }
+
+  setDarkFactoryConfig(projectDir: string, config: { level: string; merge_strategy: string }): void {
+    const key = `project:${path.resolve(projectDir)}`;
+    const enabled = config.level === 'dark_factory' ? 1 : 0;
     this.db.prepare(
-      'INSERT OR REPLACE INTO project_dark_factory (key, enabled) VALUES (?, ?)'
-    ).run(key, enabled ? 1 : 0);
+      `INSERT INTO project_dark_factory (key, enabled, level, merge_strategy) VALUES (?, ?, ?, ?)
+       ON CONFLICT(key) DO UPDATE SET enabled = excluded.enabled, level = excluded.level, merge_strategy = excluded.merge_strategy`
+    ).run(key, enabled, config.level, config.merge_strategy);
   }
 
   // --- Ticket Board ---
