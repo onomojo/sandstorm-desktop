@@ -2259,6 +2259,24 @@ export class Registry {
     ).all(epicId) as EpicTask[];
   }
 
+  /**
+   * Reverse lookup: find the epic a ticket belongs to. Read-only; consumes the
+   * existing `epic_tasks` table shape (no write, no schema change).
+   *
+   * A ticket maps to at most one epic in practice. If multiple `epic_tasks`
+   * rows reference the same ticket, the first by `epic_id` ordering is returned
+   * deterministically so repeated calls are stable.
+   */
+  getEpicForTicket(
+    ticketId: string,
+  ): { epicId: string; role: EpicTaskRole; critId: string | null } | null {
+    const row = this.db.prepare(
+      'SELECT epic_id, role, crit_id FROM epic_tasks WHERE ticket_id = ? ORDER BY epic_id LIMIT 1'
+    ).get(ticketId) as { epic_id: string; role: EpicTaskRole; crit_id: string | null } | undefined;
+    if (!row) return null;
+    return { epicId: row.epic_id, role: row.role, critId: row.crit_id };
+  }
+
   upsertEpicTask(
     epicId: string,
     ticketId: string,

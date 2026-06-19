@@ -140,6 +140,41 @@ describe('Registry — epic tables (migration 26)', () => {
   });
 
   // ---------------------------------------------------------------------------
+  // getEpicForTicket (reverse lookup)
+  // ---------------------------------------------------------------------------
+
+  describe('getEpicForTicket', () => {
+    it('returns null for a ticket not linked to any epic', () => {
+      expect(registry.getEpicForTicket('orphan-ticket')).toBeNull();
+    });
+
+    it('returns the linked epic, role, and critId for a linked ticket', () => {
+      registry.upsertEpicTask('ep-rev', 'tkt-rev', { role: 'reconcile', origin: 'gap', critId: 'crit-9' });
+      expect(registry.getEpicForTicket('tkt-rev')).toEqual({
+        epicId: 'ep-rev',
+        role: 'reconcile',
+        critId: 'crit-9',
+      });
+    });
+
+    it('returns null critId when the linked task has no criterion', () => {
+      registry.upsertEpicTask('ep-nc', 'tkt-nc', { role: 'build', origin: 'planned', critId: null });
+      expect(registry.getEpicForTicket('tkt-nc')).toEqual({
+        epicId: 'ep-nc',
+        role: 'build',
+        critId: null,
+      });
+    });
+
+    it('picks the first epic by epic_id ordering when a ticket links to multiple', () => {
+      registry.upsertEpicTask('ep-zeta', 'multi-tkt', { role: 'build', origin: 'planned' });
+      registry.upsertEpicTask('ep-alpha', 'multi-tkt', { role: 'reconcile', origin: 'gap', critId: 'c' });
+      const result = registry.getEpicForTicket('multi-tkt');
+      expect(result?.epicId).toBe('ep-alpha');
+    });
+  });
+
+  // ---------------------------------------------------------------------------
   // incrementGapCycles
   // ---------------------------------------------------------------------------
 

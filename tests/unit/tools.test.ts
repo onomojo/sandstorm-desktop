@@ -23,6 +23,7 @@ vi.mock('../../src/main/index', () => ({
     getEffectiveRoutingFor: vi.fn().mockReturnValue({ backend: 'claude', model: 'sonnet' }),
     getLegacyEffectiveModels: vi.fn().mockReturnValue({ inner_model: 'sonnet', outer_model: 'opus' }),
     getEffectiveTouchpointDescriptor: vi.fn().mockReturnValue({ backend: 'claude', provider: 'anthropic', model: 'sonnet', credentials: {} }),
+    getEpicForTicket: vi.fn().mockReturnValue(null),
   },
 }));
 

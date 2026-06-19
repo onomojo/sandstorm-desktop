@@ -184,6 +184,12 @@ export async function handleToolCall(
 interface SpecContext {
   ticketBody: string;
   gate: string;
+  /**
+   * Verbatim parent-epic body (prefixed with a role/criterion line) when the
+   * ticket is linked to an epic. Omitted for standalone tickets or when the
+   * epic body fetch fails/returns empty — the gate then behaves as before.
+   */
+  epicContext?: string;
 }
 
 /**
@@ -246,11 +252,79 @@ async function resolveSpecContext(
     };
   }
 
-  return { ok: true, ctx: { ticketBody, gate: getDefaultSpecQualityGate() } };
+  const epicContext = await resolveEpicContext(ticketId, config, projectDir, toolName);
+
+  return { ok: true, ctx: { ticketBody, gate: getDefaultSpecQualityGate(), epicContext } };
 }
 
-export function buildSpecCheckPrompt(gate: string, ticketBody: string, referencesSection?: string): string {
+/**
+ * Reverse-lookup the parent epic for a ticket and build the verbatim epic
+ * context block. Returns undefined when the ticket is standalone, the epic
+ * body fetch fails, or the body is empty — in those cases the gate runs
+ * exactly as before (no epic section, no regression).
+ */
+async function resolveEpicContext(
+  ticketId: string,
+  config: ProjectTicketConfig,
+  projectDir: string,
+  toolName: string,
+): Promise<string | undefined> {
+  const link = registry.getEpicForTicket(ticketId);
+  if (!link) return undefined;
+
+  let epicBody: string | null = null;
+  try {
+    epicBody = await getTicketBodyCached(link.epicId, config, projectDir);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.warn(
+      `[sandstorm] ${toolName}: failed to fetch epic ${link.epicId} body for ticket ${ticketId}: ${msg} — omitting epic context`,
+    );
+    return undefined;
+  }
+
+  if (!epicBody || !epicBody.trim()) {
+    console.warn(
+      `[sandstorm] ${toolName}: epic ${link.epicId} for ticket ${ticketId} returned an empty body — omitting epic context`,
+    );
+    return undefined;
+  }
+
+  const roleLine = `This ticket's role in the epic: role=${link.role}, serves acceptance criterion=${link.critId ?? 'none'}`;
+  return `${roleLine}\n\n${epicBody}`;
+}
+
+/**
+ * Phase-1 three-way classification shared by all spec-gate prompt builders.
+ * Beyond the legacy self-resolvable / requires-human split it adds the
+ * "implementation discretion — decide and record" path plus the Decision
+ * Altitude filter, so decisions that are neither code-derivable nor
+ * behavior-significant are decided by the evaluator instead of bubbling up as
+ * user questions.
+ */
+const PHASE1_THREE_WAY_CLASSIFICATION = `For each assumption, classify it into exactly one of three resolution types:
+- **Self-resolvable (verified fact)**: Validatable by reading code, APIs, or schemas. Use Read/Grep/Glob now and report what you found with file:line citations. State the verified fact or confirm the assumption is incorrect with evidence. Describing what you would check without checking is not sufficient.
+- **Requires human input (decision-significant question)**: Passes the Decision Altitude filter — a different answer would change observable behavior, system architecture, product intent, or a cross-ticket contract. Formulate a specific question that must be answered before the spec is complete.
+- **Implementation discretion — decide and record**: Fails the Decision Altitude filter — a different answer would NOT change observable behavior, architecture, product intent, or a cross-ticket contract (e.g. internal data structures, helper/function placement, symbol/variable naming, file organization, non-behavioral constants, logging/comment style). Do NOT emit a user question for these; pick a reasonable option and record the decision plus a one-line rationale.`;
+
+/** Phase-1 instruction injected only when an Epic Context block is present. */
+const EPIC_PHASE1_LINE = `An Epic Context section is provided above. Treat every contract, vocabulary term, and acceptance decision in it as a fixed given: validate the ticket for consistency only, and do NOT surface a question whose answer is already in the epic context or propose redefining an epic-owned shape.`;
+
+/** Render the optional Epic Context block inserted before `## Instructions`. */
+function buildEpicContextBlock(epicContext?: string): string {
+  if (!epicContext) return '';
+  return `\n## Epic Context (already-decided givens — do NOT re-litigate)\n\n${epicContext}\n`;
+}
+
+export function buildSpecCheckPrompt(
+  gate: string,
+  ticketBody: string,
+  referencesSection?: string,
+  epicContext?: string,
+): string {
   const refBlock = referencesSection ? `\n${referencesSection}\n` : '';
+  const epicBlock = buildEpicContextBlock(epicContext);
+  const epicPhase1 = epicContext ? `\n${EPIC_PHASE1_LINE}\n` : '';
   return `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict — if you'd have to guess, it's a FAIL.
 
 ## Quality Gate Criteria
@@ -260,17 +334,17 @@ ${gate}
 ## Ticket
 
 ${ticketBody}
-${refBlock}
+${refBlock}${epicBlock}
 
 ## Instructions
 
 ### Phase 1: Assumption Resolution
 Before evaluating pass/fail, identify every assumption in the ticket (explicit "Assumes..." statements AND implicit assumptions you would make if starting this task).
 
-For each assumption, classify it:
-- **Self-resolvable**: Can be validated by reading code, checking APIs, schemas, or running commands. For these, Use Read/Grep/Glob now and report what you found with file:line citations. State the verified fact or confirm the assumption is incorrect with evidence. Describing what you would check without checking is not sufficient.
-- **Requires human input**: Business logic context, domain knowledge, behavioral expectations, product direction, edge case decisions — things the codebase can't answer. For these, formulate a specific question that must be answered before the spec is complete.
+${PHASE1_THREE_WAY_CLASSIFICATION}
 
+Because this check is read-only (it returns a report and does not edit the ticket), list every decided-and-recorded decision in your report under a "Recorded Decisions" note rather than asking the user about it.
+${epicPhase1}
 ### Phase 2: Evaluation
 For each criterion, determine PASS or FAIL.
 
@@ -287,7 +361,7 @@ Respond in EXACTLY this format (no other text before or after):
 ### Assumption Resolution
 | # | Assumption | Type | Resolution |
 |---|-----------|------|------------|
-| 1 | <assumption text> | Self-resolvable / Requires human input | <verified fact OR specific question> |
+| 1 | <assumption text> | Self-resolvable / Requires human input / Decided-and-recorded | <verified fact OR specific question OR recorded decision + one-line rationale> |
 ...
 
 ### Results
@@ -350,7 +424,7 @@ async function handleSpecCheck(
 
   const references = await resolveTicketReferences(ctx.ticketBody);
   const referencesSection = renderResolvedReferences(references);
-  const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody, referencesSection || undefined);
+  const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody, referencesSection || undefined, ctx.epicContext);
   const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
@@ -360,7 +434,13 @@ async function handleSpecCheck(
   };
 }
 
-export function buildSpecRefineInitialPrompt(gate: string, ticketBody: string): string {
+export function buildSpecRefineInitialPrompt(
+  gate: string,
+  ticketBody: string,
+  epicContext?: string,
+): string {
+  const epicBlock = buildEpicContextBlock(epicContext);
+  const epicPhase1 = epicContext ? `\n${EPIC_PHASE1_LINE}\n` : '';
   return `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict.
 
 ## Quality Gate Criteria
@@ -370,14 +450,15 @@ ${gate}
 ## Ticket
 
 ${ticketBody}
+${epicBlock}
 
 ## Instructions
 
 ### Phase 1: Assumption Resolution
-Identify every assumption (explicit and implicit). For each:
-- **Self-resolvable** (can check code/APIs/schemas): Use Read/Grep/Glob now and report what you found with file:line citations. Describing what you would verify without verifying is not sufficient.
-- **Requires human input** (business logic, domain knowledge, product direction): Formulate a specific blocking question.
+Identify every assumption (explicit and implicit). ${PHASE1_THREE_WAY_CLASSIFICATION}
 
+You produce an updated ticket body below — write each decided-and-recorded decision inline into it (the decision plus a one-line rationale) so the executor reads a decision, not a blank. Do NOT ask the user about an implementation-discretion item.
+${epicPhase1}
 ### Phase 2: Evaluation
 Apply ALL criteria from the quality gate, including:
 - **Zero Unresolved Assumptions**: FAIL if any assumptions remain unverified/unanswered.
@@ -393,7 +474,7 @@ Respond in EXACTLY this format:
 ### Assumption Resolution
 | # | Assumption | Type | Resolution |
 |---|-----------|------|------------|
-| 1 | <assumption text> | Self-resolvable / Requires human input | <verified fact OR specific question> |
+| 1 | <assumption text> | Self-resolvable / Requires human input / Decided-and-recorded | <verified fact OR specific question OR recorded decision + one-line rationale> |
 ...
 
 ### Results
@@ -423,7 +504,14 @@ Mark at most one option per question with \`"recommended": true\` when you have 
 `;
 }
 
-export function buildSpecRefineAnswerPrompt(gate: string, ticketBody: string, userAnswers: string): string {
+export function buildSpecRefineAnswerPrompt(
+  gate: string,
+  ticketBody: string,
+  userAnswers: string,
+  epicContext?: string,
+): string {
+  const epicBlock = buildEpicContextBlock(epicContext);
+  const epicPhase1 = epicContext ? `\n${EPIC_PHASE1_LINE}\n` : '';
   return `You are a spec quality gate evaluator performing a refinement step.
 
 ## Quality Gate Criteria
@@ -433,7 +521,7 @@ ${gate}
 ## Current Ticket
 
 ${ticketBody}
-
+${epicBlock}
 ## User's Answers to Gap Questions
 
 ${userAnswers}
@@ -441,10 +529,12 @@ ${userAnswers}
 ## Instructions
 
 1. Incorporate the user's answers into the ticket body. Preserve existing content — add clarifications inline or in new sections, don't delete anything. Replace resolved assumptions with verified facts (e.g., "Verified: function X returns Y (see src/path/file.ts:42)").
-2. Re-evaluate the updated ticket against ALL quality gate criteria, including:
-   - **Zero Unresolved Assumptions**: Any remaining assumptions must be resolved. Listing them is not enough.
+2. Resolve every assumption to one of three types. ${PHASE1_THREE_WAY_CLASSIFICATION}
+   Write each decided-and-recorded decision inline into the updated ticket body (decision plus a one-line rationale). Do NOT ask the user about an implementation-discretion item.
+3. Re-evaluate the updated ticket against ALL quality gate criteria, including:
+   - **Zero Unresolved Assumptions**: Any remaining assumptions must be resolved (verified fact, decision-significant question, or decided-and-recorded). Listing them is not enough.
    - **Dependency Contracts**: Cross-ticket/module references need explicit contracts (format, timing, verification).
-3. If it still FAILs, ask new specific questions for the remaining gaps.
+4. If it still FAILs, ask new specific questions for the remaining gaps.${epicPhase1}
 
 Respond in EXACTLY this format:
 
@@ -457,7 +547,7 @@ Respond in EXACTLY this format:
 ### Assumption Resolution
 | # | Assumption | Type | Resolution |
 |---|-----------|------|------------|
-| 1 | <assumption text> | Self-resolvable / Requires human input | <verified fact OR answered> |
+| 1 | <assumption text> | Self-resolvable / Requires human input / Decided-and-recorded | <verified fact OR answered OR recorded decision + one-line rationale> |
 ...
 
 ### Results
@@ -554,13 +644,13 @@ async function handleSpecRefine(
   }
 
   if (!userAnswers) {
-    const prompt = buildSpecRefineInitialPrompt(ctx.gate, ctx.ticketBody);
+    const prompt = buildSpecRefineInitialPrompt(ctx.gate, ctx.ticketBody, ctx.epicContext);
     const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, undefined, 'refine');
     const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
     return { passed, report: result };
   }
 
-  const prompt = buildSpecRefineAnswerPrompt(ctx.gate, ctx.ticketBody, userAnswers);
+  const prompt = buildSpecRefineAnswerPrompt(ctx.gate, ctx.ticketBody, userAnswers, ctx.epicContext);
   const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, undefined, 'refine');
   return applySpecRefineResult(ticketId, projectDir, result, true);
 }
@@ -594,7 +684,7 @@ export function spawnSpecCheck(
 
     const references = await resolveTicketReferences(res.ctx.ticketBody);
     const referencesSection = renderResolvedReferences(references);
-    const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody, referencesSection || undefined);
+    const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody, referencesSection || undefined, res.ctx.epicContext);
     const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
@@ -679,7 +769,7 @@ export function spawnSpecRefine(
       // After-answers pass. Reuse the held session if we have one; otherwise
       // cold-start with the full answer prompt.
       const pooled = refineSessionPool.get(key);
-      const answerPrompt = buildSpecRefineAnswerPrompt(res.ctx.gate, res.ctx.ticketBody, userAnswers);
+      const answerPrompt = buildSpecRefineAnswerPrompt(res.ctx.gate, res.ctx.ticketBody, userAnswers, res.ctx.epicContext);
 
       if (pooled) {
         clearTimeout(pooled.idleTimer);
@@ -706,7 +796,7 @@ export function spawnSpecRefine(
 
     // Initial-questions pass. Spawn a long-lived session so the after-answers
     // pass can reuse it.
-    const initialPrompt = buildSpecRefineInitialPrompt(res.ctx.gate, res.ctx.ticketBody);
+    const initialPrompt = buildSpecRefineInitialPrompt(res.ctx.gate, res.ctx.ticketBody, res.ctx.epicContext);
     const handle = agentBackend.spawnEphemeralSession(initialPrompt, projectDir, 0, onChunk);
     // Cancel during the initial pass must dispose the live handle even though
     // it isn't pooled yet — otherwise SIGTERM never reaches the held subprocess.

@@ -32,6 +32,27 @@ or "how should this be verified" — tests are always required. Specify the conc
 e2e / Playwright / visual browser verification is **not required** (not yet available
 in the stack container). Do NOT fail the gate because e2e tests are absent.
 
+## Decision Altitude
+
+Not every open decision deserves a human. A question may be surfaced to the user
+**only if a different answer would change observable behavior, system architecture,
+product intent, or a cross-ticket contract.** Everything else is implementation
+discretion and MUST be decided-and-recorded by the evaluator, never asked.
+
+Examples that MUST NOT be asked — decide-and-record instead:
+
+- internal data structures
+- helper / function placement
+- symbol / variable naming
+- file organization
+- non-behavioral constants
+- logging / comment style
+
+This mirrors the \`to-prd\` altitude: architectural choices only — no file paths, no
+code snippets. A decision that is behavior-significant but *looks* small is still
+asked: the filter keys on whether a different answer changes
+behavior/architecture/intent/contract, not on apparent size.
+
 ---
 
 ## Criteria
@@ -73,11 +94,12 @@ Are the impacted areas of the codebase identified?
 - Point the agent at the right part of the codebase.
 
 ### Assumptions — Zero Unresolved
-List every assumption the agent would make if it started now.
+List every assumption the agent would make if it started now. Every assumption MUST be driven to one of **three** legal resolutions:
+- **Verified fact** — answerable by reading code, checking APIs, schemas, or running commands. The evaluator MUST validate it and replace it with a verified fact (cite \`file:line\`) or flag it as incorrect with evidence.
+- **Decision-significant question** — passes the Decision Altitude filter: a different answer would change observable behavior, system architecture, product intent, or a cross-ticket contract. Surface it as an explicit question that blocks the gate.
+- **Decided-and-recorded** — fails the Decision Altitude filter: pure implementation discretion (a different answer would NOT change behavior/architecture/intent/contract). The evaluator picks a reasonable option and records the decision plus a one-line rationale in the ticket; it does **not** ask the user.
 - **Assumptions are ambiguity. Ambiguity means the spec is incomplete.**
-- If an assumption can be validated by reading code, checking APIs, or running commands — the evaluator MUST validate it and replace it with a verified fact or flag it as incorrect.
-- If an assumption requires human input (business logic, domain knowledge, product direction, edge case decisions) — it MUST be surfaced as an explicit question that blocks the gate.
-- The gate MUST NOT pass with unresolved assumptions. Every assumption must become either a verified fact or an answered question.
+- The gate MUST NOT pass while any assumption is *unresolved*. "Decided-and-recorded" counts as resolved — the decision is pinned in the ticket, so the executor still cannot improvise; only the decider moves from the human to the evaluator. A bare list of assumptions is never sufficient.
 
 ### Dependency Contracts
 When the ticket references another ticket, module, or external system's output:
@@ -94,6 +116,13 @@ If the ticket is part of a larger epic or multi-ticket effort:
 - If it cannot point to an acceptance behavior it serves, either the epic's acceptance definition is incomplete or the ticket is scope creep — resolve before dispatch.
 - This is the per-ticket coverage check only. It does NOT require end-to-end or visual verification, and it does NOT replace a whole-epic acceptance review (a green ticket is progress, not proof the whole behavior works assembled).
 - Skip this criterion for standalone tickets with no parent epic.
+
+### Epic Context — treat as givens
+If an **Epic Context** block is present (the ticket is linked to a parent epic):
+- Every contract, vocabulary term, and acceptance decision in the epic context is **fixed** — an already-decided given, not something to re-derive.
+- Check the ticket only for *consistency* with the epic context; validate that its own/extend/consume role and served acceptance criterion match what the epic decided.
+- The evaluator MUST NOT surface a question whose answer is already in the epic context, and MUST NOT propose redefining an epic-owned shape.
+- Skip this criterion when no Epic Context block is present.
 
 ### Intent Congruence
 Does the proposed approach actually achieve the ticket's stated goal?
