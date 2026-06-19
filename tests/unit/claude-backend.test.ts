@@ -33,6 +33,7 @@ class MockChildProcess extends EventEmitter {
   stdin = {
     write: vi.fn(),
     end: vi.fn(),
+    on: vi.fn(),
     writable: true,
   } as unknown as Writable & { write: ReturnType<typeof vi.fn>; writable: boolean };
   pid = Math.floor(Math.random() * 10000);
@@ -887,6 +888,34 @@ describe('ClaudeBackend.runEphemeralAgent — promise settlement', () => {
     proc.emit('close', 1);
 
     await expect(resultPromise).rejects.toThrow('ENOENT: spawn failed');
+
+    backendUnderTest.destroy();
+  });
+
+  it('regression (E2BIG): feeds the prompt via stdin, never as a CLI argument', async () => {
+    const { spawn } = await import('child_process');
+    const spawnMock = spawn as ReturnType<typeof vi.fn>;
+    spawnMock.mockClear();
+
+    const backendUnderTest = new ClaudeBackend(60_000);
+    // A prompt large enough that, as a single argv entry, it would overflow
+    // Linux's 128 KB MAX_ARG_STRLEN and make spawn throw E2BIG.
+    const hugePrompt = 'x'.repeat(200 * 1024);
+    backendUnderTest.runEphemeralAgent(hugePrompt, '/tmp', 5_000);
+
+    const call = spawnMock.mock.calls[spawnMock.mock.calls.length - 1];
+    const spawnedArgs = call[1] as string[];
+    const callOpts = call[2] as { stdio: unknown };
+
+    // The prompt must NOT appear in argv at all.
+    expect(spawnedArgs).not.toContain(hugePrompt);
+    expect(spawnedArgs.some((a) => a.length > 100 * 1024)).toBe(false);
+    // stdin must be piped and the prompt written + closed there.
+    expect(callOpts.stdio).toEqual(['pipe', 'pipe', 'pipe']);
+    const proc = getEphemeralProcess();
+    const stdin = proc.stdin as unknown as { write: ReturnType<typeof vi.fn>; end: ReturnType<typeof vi.fn> };
+    expect(stdin.write).toHaveBeenCalledWith(hugePrompt);
+    expect(stdin.end).toHaveBeenCalled();
 
     backendUnderTest.destroy();
   });

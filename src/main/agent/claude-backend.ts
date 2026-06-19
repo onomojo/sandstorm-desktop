@@ -25,6 +25,7 @@ import {
   zeroSessionTokens,
 } from './types';
 import { appendEphemeralTiming, type EphemeralTimingRecord } from './ephemeral-timing';
+import { buildEphemeralAgentArgs } from './ephemeral-args';
 import { extractStreamEvents } from './ephemeral-stream-events';
 import { resolveOuterClaudeTools } from './tools-allowlist';
 import { composeSystemPromptWithSkills } from './skill-enumeration';
@@ -364,12 +365,11 @@ export class ClaudeBackend implements AgentBackend {
     _touchpoint?: string,
   ): { promise: Promise<string>; cancel: () => void } {
     const claudeBin = getClaudeBin();
-    const args = [
-      '-p', prompt,
-      '--output-format', 'stream-json',
-      '--dangerously-skip-permissions',
-      ...(model && model !== 'auto' ? ['--model', model] : []),
-    ];
+    // The prompt is written to stdin below, NOT passed as a CLI argument:
+    // a large prompt (spec-check/refine can inline up to ~1 MB of resolved
+    // references) would overflow Linux's 128 KB per-argument limit and make
+    // spawn throw "E2BIG" synchronously. See ephemeral-args.ts.
+    const args = buildEphemeralAgentArgs(model);
 
     const spawnedAt = Date.now();
     let firstChunkAt: number | null = null;
@@ -391,8 +391,17 @@ export class ClaudeBackend implements AgentBackend {
         CLAUDE_CODE_DISABLE_CLAUDE_MDS: '1',
         CLAUDE_CODE_PLUGIN_CACHE_DIR: this.ensureEmptyPluginCacheDir(),
       },
-      stdio: ['ignore', 'pipe', 'pipe'],
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
+
+    // Feed the prompt over stdin (print mode reads stdin as the prompt when no
+    // positional prompt is given). Guards against EPIPE if the child exits
+    // before we finish writing.
+    if (child.stdin) {
+      child.stdin.on('error', () => { /* ignore: child may exit before drain */ });
+      child.stdin.write(prompt);
+      child.stdin.end();
+    }
 
     let outputBuffer = '';
     let fullText = '';
