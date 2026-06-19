@@ -197,8 +197,8 @@ describe('StackManager.autoResolveConflicts internals', () => {
       expect(dispatchTaskSpy).toHaveBeenCalledWith(
         'stack-1',
         expect.any(String),
-        expect.anything(),
-        expect.objectContaining({ gateApproved: true })
+        undefined,
+        expect.objectContaining({ gateApproved: true, executionTouchpoint: 'merge_conflict' })
       );
     });
 
@@ -328,8 +328,8 @@ describe('StackManager.autoResolveConflicts internals', () => {
       expect(dispatchTaskSpy).toHaveBeenCalledWith(
         expect.any(String),
         expect.any(String),
-        expect.anything(),
-        expect.objectContaining({ gateApproved: true })
+        undefined,
+        expect.objectContaining({ gateApproved: true, executionTouchpoint: 'merge_conflict' })
       );
     });
 
@@ -399,34 +399,34 @@ describe('StackManager.autoResolveConflicts internals', () => {
       mockGhFn.mockResolvedValue(ghViewJson('CONFLICTING'));
     });
 
-    it('dispatches with legacy inner model when no routing configured', async () => {
+    it('dispatches with executionTouchpoint=merge_conflict and undefined model', async () => {
       await manager.autoResolveConflicts(TICKET, PROJECT_DIR);
 
-      const [, , model] = dispatchTaskSpy.mock.calls[0] as [string, string, string | undefined, ...unknown[]];
-      const legacy = registry.getLegacyEffectiveModels(PROJECT_DIR);
-      expect(model).toBe(legacy.inner_model);
+      const [, , model, opts] = dispatchTaskSpy.mock.calls[0] as [string, string, string | undefined, Record<string, unknown>];
+      // Model is now undefined — routing is driven by executionTouchpoint in --phase-routing-json
+      expect(model).toBeUndefined();
+      expect(opts.executionTouchpoint).toBe('merge_conflict');
     });
 
-    it('dispatches with resolved merge_conflict model when routing is configured', async () => {
+    it('dispatches with executionTouchpoint=merge_conflict when routing is configured', async () => {
       registry.setProjectRouting(PROJECT_DIR, { assignments: { merge_conflict: { backend: 'claude', model: 'haiku' } }, preset: null });
 
       await manager.autoResolveConflicts(TICKET, PROJECT_DIR);
 
-      const [, , model] = dispatchTaskSpy.mock.calls[0] as [string, string, string | undefined, ...unknown[]];
-      expect(model).toBe('haiku');
+      const [, , model, opts] = dispatchTaskSpy.mock.calls[0] as [string, string, string | undefined, Record<string, unknown>];
+      expect(model).toBeUndefined();
+      expect(opts.executionTouchpoint).toBe('merge_conflict');
     });
 
-    it('falls back to legacy inner model and logs warning when merge_conflict backend is opencode', async () => {
+    it('dispatches with executionTouchpoint=merge_conflict for opencode merge_conflict routing (no fallback)', async () => {
       registry.setProjectRouting(PROJECT_DIR, { assignments: { merge_conflict: { backend: 'opencode', model: 'some-opencode-model' } }, preset: null });
-      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
       await manager.autoResolveConflicts(TICKET, PROJECT_DIR);
 
-      const [, , model] = dispatchTaskSpy.mock.calls[0] as [string, string, string | undefined, ...unknown[]];
-      const legacy = registry.getLegacyEffectiveModels(PROJECT_DIR);
-      expect(model).toBe(legacy.inner_model);
-      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('opencode'));
-      warnSpy.mockRestore();
+      const [, , model, opts] = dispatchTaskSpy.mock.calls[0] as [string, string, string | undefined, Record<string, unknown>];
+      // No fallback warning — opencode is now supported for container merge_conflict dispatch
+      expect(model).toBeUndefined();
+      expect(opts.executionTouchpoint).toBe('merge_conflict');
     });
   });
 });

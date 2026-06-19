@@ -85,7 +85,7 @@ When the ticket references another ticket, module, or external system's output:
 - Read/write timing must be compatible — if the source writes at end-of-process and the consumer reads mid-process, that's a conflict.
 - How contract compatibility is verified must be specified.
 - If the data source doesn't exist yet, the ticket must include creating it or explicitly depend on a ticket that does.
-- The contract must resolve to an enforced artifact — a committed type/interface, a schema, or a contract test — not prose. A contract that exists only in an epic description, a code comment, or an unmerged sibling ticket's text is NOT a contract; FAIL the ticket until the owning ticket lands the artifact (or this ticket creates it). (Consuming existing committed code/types is fine — that IS an enforced artifact.)
+- The contract must resolve to an enforced artifact — a committed type/interface, a schema, or a contract test — not prose. A contract that exists only in an epic description, a code comment, or an unmerged sibling ticket's text is NOT a contract; FAIL the ticket until the owning ticket lands the artifact (or this ticket creates it). (Consuming existing committed code/types is fine — that IS an enforced artifact.) This rule applies to CODE contracts only — design/reference material (mockups, specs, docs) may remain external; their content is resolved and supplied in the "## Resolved References" section and must be evaluated there.
 - Name the single owner of each shared surface the ticket touches; a consumer or extender must reference that owner and must not redefine the shape.
 
 ### Contribution to the Whole
@@ -127,7 +127,7 @@ If a question is partially code-derivable:
 - State the verified fact with a \`file:line\` citation.
 - Ask only the residual judgment question (the part not in the code).
 
-Verification limit: static reading only. If answering requires executing code or hitting an external service, treat as "not feasible to verify statically" and escalate to the user.
+Verification limit: static reading only. If answering requires executing code, treat as "not feasible to verify statically" and escalate to the user. Exception: external links cited in the ticket body (gists, mockups, design docs) are resolved by the host before evaluation — their content is supplied in the "## Resolved References" section below the ticket. Treat that resolved content as part of the spec. A broken or unreachable referenced link (shown as an error in the Resolved References section) is itself a FAIL — surface the error rather than ignoring it.
 
 Hallucination guard: every claimed verification MUST include a \`file:line\` citation. A verification without a citation is not a verification.
 `;

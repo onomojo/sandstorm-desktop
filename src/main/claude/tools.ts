@@ -12,6 +12,7 @@ import { fetchTicketWithConfig, updateTicketWithConfig } from '../control-plane/
 import type { ProjectTicketConfig } from '../control-plane/registry';
 import { getDefaultSpecQualityGate } from '../spec-quality-gate';
 import { showNotification } from '../tray';
+import { resolveTicketReferences, renderResolvedReferences } from '../control-plane/ticket-references';
 import {
   createSchedule,
   listSchedules,
@@ -248,7 +249,8 @@ async function resolveSpecContext(
   return { ok: true, ctx: { ticketBody, gate: getDefaultSpecQualityGate() } };
 }
 
-export function buildSpecCheckPrompt(gate: string, ticketBody: string): string {
+export function buildSpecCheckPrompt(gate: string, ticketBody: string, referencesSection?: string): string {
+  const refBlock = referencesSection ? `\n${referencesSection}\n` : '';
   return `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict — if you'd have to guess, it's a FAIL.
 
 ## Quality Gate Criteria
@@ -258,6 +260,7 @@ ${gate}
 ## Ticket
 
 ${ticketBody}
+${refBlock}
 
 ## Instructions
 
@@ -322,6 +325,15 @@ function getRefineDescriptor(projectDir: string) {
   return registry.getEffectiveTouchpointDescriptor(projectDir, 'refine');
 }
 
+function resolveRefineModel(projectDir: string): string | undefined {
+  const routing = registry.getEffectiveRoutingFor(projectDir, 'refine');
+  if (routing.backend === 'opencode') {
+    console.warn('[refine] backend=opencode unsupported for host path; falling back to legacy outer model');
+    return registry.getLegacyEffectiveModels(projectDir).outer_model;
+  }
+  return routing.model;
+}
+
 async function handleSpecCheck(
   ticketId: string,
   projectDir: string
@@ -336,8 +348,10 @@ async function handleSpecCheck(
     return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
   }
 
-  const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, undefined, 'refine');
+  const references = await resolveTicketReferences(ctx.ticketBody);
+  const referencesSection = renderResolvedReferences(references);
+  const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody, referencesSection || undefined);
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
   return {
@@ -578,8 +592,10 @@ export function spawnSpecCheck(
       return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
     }
 
-    const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody);
-    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' }, undefined, 'refine');
+    const references = await resolveTicketReferences(res.ctx.ticketBody);
+    const referencesSection = renderResolvedReferences(references);
+    const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody, referencesSection || undefined);
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
 

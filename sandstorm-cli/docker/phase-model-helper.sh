@@ -38,12 +38,9 @@ model_args_for_phase() {
   fi
 
   if [[ "$m" == *"/"* ]]; then
-    # OpenCode provider/model (contains '/') — not runnable in this image
-    log_loop "WARNING: phase=$phase model='$m' requires OpenCode backend (not available); using task model"
-    RESOLVED_MODEL_ARGS=("${MODEL_ARGS[@]}")
-    if [ -n "${TASK_MODEL:-}" ]; then
-      log_loop "phase=$phase model=${TASK_MODEL} (task fallback)"
-    fi
+    # OpenCode provider/model (contains '/') — no Claude --model arg needed for this phase
+    RESOLVED_MODEL_ARGS=()
+    log_loop "phase=$phase model=$m (opencode, no claude --model arg)"
     return
   fi
 

@@ -60,8 +60,14 @@ vi.mock('../../src/main/spec-quality-gate', () => ({
   getDefaultSpecQualityGate: vi.fn().mockReturnValue('### Problem Statement\nIs the why clear?'),
 }));
 
+vi.mock('../../src/main/control-plane/ticket-references', () => ({
+  resolveTicketReferences: vi.fn().mockResolvedValue([]),
+  renderResolvedReferences: vi.fn().mockReturnValue(''),
+}));
+
 import { stackManager, agentBackend, registry } from '../../src/main/index';
 import { fetchTicketWithConfig, updateTicketWithConfig } from '../../src/main/control-plane/ticket-config';
+import { resolveTicketReferences, renderResolvedReferences } from '../../src/main/control-plane/ticket-references';
 import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from '../../src/main/scheduler';
 import { syncAllProjectsCrontab } from '../../src/main/scheduler/scheduler-manager';
 
@@ -934,6 +940,30 @@ describe('MCP tools', () => {
       await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
       const [, , timeoutArg] = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls[0];
       expect(timeoutArg).toBe(0);
+    });
+
+    it('spawnSpecCheck calls resolveTicketReferences with the ticket body', async () => {
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body with [ref](http://example.com)');
+      vi.mocked(resolveTicketReferences).mockResolvedValue([{ url: 'http://example.com', kind: 'other', content: 'ref content' }]);
+      vi.mocked(renderResolvedReferences).mockReturnValue('## External References\n\nref content');
+
+      spawnSpecCheck('42', '/proj');
+      await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
+
+      expect(resolveTicketReferences).toHaveBeenCalledWith('# Issue: body with [ref](http://example.com)');
+    });
+
+    it('spawnSpecCheck forwards renderResolvedReferences output to buildSpecCheckPrompt via spawnEphemeralAgent prompt', async () => {
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: body');
+      vi.mocked(resolveTicketReferences).mockResolvedValue([{ url: 'http://example.com', kind: 'other', content: 'ref content' }]);
+      vi.mocked(renderResolvedReferences).mockReturnValue('## External References\n\nref content');
+
+      spawnSpecCheck('42', '/proj');
+      await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
+
+      const [promptArg] = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls[0];
+      expect(promptArg).toContain('## External References');
+      expect(promptArg).toContain('ref content');
     });
   });
 

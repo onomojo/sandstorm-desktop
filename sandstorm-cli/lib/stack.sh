@@ -425,6 +425,7 @@ case "$COMMAND" in
     TASK_RESUME_SESSION_ID=""
     TASK_BACKEND=""
     TASK_BACKEND_MODEL=""
+    TASK_PHASE_ROUTING_JSON=""
     while true; do
       case "${1:-}" in
         --sync) SYNC_MODE=true; shift ;;
@@ -434,6 +435,7 @@ case "$COMMAND" in
         --resume) TASK_RESUME_SESSION_ID="$2"; shift 2 ;;
         --backend) TASK_BACKEND="$2"; shift 2 ;;
         --backend-model) TASK_BACKEND_MODEL="$2"; shift 2 ;;
+        --phase-routing-json) TASK_PHASE_ROUTING_JSON="$2"; shift 2 ;;
         *) break ;;
       esac
     done
@@ -511,6 +513,12 @@ case "$COMMAND" in
       if [ -n "$TASK_BACKEND_MODEL" ]; then
         echo "$TASK_BACKEND_MODEL" | docker exec -i -u claude "$CONTAINER_NAME" \
           bash -c "cat > /tmp/claude-task-backend-model.txt"
+      fi
+
+      # Write per-phase routing JSON if provided (supersedes --backend/--backend-model)
+      if [ -n "$TASK_PHASE_ROUTING_JSON" ]; then
+        printf '%s' "$TASK_PHASE_ROUTING_JSON" | docker exec -i -u claude "$CONTAINER_NAME" \
+          bash -c "cat > /tmp/claude-task-phase-routing.json"
       fi
 
       # Trigger the task runner (runs as the container's main process, output goes to docker logs)

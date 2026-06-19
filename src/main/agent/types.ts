@@ -77,6 +77,7 @@ export interface StackServiceInfo {
 
 export interface StackInfo {
   status: string;
+  project_dir?: string;
   services?: StackServiceInfo[];
 }
 

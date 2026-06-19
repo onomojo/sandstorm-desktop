@@ -769,10 +769,6 @@ export class OpenCodeBackend implements AgentBackend {
       }
     }
 
-    // --- Container-side: sync inner provider credentials ---
-    const globalSettings = registry.getGlobalBackendSettings();
-    const providerId = globalSettings.inner_provider ?? 'anthropic';
-    const bundle = registry.getBackendSecretBundle('global', 'inner') ?? {};
 
     for (const stack of stacks) {
       if (stack.status !== 'running' && stack.status !== 'up') continue;
@@ -788,20 +784,35 @@ export class OpenCodeBackend implements AgentBackend {
           'rm -f ~/.local/share/opencode/auth.json && mkdir -p ~/.local/share/opencode',
         ]);
 
-        // 2. Write the generated OpenCode config with actual credential values
-        //    directly to the config file the task runner reads.
-        const { generateOpencodeConfig } = await import('../opencode-config');
-        const config = generateOpencodeConfig({ providerId, bundle, model: globalSettings.inner_model ?? undefined });
-        const configJson = JSON.stringify(config, null, 2);
+        // 2. Collect distinct opencode providers across all container phases.
+        //    For each provider, store its credentials bundle and one representative model.
+        const providerMap = new Map<string, { credentials: Record<string, string> | null; model: string }>();
+        if (stack.project_dir) {
+          for (const touchpoint of ['execution', 'review', 'meta_review'] as const) {
+            const desc = registry.getEffectiveTouchpointDescriptor(stack.project_dir, touchpoint);
+            if (desc.backend === 'opencode' && !providerMap.has(desc.provider)) {
+              providerMap.set(desc.provider, { credentials: desc.credentials, model: desc.model });
+            }
+          }
+        }
 
-        const writeProc = spawn('docker', [
-          'exec', '-i', '-u', 'claude', claudeService.containerId,
-          'bash', '-c', 'cat > /tmp/sandstorm-opencode.json',
-        ], { stdio: ['pipe', 'ignore', 'ignore'] });
-        writeProc.on('error', () => {});
-        writeProc.stdin.write(configJson);
-        writeProc.stdin.end();
-        await new Promise<void>((resolve) => writeProc.on('close', () => resolve()));
+        // 3. Write one config file per distinct provider that has credentials.
+        //    Providers without credentials are skipped; their absence signals needs_key
+        //    to the task runner.
+        const { generateOpencodeConfig } = await import('../opencode-config');
+        for (const [providerId, { credentials, model }] of providerMap) {
+          if (!credentials) continue;
+          const config = generateOpencodeConfig({ providerId, bundle: credentials, model: model || undefined });
+          const configJson = JSON.stringify(config, null, 2);
+          const writeProc = spawn('docker', [
+            'exec', '-i', '-u', 'claude', claudeService.containerId,
+            'bash', '-c', 'cat > "$1"', '--', `/tmp/sandstorm-opencode-${providerId}.json`,
+          ], { stdio: ['pipe', 'ignore', 'ignore'] });
+          writeProc.on('error', () => {});
+          writeProc.stdin.write(configJson);
+          writeProc.stdin.end();
+          await new Promise<void>((resolve) => writeProc.on('close', () => resolve()));
+        }
       } catch {
         // Best effort per container
       }
