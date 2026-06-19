@@ -11,6 +11,7 @@ import { stackManager, agentBackend, registry } from '../index';
 import { fetchTicketWithConfig, updateTicketWithConfig } from '../control-plane/ticket-config';
 import type { ProjectTicketConfig } from '../control-plane/registry';
 import { getDefaultSpecQualityGate } from '../spec-quality-gate';
+import { resolveTicketReferences, renderResolvedReferences } from '../control-plane/ticket-references';
 import {
   createSchedule,
   listSchedules,
@@ -247,7 +248,8 @@ async function resolveSpecContext(
   return { ok: true, ctx: { ticketBody, gate: getDefaultSpecQualityGate() } };
 }
 
-export function buildSpecCheckPrompt(gate: string, ticketBody: string): string {
+export function buildSpecCheckPrompt(gate: string, ticketBody: string, referencesSection?: string): string {
+  const refBlock = referencesSection ? `\n${referencesSection}\n` : '';
   return `You are a spec quality gate evaluator. Evaluate the ticket below against every criterion in the quality gate. Be strict — if you'd have to guess, it's a FAIL.
 
 ## Quality Gate Criteria
@@ -257,6 +259,7 @@ ${gate}
 ## Ticket
 
 ${ticketBody}
+${refBlock}
 
 ## Instructions
 
@@ -330,7 +333,9 @@ async function handleSpecCheck(
   if (!res.ok) return res.result;
   const { ctx } = res;
 
-  const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody);
+  const references = await resolveTicketReferences(ctx.ticketBody);
+  const referencesSection = renderResolvedReferences(references);
+  const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody, referencesSection || undefined);
   const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
@@ -560,7 +565,9 @@ export function spawnSpecCheck(
     if (!res.ok) return res.result;
     if (cancelled) throw new Error('Cancelled');
 
-    const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody);
+    const references = await resolveTicketReferences(res.ctx.ticketBody);
+    const referencesSection = renderResolvedReferences(references);
+    const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody, referencesSection || undefined);
     const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }

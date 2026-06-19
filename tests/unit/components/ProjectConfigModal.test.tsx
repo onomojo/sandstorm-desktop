@@ -182,6 +182,11 @@ describe('buildConfigPanes registry', () => {
         get: vi.fn().mockResolvedValue(null),
         set: vi.fn().mockResolvedValue(undefined),
       },
+      providerSecrets: {
+        status: vi.fn().mockResolvedValue({ set: false }),
+        setBundle: vi.fn().mockResolvedValue(undefined),
+        remove: vi.fn().mockResolvedValue(undefined),
+      },
       onDirtyChange: vi.fn(),
       registerSave: vi.fn(),
     };
