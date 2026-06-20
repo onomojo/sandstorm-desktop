@@ -1313,9 +1313,14 @@ export class StackManager {
       if (model) cliArgs.push('--model', model);
       cliArgs.push('--models-json', phaseModelsJson);
       cliArgs.push('--phase-routing-json', phaseRoutingJson);
-      cliArgs.push(prompt);
+      const promptTmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sandstorm-task-'));
+      const promptTmpFile = path.join(promptTmpDir, 'prompt.txt');
+      await fs.promises.writeFile(promptTmpFile, prompt, 'utf-8');
+      cliArgs.push('--file', promptTmpFile);
 
-      const result = await this.runCli(stack.project_dir, cliArgs);
+      const result = await this.runCli(stack.project_dir, cliArgs).finally(() => {
+        fs.promises.rm(promptTmpDir, { recursive: true, force: true }).catch(() => {});
+      });
 
       if (result.exitCode !== 0) {
         throw new SandstormError(
