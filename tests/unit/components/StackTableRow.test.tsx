@@ -507,3 +507,62 @@ describe('StackTableRow verify_blocked_environmental', () => {
     expect(screen.queryByTestId('row-continue-verify-blocked-test-stack')).toBeNull();
   });
 });
+
+describe('StackTableRow reconcileStatus Re-check button', () => {
+  beforeEach(() => {
+    mockSandstormApi();
+    useAppStore.setState({ stacks: [], selectedStackId: null, stackMetrics: {} });
+  });
+
+  it.each([
+    'completed',
+    'failed',
+    'pushed',
+    'pr_created',
+    'verify_blocked_environmental',
+  ])('renders Re-check button for %s status', (status) => {
+    renderRow(makeStack({ status: status as any }));
+    expect(screen.getByTestId('row-reconcile-status-test-stack')).toBeDefined();
+  });
+
+  it('does not render Re-check button for needs_human status', () => {
+    renderRow(makeStack({ status: 'needs_human' }));
+    expect(screen.queryByTestId('row-reconcile-status-test-stack')).toBeNull();
+  });
+
+  it('does not render Re-check button for running status', () => {
+    renderRow(makeStack({ status: 'running' }));
+    expect(screen.queryByTestId('row-reconcile-status-test-stack')).toBeNull();
+  });
+
+  it('does not render Re-check button for session_paused status', () => {
+    renderRow(makeStack({ status: 'session_paused' }));
+    expect(screen.queryByTestId('row-reconcile-status-test-stack')).toBeNull();
+  });
+
+  it('calls reconcileStatus store action when Re-check is clicked', async () => {
+    (window.sandstorm.stacks.reconcileStatus as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ outcome: 'reconciled', status: 'needs_human' });
+    renderRow(makeStack({ status: 'completed' }));
+
+    await act(async () => {
+      screen.getByTestId('row-reconcile-status-test-stack').click();
+    });
+
+    expect(window.sandstorm.stacks.reconcileStatus).toHaveBeenCalledWith('test-stack');
+  });
+
+  it('shows container_gone message when reconcile returns container_gone', async () => {
+    (window.sandstorm.stacks.reconcileStatus as ReturnType<typeof vi.fn>)
+      .mockResolvedValue({ outcome: 'container_gone' });
+    renderRow(makeStack({ status: 'completed' }));
+
+    await act(async () => {
+      screen.getByTestId('row-reconcile-status-test-stack').click();
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('Container not running')).toBeDefined();
+    });
+  });
+});

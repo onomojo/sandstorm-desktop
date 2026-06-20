@@ -80,6 +80,10 @@ export interface SandstormAPI {
     recheckCompleted: (stackId: string) => Promise<{
       outcome: 'resuming_with_session' | 'resumed_fresh' | 'not_token_limited' | 'container_gone' | 'idle';
     }>;
+    reconcileStatus: (stackId: string) => Promise<{
+      outcome: 'reconciled' | 'container_gone' | 'guarded';
+      status?: string;
+    }>;
   };
   tasks: {
     dispatch: (stackId: string, prompt: string, model?: string) => Promise<unknown>;
@@ -294,6 +298,10 @@ export interface SandstormAPI {
     byEpic: (range?: { since: string; until: string }) => Promise<ByEpicEntry[]>;
     refresh: () => Promise<{ ok: true }>;
   };
+  epic: {
+    start: (epicId: string, projectDir: string) => Promise<unknown>;
+    getRunPlan: (epicId: string, projectDir: string) => Promise<unknown>;
+  };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
@@ -339,6 +347,8 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('stacks:restartWithFindings', stackId, updatedTicketBody),
     recheckCompleted: (stackId: string) =>
       ipcRenderer.invoke('stacks:recheckCompleted', stackId),
+    reconcileStatus: (stackId: string) =>
+      ipcRenderer.invoke('stacks:reconcileStatus', stackId),
   },
   tasks: {
     dispatch: (stackId, prompt, model?) =>
@@ -544,6 +554,10 @@ const api: SandstormAPI = {
     byTicket: (range) => ipcRenderer.invoke('stats:telemetry:byTicket', range),
     byEpic: (range) => ipcRenderer.invoke('stats:telemetry:byEpic', range),
     refresh: () => ipcRenderer.invoke('stats:telemetry:refresh'),
+  },
+  epic: {
+    start: (epicId, projectDir) => ipcRenderer.invoke('epic:start', epicId, projectDir),
+    getRunPlan: (epicId, projectDir) => ipcRenderer.invoke('epic:getRunPlan', epicId, projectDir),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>
