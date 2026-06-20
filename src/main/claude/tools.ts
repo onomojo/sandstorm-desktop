@@ -399,14 +399,6 @@ function getRefineDescriptor(projectDir: string) {
   return registry.getEffectiveTouchpointDescriptor(projectDir, 'refine');
 }
 
-function resolveRefineModel(projectDir: string): string | undefined {
-  const routing = registry.getEffectiveRoutingFor(projectDir, 'refine');
-  if (routing.backend === 'opencode') {
-    console.warn('[refine] backend=opencode unsupported for host path; falling back to legacy outer model');
-    return registry.getLegacyEffectiveModels(projectDir).outer_model;
-  }
-  return routing.model;
-}
 
 async function handleSpecCheck(
   ticketId: string,
@@ -425,7 +417,7 @@ async function handleSpecCheck(
   const references = await resolveTicketReferences(ctx.ticketBody);
   const referencesSection = renderResolvedReferences(references);
   const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody, referencesSection || undefined, ctx.epicContext);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
+  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, undefined, 'refine');
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
   return {
@@ -685,7 +677,7 @@ export function spawnSpecCheck(
     const references = await resolveTicketReferences(res.ctx.ticketBody);
     const referencesSection = renderResolvedReferences(references);
     const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody, referencesSection || undefined, res.ctx.epicContext);
-    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' }, resolveRefineModel(projectDir));
+    const { promise: ep, cancel: epCancel } = agentBackend.spawnEphemeralAgent(prompt, projectDir, 0, onChunk, { ticketId, stage: 'spec' }, undefined, 'refine');
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
 
