@@ -399,7 +399,6 @@ function getRefineDescriptor(projectDir: string) {
   return registry.getEffectiveTouchpointDescriptor(projectDir, 'refine');
 }
 
-
 async function handleSpecCheck(
   ticketId: string,
   projectDir: string
