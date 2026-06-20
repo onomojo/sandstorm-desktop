@@ -80,6 +80,10 @@ export interface SandstormAPI {
     recheckCompleted: (stackId: string) => Promise<{
       outcome: 'resuming_with_session' | 'resumed_fresh' | 'not_token_limited' | 'container_gone' | 'idle';
     }>;
+    reconcileStatus: (stackId: string) => Promise<{
+      outcome: 'reconciled' | 'container_gone' | 'guarded';
+      status?: string;
+    }>;
   };
   tasks: {
     dispatch: (stackId: string, prompt: string, model?: string) => Promise<unknown>;
@@ -339,6 +343,8 @@ const api: SandstormAPI = {
       ipcRenderer.invoke('stacks:restartWithFindings', stackId, updatedTicketBody),
     recheckCompleted: (stackId: string) =>
       ipcRenderer.invoke('stacks:recheckCompleted', stackId),
+    reconcileStatus: (stackId: string) =>
+      ipcRenderer.invoke('stacks:reconcileStatus', stackId),
   },
   tasks: {
     dispatch: (stackId, prompt, model?) =>

@@ -1134,6 +1134,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return stackManager.recheckCompletedStack(stackId);
   });
 
+  ipcMain.handle('stacks:reconcileStatus', async (_event, stackId: string) => {
+    return stackManager.reconcileStatus(stackId);
+  });
+
   ipcMain.handle('stacks:selfHealContinue', async (_event, stackId: string) => {
     await stackManager.selfHealContinue(stackId);
   });
