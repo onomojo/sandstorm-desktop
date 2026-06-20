@@ -94,7 +94,7 @@ import { getLatestUserAnswers, ANSWER_COMMENT_MARKER, GATE_FAIL_REPORT_MARKER } 
 import { KANBAN_COLUMNS } from '../shared/kanban';
 import os from 'os';
 import { createUsageEngine, clearUsageCache } from './telemetry/usage-engine';
-import type { DateRange, ByTicketEntry } from './telemetry/usage-engine';
+import type { DateRange, ByTicketEntry, ByEpicEntry } from './telemetry/usage-engine';
 import { readEphemeralTimingRecords } from './agent/ephemeral-timing';
 import { ORCHESTRATOR_TICKET_ID } from './telemetry/types';
 import { TicketRollupStore } from './telemetry/rollup-store';
@@ -829,6 +829,17 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       .filter((r) => r.ticketId != null && r.stage != null)
       .map((r) => ({ ticketId: r.ticketId!, stage: r.stage!, tokens: r.tokens ?? 0 }));
     return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords, taskPhaseWeights).getByTicket(range);
+  });
+
+  ipcMain.handle('stats:telemetry:byEpic', async (_event, range?: DateRange): Promise<ByEpicEntry[]> => {
+    const stepWeights = registry.getStepWeightsByTicket();
+    const taskPhaseWeights = registry.getTaskPhaseTokensByTicket();
+    const allEphemeral = readEphemeralTimingRecords(agentBackend.getEphemeralTimingPath());
+    const ephemeralRecords = allEphemeral
+      .filter((r) => r.ticketId != null && r.stage != null)
+      .map((r) => ({ ticketId: r.ticketId!, stage: r.stage!, tokens: r.tokens ?? 0 }));
+    const epicTasks = registry.getAllEpicTasks();
+    return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords, taskPhaseWeights).getByEpic(epicTasks, range);
   });
 
   ipcMain.handle('stats:telemetry:refresh', async () => {

@@ -1976,3 +1976,86 @@ describe('Registry', () => {
   });
 
 });
+
+// ---------------------------------------------------------------------------
+// getAllEpicTasks / getAllEpicIds
+// ---------------------------------------------------------------------------
+
+describe('getAllEpicTasks and getAllEpicIds', () => {
+  let dbPath: string;
+  let registry: Registry;
+
+  beforeEach(async () => {
+    dbPath = makeTempDb();
+    registry = await Registry.create(dbPath);
+  });
+
+  afterEach(() => {
+    registry.close();
+    cleanupDb(dbPath);
+  });
+
+  it('getAllEpicTasks returns empty array when no epic_tasks exist', () => {
+    expect(registry.getAllEpicTasks()).toEqual([]);
+  });
+
+  it('getAllEpicIds returns empty array when no epic_tasks exist', () => {
+    expect(registry.getAllEpicIds()).toEqual([]);
+  });
+
+  it('getAllEpicTasks returns all rows across all epics', () => {
+    registry.upsertEpicTask('EPIC-A', 'TICKET-1', { role: 'build', origin: 'planned' });
+    registry.upsertEpicTask('EPIC-A', 'TICKET-2', { role: 'reconcile', origin: 'gap' });
+    registry.upsertEpicTask('EPIC-B', 'TICKET-3', { role: 'build', origin: 'planned' });
+
+    const tasks = registry.getAllEpicTasks();
+    expect(tasks).toHaveLength(3);
+
+    const epicIds = tasks.map((t) => t.epic_id);
+    expect(epicIds).toContain('EPIC-A');
+    expect(epicIds).toContain('EPIC-B');
+
+    const ticket1 = tasks.find((t) => t.ticket_id === 'TICKET-1');
+    expect(ticket1?.role).toBe('build');
+    expect(ticket1?.origin).toBe('planned');
+
+    const ticket2 = tasks.find((t) => t.ticket_id === 'TICKET-2');
+    expect(ticket2?.role).toBe('reconcile');
+    expect(ticket2?.origin).toBe('gap');
+  });
+
+  it('getAllEpicTasks returns EpicTask shape with all fields', () => {
+    registry.upsertEpicTask('EPIC-1', 'TICKET-X', { role: 'build', origin: 'planned', critId: 'CRIT-99' });
+
+    const [task] = registry.getAllEpicTasks();
+    expect(typeof task.epic_id).toBe('string');
+    expect(typeof task.ticket_id).toBe('string');
+    expect(task.role).toBe('build');
+    expect(task.origin).toBe('planned');
+    expect(task.crit_id).toBe('CRIT-99');
+    expect(typeof task.gap_cycles).toBe('number');
+    expect(typeof task.done).toBe('number');
+  });
+
+  it('getAllEpicIds returns distinct epic IDs in order', () => {
+    registry.upsertEpicTask('EPIC-Z', 'TICKET-1', { role: 'build', origin: 'planned' });
+    registry.upsertEpicTask('EPIC-A', 'TICKET-2', { role: 'build', origin: 'planned' });
+    registry.upsertEpicTask('EPIC-Z', 'TICKET-3', { role: 'reconcile', origin: 'gap' });
+
+    const ids = registry.getAllEpicIds();
+    expect(ids).toHaveLength(2);
+    expect(ids).toContain('EPIC-A');
+    expect(ids).toContain('EPIC-Z');
+    // Should be sorted
+    expect(ids).toEqual([...ids].sort());
+  });
+
+  it('getAllEpicIds returns each epic_id once even with multiple tickets', () => {
+    registry.upsertEpicTask('EPIC-1', 'T-A', { role: 'build', origin: 'planned' });
+    registry.upsertEpicTask('EPIC-1', 'T-B', { role: 'reconcile', origin: 'gap' });
+    registry.upsertEpicTask('EPIC-1', 'T-C', { role: 'build', origin: 'planned' });
+
+    const ids = registry.getAllEpicIds();
+    expect(ids).toEqual(['EPIC-1']);
+  });
+});
