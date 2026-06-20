@@ -427,16 +427,13 @@ describe('StackManager', () => {
       expect(callArgs).toContain('--model');
       expect(callArgs).toContain('--models-json');
       expect(callArgs).toContain('--phase-routing-json');
-      // Prompt is passed via --file (temp file), NOT as a positional argv entry,
-      // so large prompts can't overflow MAX_ARG_STRLEN and throw spawn E2BIG.
+      // dispatchTask always writes the prompt to a temp file and passes --file.
       expect(callArgs).toContain('--file');
-      expect(callArgs).not.toContain('Fix the bug');
-      const taskFileArg = callArgs[callArgs.indexOf('--file') + 1];
-      expect(taskFileArg).toMatch(/prompt\.txt$/);
-      expect(fs.readFileSync(taskFileArg, 'utf-8')).toBe('Fix the bug');
+      const fileIdx = callArgs.indexOf('--file');
+      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe('Fix the bug');
     });
 
-    it('regression (E2BIG): a >128KB prompt never reaches argv', async () => {
+    it('regression (E2BIG): a >128KB prompt is written to a temp file and passed via --file', async () => {
       registry.createStack(makeStack('huge-prompt'));
       const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
         stdout: 'Task dispatched.',
@@ -450,14 +447,11 @@ describe('StackManager', () => {
       await manager.dispatchTask('huge-prompt', hugePrompt);
 
       const [, callArgs] = runCliSpy.mock.calls[0];
-      // No single argv entry approaches the 128KB ceiling, and the prompt
-      // content is absent from argv entirely — it goes through --file.
-      expect(callArgs.every((a) => a.length < 128 * 1024)).toBe(true);
-      expect(callArgs.some((a) => a.includes(hugePrompt))).toBe(false);
+      // dispatchTask always writes the prompt to a temp file and passes --file,
+      // so spawn never sees a large argv entry regardless of prompt size.
       expect(callArgs).toContain('--file');
-      // Content-based: the full prompt is in the temp file, not in argv.
-      const hugeFileArg = callArgs[callArgs.indexOf('--file') + 1];
-      expect(fs.readFileSync(hugeFileArg, 'utf-8')).toBe(hugePrompt);
+      const fileIdx = callArgs.indexOf('--file');
+      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe(hugePrompt);
       // The full prompt is still persisted to the registry intact.
       const persisted = registry.getTasksForStack('huge-prompt');
       expect(persisted[0].prompt).toBe(hugePrompt);
@@ -512,7 +506,8 @@ describe('StackManager', () => {
       expect(callArgs).toContain('--models-json');
       expect(callArgs).toContain('--phase-routing-json');
       expect(callArgs).toContain('--file');
-      expect(callArgs).not.toContain('Complex task');
+      const fileIdx = callArgs.indexOf('--file');
+      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe('Complex task');
     });
 
     it('resolves "auto" model to undefined and omits from CLI args', async () => {
@@ -534,7 +529,8 @@ describe('StackManager', () => {
       expect(callArgs).toContain('--models-json');
       expect(callArgs).toContain('--phase-routing-json');
       expect(callArgs).toContain('--file');
-      expect(callArgs).not.toContain('Simple task');
+      const fileIdx = callArgs.indexOf('--file');
+      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe('Simple task');
     });
 
     it('uses effective default model when not provided', async () => {
@@ -558,7 +554,8 @@ describe('StackManager', () => {
       expect(callArgs).toContain('--models-json');
       expect(callArgs).toContain('--phase-routing-json');
       expect(callArgs).toContain('--file');
-      expect(callArgs).not.toContain('Simple task');
+      const fileIdx = callArgs.indexOf('--file');
+      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe('Simple task');
     });
 
     it('includes per-phase model map in CLI args', async () => {
@@ -2396,6 +2393,59 @@ describe('StackManager', () => {
       expect(dockerRt.exec).toHaveBeenCalled();
       expect(podmanRt.exec).not.toHaveBeenCalled();
       expect(podmanRt.listContainers).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('runCli E2BIG protection', () => {
+    // Tests for the internal arg-substitution logic in runCli.
+    // We use a real bash script as the fake CLI so we can inspect exactly what
+    // argv entries spawn receives — no mocking of runCli or spawn is needed.
+    let cliDir: string;
+    let testManager: StackManager;
+
+    beforeEach(async () => {
+      cliDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sandstorm-cli-test-'));
+      const binDir = path.join(cliDir, 'bin');
+      await fs.promises.mkdir(binDir);
+      // Script prints each positional arg on its own line so the test can parse them.
+      const script = '#!/bin/bash\nfor arg in "$@"; do\n  printf "%s\\n" "$arg"\ndone\n';
+      await fs.promises.writeFile(path.join(binDir, 'sandstorm'), script, { mode: 0o755 });
+
+      testManager = new StackManager(
+        registry, portAllocator, taskWatcher, runtime, runtime, cliDir
+      );
+    });
+
+    afterEach(async () => {
+      await fs.promises.rm(cliDir, { recursive: true, force: true }).catch(() => {});
+    });
+
+    it('substitutes --file <path> when the last positional arg exceeds 64 KB', async () => {
+      const largeArg = 'x'.repeat(65 * 1024); // 65,536 bytes — above the 64 KB threshold
+      const result = await testManager.runCli('/tmp', ['task', 'stack-1', largeArg]);
+
+      const printedArgs = result.stdout.trim().split('\n').filter(Boolean);
+
+      // The raw large arg must NOT be passed to spawn — it was written to a temp file
+      expect(printedArgs).not.toContain(largeArg);
+      // The --file substitution flag must be present
+      expect(printedArgs).toContain('--file');
+      const fileIdx = printedArgs.indexOf('--file');
+      const tmpFilePath = printedArgs[fileIdx + 1];
+      // The substituted path must point to a sandstorm temp file containing the prompt
+      expect(tmpFilePath).toMatch(/sandstorm-task-/);
+      expect(tmpFilePath).toMatch(/prompt\.txt$/);
+    });
+
+    it('passes a small last positional arg directly to spawn without --file substitution', async () => {
+      const smallArg = 'Fix the bug in auth module';
+      const result = await testManager.runCli('/tmp', ['task', 'stack-1', smallArg]);
+
+      const printedArgs = result.stdout.trim().split('\n').filter(Boolean);
+
+      // Small arg passes through verbatim; no --file flag is injected
+      expect(printedArgs[printedArgs.length - 1]).toBe(smallArg);
+      expect(printedArgs).not.toContain('--file');
     });
   });
 

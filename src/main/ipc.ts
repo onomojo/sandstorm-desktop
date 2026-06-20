@@ -54,6 +54,7 @@ import {
   cleanupLegacyPorts,
 } from './compose-generator';
 import { getDefaultReviewPrompt } from './review-prompt';
+import { initEpicRunner, getEpicRunner } from './control-plane/epic-runner';
 import {
   defaultSpecGateDeps,
   fetchTicketForRenderer,
@@ -80,7 +81,7 @@ import {
   createPullRequest,
 } from './control-plane/pr-creator';
 import { showNotification } from './tray';
-import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection, closeTicketWithConfig, markTicketDoneWithConfig } from './control-plane/ticket-config';
+import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection, closeTicketWithConfig, markTicketDoneWithConfig, fetchTicketWithConfig } from './control-plane/ticket-config';
 import { withRetry } from './control-plane/retry-with-backoff';
 import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
@@ -94,7 +95,7 @@ import { getLatestUserAnswers, ANSWER_COMMENT_MARKER, GATE_FAIL_REPORT_MARKER } 
 import { KANBAN_COLUMNS } from '../shared/kanban';
 import os from 'os';
 import { createUsageEngine, clearUsageCache } from './telemetry/usage-engine';
-import type { DateRange, ByTicketEntry } from './telemetry/usage-engine';
+import type { DateRange, ByTicketEntry, ByEpicEntry } from './telemetry/usage-engine';
 import { readEphemeralTimingRecords } from './agent/ephemeral-timing';
 import { ORCHESTRATOR_TICKET_ID } from './telemetry/types';
 import { TicketRollupStore } from './telemetry/rollup-store';
@@ -204,9 +205,34 @@ function autoDetectVerifyLines(directory: string): string[] {
 }
 
 export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
-  // Wire up stack update notifications to the renderer
+  // Initialize the epic runner singleton with live dependencies
+  const epicRunner = initEpicRunner({
+    listStacks: () => registry.listStacks(),
+    getEpicTasks: (epicId) => registry.getEpicTasks(epicId),
+    upsertEpicRunState: (epicId, projectDir, status) =>
+      registry.upsertEpicRunState(epicId, projectDir, status),
+    upsertEpicTask: (epicId, ticketId, opts) =>
+      registry.upsertEpicTask(epicId, ticketId, opts),
+    setEpicTaskDone: (epicId, ticketId) => registry.setEpicTaskDone(epicId, ticketId),
+    getEpicRunState: (epicId) => registry.getEpicRunState(epicId),
+    getDarkFactoryEnabled: (projectDir) => registry.getDarkFactoryEnabled(projectDir),
+    getEpicMaxParallelStacks: (projectDir) => registry.getEpicMaxParallelStacks(projectDir),
+    getProjectTicketConfig: (projectDir) => registry.getProjectTicketConfig(projectDir),
+    createStack: (opts) => stackManager.createStack(opts),
+    dispatchTask: (stackId, prompt) => stackManager.dispatchTask(stackId, prompt),
+    fetchTicketWithConfig,
+  });
+
+  epicRunner.setOnStatusUpdate((_epicId, snapshot) => {
+    mainWindow?.webContents.send('epic:status', snapshot);
+  });
+
+  // Wire up stack update notifications to the renderer and advance any running epics
   stackManager.setOnStackUpdate(() => {
     mainWindow?.webContents.send('stacks:updated');
+    getEpicRunner().onAnyStackUpdated().catch((err) => {
+      console.warn('[EpicRunner] onAnyStackUpdated error:', err);
+    });
   });
 
   // --- Agent Sessions (backend-agnostic) ---
@@ -831,6 +857,17 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords, taskPhaseWeights).getByTicket(range);
   });
 
+  ipcMain.handle('stats:telemetry:byEpic', async (_event, range?: DateRange): Promise<ByEpicEntry[]> => {
+    const stepWeights = registry.getStepWeightsByTicket();
+    const taskPhaseWeights = registry.getTaskPhaseTokensByTicket();
+    const allEphemeral = readEphemeralTimingRecords(agentBackend.getEphemeralTimingPath());
+    const ephemeralRecords = allEphemeral
+      .filter((r) => r.ticketId != null && r.stage != null)
+      .map((r) => ({ ticketId: r.ticketId!, stage: r.stage!, tokens: r.tokens ?? 0 }));
+    const epicTasks = registry.getAllEpicTasks();
+    return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords, taskPhaseWeights).getByEpic(epicTasks, range);
+  });
+
   ipcMain.handle('stats:telemetry:refresh', async () => {
     clearUsageCache();
     return { ok: true };
@@ -1121,6 +1158,10 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('stacks:recheckCompleted', async (_event, stackId: string) => {
     return stackManager.recheckCompletedStack(stackId);
+  });
+
+  ipcMain.handle('stacks:reconcileStatus', async (_event, stackId: string) => {
+    return stackManager.reconcileStatus(stackId);
   });
 
   ipcMain.handle('stacks:selfHealContinue', async (_event, stackId: string) => {
@@ -1795,6 +1836,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('pr:autoResolve', async (_event, ticketId: string, projectDir: string) => {
     return stackManager.autoResolveConflicts(ticketId, projectDir);
+  });
+
+  // --- Epic Runner ---
+
+  ipcMain.handle('epic:start', async (_event, epicId: string, projectDir: string) => {
+    return getEpicRunner().startEpic(epicId, projectDir);
+  });
+
+  ipcMain.handle('epic:getRunPlan', async (_event, epicId: string, projectDir: string) => {
+    return getEpicRunner().getRunPlan(epicId, projectDir);
   });
 
 }

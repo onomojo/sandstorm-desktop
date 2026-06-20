@@ -14,13 +14,14 @@
 
 import fs from 'fs';
 import { parseTranscriptRoots, findJSONLFiles, type ParseResult } from './parser';
-import { aggregateSummary, aggregateDaily, aggregateByModel, aggregateSessions, aggregateByTicket } from './aggregator';
+import { aggregateSummary, aggregateDaily, aggregateByModel, aggregateSessions, aggregateByTicket, aggregateByEpic } from './aggregator';
 import type { StepWeightRow, EphemeralWeightRecord, TaskPhaseWeightRow } from './aggregator';
-import type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry } from './types';
+import type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry, ByEpicEntry } from './types';
+import type { EpicTask } from '../control-plane/registry';
 
 export type { StepWeightRow, EphemeralWeightRecord, TaskPhaseWeightRow };
 
-export type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry };
+export type { DateRange, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry, ByEpicEntry };
 
 export interface UsageEngine {
   getSummary(range: DateRange): TelemetrySummary;
@@ -28,6 +29,7 @@ export interface UsageEngine {
   getByModel(range: DateRange): ByModelEntry[];
   getSessions(range: DateRange): SessionEntry[];
   getByTicket(range?: DateRange): ByTicketEntry[];
+  getByEpic(epicTasks: EpicTask[], range?: DateRange): ByEpicEntry[];
 }
 
 // ---------------------------------------------------------------------------
@@ -130,6 +132,18 @@ export function createUsageEngine(
           })
         : entries;
       return aggregateByTicket(filtered, stackRoots, stepWeights, ephemeralRecords, taskPhaseWeights);
+    },
+
+    getByEpic(epicTasks: EpicTask[], range?: DateRange): ByEpicEntry[] {
+      const { entries } = loadCached(roots);
+      const filtered = range
+        ? entries.filter((e) => {
+            const date = e.timestamp.slice(0, 10);
+            return date >= range.since && date <= range.until;
+          })
+        : entries;
+      const byTicket = aggregateByTicket(filtered, stackRoots, stepWeights, ephemeralRecords, taskPhaseWeights);
+      return aggregateByEpic(byTicket, epicTasks);
     },
   };
 }

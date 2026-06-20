@@ -38,6 +38,8 @@ export function mockSandstormApi() {
       askClarifyingQuestions: vi.fn().mockResolvedValue(undefined),
       selfHealContinue: vi.fn().mockResolvedValue(undefined),
       restartWithFindings: vi.fn().mockResolvedValue({ newStackId: 'feat/123-fix-r2' }),
+      recheckCompleted: vi.fn().mockResolvedValue({ outcome: 'not_token_limited' }),
+      reconcileStatus: vi.fn().mockResolvedValue({ outcome: 'container_gone' }),
     },
     tasks: {
       dispatch: vi.fn().mockResolvedValue({ id: 1, stack_id: 'test', prompt: '', model: null, status: 'running' }),

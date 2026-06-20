@@ -399,15 +399,6 @@ function getRefineDescriptor(projectDir: string) {
   return registry.getEffectiveTouchpointDescriptor(projectDir, 'refine');
 }
 
-function resolveRefineModel(projectDir: string): string | undefined {
-  const routing = registry.getEffectiveRoutingFor(projectDir, 'refine');
-  if (routing.backend === 'opencode') {
-    console.warn('[refine] backend=opencode unsupported for host path; falling back to legacy outer model');
-    return registry.getLegacyEffectiveModels(projectDir).outer_model;
-  }
-  return routing.model;
-}
-
 async function handleSpecCheck(
   ticketId: string,
   projectDir: string

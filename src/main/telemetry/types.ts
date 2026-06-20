@@ -67,6 +67,24 @@ export interface ByModelEntry {
   unpriced: boolean; // true when no price is known for this model
 }
 
+/**
+ * Per-epic cost rollup derived from per-ticket attribution joined with epic_tasks membership.
+ *
+ * build + reconcile partitions the total by epic_tasks.role.
+ * reconcileRework is an overlay dimension (not a partition): it covers tickets with
+ * origin='gap', which also land in build or reconcile by their role. The invariant is
+ * reconcileRework.cost ≤ build.cost + reconcile.cost.
+ */
+export interface ByEpicEntry {
+  epicId: string;
+  cost: number;
+  tokens: TokenCounts;
+  build: { cost: number; tokens: TokenCounts };
+  reconcile: { cost: number; tokens: TokenCounts };
+  reconcileRework: { cost: number; tokens: TokenCounts };
+  memberCount: number;
+}
+
 export interface SessionEntry {
   sid: string;
   ticket: string | null;  // ticket attributed from stack manifest; null for host/orchestrator sessions

@@ -1,7 +1,11 @@
 import { describe, it, expect } from 'vitest';
 import { computeLifecycleSplit, LIFECYCLE_STAGES } from '../../../src/main/telemetry/lifecycle-split';
+import type { LifecycleCosts } from '../../../src/main/telemetry/types';
 
-const STAGES = LIFECYCLE_STAGES;
+// LIFECYCLE_STAGES includes 'reconcile' (7 items) — used by aggregateByEpic role bucketing.
+// computeLifecycleSplit returns LifecycleCosts (6 keys), which excludes 'reconcile' because
+// reconcile has no per-ticket weight producer; it is sourced at the epic level.
+const LC_KEYS: (keyof LifecycleCosts)[] = ['refine', 'spec', 'execution', 'review', 'verify', 'pr'];
 
 describe('computeLifecycleSplit', () => {
   // --- Sum invariant ---
@@ -9,7 +13,7 @@ describe('computeLifecycleSplit', () => {
   it('sum invariant: all stage values sum to cost exactly', () => {
     const result = computeLifecycleSplit(10.5, { execution: 3, review: 1 });
     expect(result).not.toBeNull();
-    const sum = STAGES.reduce((s, stage) => s + result![stage], 0);
+    const sum = LC_KEYS.reduce((s, stage) => s + result![stage], 0);
     expect(Math.abs(sum - 10.5)).toBeLessThan(1e-10);
   });
 
@@ -17,7 +21,7 @@ describe('computeLifecycleSplit', () => {
     const cost = 0.001234;
     const result = computeLifecycleSplit(cost, { refine: 2, spec: 3, execution: 7, review: 5, pr: 1 });
     expect(result).not.toBeNull();
-    const sum = STAGES.reduce((s, stage) => s + result![stage], 0);
+    const sum = LC_KEYS.reduce((s, stage) => s + result![stage], 0);
     expect(Math.abs(sum - cost)).toBeLessThan(1e-10);
   });
 
@@ -25,16 +29,16 @@ describe('computeLifecycleSplit', () => {
     const cost = 7.77;
     const result = computeLifecycleSplit(cost, { execution: 100 });
     expect(result).not.toBeNull();
-    const sum = STAGES.reduce((s, stage) => s + result![stage], 0);
+    const sum = LC_KEYS.reduce((s, stage) => s + result![stage], 0);
     expect(Math.abs(sum - cost)).toBeLessThan(1e-10);
   });
 
-  // --- Six keys always present ---
+  // --- Six LifecycleCosts keys always present (reconcile excluded from return) ---
 
   it('six keys always present: only execution+review weights given', () => {
     const result = computeLifecycleSplit(5.0, { execution: 3, review: 1 });
     expect(result).not.toBeNull();
-    expect(Object.keys(result!).sort()).toEqual(STAGES.slice().sort());
+    expect(Object.keys(result!).sort()).toEqual(LC_KEYS.slice().sort());
     expect(result!.refine).toBe(0);
     expect(result!.spec).toBe(0);
     expect(result!.verify).toBe(0);
@@ -44,7 +48,12 @@ describe('computeLifecycleSplit', () => {
   it('six keys always present: all stages have weights', () => {
     const result = computeLifecycleSplit(1.0, { refine: 1, spec: 1, execution: 1, review: 1, pr: 1 });
     expect(result).not.toBeNull();
-    expect(Object.keys(result!).sort()).toEqual(STAGES.slice().sort());
+    expect(Object.keys(result!).sort()).toEqual(LC_KEYS.slice().sort());
+  });
+
+  it('LIFECYCLE_STAGES includes reconcile for epic-level role bucketing', () => {
+    expect(LIFECYCLE_STAGES).toContain('reconcile');
+    expect(LIFECYCLE_STAGES.length).toBe(7);
   });
 
   // --- Skipped stage → 0 ---
@@ -82,7 +91,7 @@ describe('computeLifecycleSplit', () => {
   it('zero cost returns all-zero object', () => {
     const result = computeLifecycleSplit(0, { execution: 10, review: 5 });
     expect(result).not.toBeNull();
-    for (const stage of STAGES) {
+    for (const stage of LC_KEYS) {
       expect(result![stage]).toBe(0);
     }
   });
@@ -90,7 +99,7 @@ describe('computeLifecycleSplit', () => {
   it('zero cost with no weights returns all-zero object', () => {
     const result = computeLifecycleSplit(0, {});
     expect(result).not.toBeNull();
-    for (const stage of STAGES) {
+    for (const stage of LC_KEYS) {
       expect(result![stage]).toBe(0);
     }
   });
@@ -136,7 +145,7 @@ describe('computeLifecycleSplit', () => {
     const cost = 1.0 / 3.0; // 0.333...
     const result = computeLifecycleSplit(cost, { execution: 1 });
     expect(result).not.toBeNull();
-    const sum = STAGES.reduce((s, stage) => s + result![stage], 0);
+    const sum = LC_KEYS.reduce((s, stage) => s + result![stage], 0);
     expect(Math.abs(sum - cost)).toBeLessThan(1e-10);
     expect(result!.execution).toBeCloseTo(cost, 10);
   });
