@@ -204,8 +204,7 @@ describe('MCP tools', () => {
         '/proj',
         1_800_000,
         { ticketId: '42', stage: 'spec' },
-        undefined,
-        'refine',
+        'sonnet', // model resolved from refine touchpoint routing
       );
       expect(result.passed).toBe(true);
       expect(result.report).toContain('PASS');
@@ -983,24 +982,24 @@ describe('MCP tools', () => {
       vi.mocked(registry.getEffectiveTouchpointDescriptor).mockReturnValue({ backend: 'claude', provider: 'anthropic', model: 'sonnet', credentials: {} });
     });
 
-    it('handleSpecCheck passes touchpoint "refine" to runEphemeralAgent', async () => {
+    it('handleSpecCheck passes resolved model to runEphemeralAgent', async () => {
       await handleToolCall('spec_check', { ticketId: 'T-99', projectDir: '/proj' });
 
       const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
       expect(calls.length).toBeGreaterThan(0);
       const lastCall = calls[calls.length - 1];
-      expect(lastCall[4]).toBeUndefined(); // model not passed directly
-      expect(lastCall[5]).toBe('refine');  // touchpoint passed
+      expect(lastCall[4]).toBe('sonnet'); // model resolved from refine touchpoint routing
+      expect(lastCall[5]).toBeUndefined(); // no touchpoint (model resolved directly)
     });
 
-    it('spawnSpecCheck passes touchpoint "refine" to spawnEphemeralAgent', async () => {
+    it('spawnSpecCheck passes resolved model to spawnEphemeralAgent', async () => {
       spawnSpecCheck('T-99', '/proj');
       await vi.waitFor(() => expect(agentBackend.spawnEphemeralAgent).toHaveBeenCalled());
 
       const calls = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls;
       const lastCall = calls[calls.length - 1];
-      expect(lastCall[5]).toBeUndefined(); // model not passed directly
-      expect(lastCall[6]).toBe('refine');  // touchpoint passed
+      expect(lastCall[5]).toBe('sonnet'); // model resolved from refine touchpoint routing
+      expect(lastCall[6]).toBeUndefined(); // no touchpoint (model resolved directly)
     });
 
     it('shows needs_key notification and does NOT run agent when opencode backend has no credentials', async () => {

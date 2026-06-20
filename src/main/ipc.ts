@@ -54,6 +54,7 @@ import {
   cleanupLegacyPorts,
 } from './compose-generator';
 import { getDefaultReviewPrompt } from './review-prompt';
+import { initEpicRunner, getEpicRunner } from './control-plane/epic-runner';
 import {
   defaultSpecGateDeps,
   fetchTicketForRenderer,
@@ -80,7 +81,7 @@ import {
   createPullRequest,
 } from './control-plane/pr-creator';
 import { showNotification } from './tray';
-import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection, closeTicketWithConfig, markTicketDoneWithConfig } from './control-plane/ticket-config';
+import { createTicketWithConfig, updateTicketWithConfig, fetchRawBodyWithConfig, testJiraConnection, closeTicketWithConfig, markTicketDoneWithConfig, fetchTicketWithConfig } from './control-plane/ticket-config';
 import { withRetry } from './control-plane/retry-with-backoff';
 import type { TicketListError } from './control-plane/ticket-config';
 import type { ProjectTicketConfig } from './control-plane/registry';
@@ -204,9 +205,34 @@ function autoDetectVerifyLines(directory: string): string[] {
 }
 
 export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
-  // Wire up stack update notifications to the renderer
+  // Initialize the epic runner singleton with live dependencies
+  const epicRunner = initEpicRunner({
+    listStacks: () => registry.listStacks(),
+    getEpicTasks: (epicId) => registry.getEpicTasks(epicId),
+    upsertEpicRunState: (epicId, projectDir, status) =>
+      registry.upsertEpicRunState(epicId, projectDir, status),
+    upsertEpicTask: (epicId, ticketId, opts) =>
+      registry.upsertEpicTask(epicId, ticketId, opts),
+    setEpicTaskDone: (epicId, ticketId) => registry.setEpicTaskDone(epicId, ticketId),
+    getEpicRunState: (epicId) => registry.getEpicRunState(epicId),
+    getDarkFactoryEnabled: (projectDir) => registry.getDarkFactoryEnabled(projectDir),
+    getEpicMaxParallelStacks: (projectDir) => registry.getEpicMaxParallelStacks(projectDir),
+    getProjectTicketConfig: (projectDir) => registry.getProjectTicketConfig(projectDir),
+    createStack: (opts) => stackManager.createStack(opts),
+    dispatchTask: (stackId, prompt) => stackManager.dispatchTask(stackId, prompt),
+    fetchTicketWithConfig,
+  });
+
+  epicRunner.setOnStatusUpdate((_epicId, snapshot) => {
+    mainWindow?.webContents.send('epic:status', snapshot);
+  });
+
+  // Wire up stack update notifications to the renderer and advance any running epics
   stackManager.setOnStackUpdate(() => {
     mainWindow?.webContents.send('stacks:updated');
+    getEpicRunner().onAnyStackUpdated().catch((err) => {
+      console.warn('[EpicRunner] onAnyStackUpdated error:', err);
+    });
   });
 
   // --- Agent Sessions (backend-agnostic) ---
@@ -1810,6 +1836,16 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   ipcMain.handle('pr:autoResolve', async (_event, ticketId: string, projectDir: string) => {
     return stackManager.autoResolveConflicts(ticketId, projectDir);
+  });
+
+  // --- Epic Runner ---
+
+  ipcMain.handle('epic:start', async (_event, epicId: string, projectDir: string) => {
+    return getEpicRunner().startEpic(epicId, projectDir);
+  });
+
+  ipcMain.handle('epic:getRunPlan', async (_event, epicId: string, projectDir: string) => {
+    return getEpicRunner().getRunPlan(epicId, projectDir);
   });
 
 }
