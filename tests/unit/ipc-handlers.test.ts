@@ -81,6 +81,7 @@ const {
     getDb: vi.fn().mockReturnValue({}),
     getStepWeightsByTicket: vi.fn().mockReturnValue([]),
     getTaskPhaseTokensByTicket: vi.fn().mockReturnValue([]),
+    getAllEpicTasks: vi.fn().mockReturnValue([]),
     getGlobalBackendSettings: vi.fn().mockReturnValue({ inner_backend: 'claude', outer_backend: 'claude', inner_provider: null, inner_model: null, outer_provider: null, outer_model: null }),
     setGlobalBackendSettings: vi.fn(),
     getProjectBackendSettings: vi.fn().mockReturnValue(null),
@@ -196,6 +197,7 @@ const {
     getByModel: vi.fn(),
     getSessions: vi.fn(),
     getByTicket: vi.fn().mockReturnValue([]),
+    getByEpic: vi.fn().mockReturnValue([]),
   };
 
   const mockRollupStoreInstance = {
@@ -764,6 +766,26 @@ describe('IPC Handlers', () => {
       const result = await invokeHandler('stats:telemetry:byTicket');
 
       expect(mockUsageEngine.getByTicket).toHaveBeenCalledOnce();
+      expect(result).toEqual(entries);
+    });
+
+    it('stats:telemetry:byEpic delegates to usageEngine.getByEpic and returns the array', async () => {
+      const entries = [
+        {
+          epicId: 'EPIC-1',
+          cost: 5.0,
+          tokens: { input: 1000, output: 500, cacheCreate: 0, cacheRead: 0, total: 1500 },
+          build: { cost: 3.0, tokens: { input: 600, output: 300, cacheCreate: 0, cacheRead: 0, total: 900 } },
+          reconcile: { cost: 2.0, tokens: { input: 400, output: 200, cacheCreate: 0, cacheRead: 0, total: 600 } },
+          reconcileRework: { cost: 1.0, tokens: { input: 200, output: 100, cacheCreate: 0, cacheRead: 0, total: 300 } },
+          memberCount: 3,
+        },
+      ];
+      mockUsageEngine.getByEpic.mockReturnValueOnce(entries);
+
+      const result = await invokeHandler('stats:telemetry:byEpic');
+
+      expect(mockUsageEngine.getByEpic).toHaveBeenCalledOnce();
       expect(result).toEqual(entries);
     });
 
@@ -2761,6 +2783,7 @@ describe('IPC Handlers', () => {
       'stats:telemetry:byModel',
       'stats:telemetry:session',
       'stats:telemetry:byTicket',
+      'stats:telemetry:byEpic',
       'stats:telemetry:refresh',
       'epic:start',
       'epic:getRunPlan',

@@ -2259,6 +2259,18 @@ export class Registry {
     ).all(epicId) as EpicTask[];
   }
 
+  getAllEpicTasks(): EpicTask[] {
+    return this.db.prepare(
+      'SELECT epic_id, ticket_id, role, origin, crit_id, gap_cycles, done FROM epic_tasks'
+    ).all() as EpicTask[];
+  }
+
+  getAllEpicIds(): string[] {
+    return (this.db.prepare(
+      'SELECT DISTINCT epic_id FROM epic_tasks ORDER BY epic_id'
+    ).all() as { epic_id: string }[]).map((r) => r.epic_id);
+  }
+
   /**
    * Reverse lookup: find the epic a ticket belongs to. Read-only; consumes the
    * existing `epic_tasks` table shape (no write, no schema change).

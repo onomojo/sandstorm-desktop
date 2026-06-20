@@ -302,67 +302,60 @@ export class StackManager {
 
   /**
    * Run a sandstorm CLI command in the given project directory.
+   *
+   * E2BIG protection: Linux's per-argument limit (MAX_ARG_STRLEN) is 128 KB.
+   * If the last positional arg (typically a large dispatch prompt) exceeds
+   * 64 KB, it is written to a temp file and passed as `--file <path>` instead,
+   * so spawn never receives an oversized argument. Callers always pass the
+   * prompt as the last positional arg; this method handles the substitution
+   * transparently, keeping the spy-visible arg list clean for tests.
    */
-  runCli(
+  async runCli(
     projectDir: string,
     args: string[],
     env?: Record<string, string>
   ): Promise<CliResult> {
-    return new Promise((resolve, reject) => {
-      const child = spawn('bash', [this.getCliBin(), ...args], {
-        cwd: projectDir,
-        env: {
-          ...process.env,
-          ...env,
-          PATH: [
-            `${process.env.HOME}/.local/bin`,
-            '/opt/homebrew/bin',
-            '/usr/local/bin',
-            '/usr/local/sbin',
-            process.env.PATH,
-          ].join(':'),
-        },
-        stdio: ['ignore', 'pipe', 'pipe'],
-      });
+    const MAX_ARG_BYTES = 64 * 1024;
+    let spawnArgs = args;
+    let tmpDir: string | undefined;
 
-      let stdout = '';
-      let stderr = '';
-      child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
-      child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
-      child.on('close', (code) =>
-        resolve({ stdout, stderr, exitCode: code ?? 1 })
-      );
-      child.on('error', reject);
-    });
-  }
-
-  /**
-   * Run a CLI `task` dispatch, passing the prompt via a temp `--file` rather
-   * than as a positional CLI argument.
-   *
-   * A dispatch prompt is the ticket body plus up to ~1 MB of inlined external
-   * references (see resolveTicketReferences). Passed as a single argv entry it
-   * overflows Linux's per-argument limit (MAX_ARG_STRLEN = 128 KB) and makes
-   * `spawn` throw `E2BIG` on the host before the CLI even runs. The CLI's
-   * `task` command already accepts `--file <path>` and reads the prompt from
-   * it, so route large prompts through a temp file. No size limit applies to
-   * file contents.
-   *
-   * `cliArgs` must contain every flag EXCEPT the positional prompt; the prompt
-   * is appended as `--file <tmp>`.
-   */
-  private async runCliTaskFile(
-    projectDir: string,
-    cliArgs: string[],
-    prompt: string
-  ): Promise<CliResult> {
-    const tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sandstorm-task-'));
-    const tmpFile = path.join(tmpDir, 'prompt.txt');
-    await fs.promises.writeFile(tmpFile, prompt, 'utf-8');
     try {
-      return await this.runCli(projectDir, [...cliArgs, '--file', tmpFile]);
+      const lastArg = args[args.length - 1];
+      if (lastArg && !lastArg.startsWith('-') && Buffer.byteLength(lastArg, 'utf8') > MAX_ARG_BYTES) {
+        tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sandstorm-task-'));
+        const tmpFile = path.join(tmpDir, 'prompt.txt');
+        await fs.promises.writeFile(tmpFile, lastArg, 'utf-8');
+        spawnArgs = [...args.slice(0, -1), '--file', tmpFile];
+      }
+
+      return await new Promise<CliResult>((resolve, reject) => {
+        const child = spawn('bash', [this.getCliBin(), ...spawnArgs], {
+          cwd: projectDir,
+          env: {
+            ...process.env,
+            ...env,
+            PATH: [
+              `${process.env.HOME}/.local/bin`,
+              '/opt/homebrew/bin',
+              '/usr/local/bin',
+              '/usr/local/sbin',
+              process.env.PATH,
+            ].join(':'),
+          },
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+
+        let stdout = '';
+        let stderr = '';
+        child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
+        child.stderr.on('data', (d: Buffer) => (stderr += d.toString()));
+        child.on('close', (code) => resolve({ stdout, stderr, exitCode: code ?? 1 }));
+        child.on('error', reject);
+      });
     } finally {
-      fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      if (tmpDir) {
+        fs.promises.rm(tmpDir, { recursive: true, force: true }).catch(() => {});
+      }
     }
   }
 
@@ -786,8 +779,9 @@ export class StackManager {
 
     const cliArgs = ['task', stackId, '--resume', task.session_id!];
     if (task.model) cliArgs.push('--model', task.model);
+    cliArgs.push(continuationPrompt);
 
-    const result = await this.runCliTaskFile(stack.project_dir, cliArgs, continuationPrompt);
+    const result = await this.runCli(stack.project_dir, cliArgs);
     if (result.exitCode !== 0) {
       this.registry.updateStackStatus(stackId, 'session_paused');
       this.notifyUpdate();
@@ -829,8 +823,9 @@ export class StackManager {
 
     const cliArgs = ['task', stackId, '--resume', task.session_id!];
     if (task.model) cliArgs.push('--model', task.model);
+    cliArgs.push(investigationPrompt);
 
-    const result = await this.runCliTaskFile(stack.project_dir, cliArgs, investigationPrompt);
+    const result = await this.runCli(stack.project_dir, cliArgs);
     if (result.exitCode !== 0) {
       this.registry.updateStackStatus(stackId, 'needs_human');
       this.notifyUpdate();
@@ -1318,8 +1313,9 @@ export class StackManager {
       if (model) cliArgs.push('--model', model);
       cliArgs.push('--models-json', phaseModelsJson);
       cliArgs.push('--phase-routing-json', phaseRoutingJson);
+      cliArgs.push(prompt);
 
-      const result = await this.runCliTaskFile(stack.project_dir, cliArgs, prompt);
+      const result = await this.runCli(stack.project_dir, cliArgs);
 
       if (result.exitCode !== 0) {
         throw new SandstormError(

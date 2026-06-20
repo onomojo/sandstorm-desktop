@@ -10,10 +10,10 @@
 
 import type { LifecycleCosts } from './types';
 
-export type LifecycleStage = 'refine' | 'spec' | 'execution' | 'review' | 'verify' | 'pr';
+export type LifecycleStage = 'refine' | 'spec' | 'execution' | 'review' | 'verify' | 'pr' | 'reconcile';
 
 export const LIFECYCLE_STAGES: readonly LifecycleStage[] = [
-  'refine', 'spec', 'execution', 'review', 'verify', 'pr',
+  'refine', 'spec', 'execution', 'review', 'verify', 'pr', 'reconcile',
 ];
 
 export type LifecycleWeights = Partial<Record<LifecycleStage, number>>;
@@ -40,6 +40,7 @@ export function computeLifecycleSplit(
     review: weights.review ?? 0,
     verify: 0,  // always zero — no LLM spend
     pr: weights.pr ?? 0,
+    reconcile: 0,  // no per-ticket producer yet; sourced from epic_tasks.role in aggregateByEpic
   };
 
   if (cost === 0) {
@@ -68,5 +69,14 @@ export function computeLifecycleSplit(
   }
   splits[largestStage] += residual;
 
-  return splits;
+  // Return only the six LifecycleCosts keys — reconcile is tracked in effective but
+  // has no per-ticket producer yet (it is sourced from epic_tasks.role at the epic level).
+  return {
+    refine: splits.refine,
+    spec: splits.spec,
+    execution: splits.execution,
+    review: splits.review,
+    verify: splits.verify,
+    pr: splits.pr,
+  };
 }
