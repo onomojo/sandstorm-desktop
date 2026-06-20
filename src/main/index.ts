@@ -171,19 +171,14 @@ async function initializeApp(): Promise<void> {
   // `agent:token-usage:<tabId>` events. No DB persistence — "New Session"
   // resets the counter by design.
   const modelResolver = (projectDir: string) => {
-    const routing = registry.getEffectiveRoutingFor(projectDir, 'outer');
-    if (routing.backend === 'opencode') {
-      console.warn('[outer] backend=opencode unsupported for host path; falling back to legacy outer model');
-      return registry.getLegacyEffectiveModels(projectDir).outer_model;
-    }
-    return routing.model;
+    return registry.getEffectiveRoutingFor(projectDir, 'outer').model;
   };
   agentBackend = new BackendRouter(
     {
       claude: () => new ClaudeBackend(undefined, modelResolver),
       opencode: () => new OpenCodeBackend(),
     },
-    (projectDir) => registry.getEffectiveBackend(projectDir, 'outer').backend,
+    (projectDir) => registry.getEffectiveRoutingFor(projectDir, 'outer').backend,
     (projectDir, touchpoint) => registry.getEffectiveTouchpointDescriptor(projectDir, touchpoint),
   );
   await agentBackend.initialize();

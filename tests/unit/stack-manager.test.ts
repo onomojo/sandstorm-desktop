@@ -431,7 +431,9 @@ describe('StackManager', () => {
       // so large prompts can't overflow MAX_ARG_STRLEN and throw spawn E2BIG.
       expect(callArgs).toContain('--file');
       expect(callArgs).not.toContain('Fix the bug');
-      expect(callArgs[callArgs.length - 1]).toMatch(/prompt\.txt$/);
+      const taskFileArg = callArgs[callArgs.indexOf('--file') + 1];
+      expect(taskFileArg).toMatch(/prompt\.txt$/);
+      expect(fs.readFileSync(taskFileArg, 'utf-8')).toBe('Fix the bug');
     });
 
     it('regression (E2BIG): a >128KB prompt never reaches argv', async () => {
@@ -453,6 +455,9 @@ describe('StackManager', () => {
       expect(callArgs.every((a) => a.length < 128 * 1024)).toBe(true);
       expect(callArgs.some((a) => a.includes(hugePrompt))).toBe(false);
       expect(callArgs).toContain('--file');
+      // Content-based: the full prompt is in the temp file, not in argv.
+      const hugeFileArg = callArgs[callArgs.indexOf('--file') + 1];
+      expect(fs.readFileSync(hugeFileArg, 'utf-8')).toBe(hugePrompt);
       // The full prompt is still persisted to the registry intact.
       const persisted = registry.getTasksForStack('huge-prompt');
       expect(persisted[0].prompt).toBe(hugePrompt);

@@ -333,6 +333,7 @@ export interface BackendSettings {
   outer_model: string | null;
 }
 
+
 export type TicketListError =
   | { reason: 'missing-creds' }
   | { reason: 'http-status'; status: number; body?: string }
@@ -472,35 +473,12 @@ interface AppState {
   cleanupStaleWorkspaces: (workspacePaths: string[]) => Promise<CleanupResult[]>;
 
   // Model settings
-  globalModelSettings: ModelSettings;
   showModelSettings: boolean;
   setShowModelSettings: (show: boolean) => void;
-  refreshGlobalModelSettings: () => Promise<void>;
-  setGlobalModelSettings: (settings: Partial<ModelSettings>) => Promise<void>;
-  getEffectiveModels: (projectDir: string) => Promise<ModelSettings>;
-  getProjectModelSettings: (projectDir: string) => Promise<ModelSettings | null>;
-  setProjectModelSettings: (projectDir: string, settings: Partial<ModelSettings>) => Promise<void>;
-  removeProjectModelSettings: (projectDir: string) => Promise<void>;
-
-  // Backend settings
-  globalBackendSettings: BackendSettings;
-  refreshGlobalBackendSettings: () => Promise<void>;
-  setGlobalBackendSettings: (settings: Partial<BackendSettings>) => Promise<void>;
-  getProjectBackendSettings: (projectDir: string) => Promise<BackendSettings | null>;
-  setProjectBackendSettings: (projectDir: string, settings: Partial<BackendSettings>) => Promise<void>;
-  getEffectiveBackend: (projectDir: string, surface: 'inner' | 'outer') => Promise<{ backend: 'claude' | 'opencode'; provider?: string; model?: string }>;
-  setBackendSecret: (scope: 'global' | string, surface: 'inner' | 'outer', value: string) => Promise<void>;
-  getBackendSecretStatus: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<{ set: boolean }>;
-  setBackendSecretBundle: (scope: 'global' | string, surface: 'inner' | 'outer', bundle: Record<string, string>) => Promise<void>;
-  getBackendSecretBundle: (scope: 'global' | string, surface: 'inner' | 'outer') => Promise<Record<string, string> | null>;
 
   // Project ticket config
   getProjectTicketConfig: (projectDir: string) => Promise<ProjectTicketConfig | null>;
   setProjectTicketConfig: (projectDir: string, config: ProjectTicketConfig) => Promise<void>;
-
-  // Dark factory
-  getDarkFactoryEnabled: (projectDir: string) => Promise<boolean>;
-  setDarkFactoryEnabled: (projectDir: string, enabled: boolean) => Promise<void>;
 
   // Session monitor
   sessionMonitorState: SessionMonitorState | null;
@@ -890,6 +868,26 @@ declare global {
       darkFactory: {
         getEnabled: (projectDir: string) => Promise<boolean>;
         setEnabled: (projectDir: string, enabled: boolean) => Promise<void>;
+        getConfig: (projectDir: string) => Promise<{ level: string; merge_strategy: string }>;
+        setConfig: (projectDir: string, config: { level: string; merge_strategy: string }) => Promise<void>;
+      };
+      providerSecrets: {
+        get: (scope: 'global' | string, provider: string) => Promise<Record<string, string> | null>;
+        set: (scope: 'global' | string, provider: string, bundle: Record<string, string>) => Promise<void>;
+        remove: (scope: 'global' | string, provider: string) => Promise<void>;
+        status: (scope: 'global' | string, provider: string) => Promise<{ set: boolean }>;
+        getBundle: (scope: 'global' | string, provider: string) => Promise<Record<string, string> | null>;
+        setBundle: (scope: 'global' | string, provider: string, bundle: Record<string, string>) => Promise<void>;
+      };
+      modelRouting: {
+        getEffective: (projectDir: string) => Promise<Record<string, { backend: string; provider: string; model: string }>>;
+        getProject: (projectDir: string) => Promise<{ assignments: Record<string, { backend: string; provider: string; model: string }>; preset: string | null } | null>;
+        setProject: (projectDir: string, config: { assignments?: Record<string, { backend: string; provider: string; model: string }>; preset?: string | null }) => Promise<void>;
+        removeProject: (projectDir: string) => Promise<void>;
+        getGlobal: () => Promise<{ assignments: Record<string, { backend: string; provider: string; model: string }>; preset: string | null }>;
+        setGlobal: (config: { assignments?: Record<string, { backend: string; provider: string; model: string }>; preset?: string | null }) => Promise<void>;
+        applyPreset: (projectDir: string, presetId: string) => Promise<void>;
+        getAvailableModels: (projectDir: string) => Promise<Array<{ backend: string; model: string; label: string; version: string; provider: string; needsKey?: boolean; available: boolean }>>;
       };
       telemetry: {
         summary: (range: DateRange) => Promise<TelemetrySummary>;
@@ -1065,84 +1063,8 @@ export const useAppStore = create<AppState>((set, get) => ({
   },
 
   // Model settings
-  globalModelSettings: { inner_model: 'sonnet', outer_model: 'opus' },
   showModelSettings: false,
   setShowModelSettings: (show) => set({ showModelSettings: show }),
-
-  refreshGlobalModelSettings: async () => {
-    try {
-      const globalModelSettings = await window.sandstorm.modelSettings.getGlobal();
-      set({ globalModelSettings });
-    } catch {
-      // Non-fatal
-    }
-  },
-
-  setGlobalModelSettings: async (settings) => {
-    await window.sandstorm.modelSettings.setGlobal(settings);
-    await get().refreshGlobalModelSettings();
-  },
-
-  getEffectiveModels: async (projectDir) => {
-    return window.sandstorm.modelSettings.getEffective(projectDir);
-  },
-
-  getProjectModelSettings: async (projectDir) => {
-    return window.sandstorm.modelSettings.getProject(projectDir);
-  },
-
-  setProjectModelSettings: async (projectDir, settings) => {
-    await window.sandstorm.modelSettings.setProject(projectDir, settings);
-  },
-
-  removeProjectModelSettings: async (projectDir) => {
-    await window.sandstorm.modelSettings.removeProject(projectDir);
-  },
-
-  // Backend settings
-  globalBackendSettings: { inner_backend: 'claude', outer_backend: 'claude', inner_provider: null, inner_model: null, outer_provider: null, outer_model: null },
-
-  refreshGlobalBackendSettings: async () => {
-    try {
-      const globalBackendSettings = await window.sandstorm.backendSettings.getGlobal();
-      set({ globalBackendSettings });
-    } catch {
-      // Non-fatal
-    }
-  },
-
-  setGlobalBackendSettings: async (settings) => {
-    await window.sandstorm.backendSettings.setGlobal(settings);
-    await get().refreshGlobalBackendSettings();
-  },
-
-  getProjectBackendSettings: async (projectDir) => {
-    return window.sandstorm.backendSettings.getProject(projectDir);
-  },
-
-  setProjectBackendSettings: async (projectDir, settings) => {
-    await window.sandstorm.backendSettings.setProject(projectDir, settings);
-  },
-
-  getEffectiveBackend: async (projectDir, surface) => {
-    return window.sandstorm.backendSettings.getEffective(projectDir, surface);
-  },
-
-  setBackendSecret: async (scope, surface, value) => {
-    await window.sandstorm.backendSettings.setSecret(scope, surface, 'api_key', value);
-  },
-
-  getBackendSecretStatus: async (scope, surface) => {
-    return window.sandstorm.backendSettings.secretStatus(scope, surface);
-  },
-
-  setBackendSecretBundle: async (scope, surface, bundle) => {
-    await window.sandstorm.backendSettings.setSecretBundle(scope, surface, bundle);
-  },
-
-  getBackendSecretBundle: async (scope, surface) => {
-    return window.sandstorm.backendSettings.getSecretBundle(scope, surface);
-  },
 
   // Project ticket config
   getProjectTicketConfig: async (projectDir) => {
@@ -1151,15 +1073,6 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   setProjectTicketConfig: async (projectDir, config) => {
     await window.sandstorm.projectTicketConfig.set(projectDir, config);
-  },
-
-  // Dark factory
-  getDarkFactoryEnabled: async (projectDir) => {
-    return window.sandstorm.darkFactory.getEnabled(projectDir);
-  },
-
-  setDarkFactoryEnabled: async (projectDir, enabled) => {
-    await window.sandstorm.darkFactory.setEnabled(projectDir, enabled);
   },
 
   // Session monitor

@@ -134,7 +134,7 @@ function splitModel(effective: { provider?: string; model?: string }): { provide
 interface RegistryRef {
   getGlobalBackendSettings(): { outer_provider: string | null; outer_model: string | null; inner_provider?: string | null; inner_model?: string | null };
   getBackendSecretBundle(key: string, surface: 'inner' | 'outer'): Record<string, string> | null;
-  getEffectiveBackend(projectDir: string, surface: 'inner' | 'outer'): { backend: string; provider?: string; model?: string };
+  getEffectiveRoutingFor(projectDir: string, touchpoint: string): { backend: string; provider?: string; model?: string };
   getStoredProviderKeys(scope: string): string[];
   getProviderSecretBundle(key: string, provider: string): Record<string, string> | null;
 }
@@ -450,7 +450,7 @@ export class OpenCodeBackend implements AgentBackend {
 
       // Resolve per-session model routing from the project's effective backend config.
       const modelParts = (projectDir && this.registryRef)
-        ? splitModel(this.registryRef.getEffectiveBackend(projectDir, 'outer'))
+        ? splitModel(this.registryRef.getEffectiveRoutingFor(projectDir, 'outer'))
         : null;
 
       // Send prompt; completion arrives via SSE events
@@ -547,7 +547,7 @@ export class OpenCodeBackend implements AgentBackend {
         // touchpoint descriptor. Otherwise fall back to the outer model from registry.
         const modelParts = model
           ? splitModel({ model })
-          : (this.registryRef ? splitModel(this.registryRef.getEffectiveBackend(projectDir, 'outer')) : null);
+          : (this.registryRef ? splitModel(this.registryRef.getEffectiveRoutingFor(projectDir, 'outer')) : null);
 
         const { data: response } = await this.client!.session.prompt({
           path: { id: session.id },
@@ -684,7 +684,7 @@ export class OpenCodeBackend implements AgentBackend {
 
       // Resolve model once for the session lifetime from effective backend config.
       resolvedModelParts = this.registryRef
-        ? splitModel(this.registryRef.getEffectiveBackend(projectDir, 'outer'))
+        ? splitModel(this.registryRef.getEffectiveRoutingFor(projectDir, 'outer'))
         : null;
 
       const { data: session } = await this.client.session.create({

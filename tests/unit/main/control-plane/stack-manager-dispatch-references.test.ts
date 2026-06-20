@@ -134,8 +134,11 @@ describe('dispatchTask — reference resolution', () => {
     const prompt = 'Implement the mockup at https://gist.github.com/user/abc';
     await manager.dispatchTask('ref-stack', prompt, undefined, { forceBypass: true });
 
+    // Prompt is delivered via --file (temp file) to avoid argv E2BIG; read file for content verification.
     const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
-    const deliveredPrompt = cliArgs[cliArgs.length - 1];
+    expect(cliArgs).toContain('--file');
+    const filePath = cliArgs[cliArgs.indexOf('--file') + 1];
+    const deliveredPrompt = fs.readFileSync(filePath, 'utf-8');
 
     expect(deliveredPrompt).toContain('## Resolved References');
     expect(deliveredPrompt).toContain('mockup content');
@@ -155,8 +158,11 @@ describe('dispatchTask — reference resolution', () => {
     const prompt = 'Fix the bug in the auth module';
     await manager.dispatchTask('noref-stack', prompt, undefined, { forceBypass: true });
 
+    // Prompt is delivered via --file (temp file); read file for content verification.
     const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
-    const deliveredPrompt = cliArgs[cliArgs.length - 1];
+    expect(cliArgs).toContain('--file');
+    const filePath = cliArgs[cliArgs.indexOf('--file') + 1];
+    const deliveredPrompt = fs.readFileSync(filePath, 'utf-8');
 
     expect(deliveredPrompt).toBe(prompt);
     expect(deliveredPrompt).not.toContain('## Resolved References');
@@ -189,8 +195,11 @@ describe('dispatchTask — reference resolution', () => {
 
     await manager.dispatchTask('sep-stack', 'Build per spec at https://example.com/doc', undefined, { forceBypass: true });
 
+    // Prompt is delivered via --file (temp file); read file for content verification.
     const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
-    const deliveredPrompt = cliArgs[cliArgs.length - 1];
+    expect(cliArgs).toContain('--file');
+    const filePath = cliArgs[cliArgs.indexOf('--file') + 1];
+    const deliveredPrompt = fs.readFileSync(filePath, 'utf-8');
 
     expect(deliveredPrompt).toContain('\n\n---\n\n');
     expect(deliveredPrompt).toContain('## Resolved References');
