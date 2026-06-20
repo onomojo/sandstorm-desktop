@@ -1471,8 +1471,9 @@ export class StackManager {
       await fs.promises.writeFile(promptTmpFile, prompt, 'utf-8');
       cliArgs.push('--file', promptTmpFile);
 
-      const result = await this.runCli(stack.project_dir, cliArgs);
-      fs.promises.rm(promptTmpDir, { recursive: true, force: true }).catch(() => {});
+      const result = await this.runCli(stack.project_dir, cliArgs).finally(() => {
+        fs.promises.rm(promptTmpDir, { recursive: true, force: true }).catch(() => {});
+      });
 
       if (result.exitCode !== 0) {
         throw new SandstormError(

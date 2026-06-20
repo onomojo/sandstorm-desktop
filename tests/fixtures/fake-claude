@@ -1,0 +1,107 @@
+#!/bin/bash
+#
+# fake-claude — test stub for the claude CLI.
+#
+# Accepts (and ignores) all real claude CLI flags so it can stand in for the
+# binary on PATH.  Output mode is controlled by the FAKE_CLAUDE_MODE env var:
+#
+#   normal        (default) valid stream-json completion
+#   token_limit   exit 0 with rate_limit_event (rejected) + error result (429)
+#   review_pass   valid stream-json with REVIEW_PASS in the result field
+#   review_fail   valid stream-json with REVIEW_FAIL in the result field
+#   meta_pass     valid stream-json with META_VERDICT: VIABLE in the result
+#   meta_fail     valid stream-json with META_VERDICT: NO_VIABLE_PATH in the result
+#
+# Extra output can be injected via FAKE_CLAUDE_TEXT (appended to assistant text).
+# Session ID can be overridden via FAKE_CLAUDE_SESSION_ID.
+
+set -euo pipefail
+
+# Consume all arguments (flags + positional) without interpreting them
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --dangerously-skip-permissions|--verbose|--include-partial-messages|--print|--strict-mcp-config)
+      shift ;;
+    --output-format|--mcp-config|--model|--resume|-p|--permission-prompt-tool)
+      shift 2 ;;
+    -)
+      # stdin as prompt — read and discard
+      cat /dev/stdin > /dev/null
+      shift ;;
+    *)
+      shift ;;
+  esac
+done
+
+MODE="${FAKE_CLAUDE_MODE:-normal}"
+SESSION_ID="${FAKE_CLAUDE_SESSION_ID:-fake-session-t0}"
+EXTRA_TEXT="${FAKE_CLAUDE_TEXT:-}"
+
+emit_init() {
+  printf '{"type":"system","subtype":"init","session_id":"%s","tools":[]}\n' "$SESSION_ID"
+}
+
+emit_assistant() {
+  local text="$1"
+  # Escape newlines and quotes inside JSON text value
+  local escaped
+  escaped=$(printf '%s' "$text" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/' | tr -d '\n')
+  escaped="${escaped%\\n}"  # remove trailing \n we just added
+  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"%s"}]}}\n' "$escaped"
+}
+
+emit_result() {
+  local result_text="$1"
+  local is_error="${2:-false}"
+  local extra="${3:-}"
+  local escaped
+  escaped=$(printf '%s' "$result_text" | sed 's/\\/\\\\/g; s/"/\\"/g; s/$/\\n/' | tr -d '\n')
+  escaped="${escaped%\\n}"
+  if [ -n "$extra" ]; then
+    printf '{"type":"result","subtype":"success","is_error":%s,%s"result":"%s","session_id":"%s"}\n' \
+      "$is_error" "$extra" "$escaped" "$SESSION_ID"
+  else
+    printf '{"type":"result","subtype":"success","is_error":%s,"result":"%s","session_id":"%s"}\n' \
+      "$is_error" "$escaped" "$SESSION_ID"
+  fi
+}
+
+case "$MODE" in
+  token_limit)
+    emit_init
+    printf '{"type":"rate_limit_event","rate_limit_info":{"status":"rejected","resetsAt":9999999999,"rateLimitType":"five_hour"}}\n'
+    emit_result "You've hit your session limit · resets 5:20am (UTC)" true '"api_error_status":429,'
+    ;;
+  review_pass)
+    emit_init
+    local_text="Code review complete.${EXTRA_TEXT:+ $EXTRA_TEXT}"$'\n'"REVIEW_PASS"
+    emit_assistant "$local_text"
+    emit_result "REVIEW_PASS"
+    ;;
+  review_fail)
+    emit_init
+    local_text="Review found issues.${EXTRA_TEXT:+ $EXTRA_TEXT}"$'\n'"REVIEW_FAIL"
+    emit_assistant "$local_text"
+    emit_result "REVIEW_FAIL"
+    ;;
+  meta_pass)
+    emit_init
+    local_text="Meta-review analysis.${EXTRA_TEXT:+ $EXTRA_TEXT}"$'\n'"META_VERDICT: VIABLE"
+    emit_assistant "$local_text"
+    emit_result "META_VERDICT: VIABLE"
+    ;;
+  meta_fail)
+    emit_init
+    local_text="Meta-review: no viable path.${EXTRA_TEXT:+ $EXTRA_TEXT}"$'\n'"META_VERDICT: NO_VIABLE_PATH"
+    emit_assistant "$local_text"
+    emit_result "META_VERDICT: NO_VIABLE_PATH"
+    ;;
+  normal|*)
+    emit_init
+    local_text="Task completed successfully.${EXTRA_TEXT:+ $EXTRA_TEXT}"
+    emit_assistant "$local_text"
+    emit_result "Task completed successfully."
+    ;;
+esac
+
+exit 0
