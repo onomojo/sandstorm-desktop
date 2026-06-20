@@ -523,6 +523,10 @@ interface AppState {
   recheckCompletedStack: (stackId: string) => Promise<{
     outcome: 'resuming_with_session' | 'resumed_fresh' | 'not_token_limited' | 'container_gone' | 'idle';
   }>;
+  reconcileStatus: (stackId: string) => Promise<{
+    outcome: 'reconciled' | 'container_gone' | 'guarded';
+    status?: string;
+  }>;
 
   // Kanban board
   boardTickets: TicketBoardEntry[];
@@ -726,6 +730,10 @@ declare global {
         restartWithFindings: (stackId: string, updatedTicketBody: string) => Promise<{ newStackId: string }>;
         recheckCompleted: (stackId: string) => Promise<{
           outcome: 'resuming_with_session' | 'resumed_fresh' | 'not_token_limited' | 'container_gone' | 'idle';
+        }>;
+        reconcileStatus: (stackId: string) => Promise<{
+          outcome: 'reconciled' | 'container_gone' | 'guarded';
+          status?: string;
         }>;
       };
       tasks: {
@@ -1221,6 +1229,12 @@ export const useAppStore = create<AppState>((set, get) => ({
 
   recheckCompletedStack: async (stackId: string) => {
     const result = await window.sandstorm.stacks.recheckCompleted(stackId);
+    await get().refreshStacks();
+    return result;
+  },
+
+  reconcileStatus: async (stackId: string) => {
+    const result = await window.sandstorm.stacks.reconcileStatus(stackId);
     await get().refreshStacks();
     return result;
   },

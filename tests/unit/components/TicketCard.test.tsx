@@ -441,6 +441,74 @@ describe('TicketCard', () => {
     expect(screen.getByTestId('ticket-card-create-pr-42')).toBeDefined();
   });
 
+  it('in_stack: shows Re-check status button for completed stack', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-reconcile-status-42')).toBeDefined();
+  });
+
+  it('in_stack: shows Re-check status button for failed stack', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'failed', pr_url: null, pr_number: null, error: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-reconcile-status-42')).toBeDefined();
+  });
+
+  it('in_stack: shows Re-check status button for pushed stack', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pushed', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-reconcile-status-42')).toBeDefined();
+  });
+
+  it('in_stack: shows Re-check status button for pr_created stack', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'pr_created', pr_url: 'https://github.com/o/r/pull/1', pr_number: 1 } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-reconcile-status-42')).toBeDefined();
+  });
+
+  it('in_stack: shows Re-check status button for verify_blocked_environmental stack', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'verify_blocked_environmental', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.getByTestId('ticket-card-reconcile-status-42')).toBeDefined();
+  });
+
+  it('in_stack: does NOT show Re-check status button for needs_human stack', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'needs_human', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-reconcile-status-42')).toBeNull();
+  });
+
+  it('in_stack: does NOT show Re-check status button for running stack', () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'running', pr_url: null, pr_number: null } as any;
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+    expect(screen.queryByTestId('ticket-card-reconcile-status-42')).toBeNull();
+  });
+
+  it('in_stack: clicking Re-check status calls reconcileStatus store action', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    api.stacks.reconcileStatus.mockResolvedValue({ outcome: 'reconciled', status: 'needs_human' });
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('ticket-card-reconcile-status-42'));
+    });
+
+    expect(api.stacks.reconcileStatus).toHaveBeenCalledWith('s1');
+  });
+
+  it('in_stack: shows container_gone feedback message after Re-check status when container not running', async () => {
+    const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
+    api.stacks.reconcileStatus.mockResolvedValue({ outcome: 'container_gone' });
+    render(<TicketCard ticket={makeTicket('in_stack') as any} stacks={[stack]} />);
+
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('ticket-card-reconcile-status-42'));
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText(/container not running/i)).toBeDefined();
+    });
+  });
+
   it('in_stack: clicking Create PR calls pr.createAuto and does NOT open the dialog on success', async () => {
     const stack = { id: 's1', ticket: '42', project_dir: PROJECT_DIR, status: 'completed', pr_url: null, pr_number: null } as any;
     api.pr.createAuto.mockResolvedValue({ status: 'created', url: 'https://github.com/o/r/pull/1', number: 1 });

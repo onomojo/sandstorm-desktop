@@ -2778,6 +2778,7 @@ describe('IPC Handlers', () => {
       'stacks:selfHealContinue',
       'stacks:restartWithFindings',
       'stacks:recheckCompleted',
+      'stacks:reconcileStatus',
       'stats:telemetry:summary',
       'stats:telemetry:daily',
       'stats:telemetry:byModel',

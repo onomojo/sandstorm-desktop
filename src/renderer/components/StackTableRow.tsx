@@ -47,7 +47,7 @@ export function StackTableRow({
   showProject?: boolean;
   columnWidths?: Record<string, number>;
 }) {
-  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation, recheckCompletedStack } = useAppStore();
+  const { selectStack, refreshStacks, stackMetrics, setShowCreatePRDialog, resumeStackWithContinuation, recheckCompletedStack, reconcileStatus } = useAppStore();
   const metrics: StackMetrics | undefined = stackMetrics[stack.id];
   const [duration, setDuration] = useState(() =>
     getStackDuration(stack.created_at, stack.updated_at, stack.status),
@@ -55,6 +55,8 @@ export function StackTableRow({
   const [popoverRect, setPopoverRect] = useState<DOMRect | null>(null);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
   const [recheckMessage, setRecheckMessage] = useState<string | null>(null);
+  const [reconcileMessage, setReconcileMessage] = useState<string | null>(null);
+  const [isReconciling, setIsReconciling] = useState(false);
   const [continuing, setContinuing] = useState(false);
   const rowRef = useRef<HTMLTableRowElement>(null);
   const enterTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -147,6 +149,27 @@ export function StackTableRow({
       }
     } catch (err) {
       alert(`Failed to re-check: ${err}`);
+    }
+  };
+
+  const handleReconcileStatus = async (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (isReconciling) return;
+    setIsReconciling(true);
+    setReconcileMessage(null);
+    try {
+      const result = await reconcileStatus(stack.id);
+      if (result.outcome === 'container_gone') {
+        setReconcileMessage('Container not running');
+        setTimeout(() => setReconcileMessage(null), 4000);
+      } else if (result.outcome === 'guarded') {
+        setReconcileMessage('Already managed');
+        setTimeout(() => setReconcileMessage(null), 4000);
+      }
+    } catch (err) {
+      alert(`Failed to re-check status: ${err}`);
+    } finally {
+      setIsReconciling(false);
     }
   };
 
@@ -313,6 +336,22 @@ export function StackTableRow({
               >
                 🆕 Make PR
               </button>
+            )}
+            {['completed', 'failed', 'pushed', 'pr_created', 'verify_blocked_environmental'].includes(stack.status) && (
+              <>
+                <button
+                  onClick={handleReconcileStatus}
+                  disabled={isReconciling}
+                  className="text-[10px] font-medium px-2 py-0.5 rounded bg-sandstorm-surface text-sandstorm-muted border border-sandstorm-border hover:bg-sandstorm-surface-hover transition-colors disabled:opacity-40"
+                  data-testid={`row-reconcile-status-${stack.id}`}
+                  title="Re-check the actual container status and update registry"
+                >
+                  {isReconciling ? '…' : 'Re-check'}
+                </button>
+                {reconcileMessage && (
+                  <span className="text-[10px] text-sandstorm-muted">{reconcileMessage}</span>
+                )}
+              </>
             )}
             {/* Teardown — always visible (#316). Was opacity-0 group-hover
                 but the user couldn't reach it without the popover blocking. */}

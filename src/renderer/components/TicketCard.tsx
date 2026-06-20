@@ -26,6 +26,7 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
     retryRefinementForTicket,
     resumeStackWithContinuation,
     recheckCompletedStack,
+    reconcileStatus,
     startStackForTicket,
     stackCreateErrors,
     stackCreateInFlight,
@@ -51,6 +52,8 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
   const [showMoveToBacklogDialog, setShowMoveToBacklogDialog] = useState(false);
   const [showAnswerModal, setShowAnswerModal] = useState(false);
   const [recheckMessage, setRecheckMessage] = useState<string | null>(null);
+  const [reconcileMessage, setReconcileMessage] = useState<string | null>(null);
+  const [isReconciling, setIsReconciling] = useState(false);
   const [isContinuing, setIsContinuing] = useState(false);
 
   const stack = getTicketStack(ticket.ticket_id, stacks);
@@ -128,6 +131,26 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
       }
     } catch (err) {
       alert(`Failed to re-check: ${err}`);
+    }
+  };
+
+  const handleReconcileStatus = async () => {
+    if (!stack || isReconciling) return;
+    setIsReconciling(true);
+    setReconcileMessage(null);
+    try {
+      const result = await reconcileStatus(stack.id);
+      if (result.outcome === 'container_gone') {
+        setReconcileMessage('Container not running — cannot re-check status.');
+        setTimeout(() => setReconcileMessage(null), 4000);
+      } else if (result.outcome === 'guarded') {
+        setReconcileMessage('Stack is actively managed — no re-check needed.');
+        setTimeout(() => setReconcileMessage(null), 4000);
+      }
+    } catch (err) {
+      alert(`Failed to re-check status: ${err}`);
+    } finally {
+      setIsReconciling(false);
     }
   };
 
@@ -444,6 +467,21 @@ export function TicketCard({ ticket, stacks }: TicketCardProps) {
                 'Create PR'
               )}
             </button>
+          )}
+          {stack && ['completed', 'failed', 'pushed', 'pr_created', 'verify_blocked_environmental'].includes(stack.status) && (
+            <div>
+              <button
+                onClick={() => void handleReconcileStatus()}
+                disabled={isReconciling}
+                className="w-full text-xs py-1 px-3 rounded-md bg-sandstorm-surface text-sandstorm-muted border border-sandstorm-border hover:bg-sandstorm-surface-hover transition-colors font-medium disabled:opacity-40 disabled:cursor-not-allowed"
+                data-testid={`ticket-card-reconcile-status-${ticket.ticket_id}`}
+              >
+                {isReconciling ? 'Checking…' : 'Re-check status'}
+              </button>
+              {reconcileMessage && (
+                <p className="mt-1 text-xs text-sandstorm-muted">{reconcileMessage}</p>
+              )}
+            </div>
           )}
           {discardErrorBlock}
         </div>

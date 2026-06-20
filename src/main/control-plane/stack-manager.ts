@@ -3,7 +3,7 @@ import { promisify } from 'util';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { Registry, Stack, StackHistoryRecord, Task, TokenUsage } from './registry';
+import { Registry, Stack, StackHistoryRecord, StackStatus, Task, TokenUsage } from './registry';
 import { PortAllocator, ServicePort } from './port-allocator';
 import { PortProxy } from './port-proxy';
 import { TaskWatcher, WorkflowProgressData } from './task-watcher';
@@ -945,6 +945,158 @@ export class StackManager {
   }
 
   /**
+   * Reconcile a stale terminal stack status by reading the container's
+   * authoritative /tmp/claude-task.status file and driving the registry to match.
+   * Mirrors the status→registry mapping in task-watcher.ts exactly.
+   * Guards against overwriting session_paused or rate_limited stacks.
+   */
+  async reconcileStatus(stackId: string): Promise<{
+    outcome: 'reconciled' | 'container_gone' | 'guarded';
+    status?: StackStatus;
+  }> {
+    const stack = this.registry.getStack(stackId);
+    if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
+
+    if (stack.status === 'session_paused' || stack.status === 'rate_limited') {
+      return { outcome: 'guarded' };
+    }
+
+    const runtime = this.getRuntimeForStack(stack);
+    const composeProjectName = composeProjectNameFor(stack.project, stack.id);
+
+    let containers;
+    try {
+      containers = await runtime.listContainers({ name: `${composeProjectName}-claude` });
+    } catch (err) {
+      console.debug(`[StackManager] reconcileStatus: container list failed for ${stackId}:`, err);
+      return { outcome: 'container_gone' };
+    }
+
+    const container = containers[0] ?? null;
+    if (!container || container.status !== 'running') {
+      console.debug(`[StackManager] reconcileStatus: container absent or not running for ${stackId}`);
+      return { outcome: 'container_gone' };
+    }
+
+    let containerStatus: string;
+    try {
+      const result = await runtime.exec(container.id, ['cat', '/tmp/claude-task.status']);
+      containerStatus = result.stdout.trim();
+    } catch {
+      return { outcome: 'container_gone' };
+    }
+
+    const task = this.registry.getMostRecentTask(stackId);
+
+    if (containerStatus === 'running') {
+      this.registry.updateStackStatus(stackId, 'running');
+      if (task) this.registry.reopenTaskForResume(task.id);
+      this.taskWatcher.watch(stackId, container.id);
+      this.notifyUpdate();
+      return { outcome: 'reconciled', status: 'running' };
+    }
+
+    if (containerStatus === 'token_limited') {
+      this.registry.updateStackStatus(stackId, 'session_paused');
+      this.notifyUpdate();
+      return { outcome: 'reconciled', status: 'session_paused' };
+    }
+
+    if (containerStatus === 'needs_human' || containerStatus === 'unknown') {
+      let stopReason = containerStatus === 'unknown'
+        ? 'Investigation returned unknown state — needs human review'
+        : 'Agent signaled STOP_AND_ASK — needs human intervention';
+      let questionsJson: string | null = null;
+
+      if (containerStatus === 'needs_human') {
+        try {
+          const reasonResult = await runtime.exec(container.id, ['cat', '/tmp/claude-stop-reason.txt']);
+          if (reasonResult.stdout.trim()) stopReason = reasonResult.stdout.trim();
+        } catch { /* best effort */ }
+        try {
+          const questionsResult = await runtime.exec(container.id, ['cat', '/tmp/claude-stop-questions.json']);
+          if (questionsResult.stdout.trim()) {
+            const parsed = JSON.parse(questionsResult.stdout.trim());
+            if (Array.isArray(parsed) && parsed.every(
+              (q: unknown) => q && typeof q === 'object' &&
+                typeof (q as Record<string, unknown>).id === 'string' &&
+                typeof (q as Record<string, unknown>).question === 'string'
+            )) {
+              questionsJson = questionsResult.stdout.trim();
+            }
+          }
+        } catch { /* best effort — malformed/absent JSON falls back to null */ }
+      }
+
+      if (task) {
+        this.registry.completeTaskNeedsHuman(task.id, stopReason, questionsJson);
+      } else {
+        this.registry.updateStackStatus(stackId, 'needs_human');
+      }
+      this.notifyUpdate();
+      return { outcome: 'reconciled', status: 'needs_human' };
+    }
+
+    if (containerStatus === 'needs_key') {
+      let keyReason = 'A phase provider has no credentials configured — add credentials in provider settings';
+      try {
+        const reasonResult = await runtime.exec(container.id, ['cat', '/tmp/claude-task-needs-key.txt']);
+        if (reasonResult.stdout.trim()) keyReason = reasonResult.stdout.trim();
+      } catch { /* best effort */ }
+
+      if (task) {
+        this.registry.completeTaskNeedsKey(task.id, keyReason);
+      } else {
+        this.registry.updateStackStatus(stackId, 'needs_key');
+      }
+      this.notifyUpdate();
+      return { outcome: 'reconciled', status: 'needs_key' };
+    }
+
+    if (containerStatus === 'verify_blocked_environmental') {
+      let envReason = 'Verify failed repeatedly — likely an environmental issue (missing binary, missing service, etc.)';
+      try {
+        const envResult = await runtime.exec(container.id, ['cat', '/tmp/claude-verify-environmental.txt']);
+        if (envResult.stdout.trim()) envReason = `Verify blocked (environmental): ${envResult.stdout.trim()}`;
+      } catch { /* best effort */ }
+
+      if (task) {
+        this.registry.completeTaskVerifyBlockedEnvironmental(task.id, envReason);
+      } else {
+        this.registry.updateStackStatus(stackId, 'verify_blocked_environmental');
+      }
+      this.notifyUpdate();
+      return { outcome: 'reconciled', status: 'verify_blocked_environmental' };
+    }
+
+    if (containerStatus === 'completed' || containerStatus === 'failed') {
+      let exitCode = containerStatus === 'completed' ? 0 : 1;
+      try {
+        const exitResult = await runtime.exec(container.id, ['cat', '/tmp/claude-task.exit']);
+        const parsed = parseInt(exitResult.stdout.trim(), 10);
+        if (!isNaN(parsed)) exitCode = parsed;
+      } catch { /* best effort */ }
+
+      if (task) {
+        this.registry.completeTask(task.id, exitCode);
+      } else {
+        this.registry.updateStackStatus(stackId, containerStatus as 'completed' | 'failed');
+      }
+      this.notifyUpdate();
+      return { outcome: 'reconciled', status: containerStatus as 'completed' | 'failed' };
+    }
+
+    // Unrecognized status — surface to user as needs_human
+    if (task) {
+      this.registry.completeTaskNeedsHuman(task.id, `Unrecognized container status: ${containerStatus}`);
+    } else {
+      this.registry.updateStackStatus(stackId, 'needs_human');
+    }
+    this.notifyUpdate();
+    return { outcome: 'reconciled', status: 'needs_human' };
+  }
+
+  /**
    * Resume a needs_human stack by providing answers to the agent's questions.
    * Uses --resume <session_id> if available; falls back to fresh dispatch if not.
    */
@@ -1272,6 +1424,7 @@ export class StackManager {
     const task = this.registry.createTask(stackId, prompt, model);
 
     const runtime = this.getRuntimeForStack(stack);
+    let promptTmpDir: string | undefined;
 
     try {
       let claudeContainer = await this.findClaudeContainer(stack, runtime);
@@ -1313,9 +1466,13 @@ export class StackManager {
       if (model) cliArgs.push('--model', model);
       cliArgs.push('--models-json', phaseModelsJson);
       cliArgs.push('--phase-routing-json', phaseRoutingJson);
-      cliArgs.push(prompt);
+      promptTmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sandstorm-task-'));
+      const promptTmpFile = path.join(promptTmpDir, 'prompt.txt');
+      await fs.promises.writeFile(promptTmpFile, prompt, 'utf-8');
+      cliArgs.push('--file', promptTmpFile);
 
       const result = await this.runCli(stack.project_dir, cliArgs);
+      fs.promises.rm(promptTmpDir, { recursive: true, force: true }).catch(() => {});
 
       if (result.exitCode !== 0) {
         throw new SandstormError(
@@ -1332,6 +1489,9 @@ export class StackManager {
 
       return { id: task.id, stack_id: stackId, status: task.status };
     } catch (err) {
+      if (promptTmpDir) {
+        fs.promises.rm(promptTmpDir, { recursive: true, force: true }).catch(() => {});
+      }
       // Task was created but dispatch failed — mark it as failed so the
       // stack doesn't stay stuck in 'running' status forever.
       this.registry.completeTask(task.id, 1);
