@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
-import type { ByTicketEntry } from '@main/telemetry/types';
+import type { ByTicketEntry, ByEpicEntry } from '@main/telemetry/types';
 
 export type ScheduleAction =
   | { kind: 'run-script'; scriptName: string };
@@ -291,6 +291,7 @@ export interface SandstormAPI {
     byModel: (range: { since: string; until: string }) => Promise<unknown[]>;
     session: (range: { since: string; until: string }) => Promise<unknown[]>;
     byTicket: (range?: { since: string; until: string }) => Promise<ByTicketEntry[]>;
+    byEpic: (range?: { since: string; until: string }) => Promise<ByEpicEntry[]>;
     refresh: () => Promise<{ ok: true }>;
   };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
@@ -541,6 +542,7 @@ const api: SandstormAPI = {
     byModel: (range) => ipcRenderer.invoke('stats:telemetry:byModel', range),
     session: (range) => ipcRenderer.invoke('stats:telemetry:session', range),
     byTicket: (range) => ipcRenderer.invoke('stats:telemetry:byTicket', range),
+    byEpic: (range) => ipcRenderer.invoke('stats:telemetry:byEpic', range),
     refresh: () => ipcRenderer.invoke('stats:telemetry:refresh'),
   },
   on: (channel, callback) => {

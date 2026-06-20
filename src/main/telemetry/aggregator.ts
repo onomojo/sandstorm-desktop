@@ -7,8 +7,9 @@ import fs from 'fs';
 import path from 'path';
 import { computeCost } from './pricing';
 import type { RawUsageEntry } from './parser';
-import type { DateRange, TokenCounts, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry } from './types';
+import type { DateRange, TokenCounts, TelemetrySummary, DailyEntry, ByModelEntry, SessionEntry, ByTicketEntry, ByEpicEntry } from './types';
 import { ORCHESTRATOR_TICKET_ID } from './types';
+import type { EpicTask } from '../control-plane/registry';
 import { computeLifecycleSplit } from './lifecycle-split';
 import type { LifecycleWeights } from './lifecycle-split';
 import type { TaskPhaseWeightRow } from '../control-plane/registry';
@@ -410,5 +411,94 @@ export function aggregateByTicket(
       unpriced: data.unpriced,
     } satisfies ByTicketEntry;
   });
+}
+
+/**
+ * Aggregate per-ticket attribution into per-epic rollups.
+ *
+ * byTicket: pre-computed per-ticket results (from aggregateByTicket).
+ * epicTasks: membership rows from epic_tasks (injected, electron-free).
+ *
+ * build + reconcile partition total by epic_tasks.role.
+ * reconcileRework is an overlay (not a partition): gap tickets also count in
+ * their role bucket (build or reconcile). Invariant: reconcileRework.cost ≤ build.cost + reconcile.cost.
+ * ORCHESTRATOR_TICKET_ID is excluded from all rollups.
+ */
+export function aggregateByEpic(
+  byTicket: ByTicketEntry[],
+  epicTasks: EpicTask[],
+): ByEpicEntry[] {
+  if (epicTasks.length === 0) return [];
+
+  // Index byTicket for O(1) lookup
+  const ticketIndex = new Map<string, ByTicketEntry>();
+  for (const entry of byTicket) {
+    if (entry.ticketId !== ORCHESTRATOR_TICKET_ID) {
+      ticketIndex.set(entry.ticketId, entry);
+    }
+  }
+
+  // Group epic_tasks by epic_id
+  const epicMap = new Map<string, EpicTask[]>();
+  for (const task of epicTasks) {
+    if (!epicMap.has(task.epic_id)) epicMap.set(task.epic_id, []);
+    epicMap.get(task.epic_id)!.push(task);
+  }
+
+  function addTokenCounts(acc: TokenCounts, src: TokenCounts): void {
+    acc.input += src.input;
+    acc.output += src.output;
+    acc.cacheCreate += src.cacheCreate;
+    acc.cacheRead += src.cacheRead;
+    acc.total += src.total;
+  }
+
+  const results: ByEpicEntry[] = [];
+
+  for (const [epicId, tasks] of epicMap) {
+    const total = { cost: 0, tokens: zeroTokens() };
+    const build = { cost: 0, tokens: zeroTokens() };
+    const reconcile = { cost: 0, tokens: zeroTokens() };
+    const reconcileRework = { cost: 0, tokens: zeroTokens() };
+
+    for (const task of tasks) {
+      const entry = ticketIndex.get(task.ticket_id);
+      if (!entry) continue;
+
+      // Accumulate total
+      total.cost += entry.cost;
+      addTokenCounts(total.tokens, entry.tokens);
+
+      // Partition by role
+      if (task.role === 'build') {
+        build.cost += entry.cost;
+        addTokenCounts(build.tokens, entry.tokens);
+      } else {
+        reconcile.cost += entry.cost;
+        addTokenCounts(reconcile.tokens, entry.tokens);
+      }
+
+      // reconcileRework overlay: gap tickets regardless of role
+      if (task.origin === 'gap') {
+        reconcileRework.cost += entry.cost;
+        addTokenCounts(reconcileRework.tokens, entry.tokens);
+      }
+    }
+
+    // memberCount = distinct tickets with data in byTicket (excludes tasks with no spend)
+    const memberCount = tasks.filter((t) => ticketIndex.has(t.ticket_id)).length;
+
+    results.push({
+      epicId,
+      cost: total.cost,
+      tokens: total.tokens,
+      build,
+      reconcile,
+      reconcileRework,
+      memberCount,
+    } satisfies ByEpicEntry);
+  }
+
+  return results;
 }
 
