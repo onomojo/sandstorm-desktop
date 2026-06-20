@@ -35,7 +35,7 @@ const {
   mockServerClose,
   mockGetGlobalBackendSettings,
   mockGetBackendSecretBundle,
-  mockGetEffectiveBackend,
+  mockGetEffectiveRoutingFor,
   mockGetStoredProviderKeys,
   mockGetProviderSecretBundle,
 } = vi.hoisted(() => {
@@ -64,7 +64,7 @@ const {
     outer_model: null,
   });
   const mockGetBackendSecretBundle = vi.fn().mockReturnValue(null);
-  const mockGetEffectiveBackend = vi.fn().mockReturnValue({
+  const mockGetEffectiveRoutingFor = vi.fn().mockReturnValue({
     backend: 'opencode',
     provider: undefined,
     model: undefined,
@@ -84,7 +84,7 @@ const {
     mockServerClose,
     mockGetGlobalBackendSettings,
     mockGetBackendSecretBundle,
-    mockGetEffectiveBackend,
+    mockGetEffectiveRoutingFor,
     mockGetStoredProviderKeys,
     mockGetProviderSecretBundle,
   };
@@ -111,7 +111,7 @@ vi.mock('../../../src/main/index', () => ({
   registry: {
     getGlobalBackendSettings: mockGetGlobalBackendSettings,
     getBackendSecretBundle: mockGetBackendSecretBundle,
-    getEffectiveBackend: mockGetEffectiveBackend,
+    getEffectiveRoutingFor: mockGetEffectiveRoutingFor,
     getStoredProviderKeys: mockGetStoredProviderKeys,
     getProviderSecretBundle: mockGetProviderSecretBundle,
   },
@@ -1218,7 +1218,7 @@ describe('OpenCodeBackend provider routing', () => {
     // Reset registry mocks to safe defaults each test
     mockGetGlobalBackendSettings.mockReturnValue({ ...defaultGlobalSettings });
     mockGetBackendSecretBundle.mockReturnValue(null);
-    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+    mockGetEffectiveRoutingFor.mockReturnValue({ backend: 'opencode' });
   });
 
   afterEach(() => {
@@ -1303,7 +1303,7 @@ describe('OpenCodeBackend provider routing', () => {
       outer_model: 'amazon-bedrock/some-model',
     });
     mockGetBackendSecretBundle.mockReturnValue(null);
-    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+    mockGetEffectiveRoutingFor.mockReturnValue({ backend: 'opencode' });
 
     const b2 = new OpenCodeBackend();
     await b2.initialize();
@@ -1316,8 +1316,8 @@ describe('OpenCodeBackend provider routing', () => {
 
   // --- sendMessage / promptAsync (entry point :361) ---
 
-  it('sendMessage routes to provider/model from getEffectiveBackend (combined form with /)', async () => {
-    mockGetEffectiveBackend.mockReturnValue({
+  it('sendMessage routes to provider/model from getEffectiveRoutingFor (combined form with /)', async () => {
+    mockGetEffectiveRoutingFor.mockReturnValue({
       backend: 'opencode',
       provider: 'amazon-bedrock',
       model: 'amazon-bedrock/some-model',
@@ -1338,7 +1338,7 @@ describe('OpenCodeBackend provider routing', () => {
   });
 
   it('sendMessage omits model field when effective.model is unset', async () => {
-    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+    mockGetEffectiveRoutingFor.mockReturnValue({ backend: 'opencode' });
 
     backend = new OpenCodeBackend();
     await backend.initialize();
@@ -1350,7 +1350,7 @@ describe('OpenCodeBackend provider routing', () => {
   });
 
   it('sendMessage routes no-slash model using provider as providerID', async () => {
-    mockGetEffectiveBackend.mockReturnValue({
+    mockGetEffectiveRoutingFor.mockReturnValue({
       backend: 'opencode',
       provider: 'openai',
       model: 'gpt-4o',
@@ -1371,7 +1371,7 @@ describe('OpenCodeBackend provider routing', () => {
   });
 
   it('sendMessage no-slash model falls back to anthropic when provider unset', async () => {
-    mockGetEffectiveBackend.mockReturnValue({
+    mockGetEffectiveRoutingFor.mockReturnValue({
       backend: 'opencode',
       model: 'claude-opus-4',
     });
@@ -1392,8 +1392,8 @@ describe('OpenCodeBackend provider routing', () => {
 
   // --- spawnEphemeralAgent / session.prompt (entry point :450) ---
 
-  it('spawnEphemeralAgent routes to provider/model from getEffectiveBackend (combined form)', async () => {
-    mockGetEffectiveBackend.mockReturnValue({
+  it('spawnEphemeralAgent routes to provider/model from getEffectiveRoutingFor (combined form)', async () => {
+    mockGetEffectiveRoutingFor.mockReturnValue({
       backend: 'opencode',
       provider: 'amazon-bedrock',
       model: 'amazon-bedrock/some-model',
@@ -1413,7 +1413,7 @@ describe('OpenCodeBackend provider routing', () => {
   });
 
   it('spawnEphemeralAgent does not hardcode anthropic as providerID', async () => {
-    mockGetEffectiveBackend.mockReturnValue({
+    mockGetEffectiveRoutingFor.mockReturnValue({
       backend: 'opencode',
       provider: 'openai',
       model: 'openai/gpt-4o',
@@ -1429,7 +1429,7 @@ describe('OpenCodeBackend provider routing', () => {
   });
 
   it('spawnEphemeralAgent omits model field when effective.model is unset', async () => {
-    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+    mockGetEffectiveRoutingFor.mockReturnValue({ backend: 'opencode' });
 
     backend = new OpenCodeBackend();
     await backend.initialize();
@@ -1441,8 +1441,8 @@ describe('OpenCodeBackend provider routing', () => {
 
   // --- spawnEphemeralSession / sendTurn (entry point :546) ---
 
-  it('spawnEphemeralSession routes initial turn to provider/model from getEffectiveBackend', async () => {
-    mockGetEffectiveBackend.mockReturnValue({
+  it('spawnEphemeralSession routes initial turn to provider/model from getEffectiveRoutingFor', async () => {
+    mockGetEffectiveRoutingFor.mockReturnValue({
       backend: 'opencode',
       provider: 'amazon-bedrock',
       model: 'amazon-bedrock/some-model',
@@ -1464,7 +1464,7 @@ describe('OpenCodeBackend provider routing', () => {
   });
 
   it('spawnEphemeralSession follow-up turns also carry the resolved model', async () => {
-    mockGetEffectiveBackend.mockReturnValue({
+    mockGetEffectiveRoutingFor.mockReturnValue({
       backend: 'opencode',
       provider: 'amazon-bedrock',
       model: 'amazon-bedrock/some-model',
@@ -1487,7 +1487,7 @@ describe('OpenCodeBackend provider routing', () => {
   });
 
   it('spawnEphemeralSession omits model field when effective.model is unset', async () => {
-    mockGetEffectiveBackend.mockReturnValue({ backend: 'opencode' });
+    mockGetEffectiveRoutingFor.mockReturnValue({ backend: 'opencode' });
 
     backend = new OpenCodeBackend();
     await backend.initialize();

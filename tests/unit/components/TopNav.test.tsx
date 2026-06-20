@@ -290,6 +290,39 @@ describe('TopNav', () => {
     expect(useAppStore.getState().showModelSettings).toBe(true);
   });
 
+  it('settings gear is always enabled even when no project is active', () => {
+    useAppStore.setState({ projects: [], activeProjectId: null } as any);
+    render(<TopNav />);
+    const btn = screen.getByTestId('settings-cog-btn') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+
+  it('settings gear has Settings tooltip when no project is active', () => {
+    useAppStore.setState({ projects: [], activeProjectId: null } as any);
+    render(<TopNav />);
+    const btn = screen.getByTestId('settings-cog-btn');
+    expect(btn.getAttribute('title')).toBe('Settings');
+  });
+
+  it('clicking settings gear when no project is active opens settings', () => {
+    useAppStore.setState({ projects: [], activeProjectId: null, showModelSettings: false } as any);
+    render(<TopNav />);
+    fireEvent.click(screen.getByTestId('settings-cog-btn'));
+    expect(useAppStore.getState().showModelSettings).toBe(true);
+  });
+
+  it('settings gear is enabled when a project is active', () => {
+    render(<TopNav />);
+    const btn = screen.getByTestId('settings-cog-btn') as HTMLButtonElement;
+    expect(btn.disabled).toBe(false);
+  });
+
+  it('settings gear has Settings tooltip when a project is active', () => {
+    render(<TopNav />);
+    const btn = screen.getByTestId('settings-cog-btn');
+    expect(btn.getAttribute('title')).toBe('Settings');
+  });
+
   // ── Search ────────────────────────────────────────────────────────────────
 
   it('search input is bound to store searchQuery', () => {

@@ -3,10 +3,11 @@
  */
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent } from '@testing-library/react';
 import App from '../../../src/renderer/App';
 import { useAppStore } from '../../../src/renderer/store';
 import { mockSandstormApi } from './setup';
+import { buildConfigPanes } from '../../../src/renderer/components/config/panes';
 
 // Mock child components to isolate App logic
 vi.mock('../../../src/renderer/components/KanbanBoard', () => ({
@@ -26,8 +27,27 @@ vi.mock('../../../src/renderer/components/OpenProjectDialog', () => ({
   OpenProjectDialog: () => <div data-testid="open-project-dialog" />,
 }));
 vi.mock('../../../src/renderer/tray-icon.png', () => ({ default: 'tray-icon.png' }));
-vi.mock('../../../src/renderer/components/ModelSettings', () => ({
-  ModelSettingsModal: () => <div data-testid="model-settings-modal" />,
+vi.mock('../../../src/renderer/components/ProjectConfigModal', () => ({
+  ProjectConfigModal: ({ open, title, panes, onClose, onSave }: {
+    open: boolean;
+    title: string;
+    panes: Array<{ id: string; label: string }>;
+    onClose: () => void;
+    onSave: () => void;
+  }) =>
+    open ? (
+      <div data-testid="project-config-modal">
+        {title}
+        {panes?.map((p) => (
+          <span key={p.id} data-testid={`pane-tab-${p.id}`}>{p.label}</span>
+        ))}
+        <button data-testid="modal-close" onClick={onClose}>Close</button>
+        <button data-testid="modal-save" onClick={onSave}>Save</button>
+      </div>
+    ) : null,
+}));
+vi.mock('../../../src/renderer/components/config/panes', () => ({
+  buildConfigPanes: vi.fn().mockResolvedValue([]),
 }));
 
 describe('App', () => {
@@ -113,9 +133,93 @@ describe('App', () => {
     expect(api.stacks.history).not.toHaveBeenCalled();
   });
 
-  it('renders ModelSettingsModal when showModelSettings is true', () => {
-    useAppStore.setState({ showModelSettings: true });
+  it('renders ProjectConfigModal when showModelSettings is true and a project is active', async () => {
+    useAppStore.setState({
+      showModelSettings: true,
+      projects: [{ id: 1, name: 'My Project', directory: '/myproject', added_at: '' }],
+      activeProjectId: 1,
+    });
     render(<App />);
-    expect(screen.getByTestId('model-settings-modal')).toBeDefined();
+    await waitFor(() => {
+      expect(screen.getByTestId('project-config-modal')).toBeDefined();
+    });
+  });
+
+  it('does not render ProjectConfigModal when showModelSettings is true but no project is active', () => {
+    useAppStore.setState({ showModelSettings: true, activeProjectId: null });
+    render(<App />);
+    expect(screen.queryByTestId('project-config-modal')).toBeNull();
+  });
+
+  it('ProjectConfigModal onClose clears showModelSettings', async () => {
+    const testProject = { id: 1, name: 'My Project', directory: '/myproject', added_at: '' };
+    api.projects.list.mockResolvedValue([testProject]);
+    useAppStore.setState({
+      showModelSettings: true,
+      projects: [testProject],
+      activeProjectId: 1,
+    });
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('project-config-modal')).toBeDefined();
+    });
+    fireEvent.click(screen.getByTestId('modal-close'));
+    await waitFor(() => {
+      expect(useAppStore.getState().showModelSettings).toBe(false);
+    });
+  });
+
+  it('onSave invokes pane-registered save and calls window.sandstorm.modelRouting.setProject', async () => {
+    const testProject = { id: 1, name: 'My Project', directory: '/myproject', added_at: '' };
+    api.projects.list.mockResolvedValue([testProject]);
+    vi.mocked(buildConfigPanes).mockImplementationOnce(async (ctx) => {
+      ctx.registerSave(async () => {
+        await window.sandstorm.modelRouting.setProject('/myproject', {});
+      });
+      return [{ id: 'models', label: 'Models', icon: null, render: () => null }] as any;
+    });
+
+    useAppStore.setState({
+      showModelSettings: true,
+      projects: [testProject],
+      activeProjectId: 1,
+    });
+
+    render(<App />);
+    await waitFor(() => {
+      expect(screen.getByTestId('project-config-modal')).toBeDefined();
+    });
+
+    fireEvent.click(screen.getByTestId('modal-save'));
+
+    await waitFor(() => {
+      expect(api.modelRouting.setProject).toHaveBeenCalledWith('/myproject', {});
+    });
+  });
+
+  it('passes Models, Providers, Automation, Ticketing panes to ProjectConfigModal', async () => {
+    const testProject = { id: 1, name: 'My Project', directory: '/myproject', added_at: '' };
+    api.projects.list.mockResolvedValue([testProject]);
+    vi.mocked(buildConfigPanes).mockResolvedValueOnce([
+      { id: 'models', label: 'Models', icon: null, render: () => null },
+      { id: 'providers', label: 'Providers', icon: null, render: () => null },
+      { id: 'automation', label: 'Automation', icon: null, render: () => null },
+      { id: 'ticketing', label: 'Ticketing', icon: null, render: () => null },
+    ] as any);
+
+    useAppStore.setState({
+      showModelSettings: true,
+      projects: [testProject],
+      activeProjectId: 1,
+    });
+
+    render(<App />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId('pane-tab-models')).toBeDefined();
+      expect(screen.getByTestId('pane-tab-providers')).toBeDefined();
+      expect(screen.getByTestId('pane-tab-automation')).toBeDefined();
+      expect(screen.getByTestId('pane-tab-ticketing')).toBeDefined();
+    });
   });
 });

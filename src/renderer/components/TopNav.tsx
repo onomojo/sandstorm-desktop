@@ -313,7 +313,7 @@ export function TopNav() {
 
           <button
             onClick={() => setShowModelSettings(true)}
-            className="p-1.5 rounded-lg text-sandstorm-muted hover:text-sandstorm-text hover:bg-sandstorm-surface transition-colors"
+            className="p-1.5 rounded-lg transition-colors text-sandstorm-muted hover:text-sandstorm-text hover:bg-sandstorm-surface"
             data-testid="settings-cog-btn"
             title="Settings"
           >

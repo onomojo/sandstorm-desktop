@@ -1,4 +1,4 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useAppStore, ThresholdLevel } from './store';
 import { StackDetail } from './components/StackDetail';
 import { RefineTicketDialog } from './components/RefineTicketDialog';
@@ -9,11 +9,71 @@ import { CreatePRDialog } from './components/CreatePRDialog';
 import { OpenProjectDialog } from './components/OpenProjectDialog';
 import { SessionWarningModal } from './components/SessionWarningModal';
 import { SessionTokenLimitModal } from './components/SessionTokenLimitModal';
-import { ModelSettingsModal } from './components/ModelSettings';
+import { ProjectConfigModal } from './components/ProjectConfigModal';
+import { buildConfigPanes } from './components/config/panes';
+import type { ConfigPane } from './components/config/types';
 import { StaleWorkspaces } from './components/StaleWorkspaces';
+import { GlobalSettingsModal } from './components/GlobalSettingsModal';
 import { TopNav } from './components/TopNav';
 import { KanbanBoard } from './components/KanbanBoard';
 import { TelemetryView } from './components/TelemetryView';
+
+function ProjectConfigModalMount({ open, onClose }: { open: boolean; onClose: () => void }) {
+  const { activeProject } = useAppStore();
+  const project = activeProject();
+  const [panes, setPanes] = useState<ConfigPane[]>([]);
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const pendingSave = useRef<(() => Promise<void>) | null>(null);
+
+  useEffect(() => {
+    if (!open || !project) {
+      setPanes([]);
+      setDirty(false);
+      pendingSave.current = null;
+      return;
+    }
+    const ctx = {
+      projectDir: project.directory,
+      routing: window.sandstorm.modelRouting,
+      darkFactory: window.sandstorm.darkFactory,
+      ticketing: window.sandstorm.projectTicketConfig,
+      providerSecrets: window.sandstorm.providerSecrets,
+      onDirtyChange: setDirty,
+      registerSave: (fn: () => Promise<void>) => { pendingSave.current = fn; },
+    };
+    void buildConfigPanes(ctx).then(setPanes);
+  }, [open, project?.directory]);
+
+  const handleSave = useCallback(async () => {
+    if (!pendingSave.current) return;
+    setSaving(true);
+    try {
+      await pendingSave.current();
+      setDirty(false);
+      onClose();
+    } finally {
+      setSaving(false);
+    }
+  }, [onClose]);
+
+  if (!project) {
+    return open ? <GlobalSettingsModal onClose={onClose} /> : null;
+  }
+
+  return (
+    <ProjectConfigModal
+      open={open}
+      title={project.name}
+      subtitle="Configure models, providers, and automation"
+      panes={panes}
+      onClose={onClose}
+      onSave={handleSave}
+      saving={saving}
+      dirty={dirty}
+    />
+  );
+}
 
 /** Polling interval when Docker is connected (ms) */
 const STACK_POLL_INTERVAL = 3000;
@@ -35,6 +95,7 @@ export default function App() {
     showCreatePRDialog,
     showOpenProjectDialog,
     showModelSettings,
+    setShowModelSettings,
     dockerConnected,
     refreshStacks,
     refreshProjects,
@@ -275,7 +336,10 @@ export default function App() {
       {showStartTicketDialog && <StartTicketDialog />}
       {showCreatePRDialog && <CreatePRDialog stackId={showCreatePRDialog.stackId} initialError={showCreatePRDialog.initialError} />}
       {showOpenProjectDialog && <OpenProjectDialog />}
-      {showModelSettings && <ModelSettingsModal />}
+      <ProjectConfigModalMount
+        open={showModelSettings}
+        onClose={() => setShowModelSettings(false)}
+      />
 
       {/* Stale workspaces modal — shown on app start when stale workspaces exist */}
       <StaleWorkspaces />

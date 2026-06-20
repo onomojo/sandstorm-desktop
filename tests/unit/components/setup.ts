@@ -211,6 +211,26 @@ export function mockSandstormApi() {
     darkFactory: {
       getEnabled: vi.fn().mockResolvedValue(false),
       setEnabled: vi.fn().mockResolvedValue(undefined),
+      getConfig: vi.fn().mockResolvedValue({ level: 'manual', merge_strategy: 'squash' }),
+      setConfig: vi.fn().mockResolvedValue(undefined),
+    },
+    providerSecrets: {
+      get: vi.fn().mockResolvedValue(null),
+      set: vi.fn().mockResolvedValue(undefined),
+      remove: vi.fn().mockResolvedValue(undefined),
+      status: vi.fn().mockResolvedValue({ set: false }),
+      getBundle: vi.fn().mockResolvedValue(null),
+      setBundle: vi.fn().mockResolvedValue(undefined),
+    },
+    modelRouting: {
+      getEffective: vi.fn().mockResolvedValue({}),
+      getProject: vi.fn().mockResolvedValue(null),
+      setProject: vi.fn().mockResolvedValue(undefined),
+      removeProject: vi.fn().mockResolvedValue(undefined),
+      getGlobal: vi.fn().mockResolvedValue({ assignments: {}, preset: null }),
+      setGlobal: vi.fn().mockResolvedValue(undefined),
+      applyPreset: vi.fn().mockResolvedValue(undefined),
+      getAvailableModels: vi.fn().mockResolvedValue([]),
     },
     telemetry: {
       summary: vi.fn().mockResolvedValue({

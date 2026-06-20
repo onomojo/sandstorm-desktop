@@ -143,6 +143,7 @@ describe('dispatchTask — reference resolution', () => {
     const prompt = 'Implement the mockup at https://gist.github.com/user/abc';
     await manager.dispatchTask('ref-stack', prompt, undefined, { forceBypass: true });
 
+    // Prompt is delivered via --file (temp file) to avoid argv E2BIG; read file for content verification.
     const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
     const deliveredPrompt = readDeliveredPrompt(cliArgs);
 
@@ -164,6 +165,7 @@ describe('dispatchTask — reference resolution', () => {
     const prompt = 'Fix the bug in the auth module';
     await manager.dispatchTask('noref-stack', prompt, undefined, { forceBypass: true });
 
+    // Prompt is delivered via --file (temp file); read file for content verification.
     const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
     const deliveredPrompt = readDeliveredPrompt(cliArgs);
 
@@ -198,6 +200,7 @@ describe('dispatchTask — reference resolution', () => {
 
     await manager.dispatchTask('sep-stack', 'Build per spec at https://example.com/doc', undefined, { forceBypass: true });
 
+    // Prompt is delivered via --file (temp file); read file for content verification.
     const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
     const deliveredPrompt = readDeliveredPrompt(cliArgs);
 
