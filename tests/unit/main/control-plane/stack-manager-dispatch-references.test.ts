@@ -89,6 +89,15 @@ function makeStack(id: string) {
 
 const REFS_SECTION = '## Resolved References\n\n### https://gist.github.com/user/abc\n\n```\nmockup content\n```\n';
 
+/** Read the prompt delivered to runCli, handling the --file <path> dispatch pattern. */
+function readDeliveredPrompt(cliArgs: string[]): string {
+  const fileIdx = cliArgs.indexOf('--file');
+  if (fileIdx !== -1) {
+    return fs.readFileSync(cliArgs[fileIdx + 1], 'utf-8');
+  }
+  return cliArgs[cliArgs.length - 1];
+}
+
 // ---------------------------------------------------------------------------
 // Suite
 // ---------------------------------------------------------------------------
@@ -135,7 +144,7 @@ describe('dispatchTask — reference resolution', () => {
     await manager.dispatchTask('ref-stack', prompt, undefined, { forceBypass: true });
 
     const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
-    const deliveredPrompt = cliArgs[cliArgs.length - 1];
+    const deliveredPrompt = readDeliveredPrompt(cliArgs);
 
     expect(deliveredPrompt).toContain('## Resolved References');
     expect(deliveredPrompt).toContain('mockup content');
@@ -156,7 +165,7 @@ describe('dispatchTask — reference resolution', () => {
     await manager.dispatchTask('noref-stack', prompt, undefined, { forceBypass: true });
 
     const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
-    const deliveredPrompt = cliArgs[cliArgs.length - 1];
+    const deliveredPrompt = readDeliveredPrompt(cliArgs);
 
     expect(deliveredPrompt).toBe(prompt);
     expect(deliveredPrompt).not.toContain('## Resolved References');
@@ -190,7 +199,7 @@ describe('dispatchTask — reference resolution', () => {
     await manager.dispatchTask('sep-stack', 'Build per spec at https://example.com/doc', undefined, { forceBypass: true });
 
     const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
-    const deliveredPrompt = cliArgs[cliArgs.length - 1];
+    const deliveredPrompt = readDeliveredPrompt(cliArgs);
 
     expect(deliveredPrompt).toContain('\n\n---\n\n');
     expect(deliveredPrompt).toContain('## Resolved References');

@@ -293,6 +293,10 @@ export interface SandstormAPI {
     byTicket: (range?: { since: string; until: string }) => Promise<ByTicketEntry[]>;
     refresh: () => Promise<{ ok: true }>;
   };
+  epic: {
+    start: (epicId: string, projectDir: string) => Promise<unknown>;
+    getRunPlan: (epicId: string, projectDir: string) => Promise<unknown>;
+  };
   on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
 }
 
@@ -542,6 +546,10 @@ const api: SandstormAPI = {
     session: (range) => ipcRenderer.invoke('stats:telemetry:session', range),
     byTicket: (range) => ipcRenderer.invoke('stats:telemetry:byTicket', range),
     refresh: () => ipcRenderer.invoke('stats:telemetry:refresh'),
+  },
+  epic: {
+    start: (epicId, projectDir) => ipcRenderer.invoke('epic:start', epicId, projectDir),
+    getRunPlan: (epicId, projectDir) => ipcRenderer.invoke('epic:getRunPlan', epicId, projectDir),
   },
   on: (channel, callback) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>

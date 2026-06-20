@@ -334,6 +334,7 @@ vi.mock('../../src/main/control-plane/ticket-config', () => ({
   closeTicketWithConfig: (...args: unknown[]) => mockCloseTicketWithConfig(...args),
   markTicketDoneWithConfig: (...args: unknown[]) => mockMarkTicketDoneWithConfig(...args),
   testJiraConnection: (...args: unknown[]) => mockTestJiraConnection(...args),
+  fetchTicketWithConfig: vi.fn().mockResolvedValue(null),
 }));
 
 vi.mock('../../src/main/control-plane/retry-with-backoff', () => ({
@@ -2761,6 +2762,8 @@ describe('IPC Handlers', () => {
       'stats:telemetry:session',
       'stats:telemetry:byTicket',
       'stats:telemetry:refresh',
+      'epic:start',
+      'epic:getRunPlan',
     ];
 
     it('registers all expected IPC channels', () => {
