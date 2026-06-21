@@ -450,32 +450,22 @@ export class StackManager {
    * Compares the image's sandstorm.app-version label to the current app version.
    * Returns true if the image is outdated or missing a version stamp.
    */
-  async checkImageNeedsRebuild(projectDir: string): Promise<boolean> {
+  async checkImageNeedsRebuild(projectDir: string, runtime: ContainerRuntime): Promise<boolean> {
     if (this.appVersion === 'unknown') return false;
 
     try {
       const projectName = path.basename(projectDir).toLowerCase().replace(/[^a-z0-9]/g, '-');
       const imageName = `sandstorm-${projectName}-claude`;
 
-      // Use docker CLI to inspect the image label (works with any runtime)
-      const result = await new Promise<{ stdout: string; exitCode: number }>((resolve) => {
-        const child = spawn('docker', [
-          'image', 'inspect', imageName,
-          '--format', '{{index .Config.Labels "sandstorm.app-version"}}',
-        ], { stdio: ['ignore', 'pipe', 'pipe'] });
-        let stdout = '';
-        child.stdout.on('data', (d: Buffer) => (stdout += d.toString()));
-        child.on('close', (code) => resolve({ stdout: stdout.trim(), exitCode: code ?? 1 }));
-        child.on('error', () => resolve({ stdout: '', exitCode: 1 }));
-      });
+      const imageInfo = await runtime.inspectImage(imageName);
 
-      if (result.exitCode !== 0) {
+      if (!imageInfo) {
         // Image doesn't exist — will be built from scratch, no rebuild needed
         return false;
       }
 
-      const imageVersion = result.stdout;
-      if (!imageVersion || imageVersion === '<no value>') {
+      const imageVersion = imageInfo.labels['sandstorm.app-version'];
+      if (!imageVersion) {
         // Image exists but has no version label — needs rebuild to stamp it
         return true;
       }
@@ -489,7 +479,8 @@ export class StackManager {
   private async buildStackInBackground(opts: CreateStackOpts, _projectName: string): Promise<void> {
     try {
       // Check if the base image needs rebuilding due to app version change
-      const needsRebuild = await this.checkImageNeedsRebuild(opts.projectDir);
+      const buildRuntime = opts.runtime === 'podman' ? this.podmanRuntime : this.dockerRuntime;
+      const needsRebuild = await this.checkImageNeedsRebuild(opts.projectDir, buildRuntime);
       if (needsRebuild) {
         this.registry.updateStackStatus(opts.name, 'rebuilding');
         this.notifyUpdate();

@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TaskWatcher, LIVENESS_CHECK_INTERVAL_MS, LIVENESS_STALL_THRESHOLD_MS } from '../../../../src/main/control-plane/task-watcher';
 import { Registry, Task } from '../../../../src/main/control-plane/registry';
 import { ContainerRuntime } from '../../../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../../../helpers/fake-container-runtime';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -24,48 +25,32 @@ function createLivenessMockRuntime(opts: {
   pgrepShouldThrow?: boolean;
 } = {}): ContainerRuntime {
   let statusCallIdx = 0;
-  return {
-    name: 'mock',
-    composeUp: vi.fn(),
-    composeDown: vi.fn(),
-    listContainers: vi.fn().mockResolvedValue([]),
-    inspect: vi.fn(),
+  return makeFakeContainerRuntime({
     logs: vi.fn().mockReturnValue({
       [Symbol.asyncIterator]: () => ({ next: async () => ({ done: true, value: '' }) }),
     }),
     exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
-      // /tmp/claude-task.status read (main poll + idempotency re-read)
       if (cmd.includes('/tmp/claude-task.status')) {
         const seq = opts.statusSequence ?? ['running'];
         const idx = Math.min(statusCallIdx++, seq.length - 1);
         return { exitCode: 0, stdout: seq[idx], stderr: '' };
       }
-
-      // stat for liveness log size
       if (cmd[0] === 'stat' && cmd.includes('/tmp/claude-raw.log')) {
         if (opts.statShouldThrow) throw new Error('stat exec error');
         const size = typeof opts.logSize === 'function' ? opts.logSize() : (opts.logSize ?? 0);
         return { exitCode: 0, stdout: String(size), stderr: '' };
       }
-
-      // pgrep for process liveness
       if (cmd[0] === 'pgrep') {
         if (opts.pgrepShouldThrow) throw new Error('pgrep exec error');
         const out = opts.pgrepOut ?? '';
         return { exitCode: out ? 0 : 1, stdout: out, stderr: '' };
       }
-
-      // /tmp/claude-task.exit
       if (cmd.includes('/tmp/claude-task.exit')) {
         return { exitCode: 0, stdout: '0', stderr: '' };
       }
-
-      // Everything else (token files, iteration files, metadata)
       return { exitCode: 0, stdout: '', stderr: '' };
     }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-  };
+  });
 }
 
 describe('TaskWatcher — liveness check', () => {

@@ -6,6 +6,7 @@ import { Registry } from '../../src/main/control-plane/registry';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { StackManager } from '../../src/main/control-plane/stack-manager';
 import { ContainerRuntime, Container } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import { runStartupReconciliation } from '../../src/main/control-plane/startup-reconciler';
 
 function makeTempDb(): string {
@@ -82,16 +83,11 @@ describe('DR-F: non-blocking startup reconciliation (integration)', () => {
       created: '2026-01-01T00:00:00.000Z',
     };
 
-    const slowRuntime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
+    const slowRuntime = makeFakeContainerRuntime({
       listContainers: vi.fn().mockImplementation(async () => {
         await barrier; // Blocked until we call releaseBarrier()
         return [mockContainer];
       }),
-      inspect: vi.fn(),
-      logs: vi.fn().mockReturnValue((async function* () {})()),
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         if (cmd.includes('/tmp/claude-task.status')) {
           return { exitCode: 0, stdout: 'completed', stderr: '' };
@@ -101,10 +97,7 @@ describe('DR-F: non-blocking startup reconciliation (integration)', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-      containerStats: vi.fn(),
-    };
+    });
 
     const stackManagerMock = {
       resumeStackWithContinuation: vi.fn(),
@@ -180,18 +173,9 @@ describe('DR-F: non-blocking startup reconciliation (integration)', () => {
     const updatesEmitted: string[] = [];
     const notifyUpdate = vi.fn(() => updatesEmitted.push('stacks:updated'));
 
-    const noContainerRuntime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn().mockReturnValue((async function* () {})()),
+    const noContainerRuntime = makeFakeContainerRuntime({
       exec: vi.fn(),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-      containerStats: vi.fn(),
-    };
+    });
 
     const stackManagerMock = {
       resumeStackWithContinuation: vi.fn(),

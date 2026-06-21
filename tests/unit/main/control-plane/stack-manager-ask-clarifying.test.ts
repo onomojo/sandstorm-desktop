@@ -14,6 +14,7 @@ import { Registry } from '../../../../src/main/control-plane/registry';
 import { PortAllocator } from '../../../../src/main/control-plane/port-allocator';
 import { TaskWatcher } from '../../../../src/main/control-plane/task-watcher';
 import type { ContainerRuntime } from '../../../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../../../helpers/fake-container-runtime';
 
 function makeTempDb(): string {
   return path.join(
@@ -29,10 +30,7 @@ function cleanupDb(dbPath: string): void {
 }
 
 function createMockRuntime(): ContainerRuntime {
-  return {
-    name: 'mock',
-    composeUp: vi.fn().mockResolvedValue(undefined),
-    composeDown: vi.fn().mockResolvedValue(undefined),
+  return makeFakeContainerRuntime({
     listContainers: vi.fn().mockResolvedValue([
       {
         id: 'cid-claude',
@@ -45,13 +43,7 @@ function createMockRuntime(): ContainerRuntime {
         created: new Date().toISOString(),
       },
     ]),
-    inspect: vi.fn().mockResolvedValue({}),
-    logs: vi.fn().mockReturnValue((async function* () {})()),
-    containerStats: vi.fn().mockResolvedValue({ memoryUsage: 0, memoryLimit: 0, cpuPercent: 0 }),
-    exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-  };
+  });
 }
 
 describe('ASK_CLARIFYING_QUESTIONS_PROMPT', () => {

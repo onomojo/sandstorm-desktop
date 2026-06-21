@@ -61,7 +61,12 @@ vi.mock('child_process', async (importOriginal) => {
 // Mock fs to avoid real file operations
 vi.mock('fs', async (importOriginal) => {
   const actual = await importOriginal() as typeof import('fs');
-  return {
+  // Build mock object first so we can assign it as `default` too.
+  // claude-backend uses `import fs from 'fs'` (default import), which resolves
+  // to `actual.default` (the original module) when we spread `...actual`.
+  // Setting `default: mockFs` ensures both named imports and default imports
+  // reference the same vi.fn() instances.
+  const mockFs = {
     ...actual,
     existsSync: vi.fn().mockReturnValue(false),
     mkdirSync: vi.fn(),
@@ -77,6 +82,7 @@ vi.mock('fs', async (importOriginal) => {
     })),
     rmSync: vi.fn(),
   };
+  return { ...mockFs, default: mockFs };
 });
 
 // Mock http server
@@ -465,6 +471,37 @@ describe('ClaudeBackend (AgentBackend implementation)', () => {
       await expect(
         backend.syncCredentials([{ status: 'stopped', services: [] }])
       ).resolves.toBeUndefined();
+    });
+
+    it('calls runtime.exec with credentials for a running stack with a claude container', async () => {
+      const fakeCreds = JSON.stringify({ token: 'test-token' });
+      const { readFileSync } = await import('fs');
+      (readFileSync as ReturnType<typeof vi.fn>).mockImplementationOnce(() => fakeCreds);
+
+      const execMock = vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' });
+      const mockRuntime = { exec: execMock };
+      const resolveRuntime = vi.fn().mockReturnValue(mockRuntime);
+
+      const backendWithRuntime = new ClaudeBackend(1000, undefined, resolveRuntime as never);
+      backendWithRuntime.setMainWindow(mockWindow as never);
+      await backendWithRuntime.initialize();
+
+      const stack = {
+        status: 'running',
+        services: [{ name: 'claude', status: 'running', containerId: 'abc123' }],
+        runtime: 'docker' as const,
+      };
+
+      await backendWithRuntime.syncCredentials([stack]);
+
+      expect(resolveRuntime).toHaveBeenCalledWith(stack);
+      expect(execMock).toHaveBeenCalledWith(
+        'abc123',
+        ['bash', '-c', 'mkdir -p ~/.claude && cat > ~/.claude/.credentials.json'],
+        expect.objectContaining({ user: 'claude', input: fakeCreds })
+      );
+
+      backendWithRuntime.destroy();
     });
   });
 

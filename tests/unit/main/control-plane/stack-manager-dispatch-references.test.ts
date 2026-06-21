@@ -13,6 +13,7 @@ import { Registry } from '../../../../src/main/control-plane/registry';
 import { PortAllocator } from '../../../../src/main/control-plane/port-allocator';
 import { TaskWatcher } from '../../../../src/main/control-plane/task-watcher';
 import type { ContainerRuntime } from '../../../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../../../helpers/fake-container-runtime';
 
 // ---------------------------------------------------------------------------
 // Mock ticket-references so we don't hit the network or gh CLI.
@@ -50,10 +51,7 @@ function cleanupDb(dbPath: string): void {
 }
 
 function createMockRuntime(): ContainerRuntime {
-  return {
-    name: 'mock',
-    composeUp: vi.fn().mockResolvedValue(undefined),
-    composeDown: vi.fn().mockResolvedValue(undefined),
+  return makeFakeContainerRuntime({
     listContainers: vi.fn().mockResolvedValue([
       {
         id: 'claude-cid',
@@ -66,12 +64,7 @@ function createMockRuntime(): ContainerRuntime {
         created: new Date().toISOString(),
       },
     ]),
-    inspect: vi.fn().mockResolvedValue({}),
-    logs: vi.fn().mockReturnValue((async function* () {})()),
-    exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-  };
+  });
 }
 
 function makeStack(id: string) {

@@ -4,6 +4,7 @@ import { Registry } from '../../src/main/control-plane/registry';
 import { PortAllocator } from '../../src/main/control-plane/port-allocator';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -19,18 +20,7 @@ function cleanupDb(dbPath: string): void {
 }
 
 function createMockRuntime(): ContainerRuntime {
-  return {
-    name: 'mock',
-    composeUp: vi.fn().mockResolvedValue(undefined),
-    composeDown: vi.fn().mockResolvedValue(undefined),
-    listContainers: vi.fn().mockResolvedValue([]),
-    inspect: vi.fn(),
-    logs: vi.fn().mockReturnValue((async function* () {})()),
-    exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-    containerStats: vi.fn().mockResolvedValue({ memoryUsage: 0, memoryLimit: 0, cpuPercent: 0 }),
-  };
+  return makeFakeContainerRuntime();
 }
 
 describe('Auto-rebuild mechanism', () => {
@@ -87,13 +77,13 @@ describe('Auto-rebuild mechanism', () => {
       // Override private field for testing
       (unknownManager as unknown as { appVersion: string }).appVersion = 'unknown';
 
-      const result = await unknownManager.checkImageNeedsRebuild('/some/project');
+      const result = await unknownManager.checkImageNeedsRebuild('/some/project', runtime);
       expect(result).toBe(false);
     });
 
     it('returns false when docker inspect fails (image does not exist)', async () => {
       // spawn will fail since Docker is not available in test env
-      const result = await manager.checkImageNeedsRebuild('/nonexistent/project');
+      const result = await manager.checkImageNeedsRebuild('/nonexistent/project', runtime);
       expect(result).toBe(false);
     });
   });

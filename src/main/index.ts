@@ -1,6 +1,6 @@
 import { app, BrowserWindow, nativeTheme } from 'electron';
 import path from 'path';
-import { Registry } from './control-plane/registry';
+import { Registry, Stack } from './control-plane/registry';
 import { PortAllocator } from './control-plane/port-allocator';
 import { PortProxy } from './control-plane/port-proxy';
 import { TaskWatcher } from './control-plane/task-watcher';
@@ -9,7 +9,7 @@ import { DockerRuntime } from './runtime/docker';
 import { PodmanRuntime } from './runtime/podman';
 import { ContainerRuntime } from './runtime/types';
 import { DockerConnectionManager } from './runtime/docker-connection';
-import { AgentBackend, ClaudeBackend, OpenCodeBackend, BackendRouter } from './agent';
+import { AgentBackend, ClaudeBackend, OpenCodeBackend, BackendRouter, StackInfo } from './agent';
 import { registerIpcHandlers } from './ipc';
 import { createTray } from './tray';
 import { SessionMonitor } from './control-plane/session-monitor';
@@ -173,10 +173,11 @@ async function initializeApp(): Promise<void> {
   const modelResolver = (projectDir: string) => {
     return registry.getEffectiveRoutingFor(projectDir, 'outer').model;
   };
+  const resolveRuntime = (stack: StackInfo) => stackManager.getRuntimeForStack(stack as Stack);
   agentBackend = new BackendRouter(
     {
-      claude: () => new ClaudeBackend(undefined, modelResolver),
-      opencode: () => new OpenCodeBackend(),
+      claude: () => new ClaudeBackend(undefined, modelResolver, resolveRuntime),
+      opencode: () => new OpenCodeBackend(resolveRuntime),
     },
     (projectDir) => registry.getEffectiveRoutingFor(projectDir, 'outer').backend,
     (projectDir, touchpoint) => registry.getEffectiveTouchpointDescriptor(projectDir, touchpoint),

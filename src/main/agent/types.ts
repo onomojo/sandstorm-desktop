@@ -79,6 +79,7 @@ export interface StackInfo {
   status: string;
   project_dir?: string;
   services?: StackServiceInfo[];
+  runtime?: 'docker' | 'podman';
 }
 
 export interface AgentBackend {

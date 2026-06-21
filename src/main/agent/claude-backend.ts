@@ -24,6 +24,7 @@ import {
   EphemeralSessionHandle,
   zeroSessionTokens,
 } from './types';
+import { ContainerRuntime } from '../runtime/types';
 import { appendEphemeralTiming, type EphemeralTimingRecord } from './ephemeral-timing';
 import { buildEphemeralAgentArgs } from './ephemeral-args';
 import { extractStreamEvents } from './ephemeral-stream-events';
@@ -90,16 +91,19 @@ export class ClaudeBackend implements AgentBackend {
   private logStream: fs.WriteStream | null = null;
   private timeoutMs: number;
   private modelResolver?: (projectDir: string) => string;
+  private resolveRuntime?: (stack: StackInfo) => ContainerRuntime;
   private rawCapture: RawCaptureSupervisor;
   private rawCaptureByTab = new Map<string, RawCaptureSession>();
   private ephemeralTimingPath: string;
 
   constructor(
     timeoutMs?: number,
-    modelResolver?: (projectDir: string) => string
+    modelResolver?: (projectDir: string) => string,
+    resolveRuntime?: (stack: StackInfo) => ContainerRuntime
   ) {
     this.timeoutMs = timeoutMs ?? DEFAULT_TIMEOUT_MS;
     this.modelResolver = modelResolver;
+    this.resolveRuntime = resolveRuntime;
     this.initLogger();
     this.rawCapture = this.initRawCapture();
     this.ephemeralTimingPath = this.resolveEphemeralTimingPath();
@@ -824,13 +828,13 @@ export class ClaudeBackend implements AgentBackend {
         if (!claudeService?.containerId) continue;
 
         try {
-          const child = spawn('docker', [
-            'exec', '-i', '-u', 'claude', claudeService.containerId,
-            'bash', '-c', 'mkdir -p ~/.claude && cat > ~/.claude/.credentials.json',
-          ], { stdio: ['pipe', 'ignore', 'ignore'] });
-          child.stdin.write(creds);
-          child.stdin.end();
-          await new Promise<void>((resolve) => child.on('close', () => resolve()));
+          if (!this.resolveRuntime) throw new Error('resolveRuntime is required');
+          const runtime = this.resolveRuntime(stack);
+          await runtime.exec(
+            claudeService.containerId,
+            ['bash', '-c', 'mkdir -p ~/.claude && cat > ~/.claude/.credentials.json'],
+            { user: 'claude', input: creds }
+          );
         } catch {
           // Best effort per container
         }
