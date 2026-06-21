@@ -1472,7 +1472,7 @@ export class StackManager {
       cliArgs.push('--file', promptTmpFile);
 
       const result = await this.runCli(stack.project_dir, cliArgs).finally(() => {
-        fs.promises.rm(promptTmpDir, { recursive: true, force: true }).catch(() => {});
+        if (promptTmpDir) fs.promises.rm(promptTmpDir, { recursive: true, force: true }).catch(() => {});
       });
 
       if (result.exitCode !== 0) {
