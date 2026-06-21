@@ -1,5 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron';
 import type { ByTicketEntry, ByEpicEntry } from '@main/telemetry/types';
+import type { CatalogProviderList } from '../shared/opencode-providers';
 
 export type ScheduleAction =
   | { kind: 'run-script'; scriptName: string };
@@ -170,6 +171,10 @@ export interface SandstormAPI {
     getBundle: (scope: 'global' | string, provider: string) => Promise<Record<string, string> | null>;
     setBundle: (scope: 'global' | string, provider: string, bundle: Record<string, string>) => Promise<void>;
   };
+  providers: {
+    catalog: () => Promise<CatalogProviderList | null>;
+    configured: (scope: string) => Promise<string[]>;
+  };
   modelRouting: {
     getEffective: (projectDir: string) => Promise<Record<string, { backend: string; provider: string; model: string }>>;
     getProject: (projectDir: string) => Promise<{ assignments: Record<string, { backend: string; provider: string; model: string }>; preset: string | null } | null>;
@@ -179,6 +184,7 @@ export interface SandstormAPI {
     setGlobal: (config: { assignments?: Record<string, { backend: string; provider: string; model: string }>; preset?: string | null }) => Promise<void>;
     applyPreset: (projectDir: string, presetId: string) => Promise<void>;
     getAvailableModels: (projectDir: string) => Promise<Array<{ backend: string; model: string; label: string; version: string; provider: string; needsKey?: boolean; available: boolean }>>;
+    getAvailableModelsWithCatalog: (projectDir: string) => Promise<Array<{ backend: string; model: string; label: string; version: string; provider: string; needsKey?: boolean; available: boolean }>>;
   };
   projectTicketConfig: {
     get: (projectDir: string) => Promise<{
@@ -444,6 +450,10 @@ const api: SandstormAPI = {
     getBundle: (scope, provider) => ipcRenderer.invoke('providerSecrets:getBundle', scope, provider),
     setBundle: (scope, provider, bundle) => ipcRenderer.invoke('providerSecrets:setBundle', scope, provider, bundle),
   },
+  providers: {
+    catalog: () => ipcRenderer.invoke('providers:catalog'),
+    configured: (scope) => ipcRenderer.invoke('providers:configured', scope),
+  },
   modelRouting: {
     getEffective: (projectDir) => ipcRenderer.invoke('modelRouting:getEffective', projectDir),
     getProject: (projectDir) => ipcRenderer.invoke('modelRouting:getProject', projectDir),
@@ -453,6 +463,7 @@ const api: SandstormAPI = {
     setGlobal: (config) => ipcRenderer.invoke('modelRouting:setGlobal', config),
     applyPreset: (projectDir, presetId) => ipcRenderer.invoke('modelRouting:applyPreset', projectDir, presetId),
     getAvailableModels: (projectDir) => ipcRenderer.invoke('modelRouting:getAvailableModels', projectDir),
+    getAvailableModelsWithCatalog: (projectDir) => ipcRenderer.invoke('modelRouting:getAvailableModelsWithCatalog', projectDir),
   },
   projectTicketConfig: {
     get: (projectDir) => ipcRenderer.invoke('projectTicketConfig:get', projectDir),

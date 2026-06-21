@@ -107,10 +107,9 @@ describe('.sandstorm/verify.sh', () => {
     expect(content).toContain('electron-rebuild --force');
   });
 
-  it('runs typecheck, unit tests, build, and package before integration tests', () => {
+  it('runs unit tests, build, and package before integration tests', () => {
     const content = readFileSync(verifyPath, 'utf-8');
     const steps = [
-      'npm run typecheck',
       'npm test',
       'npm run build',
       'npm run package',

@@ -1,7 +1,8 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { Registry } from '../../src/main/control-plane/registry';
-import { TOUCHPOINTS, PRESETS, CLAUDE_MODELS, OPENCODE_MODELS, getAvailableModels } from '../../src/main/control-plane/routing';
-import type { TouchpointId, PresetId } from '../../src/main/control-plane/routing';
+import { TOUCHPOINTS, PRESETS, CLAUDE_MODELS, OPENCODE_MODELS, getAvailableModels, buildOpencodeModels } from '../../src/main/control-plane/routing';
+import type { TouchpointId, PresetId, RoutingAssignment } from '../../src/main/control-plane/routing';
+import type { CatalogProvider } from '../../src/shared/opencode-providers';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -437,9 +438,10 @@ describe('Model Routing', () => {
       expect(bedrockModel?.available).toBe(true);
     });
 
-    it('OpenCode models available when global provider secret configured', () => {
+    it('OpenCode models available when project-scoped provider secret configured', () => {
       const models = getAvailableModels('/proj/test', (key, provider) => {
-        return key === 'global' && provider === 'anthropic';
+        // Credentials are per-project only
+        return key.startsWith('project:') && provider === 'anthropic';
       });
       const oc = models.filter((m) => m.backend === 'opencode');
       const anthropicModel = oc.find((m) => m.provider === 'anthropic');
@@ -473,6 +475,93 @@ describe('Model Routing', () => {
       OPENCODE_MODELS.forEach((m, i) => {
         expect(m.available).toBe(originalAvailable[i]);
       });
+    });
+  });
+
+  // ==========================================================================
+  // buildOpencodeModels with catalog providers
+  // ==========================================================================
+  describe('buildOpencodeModels with catalogProviders', () => {
+    const projectKey = `project:${path.resolve('/proj/test')}`;
+
+    const makeProvider = (overrides: Partial<CatalogProvider> = {}): CatalogProvider => ({
+      id: 'openai',
+      name: 'OpenAI',
+      models: {
+        'gpt-4o': { name: 'GPT-4o' },
+        'gpt-4o-mini': { name: 'GPT-4o Mini' },
+      },
+      ...overrides,
+    });
+
+    it('enumerates models from provider.models into labelled entries', () => {
+      const provider = makeProvider();
+      const models = buildOpencodeModels(() => true, projectKey, [provider]);
+      expect(models).toHaveLength(2);
+      const gpt4o = models.find((m) => m.model === 'openai/gpt-4o');
+      expect(gpt4o).toBeDefined();
+      expect(gpt4o!.label).toBe('GPT-4o — OpenAI');
+      expect(gpt4o!.backend).toBe('opencode');
+      expect(gpt4o!.provider).toBe('openai');
+      expect(gpt4o!.version).toBe('openai/gpt-4o');
+    });
+
+    it('uses modelId as label when model has no name field', () => {
+      const provider = makeProvider({
+        models: { 'some-model': {} },
+      });
+      const models = buildOpencodeModels(() => true, projectKey, [provider]);
+      expect(models).toHaveLength(1);
+      expect(models[0].label).toBe('some-model — OpenAI');
+    });
+
+    it('adds a placeholder entry when provider has no models and isAvailable=true', () => {
+      const provider = makeProvider({ models: undefined });
+      const models = buildOpencodeModels(
+        (key, p) => key === projectKey && p === 'openai',
+        projectKey,
+        [provider],
+      );
+      expect(models).toHaveLength(1);
+      expect(models[0].model).toBe('openai/default');
+      expect(models[0].label).toBe('OpenAI (default)');
+      expect(models[0].available).toBe(true);
+    });
+
+    it('does NOT add a placeholder when provider has no models and isAvailable=false', () => {
+      const provider = makeProvider({ models: undefined });
+      const models = buildOpencodeModels(() => false, projectKey, [provider]);
+      expect(models).toHaveLength(0);
+    });
+
+    it('sets available=false for a provider when no secret is configured', () => {
+      const provider = makeProvider();
+      const models = buildOpencodeModels(() => false, projectKey, [provider]);
+      for (const m of models) {
+        expect(m.available).toBe(false);
+      }
+    });
+
+    it('sets available=true for a provider when its secret is configured', () => {
+      const provider = makeProvider();
+      const models = buildOpencodeModels(
+        (key, p) => key === projectKey && p === 'openai',
+        projectKey,
+        [provider],
+      );
+      for (const m of models) {
+        expect(m.available).toBe(true);
+      }
+    });
+
+    it('falls back to static OPENCODE_MODELS when no catalogProviders supplied', () => {
+      const models = buildOpencodeModels(() => false, projectKey, undefined);
+      expect(models).toHaveLength(OPENCODE_MODELS.length);
+    });
+
+    it('falls back to static OPENCODE_MODELS when catalogProviders is empty', () => {
+      const models = buildOpencodeModels(() => false, projectKey, []);
+      expect(models).toHaveLength(OPENCODE_MODELS.length);
     });
   });
 
@@ -524,6 +613,89 @@ describe('Model Routing', () => {
         expect(typeof desc.backend).toBe('string');
         expect(typeof desc.provider).toBe('string');
         expect(typeof desc.model).toBe('string');
+      }
+    });
+  });
+
+  // ==========================================================================
+  // Contract: touchpoint × precedence layer cross-product (all 7 × 5)
+  // ==========================================================================
+  describe('contract: touchpoint × precedence layer', () => {
+    const PRESET_IDS: PresetId[] = ['max_quality', 'balanced', 'budget'];
+    const OUTER_LEGACY: TouchpointId[] = ['outer', 'refine', 'pr_description'];
+    const INNER_LEGACY: TouchpointId[] = ['execution', 'review', 'meta_review', 'merge_conflict'];
+
+    // Layer 1: project explicit assignment wins over global preset for every touchpoint
+    describe('layer 1: project explicit assignment wins for all 7 touchpoints', () => {
+      for (const touchpoint of TOUCHPOINTS) {
+        it(`${touchpoint}: project explicit assignment wins over conflicting global preset`, () => {
+          const explicit: RoutingAssignment = { backend: 'claude', provider: 'anthropic', model: 'haiku' };
+          registry.setProjectRouting('/proj/layer1', {
+            assignments: { [touchpoint]: explicit },
+          });
+          registry.setGlobalRouting({ preset: 'max_quality' });
+          expect(registry.getEffectiveRoutingFor('/proj/layer1', touchpoint)).toEqual(explicit);
+        });
+      }
+    });
+
+    // Layer 2: project preset resolves to PRESETS[preset][touchpoint] for every preset × touchpoint
+    describe('layer 2: project preset resolves to PRESETS[preset][touchpoint] for all 7 touchpoints', () => {
+      for (const presetId of PRESET_IDS) {
+        for (const touchpoint of TOUCHPOINTS) {
+          it(`${presetId}/${touchpoint}: project preset resolves correctly`, () => {
+            registry.setProjectRouting('/proj/layer2', { preset: presetId });
+            expect(registry.getEffectiveRoutingFor('/proj/layer2', touchpoint)).toEqual(
+              PRESETS[presetId][touchpoint],
+            );
+          });
+        }
+      }
+    });
+
+    // Layer 3: global explicit assignment applies for every touchpoint when no project routing
+    describe('layer 3: global explicit assignment applies for all 7 touchpoints', () => {
+      for (const touchpoint of TOUCHPOINTS) {
+        it(`${touchpoint}: global explicit assignment applies when no project routing exists`, () => {
+          const explicit: RoutingAssignment = { backend: 'claude', provider: 'anthropic', model: 'haiku' };
+          registry.setGlobalRouting({ assignments: { [touchpoint]: explicit } });
+          expect(registry.getEffectiveRoutingFor('/proj/no-project-layer3', touchpoint)).toEqual(explicit);
+        });
+      }
+    });
+
+    // Layer 4: global preset resolves to PRESETS[preset][touchpoint] for every preset × touchpoint
+    describe('layer 4: global preset resolves to PRESETS[preset][touchpoint] for all 7 touchpoints', () => {
+      for (const presetId of PRESET_IDS) {
+        for (const touchpoint of TOUCHPOINTS) {
+          it(`${presetId}/${touchpoint}: global preset resolves correctly`, () => {
+            registry.setGlobalRouting({ preset: presetId });
+            expect(registry.getEffectiveRoutingFor('/proj/no-project-layer4', touchpoint)).toEqual(
+              PRESETS[presetId][touchpoint],
+            );
+          });
+        }
+      }
+    });
+
+    // Layer 5: legacy fallback — outer/refine/pr_description → outer_model; the other four → inner_model
+    describe('layer 5: legacy fallback routes correctly for all 7 touchpoints', () => {
+      for (const touchpoint of OUTER_LEGACY) {
+        it(`${touchpoint}: legacy fallback resolves to outer_model`, () => {
+          registry.setGlobalModelSettings({ inner_model: 'sonnet', outer_model: 'haiku' });
+          expect(registry.getEffectiveRoutingFor('/proj/no-routing-layer5', touchpoint)).toEqual(
+            { backend: 'claude', provider: 'anthropic', model: 'haiku' },
+          );
+        });
+      }
+
+      for (const touchpoint of INNER_LEGACY) {
+        it(`${touchpoint}: legacy fallback resolves to inner_model`, () => {
+          registry.setGlobalModelSettings({ inner_model: 'sonnet', outer_model: 'haiku' });
+          expect(registry.getEffectiveRoutingFor('/proj/no-routing-layer5', touchpoint)).toEqual(
+            { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
+          );
+        });
       }
     });
   });

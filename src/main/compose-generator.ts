@@ -1,5 +1,11 @@
 import fs from 'fs';
 import path from 'path';
+import {
+  PROVIDER_METADATA,
+  buildProviderMetaFromCatalog,
+  getProviderEnvVars,
+  type CatalogProvider,
+} from '../shared/opencode-providers';
 
 export interface ServiceAnalysis {
   name: string;
@@ -203,7 +209,7 @@ export function buildPortMap(services: ServiceAnalysis[]): string {
  * Generate the .sandstorm/docker-compose.yml content.
  * Ported from init.sh lines 329-423.
  */
-export function generateComposeYaml(analysis: ComposeAnalysis): string {
+export function generateComposeYaml(analysis: ComposeAnalysis, providerEnvVars?: string[]): string {
   const lines: string[] = [
     '# Sandstorm stack override — adds Claude workspace, disables static port mapping.',
     '#',
@@ -254,15 +260,22 @@ export function generateComposeYaml(analysis: ComposeAnalysis): string {
   lines.push('      - SANDSTORM_STACK_ID');
   lines.push('      - OPENCODE_CONFIG');
   // Provider credential passthrough — inherited from host process.env when set.
-  // The stack launcher populates these from the configured backend_secrets bundle
-  // before calling docker compose up. OpenCode resolves {env:…} placeholders in
-  // the generated config against the container's environment at runtime.
-  lines.push('      - ANTHROPIC_API_KEY');
-  lines.push('      - AWS_BEARER_TOKEN_BEDROCK');
-  lines.push('      - AWS_ACCESS_KEY_ID');
-  lines.push('      - AWS_SECRET_ACCESS_KEY');
-  lines.push('      - AWS_REGION');
-  lines.push('      - AWS_PROFILE');
+  // Env var list is derived from the project's configured providers so that any
+  // provider's credentials are forwarded to the container automatically.
+  const envVarsToPassthrough = providerEnvVars && providerEnvVars.length > 0
+    ? [...new Set(providerEnvVars)]
+    : [
+        // Default fallback covers the well-known providers for backward compat.
+        'ANTHROPIC_API_KEY',
+        'AWS_BEARER_TOKEN_BEDROCK',
+        'AWS_ACCESS_KEY_ID',
+        'AWS_SECRET_ACCESS_KEY',
+        'AWS_REGION',
+        'AWS_PROFILE',
+      ];
+  for (const envVar of envVarsToPassthrough) {
+    lines.push(`      - ${envVar}`);
+  }
   lines.push('    volumes:');
   lines.push('      - ${SANDSTORM_WORKSPACE}:/app');
   lines.push('      - ${SANDSTORM_CONTEXT}:/sandstorm-context:ro');
@@ -317,11 +330,50 @@ export function generateConfig(analysis: ComposeAnalysis): string {
 }
 
 /**
- * Full compose generation: parse project compose → generate sandstorm compose + config.
+ * Derive the env var passthrough list from a project's configured providers.
+ * Accepts an optional catalog for deriving fields for non-well-known providers.
  */
-export function generateSandstormCompose(projectDir: string, composeFile: string): GenerateComposeResult {
+export function getProjectProviderEnvVars(
+  projectDir: string,
+  getStoredProviderKeys: (scope: string) => string[],
+  catalogProviders?: CatalogProvider[],
+): string[] {
+  const scope = `project:${path.resolve(projectDir)}`;
+  const providerIds = getStoredProviderKeys(scope);
+  const envVars = new Set<string>();
+
+  for (const providerId of providerIds) {
+    // Prefer well-known metadata; fall back to catalog-derived fields
+    const known = PROVIDER_METADATA.find((p) => p.id === providerId);
+    if (known) {
+      for (const v of getProviderEnvVars(known)) envVars.add(v);
+    } else {
+      const catalogEntry = catalogProviders?.find((p) => p.id === providerId);
+      if (catalogEntry) {
+        const meta = buildProviderMetaFromCatalog(catalogEntry);
+        for (const v of getProviderEnvVars(meta)) envVars.add(v);
+      }
+    }
+  }
+
+  return [...envVars];
+}
+
+/**
+ * Full compose generation: parse project compose → generate sandstorm compose + config.
+ * Accepts an optional getStoredProviderKeys function to build a dynamic env var list.
+ */
+export function generateSandstormCompose(
+  projectDir: string,
+  composeFile: string,
+  getStoredProviderKeys?: (scope: string) => string[],
+  catalogProviders?: CatalogProvider[],
+): GenerateComposeResult {
   const analysis = parseProjectCompose(projectDir, composeFile);
-  const yaml = generateComposeYaml(analysis);
+  const providerEnvVars = getStoredProviderKeys
+    ? getProjectProviderEnvVars(projectDir, getStoredProviderKeys, catalogProviders)
+    : undefined;
+  const yaml = generateComposeYaml(analysis, providerEnvVars);
   const config = generateConfig(analysis);
   return { yaml, config, analysis };
 }

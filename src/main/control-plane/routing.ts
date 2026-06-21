@@ -1,4 +1,5 @@
 import path from 'path';
+import type { CatalogProvider } from '../../shared/opencode-providers';
 
 export type TouchpointId =
   | 'outer'
@@ -100,13 +101,74 @@ export const OPENCODE_MODELS: AvailableModel[] = [
 export function getAvailableModels(
   projectDir: string,
   hasProviderSecret: (key: string, provider: string) => boolean,
+  catalogProviders?: CatalogProvider[],
 ): AvailableModel[] {
   const projectKey = `project:${path.resolve(projectDir)}`;
+
+  // Build opencode models list: start from static list, then augment with catalog
+  const opencodeModels = buildOpencodeModels(hasProviderSecret, projectKey, catalogProviders);
+
   return [
     ...CLAUDE_MODELS,
-    ...OPENCODE_MODELS.map((m) => ({
-      ...m,
-      available: hasProviderSecret(projectKey, m.provider) || hasProviderSecret('global', m.provider),
-    })),
+    ...opencodeModels,
   ];
+}
+
+/**
+ * Build the list of available OpenCode models. When catalog providers are
+ * supplied, the list is extended with all models from all catalog providers
+ * that have project-scoped credentials configured.
+ */
+export function buildOpencodeModels(
+  hasProviderSecret: (key: string, provider: string) => boolean,
+  projectKey: string,
+  catalogProviders?: CatalogProvider[],
+): AvailableModel[] {
+  if (!catalogProviders || catalogProviders.length === 0) {
+    // Fall back to static list
+    return OPENCODE_MODELS.map((m) => ({
+      ...m,
+      available: hasProviderSecret(projectKey, m.provider),
+    }));
+  }
+
+  const models: AvailableModel[] = [];
+  for (const provider of catalogProviders) {
+    const isAvailable = hasProviderSecret(projectKey, provider.id);
+    const providerModels = provider.models
+      ? Object.entries(provider.models as Record<string, { name?: string }>)
+      : [];
+
+    for (const [modelId, modelInfo] of providerModels) {
+      const modelLabel = modelInfo?.name
+        ? `${modelInfo.name} — ${provider.name}`
+        : `${modelId} — ${provider.name}`;
+      const fullModelId = `${provider.id}/${modelId}`;
+      models.push({
+        backend: 'opencode',
+        model: fullModelId,
+        label: modelLabel,
+        version: fullModelId,
+        provider: provider.id,
+        needsKey: true,
+        available: isAvailable,
+      });
+    }
+
+    // If provider has no models in catalog, add a placeholder entry so it's
+    // visible in the routing UI
+    if (providerModels.length === 0 && isAvailable) {
+      models.push({
+        backend: 'opencode',
+        model: `${provider.id}/default`,
+        label: `${provider.name} (default)`,
+        version: `${provider.id}/default`,
+        provider: provider.id,
+        needsKey: true,
+        available: isAvailable,
+      });
+    }
+  }
+
+  return models;
 }

@@ -2,14 +2,37 @@
  * @vitest-environment jsdom
  */
 import React from 'react';
-import { describe, it, expect, vi, afterEach } from 'vitest';
+import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest';
 import { render, screen, fireEvent, act, waitFor, cleanup } from '@testing-library/react';
 
 afterEach(cleanup);
 
 import { buildProvidersPane } from '../../../src/renderer/components/config/ProvidersPane';
-import { PROVIDER_METADATA } from '../../../src/shared/opencode-providers';
 import type { ConfigPaneContext, ProviderSecretsApi } from '../../../src/renderer/components/config/types';
+
+const MOCK_CATALOG = {
+  all: [
+    { id: 'anthropic', name: 'Anthropic', env: ['ANTHROPIC_API_KEY'], models: {} },
+    { id: 'openai', name: 'OpenAI', env: ['OPENAI_API_KEY'], models: {} },
+    { id: 'ollama', name: 'Ollama', env: [], models: {} },
+  ],
+  default: {},
+  connected: [],
+};
+
+function setupWindowSandstorm(opts: {
+  configuredIds?: string[];
+  catalog?: typeof MOCK_CATALOG | null;
+} = {}) {
+  const configuredIds = opts.configuredIds ?? [];
+  const catalog = opts.catalog !== undefined ? opts.catalog : MOCK_CATALOG;
+  (window as unknown as Record<string, unknown>).sandstorm = {
+    providers: {
+      configured: vi.fn().mockResolvedValue(configuredIds),
+      catalog: vi.fn().mockResolvedValue(catalog),
+    },
+  };
+}
 
 function makeProviderSecrets(overrides: Partial<ProviderSecretsApi> = {}): ProviderSecretsApi {
   return {
@@ -48,6 +71,10 @@ function makeCtx(providerSecretsOverrides: Partial<ProviderSecretsApi> = {}): Co
 }
 
 describe('ProvidersPane', () => {
+  beforeEach(() => {
+    setupWindowSandstorm();
+  });
+
   it('renders the providers-pane testid', async () => {
     const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
@@ -62,56 +89,9 @@ describe('ProvidersPane', () => {
     expect(pane.label).toBe('Providers');
   });
 
-  it('renders a card for each provider in PROVIDER_METADATA', async () => {
+  it('shows empty-state prompt when no providers are configured', async () => {
+    setupWindowSandstorm({ configuredIds: [] });
     const ctx = makeCtx();
-    const pane = buildProvidersPane(ctx);
-    render(<>{pane.render()}</>);
-    await waitFor(() => {
-      for (const provider of PROVIDER_METADATA) {
-        expect(screen.getByTestId(`provider-card-${provider.id}`)).toBeDefined();
-      }
-    });
-  });
-
-  it('shows "Not configured" status for all providers when none are set', async () => {
-    const ctx = makeCtx({ status: vi.fn().mockResolvedValue({ set: false }) });
-    const pane = buildProvidersPane(ctx);
-    render(<>{pane.render()}</>);
-    await waitFor(() => {
-      for (const provider of PROVIDER_METADATA) {
-        const statusEl = screen.getByTestId(`provider-status-${provider.id}`);
-        expect(statusEl.textContent).toBe('Not configured');
-      }
-    });
-  });
-
-  it('shows "Configured" status for a provider that is set', async () => {
-    const status = vi.fn().mockImplementation((_scope: string, provider: string) =>
-      Promise.resolve({ set: provider === 'anthropic' })
-    );
-    const ctx = makeCtx({ status });
-    const pane = buildProvidersPane(ctx);
-    render(<>{pane.render()}</>);
-    await waitFor(() => {
-      expect(screen.getByTestId('provider-status-anthropic').textContent).toBe('Configured');
-      expect(screen.getByTestId('provider-status-ollama').textContent).toBe('Not configured');
-    });
-  });
-
-  it('calls status with projectDir and provider id', async () => {
-    const status = vi.fn().mockResolvedValue({ set: false });
-    const ctx = makeCtx({ status });
-    const pane = buildProvidersPane(ctx);
-    render(<>{pane.render()}</>);
-    await waitFor(() => {
-      for (const provider of PROVIDER_METADATA) {
-        expect(status).toHaveBeenCalledWith('/test/project', provider.id);
-      }
-    });
-  });
-
-  it('shows empty-state prompt when all providers are not configured', async () => {
-    const ctx = makeCtx({ status: vi.fn().mockResolvedValue({ set: false }) });
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
     await waitFor(() => {
@@ -120,42 +100,127 @@ describe('ProvidersPane', () => {
   });
 
   it('does not show empty-state prompt when at least one provider is configured', async () => {
-    const status = vi.fn().mockImplementation((_scope: string, provider: string) =>
-      Promise.resolve({ set: provider === 'anthropic' })
-    );
-    const ctx = makeCtx({ status });
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
+    const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-status-anthropic'));
     await waitFor(() => {
       expect(screen.queryByTestId('providers-empty-prompt')).toBeNull();
     });
   });
 
-  it('expand button shows "Configure" for unconfigured provider', async () => {
-    const ctx = makeCtx({ status: vi.fn().mockResolvedValue({ set: false }) });
+  it('renders a card for each configured provider', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic', 'openai'] });
+    const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
     await waitFor(() => {
-      const btn = screen.getByTestId('provider-expand-anthropic');
-      expect(btn.textContent).toBe('Configure');
+      expect(screen.getByTestId('provider-card-anthropic')).toBeDefined();
+      expect(screen.getByTestId('provider-card-openai')).toBeDefined();
     });
   });
 
-  it('expand button shows "Edit" for configured provider', async () => {
-    const ctx = makeCtx({
-      status: vi.fn().mockImplementation((_scope: string, provider: string) =>
-        Promise.resolve({ set: provider === 'anthropic' })
-      ),
-    });
+  it('shows "Configured" status badge for each configured provider', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
+    const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
     await waitFor(() => {
-      expect(screen.getByTestId('provider-expand-anthropic').textContent).toBe('Edit');
+      expect(screen.getByTestId('provider-status-anthropic').textContent).toBe('Configured');
     });
   });
 
-  it('clicking expand button shows the provider form', async () => {
+  it('shows green status dot for configured providers', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
+    const ctx = makeCtx();
+    const pane = buildProvidersPane(ctx);
+    render(<>{pane.render()}</>);
+    await waitFor(() => {
+      const dot = screen.getByTestId('provider-status-dot-anthropic');
+      expect(dot.className).toContain('bg-green-500');
+    });
+  });
+
+  it('shows Add provider button', async () => {
+    const ctx = makeCtx();
+    const pane = buildProvidersPane(ctx);
+    render(<>{pane.render()}</>);
+    await waitFor(() => {
+      expect(screen.getByTestId('add-provider-button')).toBeDefined();
+    });
+  });
+
+  it('clicking Add provider opens catalog picker', async () => {
+    const ctx = makeCtx();
+    const pane = buildProvidersPane(ctx);
+    render(<>{pane.render()}</>);
+    await waitFor(() => screen.getByTestId('add-provider-button'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('add-provider-button'));
+    });
+    expect(screen.getByTestId('catalog-picker')).toBeDefined();
+    expect(screen.getByTestId('catalog-search')).toBeDefined();
+  });
+
+  it('catalog picker lists providers from catalog not yet configured', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
+    const ctx = makeCtx();
+    const pane = buildProvidersPane(ctx);
+    render(<>{pane.render()}</>);
+    await waitFor(() => screen.getByTestId('add-provider-button'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('add-provider-button'));
+    });
+    await waitFor(() => {
+      // anthropic is configured, so it should NOT appear in catalog picker
+      expect(screen.queryByTestId('catalog-provider-anthropic')).toBeNull();
+      // openai is not configured, so it SHOULD appear
+      expect(screen.getByTestId('catalog-provider-openai')).toBeDefined();
+    });
+  });
+
+  it('catalog picker search filters providers by name/id', async () => {
+    setupWindowSandstorm({ configuredIds: [] });
+    const ctx = makeCtx();
+    const pane = buildProvidersPane(ctx);
+    render(<>{pane.render()}</>);
+    await waitFor(() => screen.getByTestId('add-provider-button'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('add-provider-button'));
+    });
+    await waitFor(() => screen.getByTestId('catalog-search'));
+    await act(async () => {
+      fireEvent.change(screen.getByTestId('catalog-search'), {
+        target: { value: 'openai' },
+      });
+    });
+    await waitFor(() => {
+      expect(screen.getByTestId('catalog-provider-openai')).toBeDefined();
+      expect(screen.queryByTestId('catalog-provider-anthropic')).toBeNull();
+    });
+  });
+
+  it('selecting catalog provider closes picker and opens form', async () => {
+    setupWindowSandstorm({ configuredIds: [] });
+    const ctx = makeCtx();
+    const pane = buildProvidersPane(ctx);
+    render(<>{pane.render()}</>);
+    await waitFor(() => screen.getByTestId('add-provider-button'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('add-provider-button'));
+    });
+    await waitFor(() => screen.getByTestId('catalog-provider-anthropic'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('catalog-provider-anthropic'));
+    });
+    await waitFor(() => {
+      expect(screen.queryByTestId('catalog-picker')).toBeNull();
+      expect(screen.getByTestId('provider-form-anthropic')).toBeDefined();
+    });
+  });
+
+  it('clicking expand button on configured provider shows Edit form', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
     const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
@@ -167,6 +232,7 @@ describe('ProvidersPane', () => {
   });
 
   it('clicking expand again collapses the form', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
     const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
@@ -181,7 +247,8 @@ describe('ProvidersPane', () => {
     expect(screen.queryByTestId('provider-form-anthropic')).toBeNull();
   });
 
-  it('renders field inputs for the expanded provider', async () => {
+  it('Edit form shows field inputs for the provider', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
     const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
@@ -192,18 +259,8 @@ describe('ProvidersPane', () => {
     expect(screen.getByTestId('provider-field-anthropic-apiKey')).toBeDefined();
   });
 
-  it('Ollama form shows Base URL field', async () => {
-    const ctx = makeCtx();
-    const pane = buildProvidersPane(ctx);
-    render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-expand-ollama'));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-expand-ollama'));
-    });
-    expect(screen.getByTestId('provider-field-ollama-baseUrl')).toBeDefined();
-  });
-
-  it('password-type fields use type="password" so values are never exposed', async () => {
+  it('password-type fields use type="password"', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
     const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
@@ -215,24 +272,8 @@ describe('ProvidersPane', () => {
     expect(input.type).toBe('password');
   });
 
-  it('required-field validation blocks save when Ollama Base URL is empty', async () => {
-    const setBundle = vi.fn().mockResolvedValue(undefined);
-    const ctx = makeCtx({ setBundle });
-    const pane = buildProvidersPane(ctx);
-    render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-expand-ollama'));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-expand-ollama'));
-    });
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-save-ollama'));
-    });
-    expect(setBundle).not.toHaveBeenCalled();
-    expect(screen.getByTestId('provider-error-ollama')).toBeDefined();
-    expect(screen.getByTestId('provider-error-ollama').textContent).toContain('Base URL');
-  });
-
   it('save calls setBundle with scope and provider id and bundle', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
     const setBundle = vi.fn().mockResolvedValue(undefined);
     const ctx = makeCtx({ setBundle });
     const pane = buildProvidersPane(ctx);
@@ -256,92 +297,55 @@ describe('ProvidersPane', () => {
     });
   });
 
-  it('save for Ollama with Base URL calls setBundle correctly', async () => {
+  it('save for a new catalog provider stores credentials and shows card', async () => {
+    setupWindowSandstorm({ configuredIds: [] });
     const setBundle = vi.fn().mockResolvedValue(undefined);
     const ctx = makeCtx({ setBundle });
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-expand-ollama'));
+    // Open catalog picker
+    await waitFor(() => screen.getByTestId('add-provider-button'));
     await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-expand-ollama'));
+      fireEvent.click(screen.getByTestId('add-provider-button'));
     });
+    // Select anthropic from catalog
+    await waitFor(() => screen.getByTestId('catalog-provider-anthropic'));
     await act(async () => {
-      fireEvent.change(screen.getByTestId('provider-field-ollama-baseUrl'), {
-        target: { value: 'http://localhost:11434/v1' },
-      });
+      fireEvent.click(screen.getByTestId('catalog-provider-anthropic'));
     });
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-save-ollama'));
-    });
-    await waitFor(() => {
-      expect(setBundle).toHaveBeenCalledWith('/test/project', 'ollama', {
-        baseUrl: 'http://localhost:11434/v1',
-      });
-    });
-  });
-
-  it('successful save collapses the form and updates status to Configured', async () => {
-    const setBundle = vi.fn().mockResolvedValue(undefined);
-    const ctx = makeCtx({ setBundle });
-    const pane = buildProvidersPane(ctx);
-    render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-expand-anthropic'));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-expand-anthropic'));
-    });
+    // Fill the form
+    await waitFor(() => screen.getByTestId('provider-form-anthropic'));
     await act(async () => {
       fireEvent.change(screen.getByTestId('provider-field-anthropic-apiKey'), {
-        target: { value: 'sk-ant-test123' },
+        target: { value: 'sk-ant-new' },
       });
     });
     await act(async () => {
       fireEvent.click(screen.getByTestId('provider-save-anthropic'));
     });
     await waitFor(() => {
-      expect(screen.queryByTestId('provider-form-anthropic')).toBeNull();
-      expect(screen.getByTestId('provider-status-anthropic').textContent).toBe('Configured');
+      expect(setBundle).toHaveBeenCalledWith('/test/project', 'anthropic', { apiKey: 'sk-ant-new' });
+      // Card should now be visible as configured
+      expect(screen.getByTestId('provider-card-anthropic')).toBeDefined();
     });
   });
 
-  it('Remove button is not shown when provider is not configured', async () => {
-    const ctx = makeCtx({ status: vi.fn().mockResolvedValue({ set: false }) });
+  it('Remove button is shown for configured providers', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
+    const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-expand-anthropic'));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-expand-anthropic'));
-    });
-    expect(screen.queryByTestId('provider-remove-anthropic')).toBeNull();
-  });
-
-  it('Remove button is shown when provider is configured', async () => {
-    const status = vi.fn().mockImplementation((_scope: string, provider: string) =>
-      Promise.resolve({ set: provider === 'anthropic' })
-    );
-    const ctx = makeCtx({ status });
-    const pane = buildProvidersPane(ctx);
-    render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-status-anthropic'));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-expand-anthropic'));
-    });
     await waitFor(() => {
       expect(screen.getByTestId('provider-remove-anthropic')).toBeDefined();
     });
   });
 
   it('remove calls providerSecrets.remove with scope and provider id', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
     const remove = vi.fn().mockResolvedValue(undefined);
-    const status = vi.fn().mockImplementation((_scope: string, provider: string) =>
-      Promise.resolve({ set: provider === 'anthropic' })
-    );
-    const ctx = makeCtx({ status, remove });
+    const ctx = makeCtx({ remove });
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-status-anthropic'));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-expand-anthropic'));
-    });
     await waitFor(() => screen.getByTestId('provider-remove-anthropic'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('provider-remove-anthropic'));
@@ -351,28 +355,23 @@ describe('ProvidersPane', () => {
     });
   });
 
-  it('remove updates status to Not configured', async () => {
+  it('remove hides the provider card', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
     const remove = vi.fn().mockResolvedValue(undefined);
-    const status = vi.fn().mockImplementation((_scope: string, provider: string) =>
-      Promise.resolve({ set: provider === 'anthropic' })
-    );
-    const ctx = makeCtx({ status, remove });
+    const ctx = makeCtx({ remove });
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-status-anthropic'));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-expand-anthropic'));
-    });
-    await waitFor(() => screen.getByTestId('provider-remove-anthropic'));
+    await waitFor(() => screen.getByTestId('provider-card-anthropic'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('provider-remove-anthropic'));
     });
     await waitFor(() => {
-      expect(screen.getByTestId('provider-status-anthropic').textContent).toBe('Not configured');
+      expect(screen.queryByTestId('provider-card-anthropic')).toBeNull();
     });
   });
 
   it('raw secret values are never rendered in the DOM', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
     const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
@@ -381,43 +380,43 @@ describe('ProvidersPane', () => {
     expect(screen.queryByText('AKIAIOSFODNN7EXAMPLE')).toBeNull();
   });
 
-  it('project switch re-fetches statuses with new scope', async () => {
-    const status = vi.fn().mockResolvedValue({ set: false });
-    const ctx = makeCtx({ status });
+  it('project switch re-fetches configured providers with new scope', async () => {
+    const configuredFn = vi.fn().mockResolvedValue([]);
+    (window as unknown as Record<string, unknown>).sandstorm = {
+      providers: {
+        configured: configuredFn,
+        catalog: vi.fn().mockResolvedValue(MOCK_CATALOG),
+      },
+    };
+    const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
     const { rerender } = render(<>{pane.render()}</>);
-    await waitFor(() => expect(status).toHaveBeenCalled());
+    await waitFor(() => screen.getByTestId('providers-pane'));
 
-    const callCountAfterFirst = status.mock.calls.length;
+    const callCountAfterFirst = configuredFn.mock.calls.length;
 
-    const ctx2 = { ...ctx, projectDir: '/other/project', providerSecrets: { ...ctx.providerSecrets, status } };
+    const ctx2 = { ...ctx, projectDir: '/other/project' };
     const pane2 = buildProvidersPane(ctx2);
     rerender(<>{pane2.render()}</>);
 
     await waitFor(() => {
-      expect(status.mock.calls.length).toBeGreaterThan(callCountAfterFirst);
-      const newCalls = status.mock.calls.slice(callCountAfterFirst);
+      expect(configuredFn.mock.calls.length).toBeGreaterThan(callCountAfterFirst);
+      const newCalls = configuredFn.mock.calls.slice(callCountAfterFirst);
       expect(newCalls.some((call) => call[0] === '/other/project')).toBe(true);
     });
   });
 
-  it('shows routing warning when removed provider models are routed to touchpoints', async () => {
+  it('shows routing warning when removed provider is routed to touchpoints', async () => {
+    setupWindowSandstorm({ configuredIds: ['anthropic'] });
     const remove = vi.fn().mockResolvedValue(undefined);
-    const status = vi.fn().mockImplementation((_scope: string, provider: string) =>
-      Promise.resolve({ set: provider === 'anthropic' })
-    );
     const getEffective = vi.fn().mockResolvedValue({
       outer: { backend: 'claude', provider: 'anthropic', model: 'opus' },
       execution: { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
     });
-    const ctx = makeCtx({ status, remove });
+    const ctx = makeCtx({ remove });
     ctx.routing.getEffective = getEffective;
     const pane = buildProvidersPane(ctx);
     render(<>{pane.render()}</>);
-    await waitFor(() => screen.getByTestId('provider-status-anthropic'));
-    await act(async () => {
-      fireEvent.click(screen.getByTestId('provider-expand-anthropic'));
-    });
     await waitFor(() => screen.getByTestId('provider-remove-anthropic'));
     await act(async () => {
       fireEvent.click(screen.getByTestId('provider-remove-anthropic'));
@@ -430,28 +429,62 @@ describe('ProvidersPane', () => {
     });
   });
 
-  it('no cross-project bleed: second project uses its own scope', async () => {
-    const status = vi.fn()
-      .mockResolvedValue({ set: false });
-    const ctx = makeCtx({ status });
+  it('no cross-project bleed: configured IDs are project-specific', async () => {
+    const configuredFn = vi.fn()
+      .mockImplementation((scope: string) => {
+        if (scope === '/test/project') return Promise.resolve([]);
+        if (scope === '/other/project') return Promise.resolve(['anthropic']);
+        return Promise.resolve([]);
+      });
+    (window as unknown as Record<string, unknown>).sandstorm = {
+      providers: {
+        configured: configuredFn,
+        catalog: vi.fn().mockResolvedValue(MOCK_CATALOG),
+      },
+    };
+    const ctx = makeCtx();
     const pane = buildProvidersPane(ctx);
-    const { rerender } = render(<>{pane.render()}</>);
+    render(<>{pane.render()}</>);
     await waitFor(() => screen.getByTestId('providers-pane'));
 
-    const ctx2 = {
-      ...ctx,
-      projectDir: '/other/project',
-      providerSecrets: makeProviderSecrets({
-        status: vi.fn().mockResolvedValue({ set: true }),
-      }),
-    };
+    // No cards for project1 (none configured)
+    expect(screen.queryByTestId('provider-card-anthropic')).toBeNull();
+
+    // Switch to project2
+    const ctx2 = { ...ctx, projectDir: '/other/project' };
     const pane2 = buildProvidersPane(ctx2);
+    const { rerender } = render(<>{pane2.render()}</>);
     rerender(<>{pane2.render()}</>);
 
     await waitFor(() => {
-      for (const provider of PROVIDER_METADATA) {
-        expect(screen.getByTestId(`provider-status-${provider.id}`).textContent).toBe('Configured');
-      }
+      expect(screen.getByTestId('provider-card-anthropic')).toBeDefined();
+      expect(screen.getByTestId('provider-status-anthropic').textContent).toBe('Configured');
+    });
+  });
+
+  it('derives fields from catalog env[] for non-well-known providers', async () => {
+    const catalogWithCustom = {
+      ...MOCK_CATALOG,
+      all: [
+        ...MOCK_CATALOG.all,
+        { id: 'custom-llm', name: 'Custom LLM', env: ['CUSTOM_LLM_API_KEY', 'CUSTOM_LLM_BASE_URL'], models: {} },
+      ],
+    };
+    setupWindowSandstorm({ configuredIds: [], catalog: catalogWithCustom });
+    const ctx = makeCtx();
+    const pane = buildProvidersPane(ctx);
+    render(<>{pane.render()}</>);
+    await waitFor(() => screen.getByTestId('add-provider-button'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('add-provider-button'));
+    });
+    await waitFor(() => screen.getByTestId('catalog-provider-custom-llm'));
+    await act(async () => {
+      fireEvent.click(screen.getByTestId('catalog-provider-custom-llm'));
+    });
+    // Fields should be derived: apiKey (password) and baseUrl (url)
+    await waitFor(() => {
+      expect(screen.getByTestId('provider-form-custom-llm')).toBeDefined();
     });
   });
 });
