@@ -38,7 +38,7 @@ setup_harness() {
   tmpdir=$(mktemp -d)
   export tmpdir
 
-  trap 'rm -rf "$tmpdir"' EXIT
+  trap '[ -n "${HARNESS_KEEP_TMPDIR:-}" ] || rm -rf "$tmpdir"' EXIT
 
   # Create a per-test bin directory with a 'claude' entry pointing at fake-claude
   local _bin_dir="${tmpdir}/bin"
@@ -68,6 +68,31 @@ source_task_runner_helpers() {
   _func_src=$(sed -n '1,/^# ─── Main Loop/p' "$TASK_RUNNER" | head -n -1)
   # Isolate all /tmp/ file references to tmpdir
   _func_src="${_func_src//\/tmp\//$tmpdir/}"
+  eval "$_func_src"
+}
+
+# Source the full task-runner.sh including the main loop body, loading all
+# helper functions plus the loop-body variable definitions into the caller's
+# environment.  Rewrites /tmp/ → $tmpdir/ so all state-file reads/writes are
+# isolated.
+#
+# Unlike source_task_runner_helpers (which stops at "# ─── Main Loop"),
+# this function reads the complete file so that loop-level constants
+# (MAX_INNER_ITERATIONS, MAX_OUTER_ITERATIONS, …) and every helper are
+# available.  The outer daemon "while true" is NOT started: eval stops just
+# before that line so the call returns immediately.
+#
+# After calling this function, override run_claude / run_review /
+# run_meta_review / run_verify with test stubs, then drive the dual-loop body
+# directly.  Must be called after setup_harness.
+source_task_runner_with_loop() {
+  local _func_src
+  # Read the whole file and apply the /tmp/ isolation substitution
+  _func_src=$(cat "$TASK_RUNNER")
+  _func_src="${_func_src//\/tmp\//$tmpdir/}"
+  # Truncate at (but not including) the outer daemon loop so eval returns
+  # immediately; all functions and loop-level constants are defined above it
+  _func_src=$(printf '%s\n' "$_func_src" | sed -n '1,/^while true; do$/p' | head -n -1)
   eval "$_func_src"
 }
 

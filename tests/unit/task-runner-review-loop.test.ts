@@ -1,7 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, existsSync, rmSync } from 'fs'
 import { resolve } from 'path'
 import { spawnSync } from 'child_process'
+import { STATE_FILES } from '../contract/state-files'
 
 /**
  * Tests for the dual-loop review workflow in task-runner.sh.
@@ -1294,6 +1295,123 @@ describe('Dockerfile includes review-prompt.md', () => {
     expect(dockerfile).toContain('COPY docker/review-prompt.md /usr/bin/review-prompt.md')
   })
 })
+
+// ── Loop-invariant behavioral tests (bash-level) ────────────────────────────
+//
+// Drive the dual-loop body with function-shadowing stubs through the
+// source_task_runner_with_loop harness.  Each case exercises one structural
+// invariant without running real claude/review/verify binaries.
+
+const loopInvariantsSh = resolve(__dirname, 'task-runner-loop-invariants.sh')
+const hasBashForLoop = spawnSync('which', ['bash'], { encoding: 'utf-8' }).status === 0
+const isVerifyLoop = process.env.SANDSTORM_VERIFY === '1'
+
+// Derive loop-written files from the contract (not a hardcoded list)
+const loopWrittenFiles = STATE_FILES.filter((f) => !f.t0Reachable)
+
+if (isVerifyLoop && (!hasBashForLoop || !existsSync(loopInvariantsSh))) {
+  describe('loop invariant behavioral tests (bash-level)', () => {
+    it('prerequisite check: bash and loop-invariants script must exist', () => {
+      expect(hasBashForLoop, 'bash not found on PATH').toBe(true)
+      expect(existsSync(loopInvariantsSh), `loop-invariants script not found: ${loopInvariantsSh}`).toBe(true)
+    })
+  })
+} else {
+  describe.skipIf(!hasBashForLoop || !existsSync(loopInvariantsSh))(
+    'loop invariant behavioral tests (bash-level)',
+    () => {
+      it(
+        'INNER_ITERATION resets to 0 on each outer loop iteration',
+        () => {
+          const result = spawnSync('bash', [loopInvariantsSh, 'inner-counter-reset'], {
+            encoding: 'utf-8',
+            timeout: 15_000,
+          })
+          if (result.status !== 0) {
+            console.error('stdout:', result.stdout)
+            console.error('stderr:', result.stderr)
+          }
+          expect(result.status).toBe(0)
+        },
+        15_000,
+      )
+
+      it(
+        'review PASS causes inner loop to exit and run_verify to be called',
+        () => {
+          const result = spawnSync('bash', [loopInvariantsSh, 'review-pass-exits'], {
+            encoding: 'utf-8',
+            timeout: 15_000,
+          })
+          if (result.status !== 0) {
+            console.error('stdout:', result.stdout)
+            console.error('stderr:', result.stderr)
+          }
+          expect(result.status).toBe(0)
+        },
+        15_000,
+      )
+
+      it(
+        'meta-review is called exactly once after 2 consecutive review failures',
+        () => {
+          const result = spawnSync('bash', [loopInvariantsSh, 'meta-review-fallback'], {
+            encoding: 'utf-8',
+            timeout: 15_000,
+          })
+          if (result.status !== 0) {
+            console.error('stdout:', result.stdout)
+            console.error('stderr:', result.stderr)
+          }
+          expect(result.status).toBe(0)
+        },
+        15_000,
+      )
+
+      it('loop-written state files have valid schema fields and exist on disk after a loop run', () => {
+        const validFormats = ['trigger', 'text', 'json', 'ndjson', 'kvlines', 'numeric', 'status'] as const
+        // Schema assertions (Issues 1: format and statusValues)
+        expect(loopWrittenFiles.length).toBeGreaterThan(0)
+        for (const f of loopWrittenFiles) {
+          expect(f.pattern).toMatch(/^\/tmp\//)
+          expect(validFormats as readonly string[]).toContain(f.format)
+          if (f.statusValues !== undefined) {
+            expect(f.statusValues.length).toBeGreaterThan(0)
+          }
+        }
+        // Behavioral assertions (Issue 2): run the harness, resolve files under tmpdir.
+        // HARNESS_KEEP_TMPDIR=1 suppresses the EXIT trap cleanup so we can inspect files.
+        const loopResult = spawnSync('bash', [loopInvariantsSh, 'inner-counter-reset'], {
+          encoding: 'utf-8',
+          timeout: 15_000,
+          env: { ...process.env, HARNESS_KEEP_TMPDIR: '1' },
+        })
+        expect(loopResult.status).toBe(0)
+        const tmpMatch = loopResult.stdout.match(/^TMPDIR=(.+)$/m)
+        expect(tmpMatch, 'bash script must emit TMPDIR=<path> on stdout').not.toBeNull()
+        const tmpdir = tmpMatch![1]
+        try {
+          let checked = 0
+          for (const f of loopWrittenFiles) {
+            if (f.pattern.includes('{N}')) continue
+            const filePath = `${tmpdir}/${f.pattern.replace(/^\/tmp\//, '')}`
+            if (!existsSync(filePath)) continue
+            checked++
+            const content = readFileSync(filePath, 'utf-8').trim()
+            if (f.format === 'status' && f.statusValues && content.length > 0) {
+              expect([...f.statusValues]).toContain(content)
+            } else if (f.format === 'numeric' && content.length > 0) {
+              expect(content).toMatch(/^\d+$/)
+            }
+          }
+          expect(checked).toBeGreaterThan(0)
+        } finally {
+          rmSync(tmpdir, { recursive: true, force: true })
+        }
+      }, 15_000)
+    },
+  )
+}
 
 // ── Regression smoke test: out-of-scope ticket → STOP_AND_ASK → needs_human ──
 //
