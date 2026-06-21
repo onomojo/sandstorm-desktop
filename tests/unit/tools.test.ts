@@ -205,6 +205,7 @@ describe('MCP tools', () => {
         1_800_000,
         { ticketId: '42', stage: 'spec' },
         'sonnet', // model resolved from refine touchpoint routing
+        'refine', // touchpoint always passed
       );
       expect(result.passed).toBe(true);
       expect(result.report).toContain('PASS');
@@ -989,7 +990,7 @@ describe('MCP tools', () => {
       expect(calls.length).toBeGreaterThan(0);
       const lastCall = calls[calls.length - 1];
       expect(lastCall[4]).toBe('sonnet'); // model resolved from refine touchpoint routing
-      expect(lastCall[5]).toBeUndefined(); // no touchpoint (model resolved directly)
+      expect(lastCall[5]).toBe('refine'); // touchpoint always passed
     });
 
     it('spawnSpecCheck passes resolved model to spawnEphemeralAgent', async () => {
@@ -999,7 +1000,7 @@ describe('MCP tools', () => {
       const calls = vi.mocked(agentBackend.spawnEphemeralAgent).mock.calls;
       const lastCall = calls[calls.length - 1];
       expect(lastCall[5]).toBe('sonnet'); // model resolved from refine touchpoint routing
-      expect(lastCall[6]).toBeUndefined(); // no touchpoint (model resolved directly)
+      expect(lastCall[6]).toBe('refine'); // touchpoint always passed
     });
 
     it('shows needs_key notification and does NOT run agent when opencode backend has no credentials', async () => {

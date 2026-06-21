@@ -27,6 +27,9 @@ __export(opencode_config_exports, {
 module.exports = __toCommonJS(opencode_config_exports);
 
 // src/shared/opencode-providers.ts
+var PROVIDER_OVERRIDES = {
+  "ollama": { providerKey: "openai", apiKeyOverride: "ollama" }
+};
 function buildProviderEntry(providerId, bundle) {
   switch (providerId) {
     case "anthropic":
@@ -57,11 +60,22 @@ function buildProviderEntry(providerId, bundle) {
           ...bundle.baseUrl ? { baseURL: bundle.baseUrl } : {}
         }
       };
-    default:
+    default: {
+      const override = PROVIDER_OVERRIDES[providerId];
+      if (override) {
+        return {
+          providerKey: override.providerKey,
+          config: {
+            ...override.apiKeyOverride ? { apiKey: override.apiKeyOverride } : {},
+            ...bundle.baseUrl ? { baseURL: bundle.baseUrl } : {}
+          }
+        };
+      }
       return {
         providerKey: providerId,
         config: bundle.apiKey ? { apiKey: bundle.apiKey } : { apiKey: `{env:${providerId.toUpperCase().replace(/-/g, "_")}_API_KEY}` }
       };
+    }
   }
 }
 

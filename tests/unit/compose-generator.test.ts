@@ -10,6 +10,7 @@ import {
   generateComposeYaml,
   generateConfig,
   generateSandstormCompose,
+  getProjectProviderEnvVars,
   checkInitState,
   saveComposeSetup,
   validateComposeYaml,
@@ -345,6 +346,141 @@ describe('compose-generator', () => {
       expect(result.yaml).toContain('claude:');
       expect(result.config).toContain('PORT_MAP=app:8000:3000:0,db:5432:5432:0');
       expect(result.analysis.services).toHaveLength(2);
+    });
+
+    it('passes dynamic provider env vars when getStoredProviderKeys is provided', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'docker-compose.yml'),
+        ['services:', '  app:', '    image: node', ''].join('\n'),
+      );
+
+      // Simulate anthropic configured for project
+      const result = generateSandstormCompose(
+        tmpDir,
+        'docker-compose.yml',
+        (scope) => {
+          if (scope.includes(tmpDir)) return ['anthropic'];
+          return [];
+        },
+      );
+      expect(result.yaml).toContain('      - ANTHROPIC_API_KEY');
+      expect(result.yaml).not.toContain('      - AWS_REGION');
+    });
+
+    it('falls back to default env vars when no getStoredProviderKeys provided', () => {
+      fs.writeFileSync(
+        path.join(tmpDir, 'docker-compose.yml'),
+        ['services:', '  app:', '    image: node', ''].join('\n'),
+      );
+
+      const result = generateSandstormCompose(tmpDir, 'docker-compose.yml');
+      // Default fallback includes the well-known providers
+      expect(result.yaml).toContain('      - ANTHROPIC_API_KEY');
+      expect(result.yaml).toContain('      - AWS_REGION');
+    });
+  });
+
+  describe('getProjectProviderEnvVars', () => {
+    it('returns env vars for configured well-known providers', () => {
+      const envVars = getProjectProviderEnvVars(
+        '/test/project',
+        (scope) => {
+          if (scope === 'project:/test/project') return ['anthropic'];
+          return [];
+        },
+      );
+      expect(envVars).toContain('ANTHROPIC_API_KEY');
+    });
+
+    it('returns env vars for multiple configured providers', () => {
+      const envVars = getProjectProviderEnvVars(
+        '/test/project',
+        () => ['anthropic', 'amazon-bedrock'],
+      );
+      expect(envVars).toContain('ANTHROPIC_API_KEY');
+      expect(envVars).toContain('AWS_REGION');
+      expect(envVars).toContain('AWS_ACCESS_KEY_ID');
+    });
+
+    it('returns empty array when no providers are configured', () => {
+      const envVars = getProjectProviderEnvVars('/test/project', () => []);
+      expect(envVars).toHaveLength(0);
+    });
+
+    it('deduplicates env vars when multiple providers share them', () => {
+      const envVars = getProjectProviderEnvVars(
+        '/test/project',
+        () => ['anthropic'],
+      );
+      const dupeCount = envVars.filter((v) => v === 'ANTHROPIC_API_KEY').length;
+      expect(dupeCount).toBe(1);
+    });
+
+    it('derives env vars from catalog for non-well-known providers', () => {
+      const envVars = getProjectProviderEnvVars(
+        '/test/project',
+        () => ['custom-llm'],
+        [{ id: 'custom-llm', name: 'Custom LLM', env: ['CUSTOM_LLM_API_KEY'] }],
+      );
+      expect(envVars).toContain('CUSTOM_LLM_API_KEY');
+    });
+
+    it('excludes providers not in catalog when catalog is provided', () => {
+      const envVars = getProjectProviderEnvVars(
+        '/test/project',
+        () => ['unknown-provider'],
+        [], // empty catalog — unknown-provider has no env vars
+      );
+      expect(envVars).toHaveLength(0);
+    });
+  });
+
+  describe('generateComposeYaml — dynamic provider env vars', () => {
+    it('uses provided providerEnvVars list instead of default', () => {
+      const analysis = {
+        services: [{ name: 'app', ports: [], image: 'node', hasBuilt: false, description: 'App' }],
+        namedNetworks: [],
+        projectName: 'test',
+        composeFile: 'docker-compose.yml',
+      };
+      const yaml = generateComposeYaml(analysis, ['OPENAI_API_KEY', 'OPENAI_ORG_ID']);
+      expect(yaml).toContain('      - OPENAI_API_KEY');
+      expect(yaml).toContain('      - OPENAI_ORG_ID');
+      expect(yaml).not.toContain('      - ANTHROPIC_API_KEY');
+    });
+
+    it('deduplicates env vars in the provided list', () => {
+      const analysis = {
+        services: [{ name: 'app', ports: [], image: 'node', hasBuilt: false, description: 'App' }],
+        namedNetworks: [],
+        projectName: 'test',
+        composeFile: 'docker-compose.yml',
+      };
+      const yaml = generateComposeYaml(analysis, ['OPENAI_API_KEY', 'OPENAI_API_KEY']);
+      const matches = (yaml.match(/      - OPENAI_API_KEY/g) || []).length;
+      expect(matches).toBe(1);
+    });
+
+    it('falls back to default list when providerEnvVars is undefined', () => {
+      const analysis = {
+        services: [{ name: 'app', ports: [], image: 'node', hasBuilt: false, description: 'App' }],
+        namedNetworks: [],
+        projectName: 'test',
+        composeFile: 'docker-compose.yml',
+      };
+      const yaml = generateComposeYaml(analysis);
+      expect(yaml).toContain('      - ANTHROPIC_API_KEY');
+    });
+
+    it('falls back to default list when providerEnvVars is empty', () => {
+      const analysis = {
+        services: [{ name: 'app', ports: [], image: 'node', hasBuilt: false, description: 'App' }],
+        namedNetworks: [],
+        projectName: 'test',
+        composeFile: 'docker-compose.yml',
+      };
+      const yaml = generateComposeYaml(analysis, []);
+      expect(yaml).toContain('      - ANTHROPIC_API_KEY');
     });
   });
 

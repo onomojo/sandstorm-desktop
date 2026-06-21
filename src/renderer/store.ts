@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import type { CatalogProviderList } from '../shared/opencode-providers';
 import { KANBAN_COLUMNS } from './types/kanban';
 import type { KanbanColumn } from './types/kanban';
 import { suggestStackName } from './lib/stack-name';
@@ -886,6 +887,10 @@ declare global {
         status: (scope: 'global' | string, provider: string) => Promise<{ set: boolean }>;
         getBundle: (scope: 'global' | string, provider: string) => Promise<Record<string, string> | null>;
         setBundle: (scope: 'global' | string, provider: string, bundle: Record<string, string>) => Promise<void>;
+      };
+      providers: {
+        catalog: () => Promise<CatalogProviderList | null>;
+        configured: (scope: string) => Promise<string[]>;
       };
       modelRouting: {
         getEffective: (projectDir: string) => Promise<Record<string, { backend: string; provider: string; model: string }>>;

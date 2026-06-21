@@ -1153,8 +1153,11 @@ describe('OpenCodeBackend syncCredentials provider restart', () => {
 
     const callCountAfterInit = (createOpencodeServer as ReturnType<typeof vi.fn>).mock.calls.length;
 
-    // Simulate a new provider being stored since initialize() ran
-    mockGetStoredProviderKeys.mockReturnValue(['openai']);
+    // Simulate a new provider being stored since initialize() ran (project-scoped)
+    mockGetStoredProviderKeys.mockImplementation((scope: string) => {
+      if (scope === 'project:/project/test') return ['openai'];
+      return [];
+    });
     mockGetProviderSecretBundle.mockReturnValue({ api_key: 'sk-test' });
 
     // Provide a fresh server response for the restart call
@@ -1164,7 +1167,13 @@ describe('OpenCodeBackend syncCredentials provider restart', () => {
     });
     mockEventSubscribe.mockResolvedValue({ stream: makeMockStream() });
 
-    await backend.syncCredentials([]);
+    // Pass a stack with a project_dir so the scope is scanned
+    await backend.syncCredentials([{
+      id: 's1',
+      status: 'running',
+      project_dir: '/project/test',
+      services: [],
+    } as unknown as import('../../../src/main/agent/types').StackInfo]);
 
     // Server should have been created a second time
     expect(createOpencodeServer).toHaveBeenCalledTimes(callCountAfterInit + 1);
@@ -1175,16 +1184,13 @@ describe('OpenCodeBackend syncCredentials provider restart', () => {
   });
 
   it('syncCredentials does not restart server when provider signature is unchanged', async () => {
-    // Initialize with openai already stored
-    mockGetStoredProviderKeys.mockReturnValue(['openai']);
-    mockGetProviderSecretBundle.mockReturnValue({ api_key: 'sk-test' });
-
+    // Initialize with no providers — signature is '{}'
     backend = new OpenCodeBackend();
     await backend.initialize();
 
     const callCountAfterInit = (createOpencodeServer as ReturnType<typeof vi.fn>).mock.calls.length;
 
-    // Same provider keys — signature unchanged
+    // Sync with no stacks → same empty signature
     await backend.syncCredentials([]);
 
     expect(createOpencodeServer).toHaveBeenCalledTimes(callCountAfterInit);
