@@ -38,6 +38,17 @@ setup_harness() {
   tmpdir=$(mktemp -d)
   export tmpdir
 
+  # Snapshot any /tmp/claude-* files that already exist before the test runs.
+  # The task-runner daemon that hosts this container keeps live state files in
+  # the real /tmp (claude-task.status, claude-raw.log, …); those are NOT leaks
+  # from the test.  assert_no_tmp_leak diffs against this baseline so it only
+  # flags files the test itself created via a /tmp/→$tmpdir/ substitution gap.
+  # `|| true` guards against a transient non-zero exit from find when a
+  # concurrent test removes its own /tmp/tmp.XXXX dir mid-scan — under
+  # `set -euo pipefail` that would otherwise abort the sourcing script.
+  _TMP_LEAK_BASELINE=$( { find /tmp -maxdepth 1 -name 'claude-*' 2>/dev/null || true; } | sort)
+  export _TMP_LEAK_BASELINE
+
   trap '[ -n "${HARNESS_KEEP_TMPDIR:-}" ] || rm -rf "$tmpdir"' EXIT
 
   # Create a per-test bin directory with a 'claude' entry pointing at fake-claude
@@ -96,14 +107,26 @@ source_task_runner_with_loop() {
   eval "$_func_src"
 }
 
-# Assert no /tmp/claude-* files leaked into the real /tmp directory.
+# Assert the test did not leak any NEW /tmp/claude-* files into the real /tmp.
 # Prints a FAIL message to stderr and returns 1 if any are found.
 # Under the /tmp/→$tmpdir/ substitution used by source_task_runner_helpers,
 # this should always pass; failures indicate a substitution gap.
+# Files present before the test ran (captured by setup_harness into
+# _TMP_LEAK_BASELINE — e.g. the host task-runner daemon's live state files)
+# are excluded so the check is robust to a pre-populated /tmp.
 assert_no_tmp_leak() {
   local _label="${1:-}"
-  local _leaked
-  _leaked=$(find /tmp -maxdepth 1 -name 'claude-*' 2>/dev/null | sort)
+  local _current _leaked
+  # `|| true` guards against a transient non-zero exit from find when a
+  # concurrent test removes its own /tmp/tmp.XXXX dir mid-scan — under a
+  # caller's `set -euo pipefail` that would otherwise abort the script with
+  # status 1 before this assertion is ever evaluated.
+  _current=$( { find /tmp -maxdepth 1 -name 'claude-*' 2>/dev/null || true; } | sort)
+  if [ -n "${_TMP_LEAK_BASELINE:-}" ]; then
+    _leaked=$(comm -23 <(printf '%s\n' "$_current") <(printf '%s\n' "$_TMP_LEAK_BASELINE"))
+  else
+    _leaked="$_current"
+  fi
   if [ -n "$_leaked" ]; then
     local _prefix=""
     [ -n "$_label" ] && _prefix="[$_label] "
