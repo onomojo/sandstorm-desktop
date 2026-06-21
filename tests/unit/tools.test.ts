@@ -1003,6 +1003,19 @@ describe('MCP tools', () => {
       expect(lastCall[6]).toBe('refine'); // touchpoint always passed
     });
 
+    it('handleSpecCheck forwards non-default descriptor.model to runEphemeralAgent', async () => {
+      vi.mocked(registry.getEffectiveTouchpointDescriptor).mockReturnValue({
+        backend: 'claude', provider: 'anthropic', model: 'claude-opus-4-8', credentials: {},
+      });
+
+      await handleToolCall('spec_check', { ticketId: 'T-99', projectDir: '/proj' });
+
+      const calls = vi.mocked(agentBackend.runEphemeralAgent).mock.calls;
+      expect(calls.length).toBeGreaterThan(0);
+      const lastCall = calls[calls.length - 1];
+      expect(lastCall[4]).toBe('claude-opus-4-8');
+    });
+
     it('shows needs_key notification and does NOT run agent when opencode backend has no credentials', async () => {
       const { showNotification } = await import('../../src/main/tray');
       vi.mocked(registry.getEffectiveTouchpointDescriptor).mockReturnValue({
