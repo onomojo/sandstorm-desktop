@@ -143,6 +143,7 @@ export class OpenCodeBackend implements AgentBackend {
   readonly name = 'OpenCode';
 
   private client: OpencodeClient | null = null;
+  private serverUrl: string | null = null;
   private serverClose: (() => void) | null = null;
   private bridge: BridgeHandle | null = null;
   private mainWindow: BrowserWindow | null = null;
@@ -222,13 +223,15 @@ export class OpenCodeBackend implements AgentBackend {
     process.env.SANDSTORM_BRIDGE_URL = this.bridge.url;
     process.env.SANDSTORM_BRIDGE_TOKEN = this.bridge.token;
 
-    // Build multi-provider config: include every globally-stored provider so the
+    // Build multi-provider config: include every project-scoped provider so the
     // long-lived server can dispatch ephemeral sessions to any configured provider+model
     // without per-call credential injection or server restarts.
-    const allProviders = this.buildGlobalProviderMap(registry as RegistryRef);
+    // At initialize() time no project is open yet, so start with empty providers;
+    // syncCredentials() will restart the server with the right scopes once stacks load.
+    const allProviders = this.buildProviderMapForScopes(registry as RegistryRef, []);
     const sdkConfig: OpenCodeConfig = {
       mcp: outerConfig.mcp as OpenCodeConfig['mcp'],
-      // Merge outer provider with all other globally-stored providers.
+      // Merge outer provider with all project-scoped providers.
       provider: {
         ...outerConfig.provider as OpenCodeConfig['provider'],
         ...allProviders,
@@ -238,6 +241,7 @@ export class OpenCodeBackend implements AgentBackend {
 
     const server = await createOpencodeServer({ hostname: '127.0.0.1', config: sdkConfig });
     this.serverClose = server.close;
+    this.serverUrl = server.url;
     this.client = createOpencodeClient({ baseUrl: server.url });
 
     // Kick off the SSE event loop for persistent-session events
@@ -250,6 +254,7 @@ export class OpenCodeBackend implements AgentBackend {
     this.eventLoopAbort = null;
     this.serverClose?.();
     this.serverClose = null;
+    this.serverUrl = null;
     this.client = null;
     this.bridge?.release();
     this.bridge = null;
@@ -263,20 +268,27 @@ export class OpenCodeBackend implements AgentBackend {
     this.mainWindow = win;
   }
 
+  /** Returns the URL of the running OpenCode server, or null if not started. */
+  getServerUrl(): string | null {
+    return this.serverUrl;
+  }
+
   // --- Provider config helpers ---
 
   /**
-   * Build a merged provider map containing every globally-stored provider's
-   * credentials. Called at init and syncCredentials to keep the OpenCode server
-   * aware of all configured providers without per-call credential injection.
+   * Build a merged provider map from all project-scoped credentials across
+   * the given project scopes. Replaces the old global-scope read so that
+   * per-project credentials are properly loaded into the outer server.
    */
-  private buildGlobalProviderMap(reg: RegistryRef): OpenCodeConfig['provider'] {
-    const providerIds = reg.getStoredProviderKeys('global');
+  private buildProviderMapForScopes(reg: RegistryRef, projectScopes: string[]): OpenCodeConfig['provider'] {
     const result: OpenCodeConfig['provider'] = {};
-    for (const providerId of providerIds) {
-      const bundle = reg.getProviderSecretBundle('global', providerId) ?? {};
-      const { providerKey, config } = buildProviderEntry(providerId, bundle);
-      result[providerKey] = config;
+    for (const scope of projectScopes) {
+      const providerIds = reg.getStoredProviderKeys(scope);
+      for (const providerId of providerIds) {
+        const bundle = reg.getProviderSecretBundle(scope, providerId) ?? {};
+        const { providerKey, config } = buildProviderEntry(providerId, bundle);
+        result[providerKey] = config;
+      }
     }
     return result;
   }
@@ -727,8 +739,14 @@ export class OpenCodeBackend implements AgentBackend {
     // --- Host-side: keep OpenCode server's provider map current ---
     // If new providers have been configured since initialize(), restart the server so
     // ephemeral sessions can use any provider without credential injection per call.
+    // Collect project scopes from all known stacks so per-project credentials are included.
     if (this.client && this.registryRef) {
-      const newProviderMap = this.buildGlobalProviderMap(this.registryRef);
+      const projectScopes = [...new Set(
+        stacks
+          .filter((s) => s.project_dir)
+          .map((s) => `project:${path.resolve(s.project_dir!)}`)
+      )];
+      const newProviderMap = this.buildProviderMapForScopes(this.registryRef, projectScopes);
       const newSignature = JSON.stringify(newProviderMap);
       if (newSignature !== this.serverProviderSignature) {
         // Restart the host OpenCode server with the updated provider set.
@@ -761,6 +779,7 @@ export class OpenCodeBackend implements AgentBackend {
           };
           const server = await createOpencodeServer({ hostname: '127.0.0.1', config: sdkConfig });
           this.serverClose = server.close;
+          this.serverUrl = server.url;
           this.client = createOpencodeClient({ baseUrl: server.url });
           this.serverProviderSignature = newSignature;
           this.eventLoopAbort = new AbortController();

@@ -266,4 +266,13 @@ export class BackendRouter implements AgentBackend {
       (Object.values(this.instances) as AgentBackend[]).map(b => b.syncCredentials(stacks)),
     ).then(() => undefined);
   }
+
+  /** Returns the running OpenCode server URL if the opencode backend is active, else null. */
+  getOpenCodeServerUrl(): string | null {
+    const be = this.instances['opencode'];
+    if (be && 'getServerUrl' in be && typeof (be as unknown as { getServerUrl(): string | null }).getServerUrl === 'function') {
+      return (be as unknown as { getServerUrl(): string | null }).getServerUrl();
+    }
+    return null;
+  }
 }

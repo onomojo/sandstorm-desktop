@@ -54,6 +54,7 @@ import {
   cleanupLegacyPorts,
 } from './compose-generator';
 import { getDefaultReviewPrompt } from './review-prompt';
+import { fetchProviderCatalog } from './control-plane/provider-catalog';
 import { initEpicRunner, getEpicRunner } from './control-plane/epic-runner';
 import {
   defaultSpecGateDeps,
@@ -202,6 +203,15 @@ function autoDetectVerifyLines(directory: string): string[] {
   }
 
   return lines;
+}
+
+function getBackendServerUrl(): string | null {
+  try {
+    const router = agentBackend as unknown as { getOpenCodeServerUrl?: () => string | null };
+    return router.getOpenCodeServerUrl?.() ?? null;
+  } catch {
+    return null;
+  }
 }
 
 export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
@@ -619,7 +629,13 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         };
       }
 
-      const result = generateSandstormCompose(directory, composeFile);
+      const catalog = await fetchProviderCatalog(getBackendServerUrl());
+      const result = generateSandstormCompose(
+        directory,
+        composeFile,
+        (scope) => registry.getStoredProviderKeys(scope),
+        catalog?.all,
+      );
       return {
         success: true,
         yaml: result.yaml,
@@ -1050,6 +1066,15 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return getAvailableModels(projectDir, (key, provider) => registry.hasProviderSecret(key, provider));
   });
 
+  ipcMain.handle('modelRouting:getAvailableModelsWithCatalog', async (_event, projectDir: string) => {
+    const catalog = await fetchProviderCatalog(getBackendServerUrl());
+    return getAvailableModels(
+      projectDir,
+      (key, provider) => registry.hasProviderSecret(key, provider),
+      catalog?.all,
+    );
+  });
+
   // --- Provider Secrets ---
 
   ipcMain.handle('providerSecrets:status', (_event, scope: string, provider: string) => {
@@ -1080,6 +1105,17 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   ipcMain.handle('providerSecrets:remove', (_event, scope: string, provider: string) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     registry.removeProviderSecret(key, provider);
+  });
+
+  // --- Provider Catalog ---
+
+  ipcMain.handle('providers:catalog', async () => {
+    return fetchProviderCatalog(getBackendServerUrl());
+  });
+
+  ipcMain.handle('providers:configured', (_event, scope: string) => {
+    const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
+    return registry.getStoredProviderKeys(key);
   });
 
   // --- Session Monitor ---
