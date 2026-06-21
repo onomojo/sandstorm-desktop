@@ -4,6 +4,7 @@ import { Registry } from '../../src/main/control-plane/registry';
 import { PortAllocator } from '../../src/main/control-plane/port-allocator';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import { StackStatus } from '../../src/main/control-plane/registry';
 import { SandstormError, ErrorCode } from '../../src/main/errors';
 import fs from 'fs';
@@ -23,10 +24,7 @@ function cleanupDb(dbPath: string): void {
 }
 
 function createMockRuntime(): ContainerRuntime {
-  return {
-    name: 'mock',
-    composeUp: vi.fn().mockResolvedValue(undefined),
-    composeDown: vi.fn().mockResolvedValue(undefined),
+  return makeFakeContainerRuntime({
     listContainers: vi.fn().mockResolvedValue([
       {
         id: 'claude-container-1',
@@ -39,13 +37,7 @@ function createMockRuntime(): ContainerRuntime {
         created: new Date().toISOString(),
       },
     ]),
-    inspect: vi.fn(),
-    containerStats: vi.fn().mockResolvedValue({ cpuPercent: 0, memoryUsage: 0, memoryLimit: 0 }),
-    logs: vi.fn().mockReturnValue((async function* () {})()),
-    exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-  };
+  });
 }
 
 function makeStack(id: string, status: StackStatus = 'up') {

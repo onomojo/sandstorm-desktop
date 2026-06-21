@@ -6,6 +6,7 @@ import { Registry } from '../../src/main/control-plane/registry';
 import { PortAllocator } from '../../src/main/control-plane/port-allocator';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -24,10 +25,7 @@ function cleanupDb(dbPath: string): void {
 }
 
 function createMockRuntime(containerStatus = 'running'): ContainerRuntime {
-  return {
-    name: 'mock',
-    composeUp: vi.fn().mockResolvedValue(undefined),
-    composeDown: vi.fn().mockResolvedValue(undefined),
+  return makeFakeContainerRuntime({
     listContainers: vi.fn().mockResolvedValue([
       {
         id: 'claude-container-1',
@@ -40,8 +38,6 @@ function createMockRuntime(containerStatus = 'running'): ContainerRuntime {
         created: new Date().toISOString(),
       },
     ]),
-    inspect: vi.fn(),
-    logs: vi.fn().mockReturnValue((async function* () {})()),
     exec: vi.fn().mockImplementation((_id: string, cmd: string[]) => {
       const file = cmd[cmd.length - 1];
       if (file === '/tmp/claude-task.status') {
@@ -49,9 +45,7 @@ function createMockRuntime(containerStatus = 'running'): ContainerRuntime {
       }
       return Promise.resolve({ exitCode: 0, stdout: '', stderr: '' });
     }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-  };
+  });
 }
 
 describe('StackManager.reconcileStatus', () => {

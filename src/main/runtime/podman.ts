@@ -103,12 +103,25 @@ export class PodmanRuntime implements ContainerRuntime {
     }
   }
 
+  async inspectImage(ref: string): Promise<{ labels: Record<string, string> } | null> {
+    try {
+      const result = await this.runCapture('podman', ['image', 'inspect', ref, '--format', 'json']);
+      const data = JSON.parse(result);
+      const info = Array.isArray(data) ? data[0] : data;
+      return { labels: (info.Labels ?? info.Config?.Labels ?? {}) as Record<string, string> };
+    } catch {
+      return null;
+    }
+  }
+
   async exec(
     containerId: string,
     cmd: string[],
     opts?: ExecOpts
   ): Promise<ExecResult> {
+    const hasInput = opts?.input != null;
     const args = ['exec'];
+    if (hasInput) args.push('-i');
     if (opts?.workdir) args.push('-w', opts.workdir);
     if (opts?.user) args.push('-u', opts.user);
     if (opts?.env) {
@@ -118,8 +131,12 @@ export class PodmanRuntime implements ContainerRuntime {
 
     return new Promise((resolve, reject) => {
       const child = spawn('podman', args, {
-        stdio: ['ignore', 'pipe', 'pipe'],
+        stdio: [hasInput ? 'pipe' : 'ignore', 'pipe', 'pipe'],
       });
+      if (hasInput && child.stdin) {
+        child.stdin.write(opts!.input!);
+        child.stdin.end();
+      }
       let stdout = '';
       let stderr = '';
       child.stdout?.on('data', (d: Buffer) => (stdout += d.toString()));

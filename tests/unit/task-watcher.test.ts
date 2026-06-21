@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { Registry } from '../../src/main/control-plane/registry';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -10,13 +11,7 @@ function createMockRuntime(
   taskStatus: string = 'running',
   exitCode: string = '0'
 ): ContainerRuntime {
-  return {
-    name: 'mock',
-    composeUp: vi.fn(),
-    composeDown: vi.fn(),
-    listContainers: vi.fn().mockResolvedValue([]),
-    inspect: vi.fn(),
-    logs: vi.fn(),
+  return makeFakeContainerRuntime({
     exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
       if (cmd.includes('/tmp/claude-task.status')) {
         return { exitCode: 0, stdout: taskStatus, stderr: '' };
@@ -26,9 +21,7 @@ function createMockRuntime(
       }
       return { exitCode: 0, stdout: '', stderr: '' };
     }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-  };
+  });
 }
 
 /**
@@ -41,13 +34,7 @@ function createSequencedRuntime(
   exitCode: string = '0'
 ): ContainerRuntime {
   let callIndex = 0;
-  return {
-    name: 'mock',
-    composeUp: vi.fn(),
-    composeDown: vi.fn(),
-    listContainers: vi.fn().mockResolvedValue([]),
-    inspect: vi.fn(),
-    logs: vi.fn(),
+  return makeFakeContainerRuntime({
     exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
       if (cmd.includes('/tmp/claude-task.status')) {
         const idx = Math.min(callIndex, statuses.length - 1);
@@ -59,9 +46,7 @@ function createSequencedRuntime(
       }
       return { exitCode: 0, stdout: '', stderr: '' };
     }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-  };
+  });
 }
 
 /**
@@ -70,13 +55,7 @@ function createSequencedRuntime(
  */
 function createFailingRuntime(failCount: number): ContainerRuntime {
   let callIndex = 0;
-  return {
-    name: 'mock',
-    composeUp: vi.fn(),
-    composeDown: vi.fn(),
-    listContainers: vi.fn().mockResolvedValue([]),
-    inspect: vi.fn(),
-    logs: vi.fn(),
+  return makeFakeContainerRuntime({
     exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
       callIndex++;
       if (callIndex <= failCount) {
@@ -87,9 +66,7 @@ function createFailingRuntime(failCount: number): ContainerRuntime {
       }
       return { exitCode: 0, stdout: '', stderr: '' };
     }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-  };
+  });
 }
 
 describe('TaskWatcher', () => {
@@ -464,13 +441,7 @@ describe('TaskWatcher', () => {
 
     // Stay running for many polls, then complete
     let statusPollCount = 0;
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         if (cmd.includes('/tmp/claude-task.status')) {
           statusPollCount++;
@@ -492,10 +463,8 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
       containerStats: vi.fn(),
-    };
+    });
 
     // Use very short poll interval and token poll interval to trigger real-time polling
     const watcher = new TaskWatcher(registry, runtime, runtime, {
@@ -532,13 +501,7 @@ describe('TaskWatcher', () => {
 
   it('throttles token polling based on tokenPollInterval', async () => {
     let statusPollCount = 0;
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         if (cmd.includes('/tmp/claude-task.status')) {
           statusPollCount++;
@@ -554,10 +517,8 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
       containerStats: vi.fn(),
-    };
+    });
 
     // Token poll interval much longer than status poll interval
     // means tokens won't be polled every status check
@@ -614,18 +575,11 @@ describe('TaskWatcher', () => {
     vi.useFakeTimers();
 
     // Always fail
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockRejectedValue(new Error('Docker unavailable')),
       isAvailable: vi.fn().mockResolvedValue(false),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
       containerStats: vi.fn(),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 10,
@@ -666,12 +620,7 @@ describe('TaskWatcher', () => {
 
   it('cleans up output stream on unwatch', async () => {
     let streamConsumed = false;
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       logs: vi.fn().mockImplementation(async function* () {
         yield 'line 1\n';
         // Simulate a long-running stream
@@ -680,10 +629,8 @@ describe('TaskWatcher', () => {
         yield 'line 2\n';
       }),
       exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'running', stderr: '' }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
       containerStats: vi.fn(),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'test task');
@@ -704,21 +651,14 @@ describe('TaskWatcher', () => {
   });
 
   it('replaces existing output stream when streamOutput called again', async () => {
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       logs: vi.fn().mockImplementation(async function* () {
         yield 'data\n';
         await new Promise((r) => setTimeout(r, 10000));
       }),
       exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'running', stderr: '' }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
       containerStats: vi.fn(),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'test task');
@@ -741,22 +681,15 @@ describe('TaskWatcher', () => {
   // --- streamOutput data flow ---
 
   it('streamOutput emits task:output events for each chunk', async () => {
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       logs: vi.fn().mockImplementation(async function* () {
         yield 'chunk 1\n';
         yield 'chunk 2\n';
         yield 'chunk 3\n';
       }),
       exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: 'running', stderr: '' }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
       containerStats: vi.fn(),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'test task');
@@ -785,18 +718,11 @@ describe('TaskWatcher', () => {
       yield 'data\n';
     });
 
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       logs: logsSpy,
       exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
       containerStats: vi.fn(),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     await watcher.streamOutput('watch-stack', 'container-abc', vi.fn());
@@ -861,13 +787,7 @@ describe('TaskWatcher', () => {
     let stack1Calls = 0;
     let stack2Calls = 0;
 
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         if (cmd.includes('/tmp/claude-task.status')) {
           if (_id === 'container-1') {
@@ -892,10 +812,8 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
       containerStats: vi.fn(),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
@@ -993,13 +911,7 @@ describe('TaskWatcher', () => {
     const sessionId = 'sess-token-limit-123';
     const rawJsonOutput = `{"type":"result","usage":{"input_tokens":1000,"output_tokens":500},"session_id":"${sessionId}"}`;
 
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         const cmdStr = cmd.join(' ');
         if (cmdStr.includes('/tmp/claude-task.status')) {
@@ -1014,9 +926,7 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     const task = registry.createTask('watch-stack', 'token limit task');
@@ -1183,13 +1093,7 @@ describe('TaskWatcher', () => {
   it('accepts stale status after MAX_STALE_POLLS without seeing running', async () => {
     // Simulate a scenario where the task runner crashes before writing "running"
     // The status file has "completed" from a prior task and never changes
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         if (cmd.includes('/tmp/claude-task.status')) {
           return { exitCode: 0, stdout: 'completed', stderr: '' };
@@ -1199,10 +1103,8 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
       containerStats: vi.fn(),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 10 });
     registry.createTask('watch-stack', 'stale safety net task');
@@ -1225,13 +1127,7 @@ describe('TaskWatcher', () => {
   });
 
   it('getWorkflowProgress returns progress data for running task', async () => {
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         if (cmd.includes('/tmp/claude-task.status')) {
           return { exitCode: 0, stdout: 'running', stderr: '' };
@@ -1253,9 +1149,7 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
 
@@ -1304,13 +1198,7 @@ describe('TaskWatcher', () => {
 
   it('emits workflow progress during token poll', async () => {
     let pollCount = 0;
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         if (cmd.includes('/tmp/claude-task.status')) {
           pollCount++;
@@ -1321,9 +1209,7 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, {
       pollInterval: 20,
@@ -1347,13 +1233,7 @@ describe('TaskWatcher', () => {
   });
 
   it('emits workflow progress immediately on first running poll even with long token interval', async () => {
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         if (cmd.includes('/tmp/claude-task.status')) {
           return { exitCode: 0, stdout: 'running', stderr: '' };
@@ -1369,9 +1249,7 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-    };
+    });
 
     // Long token poll interval — but first poll should still emit immediately
     const watcher = new TaskWatcher(registry, runtime, runtime, {
@@ -1400,13 +1278,7 @@ describe('TaskWatcher', () => {
 
   it('emits task:failed and records needs_human status when STOP_AND_ASK detected', async () => {
     const stopReason = 'tests/integration/fixtures.ts is out of scope for this ticket';
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         const cmdStr = cmd.join(' ');
         if (cmdStr.includes('/tmp/claude-task.status')) {
@@ -1419,9 +1291,7 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'test task');
@@ -1451,13 +1321,7 @@ describe('TaskWatcher', () => {
 
   it('emits task:failed with needs_human and sets verify_blocked_environmental stack status when status file reads verify_blocked_environmental', async () => {
     const envFingerprint = 'jq: command not found';
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         const cmdStr = cmd.join(' ');
         if (cmdStr.includes('/tmp/claude-task.status')) {
@@ -1469,9 +1333,7 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'test task');
@@ -1501,13 +1363,7 @@ describe('TaskWatcher', () => {
 
   it('emits task:failed and records needs_key status when phase has no credentials', async () => {
     const keyReason = "Phase 'execution' requires provider 'openrouter' but no credentials are configured.";
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         const cmdStr = cmd.join(' ');
         if (cmdStr.includes('/tmp/claude-task.status')) {
@@ -1520,9 +1376,7 @@ describe('TaskWatcher', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('watch-stack', 'test task');

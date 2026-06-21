@@ -233,22 +233,38 @@ export class DockerRuntime implements ContainerRuntime {
     }
   }
 
+  async inspectImage(ref: string): Promise<{ labels: Record<string, string> } | null> {
+    try {
+      const image = this.docker.getImage(ref);
+      const info = await image.inspect();
+      return { labels: (info.Config?.Labels ?? {}) as Record<string, string> };
+    } catch {
+      return null;
+    }
+  }
+
   async exec(
     containerId: string,
     cmd: string[],
     opts?: ExecOpts
   ): Promise<ExecResult> {
+    const hasInput = opts?.input != null;
     const container = this.docker.getContainer(containerId);
     const exec = await container.exec({
       Cmd: cmd,
       AttachStdout: true,
       AttachStderr: true,
+      AttachStdin: hasInput,
       WorkingDir: opts?.workdir,
       Env: opts?.env,
       User: opts?.user,
     });
 
-    const stream = await exec.start({ hijack: true, stdin: false });
+    const stream = await exec.start({ hijack: true, stdin: hasInput });
+    if (hasInput) {
+      stream.write(opts!.input!);
+      stream.end();
+    }
     let stdout = '';
     let stderr = '';
     let remainder: Buffer = Buffer.alloc(0);

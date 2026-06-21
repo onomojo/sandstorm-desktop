@@ -6,6 +6,7 @@ import { Registry, Stack } from '../../src/main/control-plane/registry';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { StackManager } from '../../src/main/control-plane/stack-manager';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import {
   runStartupReconciliation,
   type ReconcilerDeps,
@@ -63,10 +64,7 @@ function makeRuntime(opts: {
 
   let callIdx = 0;
 
-  return {
-    name: 'mock',
-    composeUp: vi.fn(),
-    composeDown: vi.fn(),
+  return makeFakeContainerRuntime({
     listContainers: vi.fn().mockImplementation(async () => {
       if (listThrows) throw new Error('Docker daemon unavailable');
       if (!containerFound) return [];
@@ -81,8 +79,6 @@ function makeRuntime(opts: {
         created: new Date().toISOString(),
       }];
     }),
-    inspect: vi.fn(),
-    logs: vi.fn().mockReturnValue((async function* () {})()),
     exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
       if (execThrows) throw new Error('container exec failed');
       if (cmd.includes('/tmp/claude-task.status')) {
@@ -95,10 +91,7 @@ function makeRuntime(opts: {
       }
       return { exitCode: 0, stdout: '', stderr: '' };
     }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-    containerStats: vi.fn(),
-  };
+  });
 }
 
 function makeStackManagerMock(): Partial<StackManager> & {

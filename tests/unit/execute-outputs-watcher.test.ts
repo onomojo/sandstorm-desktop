@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Registry } from '../../src/main/control-plane/registry';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -29,13 +30,7 @@ function makeStack(id: string = 'test-stack') {
 }
 
 function createMetadataRuntime(files: Record<string, string>): ContainerRuntime {
-  return {
-    name: 'mock',
-    composeUp: vi.fn(),
-    composeDown: vi.fn(),
-    listContainers: vi.fn().mockResolvedValue([]),
-    inspect: vi.fn(),
-    logs: vi.fn(),
+  return makeFakeContainerRuntime({
     exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
       if (cmd.includes('/tmp/claude-task.status')) {
         return { exitCode: 0, stdout: 'running', stderr: '' };
@@ -68,10 +63,7 @@ function createMetadataRuntime(files: Record<string, string>): ContainerRuntime 
       }
       return { exitCode: 0, stdout: '', stderr: '' };
     }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-    containerStats: vi.fn(),
-  };
+  });
 }
 
 describe('TaskWatcher execute_outputs reading', () => {

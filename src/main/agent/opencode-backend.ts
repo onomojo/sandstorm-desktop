@@ -17,7 +17,6 @@
 
 import path from 'path';
 import os from 'os';
-import { spawn } from 'child_process';
 import { BrowserWindow } from 'electron';
 import { app } from 'electron';
 // @opencode-ai/sdk is ESM-only — static require() fails in the CJS bundle.
@@ -52,6 +51,7 @@ import {
   zeroSessionTokens,
 } from './types';
 import { appendEphemeralTiming, type EphemeralTimingRecord } from './ephemeral-timing';
+import { type ContainerRuntime } from '../runtime/types';
 import { cliDir } from '../index';
 
 // ---------------------------------------------------------------------------
@@ -166,7 +166,10 @@ export class OpenCodeBackend implements AgentBackend {
   // Used to detect when syncCredentials needs to restart the server.
   private serverProviderSignature = '';
 
-  constructor() {
+  private resolveRuntime?: (stack: StackInfo) => ContainerRuntime;
+
+  constructor(resolveRuntime?: (stack: StackInfo) => ContainerRuntime) {
+    this.resolveRuntime = resolveRuntime;
     this.ephemeralTimingPath = this.resolveEphemeralTimingPath();
   }
 
@@ -801,7 +804,7 @@ export class OpenCodeBackend implements AgentBackend {
         await this.execInContainer(claudeService.containerId, [
           'bash', '-c',
           'rm -f ~/.local/share/opencode/auth.json && mkdir -p ~/.local/share/opencode',
-        ]);
+        ], undefined, this.resolveRuntime?.(stack));
 
         // 2. Collect distinct opencode providers across all container phases.
         //    For each provider, store its credentials bundle and one representative model.
@@ -823,14 +826,9 @@ export class OpenCodeBackend implements AgentBackend {
           if (!credentials) continue;
           const config = generateOpencodeConfig({ providerId, bundle: credentials, model: model || undefined });
           const configJson = JSON.stringify(config, null, 2);
-          const writeProc = spawn('docker', [
-            'exec', '-i', '-u', 'claude', claudeService.containerId,
+          await this.execInContainer(claudeService.containerId, [
             'bash', '-c', 'cat > "$1"', '--', `/tmp/sandstorm-opencode-${providerId}.json`,
-          ], { stdio: ['pipe', 'ignore', 'ignore'] });
-          writeProc.on('error', () => {});
-          writeProc.stdin.write(configJson);
-          writeProc.stdin.end();
-          await new Promise<void>((resolve) => writeProc.on('close', () => resolve()));
+          ], configJson, this.resolveRuntime?.(stack));
         }
       } catch {
         // Best effort per container
@@ -838,14 +836,13 @@ export class OpenCodeBackend implements AgentBackend {
     }
   }
 
-  private execInContainer(containerId: string, cmd: string[]): Promise<void> {
-    return new Promise<void>((resolve) => {
-      const proc = spawn('docker', ['exec', '-u', 'claude', containerId, ...cmd], {
-        stdio: ['pipe', 'ignore', 'ignore'],
-      });
-      proc.stdin.end();
-      proc.on('close', () => resolve());
-      proc.on('error', () => resolve());
-    });
+  private async execInContainer(
+    containerId: string,
+    cmd: string[],
+    input?: string,
+    runtime?: ContainerRuntime
+  ): Promise<void> {
+    if (!runtime) throw new Error('execInContainer requires a ContainerRuntime');
+    await runtime.exec(containerId, cmd, { user: 'claude', input });
   }
 }

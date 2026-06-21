@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { Registry } from '../../src/main/control-plane/registry';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -39,13 +40,7 @@ describe('Task Completion (Integration)', () => {
 
   it('watcher correctly transitions task through running → completed', async () => {
     let callCount = 0;
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
         if (cmd.includes('/tmp/claude-task.status')) {
           callCount++;
@@ -60,9 +55,7 @@ describe('Task Completion (Integration)', () => {
         }
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50 });
     registry.createTask('int-task-stack', 'integration task');

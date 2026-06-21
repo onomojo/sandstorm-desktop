@@ -4,6 +4,7 @@ import { Registry } from '../../src/main/control-plane/registry';
 import { PortAllocator } from '../../src/main/control-plane/port-allocator';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -19,18 +20,7 @@ function cleanupDb(dbPath: string): void {
 }
 
 function createMockRuntime(): ContainerRuntime {
-  return {
-    name: 'mock',
-    composeUp: vi.fn().mockResolvedValue(undefined),
-    composeDown: vi.fn().mockResolvedValue(undefined),
-    listContainers: vi.fn().mockResolvedValue([]),
-    inspect: vi.fn(),
-    logs: vi.fn().mockReturnValue((async function* () {})()),
-    exec: vi.fn().mockResolvedValue({ exitCode: 0, stdout: '', stderr: '' }),
-    containerStats: vi.fn().mockResolvedValue({ memoryUsage: 0, memoryLimit: 0, cpuPercent: 0 }),
-    isAvailable: vi.fn().mockResolvedValue(true),
-    version: vi.fn().mockResolvedValue('Mock 1.0'),
-  };
+  return makeFakeContainerRuntime();
 }
 
 describe('Stale Workspace Detection', () => {

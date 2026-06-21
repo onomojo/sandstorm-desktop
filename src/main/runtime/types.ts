@@ -57,6 +57,7 @@ export interface ExecOpts {
   env?: string[];
   interactive?: boolean;
   user?: string;
+  input?: string;
 }
 
 export interface ExecResult {
@@ -88,6 +89,9 @@ export interface ContainerRuntime {
     cmd: string[],
     opts?: ExecOpts
   ): Promise<ExecResult>;
+
+  // Image inspection (returns null if image not found)
+  inspectImage(ref: string): Promise<{ labels: Record<string, string> } | null>;
 
   // Health
   isAvailable(): Promise<boolean>;

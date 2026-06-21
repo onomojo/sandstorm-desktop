@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { Registry } from '../../src/main/control-plane/registry';
 import { TaskWatcher } from '../../src/main/control-plane/task-watcher';
 import { ContainerRuntime } from '../../src/main/runtime/types';
+import { makeFakeContainerRuntime } from '../helpers/fake-container-runtime';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
@@ -291,23 +292,14 @@ describe('TaskWatcher metadata reading', () => {
   });
 
   function createMetadataRuntime(files: Record<string, string>): ContainerRuntime {
-    return {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    return makeFakeContainerRuntime({
       exec: vi.fn().mockImplementation(async (_id: string, cmd: string[]) => {
-        // Handle status file
         if (cmd.includes('/tmp/claude-task.status')) {
           return { exitCode: 0, stdout: 'running', stderr: '' };
         }
         if (cmd.includes('/tmp/claude-task.exit')) {
           return { exitCode: 0, stdout: '0', stderr: '' };
         }
-
-        // Handle 'sh -c' commands (ls for listing files)
         if (cmd[0] === 'sh' && cmd[1] === '-c') {
           const shellCmd = cmd[2];
           if (shellCmd.includes('claude-review-verdict')) {
@@ -320,8 +312,6 @@ describe('TaskWatcher metadata reading', () => {
           }
           return { exitCode: 0, stdout: '', stderr: '' };
         }
-
-        // Handle cat commands
         if (cmd[0] === 'cat' && cmd[1]) {
           const content = files[cmd[1]];
           if (content !== undefined) {
@@ -329,13 +319,9 @@ describe('TaskWatcher metadata reading', () => {
           }
           throw new Error(`File not found: ${cmd[1]}`);
         }
-
         return { exitCode: 0, stdout: '', stderr: '' };
       }),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-      containerStats: vi.fn(),
-    };
+    });
   }
 
   it('reads numbered review verdict files and stores JSON array', async () => {
@@ -424,18 +410,9 @@ describe('TaskWatcher metadata reading', () => {
 
   it('handles missing metadata files gracefully', async () => {
     // Runtime where all file reads throw (simulating no metadata files)
-    const runtime: ContainerRuntime = {
-      name: 'mock',
-      composeUp: vi.fn(),
-      composeDown: vi.fn(),
-      listContainers: vi.fn().mockResolvedValue([]),
-      inspect: vi.fn(),
-      logs: vi.fn(),
+    const runtime = makeFakeContainerRuntime({
       exec: vi.fn().mockRejectedValue(new Error('file not found')),
-      isAvailable: vi.fn().mockResolvedValue(true),
-      version: vi.fn().mockResolvedValue('Mock 1.0'),
-      containerStats: vi.fn(),
-    };
+    });
 
     const watcher = new TaskWatcher(registry, runtime, runtime, { pollInterval: 50000 });
     const task = registry.createTask('test-stack', 'test prompt');
