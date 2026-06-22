@@ -15,6 +15,7 @@ import { resolveTicketReferences, renderResolvedReferences } from './ticket-refe
 import { workspacePathFor } from './pr-creator';
 import { parseTokenUsage } from './token-parser';
 import type { TouchpointId } from './routing';
+import { bringUp, deliverTask } from './dispatch';
 
 const execFileAsync = promisify(execFile);
 
@@ -492,16 +493,18 @@ export class StackManager {
       // Pass the app version so the CLI can stamp the Docker image label
       portEnv['SANDSTORM_APP_VERSION'] = this.appVersion;
 
-      // Build CLI args
-      const args = ['up', opts.name];
-      if (opts.ticket) args.push('--ticket', opts.ticket);
-      if (opts.branch) args.push('--branch', opts.branch);
+      const projectBase = path.basename(opts.projectDir);
+      const composeProjectName = composeProjectNameFor(projectBase, opts.name);
+      const workspaceCompose = path.join(opts.projectDir, '.sandstorm', 'workspaces', opts.name, 'docker-compose.yml');
+      const sandstormCompose = path.join(opts.projectDir, '.sandstorm', 'docker-compose.yml');
+      const claudeOverlay = path.join(this.cliDir, 'compose', 'claude-overlay.yml');
 
-      const result = await this.runCli(opts.projectDir, args, portEnv);
-
-      if (result.exitCode !== 0) {
-        throw new SandstormError(ErrorCode.COMPOSE_FAILED, result.stderr.trim() || result.stdout.trim() || 'Stack creation failed');
-      }
+      await bringUp(buildRuntime, opts.projectDir, {
+        projectName: composeProjectName,
+        composeFiles: [workspaceCompose, sandstormCompose, claudeOverlay],
+        env: portEnv,
+        build: needsRebuild,
+      });
 
       this.registry.updateStackStatus(opts.name, 'up');
       this.notifyUpdate();
@@ -768,18 +771,17 @@ export class StackManager {
     this.registry.updateStackStatus(stackId, 'running');
     this.notifyUpdate();
 
-    const cliArgs = ['task', stackId, '--resume', task.session_id!];
-    if (task.model) cliArgs.push('--model', task.model);
-    cliArgs.push(continuationPrompt);
-
-    const result = await this.runCli(stack.project_dir, cliArgs);
-    if (result.exitCode !== 0) {
+    try {
+      await deliverTask(runtime, claudeContainer.id, {
+        prompt: continuationPrompt,
+        model: task.model ?? undefined,
+        resume: task.session_id!,
+      });
+    } catch (err) {
       this.registry.updateStackStatus(stackId, 'session_paused');
       this.notifyUpdate();
-      throw new SandstormError(
-        ErrorCode.TASK_DISPATCH_FAILED,
-        result.stderr.trim() || result.stdout.trim() || 'Resume dispatch failed'
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new SandstormError(ErrorCode.TASK_DISPATCH_FAILED, msg || 'Resume dispatch failed');
     }
 
     this.taskWatcher.watch(stackId, claudeContainer.id);
@@ -812,18 +814,17 @@ export class StackManager {
     this.registry.updateStackStatus(stackId, 'running');
     this.notifyUpdate();
 
-    const cliArgs = ['task', stackId, '--resume', task.session_id!];
-    if (task.model) cliArgs.push('--model', task.model);
-    cliArgs.push(investigationPrompt);
-
-    const result = await this.runCli(stack.project_dir, cliArgs);
-    if (result.exitCode !== 0) {
+    try {
+      await deliverTask(runtime, claudeContainer.id, {
+        prompt: investigationPrompt,
+        model: task.model ?? undefined,
+        resume: task.session_id!,
+      });
+    } catch (err) {
       this.registry.updateStackStatus(stackId, 'needs_human');
       this.notifyUpdate();
-      throw new SandstormError(
-        ErrorCode.TASK_DISPATCH_FAILED,
-        result.stderr.trim() || result.stdout.trim() || 'Investigation dispatch failed'
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new SandstormError(ErrorCode.TASK_DISPATCH_FAILED, msg || 'Investigation dispatch failed');
     }
 
     this.taskWatcher.watch(stackId, claudeContainer.id);
@@ -1415,7 +1416,6 @@ export class StackManager {
     const task = this.registry.createTask(stackId, prompt, model);
 
     const runtime = this.getRuntimeForStack(stack);
-    let promptTmpDir: string | undefined;
 
     try {
       let claudeContainer = await this.findClaudeContainer(stack, runtime);
@@ -1432,10 +1432,6 @@ export class StackManager {
       // Wait for the inner Claude agent to be ready before dispatching
       await this.waitForClaudeReady(claudeContainer.id, runtime);
 
-      // Use the sandstorm CLI to dispatch the task. The CLI's `task` command
-      // handles credential sync (OAuth), writes files as the correct user
-      // (`-u claude`), and creates the trigger file with proper ownership —
-      // preventing the infinite-loop and not-logged-in bugs.
       const execTouchpoint = opts?.executionTouchpoint ?? 'execution';
       const execDesc = this.registry.getEffectiveTouchpointDescriptor(stack.project_dir, execTouchpoint);
       const reviewDesc = this.registry.getEffectiveTouchpointDescriptor(stack.project_dir, 'review');
@@ -1453,25 +1449,12 @@ export class StackManager {
         review:      { backend: reviewDesc.backend, provider: reviewDesc.provider, model: reviewDesc.model || 'auto' },
         meta_review: { backend: metaDesc.backend,   provider: metaDesc.provider,   model: metaDesc.model   || 'auto' },
       });
-      const cliArgs = ['task', stackId];
-      if (model) cliArgs.push('--model', model);
-      cliArgs.push('--models-json', phaseModelsJson);
-      cliArgs.push('--phase-routing-json', phaseRoutingJson);
-      promptTmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sandstorm-task-'));
-      const promptTmpFile = path.join(promptTmpDir, 'prompt.txt');
-      await fs.promises.writeFile(promptTmpFile, prompt, 'utf-8');
-      cliArgs.push('--file', promptTmpFile);
-
-      const result = await this.runCli(stack.project_dir, cliArgs).finally(() => {
-        if (promptTmpDir) fs.promises.rm(promptTmpDir, { recursive: true, force: true }).catch(() => {});
+      await deliverTask(runtime, claudeContainer.id, {
+        prompt,
+        model: model ?? undefined,
+        modelsJson: phaseModelsJson,
+        phaseRoutingJson,
       });
-
-      if (result.exitCode !== 0) {
-        throw new SandstormError(
-          ErrorCode.TASK_DISPATCH_FAILED,
-          result.stderr.trim() || result.stdout.trim() || 'Task dispatch failed'
-        );
-      }
 
       // Start watching for completion
       this.taskWatcher.watch(stackId, claudeContainer.id);
@@ -1481,9 +1464,6 @@ export class StackManager {
 
       return { id: task.id, stack_id: stackId, status: task.status };
     } catch (err) {
-      if (promptTmpDir) {
-        fs.promises.rm(promptTmpDir, { recursive: true, force: true }).catch(() => {});
-      }
       // Task was created but dispatch failed — mark it as failed so the
       // stack doesn't stay stuck in 'running' status forever.
       this.registry.completeTask(task.id, 1);

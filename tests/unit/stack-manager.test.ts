@@ -60,6 +60,17 @@ function makeStack(id: string = 'test-stack') {
   };
 }
 
+/** Find the `input` content passed to runtime.exec for a specific tmpfile write. */
+function getExecInput(rt: ContainerRuntime, filename: string): string | undefined {
+  const calls = (rt.exec as ReturnType<typeof vi.fn>).mock.calls;
+  for (const [, cmd, opts] of calls) {
+    if (Array.isArray(cmd) && cmd[2]?.includes(filename)) {
+      return opts?.input as string | undefined;
+    }
+  }
+  return undefined;
+}
+
 describe('sanitizeComposeName', () => {
   it('passes through valid names unchanged', () => {
     expect(sanitizeComposeName('auth-refactor')).toBe('auth-refactor');
@@ -260,11 +271,7 @@ describe('StackManager', () => {
     });
 
     it('marks stack as failed with error message when CLI returns non-zero', async () => {
-      vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: '',
-        stderr: 'compose failed',
-        exitCode: 1,
-      });
+      (runtime.composeUp as ReturnType<typeof vi.fn>).mockRejectedValue(new Error('compose failed'));
 
       fs.writeFileSync(path.join(tmpDir, '.sandstorm', 'config'), '# empty\n');
 
@@ -279,12 +286,6 @@ describe('StackManager', () => {
     });
 
     it('passes port env vars and stack args to CLI', async () => {
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: '',
-        stderr: '',
-        exitCode: 0,
-      });
-
       manager.createStack({
         name: 'env-test',
         projectDir: tmpDir,
@@ -299,18 +300,11 @@ describe('StackManager', () => {
         expect(stack!.status).toBe('up');
       }, { timeout: 5000 });
 
-      expect(runCliSpy).toHaveBeenCalled();
-      const [dir, args, env] = runCliSpy.mock.calls[0];
-      expect(dir).toBe(tmpDir);
-      expect(args).toContain('up');
-      expect(args).toContain('env-test');
-      expect(args).toContain('--ticket');
-      expect(args).toContain('PROJ-1');
-      expect(args).toContain('--branch');
-      expect(args).toContain('feature/test');
-      // Port env vars are no longer set at stack creation (on-demand proxy model)
-      expect(env).not.toHaveProperty('SANDSTORM_PORT_app_0');
-      expect(env).toHaveProperty('SANDSTORM_APP_VERSION');
+      expect(runtime.composeUp).toHaveBeenCalled();
+      const composeCall = (runtime.composeUp as ReturnType<typeof vi.fn>).mock.calls[0];
+      const [, opts] = composeCall;
+      expect(opts.projectName).toContain('env-test');
+      expect(opts.env).toHaveProperty('SANDSTORM_APP_VERSION');
     });
 
     it('calls onStackUpdate callback when build completes', async () => {
@@ -395,11 +389,6 @@ describe('StackManager', () => {
   describe('dispatchTask', () => {
     it('dispatches a task via CLI to a stack', async () => {
       registry.createStack(makeStack('dispatch-test'));
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       const result = await manager.dispatchTask('dispatch-test', 'Fix the bug');
       expect(result.status).toBe('running');
@@ -407,44 +396,24 @@ describe('StackManager', () => {
       expect(typeof result.id).toBe('number');
       // Verify trimmed shape — prompt is NOT echoed in the MCP response (#255)
       expect(result).not.toHaveProperty('prompt');
-      // The prompt is still persisted in the registry
       const persisted = registry.getTasksForStack('dispatch-test');
       expect(persisted[0].prompt).toBe('Fix the bug');
-
-      // Should delegate to CLI `task` command (handles cred sync + user perms)
-      // When no model is specified, the effective default (sonnet) is used.
-      // --models-json carries the per-phase model map; --phase-routing-json carries full routing.
-      const [, callArgs] = runCliSpy.mock.calls[0];
-      expect(callArgs[0]).toBe('task');
-      expect(callArgs[1]).toBe('dispatch-test');
-      expect(callArgs).toContain('--model');
-      expect(callArgs).toContain('--models-json');
-      expect(callArgs).toContain('--phase-routing-json');
-      // dispatchTask always writes the prompt to a temp file and passes --file.
-      expect(callArgs).toContain('--file');
-      const fileIdx = callArgs.indexOf('--file');
-      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe('Fix the bug');
+      // Prompt delivered via runtime.exec stdin (B1: never via argv)
+      expect(getExecInput(runtime, 'claude-task-prompt.txt')).toBe('Fix the bug');
+      // Phase routing delivered
+      expect(getExecInput(runtime, 'claude-task-models.json')).toBeDefined();
+      expect(getExecInput(runtime, 'claude-task-phase-routing.json')).toBeDefined();
     });
 
-    it('regression (E2BIG): a >128KB prompt is written to a temp file and passed via --file', async () => {
+    it('delivers large prompts via runtime.exec stdin, not argv (B1 invariant prevents E2BIG)', async () => {
       registry.createStack(makeStack('huge-prompt'));
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
-      // A prompt large enough that, as a single argv entry, it would overflow
-      // Linux's 128KB MAX_ARG_STRLEN and make spawn throw E2BIG on the host.
       const hugePrompt = 'x'.repeat(200 * 1024);
       await manager.dispatchTask('huge-prompt', hugePrompt);
 
-      const [, callArgs] = runCliSpy.mock.calls[0];
-      // dispatchTask always writes the prompt to a temp file and passes --file,
-      // so spawn never sees a large argv entry regardless of prompt size.
-      expect(callArgs).toContain('--file');
-      const fileIdx = callArgs.indexOf('--file');
-      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe(hugePrompt);
+      // Prompt delivered via runtime.exec stdin (B1: never via argv — prevents E2BIG)
+      const deliveredPrompt = getExecInput(runtime, 'claude-task-prompt.txt');
+      expect(deliveredPrompt).toBe(hugePrompt);
       // The full prompt is still persisted to the registry intact.
       const persisted = registry.getTasksForStack('huge-prompt');
       expect(persisted[0].prompt).toBe(hugePrompt);
@@ -458,10 +427,12 @@ describe('StackManager', () => {
 
     it('throws when CLI task dispatch fails', async () => {
       registry.createStack(makeStack('cli-fail'));
-      vi.spyOn(manager, 'runCli').mockResolvedValue({
+      // Mock waitForClaudeReady to succeed so exec failure is only seen by deliverTask
+      vi.spyOn(manager, 'waitForClaudeReady').mockResolvedValue(undefined);
+      (runtime.exec as ReturnType<typeof vi.fn>).mockResolvedValue({
+        exitCode: 1,
         stdout: '',
         stderr: 'credential sync failed',
-        exitCode: 1,
       });
 
       await expect(
@@ -480,59 +451,33 @@ describe('StackManager', () => {
 
     it('passes model to CLI args when provided', async () => {
       registry.createStack(makeStack('model-test'));
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       const result = await manager.dispatchTask('model-test', 'Complex task', 'opus');
       expect(result.status).toBe('running');
-      // The model is persisted on the Task in the registry even though the MCP
-      // response no longer echoes it.
       const persisted = registry.getTasksForStack('model-test');
       expect(persisted[0].model).toBe('opus');
-      // Single --model is for attribution; --models-json and --phase-routing-json carry per-phase routing.
-      const [, callArgs] = runCliSpy.mock.calls[0];
-      expect(callArgs).toContain('--model');
-      expect(callArgs[callArgs.indexOf('--model') + 1]).toBe('opus');
-      expect(callArgs).toContain('--models-json');
-      expect(callArgs).toContain('--phase-routing-json');
-      expect(callArgs).toContain('--file');
-      const fileIdx = callArgs.indexOf('--file');
-      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe('Complex task');
+      expect(getExecInput(runtime, 'claude-task-model.txt')).toBe('opus');
+      expect(getExecInput(runtime, 'claude-task-prompt.txt')).toBe('Complex task');
+      expect(getExecInput(runtime, 'claude-task-models.json')).toBeDefined();
+      expect(getExecInput(runtime, 'claude-task-phase-routing.json')).toBeDefined();
     });
 
     it('resolves "auto" model to undefined and omits from CLI args', async () => {
       registry.createStack(makeStack('auto-model'));
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       const result = await manager.dispatchTask('auto-model', 'Simple task', 'auto');
       expect(result.status).toBe('running');
       // "auto" should resolve to null in the DB (undefined → null via registry)
       const persisted = registry.getTasksForStack('auto-model');
       expect(persisted[0].model).toBeNull();
-      // Single --model is omitted for 'auto'; --models-json and --phase-routing-json are still sent.
-      const [, callArgs] = runCliSpy.mock.calls[0];
-      expect(callArgs).not.toContain('--model');
-      expect(callArgs).toContain('--models-json');
-      expect(callArgs).toContain('--phase-routing-json');
-      expect(callArgs).toContain('--file');
-      const fileIdx = callArgs.indexOf('--file');
-      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe('Simple task');
+      expect(getExecInput(runtime, 'claude-task-model.txt')).toBeUndefined();
+      expect(getExecInput(runtime, 'claude-task-models.json')).toBeDefined();
+      expect(getExecInput(runtime, 'claude-task-phase-routing.json')).toBeDefined();
+      expect(getExecInput(runtime, 'claude-task-prompt.txt')).toBe('Simple task');
     });
 
     it('uses effective default model when not provided', async () => {
       registry.createStack(makeStack('no-model'));
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       const result = await manager.dispatchTask('no-model', 'Simple task');
       expect(result.status).toBe('running');
@@ -540,31 +485,20 @@ describe('StackManager', () => {
       // on the registry Task, not echoed in the MCP response.
       const persisted = registry.getTasksForStack('no-model');
       expect(persisted[0].model).toBe('sonnet');
-      // Legacy/no-routing: --models-json and --phase-routing-json are sent alongside --model.
-      const [, callArgs] = runCliSpy.mock.calls[0];
-      expect(callArgs).toContain('--model');
-      expect(callArgs[callArgs.indexOf('--model') + 1]).toBe('sonnet');
-      expect(callArgs).toContain('--models-json');
-      expect(callArgs).toContain('--phase-routing-json');
-      expect(callArgs).toContain('--file');
-      const fileIdx = callArgs.indexOf('--file');
-      expect(fs.readFileSync(callArgs[fileIdx + 1], 'utf-8')).toBe('Simple task');
+      expect(getExecInput(runtime, 'claude-task-model.txt')).toBe('sonnet');
+      expect(getExecInput(runtime, 'claude-task-models.json')).toBeDefined();
+      expect(getExecInput(runtime, 'claude-task-phase-routing.json')).toBeDefined();
+      expect(getExecInput(runtime, 'claude-task-prompt.txt')).toBe('Simple task');
     });
 
     it('includes per-phase model map in CLI args', async () => {
       registry.createStack(makeStack('phase-map-test'));
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       await manager.dispatchTask('phase-map-test', 'Fix the bug');
 
-      const [, args] = runCliSpy.mock.calls[0];
-      const jsonIdx = args.indexOf('--models-json');
-      expect(jsonIdx).toBeGreaterThan(-1);
-      const parsed = JSON.parse(args[jsonIdx + 1]);
+      const modelsJsonStr = getExecInput(runtime, 'claude-task-models.json');
+      expect(modelsJsonStr).toBeDefined();
+      const parsed = JSON.parse(modelsJsonStr!);
       expect(parsed).toHaveProperty('execution');
       expect(parsed).toHaveProperty('review');
       expect(parsed).toHaveProperty('meta_review');
@@ -579,18 +513,12 @@ describe('StackManager', () => {
           meta_review: { backend: 'claude', model: 'sonnet' },
         },
       });
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       await manager.dispatchTask('routing-config-test', 'Complex task');
 
-      const [, args] = runCliSpy.mock.calls[0];
-      const jsonIdx = args.indexOf('--models-json');
-      expect(jsonIdx).toBeGreaterThan(-1);
-      const parsed = JSON.parse(args[jsonIdx + 1]);
+      const modelsJsonStr = getExecInput(runtime, 'claude-task-models.json');
+      expect(modelsJsonStr).toBeDefined();
+      const parsed = JSON.parse(modelsJsonStr!);
       expect(parsed.execution).toBe('haiku');
       expect(parsed.review).toBe('opus');
       expect(parsed.meta_review).toBe('sonnet');
@@ -598,27 +526,18 @@ describe('StackManager', () => {
 
     it('all phases equal single model for legacy/no-routing dispatch', async () => {
       registry.createStack(makeStack('legacy-no-routing'));
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       // No routing configured — effective default for all phases is 'sonnet'
       await manager.dispatchTask('legacy-no-routing', 'Simple task');
 
-      const [, args] = runCliSpy.mock.calls[0];
-      const singleModel = args[args.indexOf('--model') + 1];
-      const jsonIdx = args.indexOf('--models-json');
-      const modelsJson = JSON.parse(args[jsonIdx + 1]);
+      const singleModel = getExecInput(runtime, 'claude-task-model.txt');
+      const modelsJson = JSON.parse(getExecInput(runtime, 'claude-task-models.json')!);
       expect(modelsJson.execution).toBe(singleModel);
       expect(modelsJson.review).toBe(singleModel);
       expect(modelsJson.meta_review).toBe(singleModel);
 
       // --phase-routing-json should carry backend+provider+model per phase
-      const routingIdx = args.indexOf('--phase-routing-json');
-      expect(routingIdx).toBeGreaterThan(-1);
-      const routing = JSON.parse(args[routingIdx + 1]);
+      const routing = JSON.parse(getExecInput(runtime, 'claude-task-phase-routing.json')!);
       expect(routing.execution.model).toBe(singleModel);
       expect(routing.review.model).toBe(singleModel);
       expect(routing.meta_review.model).toBe(singleModel);
@@ -634,24 +553,20 @@ describe('StackManager', () => {
           meta_review: { backend: 'opencode', provider: 'anthropic', model: 'claude-sonnet-4-6' },
         },
       });
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       await manager.dispatchTask('oc-backend', 'Do the work', 'sonnet');
 
-      const callArgs = runCliSpy.mock.calls[0][1] as string[];
-      expect(callArgs).toContain('--phase-routing-json');
-      const routingJson = callArgs[callArgs.indexOf('--phase-routing-json') + 1];
-      const routing = JSON.parse(routingJson);
+      const routingJson = getExecInput(runtime, 'claude-task-phase-routing.json');
+      expect(routingJson).toBeDefined();
+      const routing = JSON.parse(routingJson!);
       expect(routing.execution.backend).toBe('opencode');
       expect(routing.execution.provider).toBe('anthropic');
       expect(routing.execution.model).toBe('claude-sonnet-4-6');
-      // Old --backend/--backend-model flags are superseded by --phase-routing-json
-      expect(callArgs).not.toContain('--backend');
-      expect(callArgs).not.toContain('--backend-model');
+      // --backend/--backend-model flags are superseded by phase-routing-json; no separate exec calls for them
+      const backendInput = getExecInput(runtime, 'claude-task-backend.txt');
+      const backendModelInput = getExecInput(runtime, 'claude-task-backend-model.txt');
+      expect(backendInput).toBeUndefined();
+      expect(backendModelInput).toBeUndefined();
     });
 
     it('includes all phases in --phase-routing-json for mixed backend stacks', async () => {
@@ -663,17 +578,12 @@ describe('StackManager', () => {
           meta_review: { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
         },
       });
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       await manager.dispatchTask('mixed-backend', 'Do work');
 
-      const callArgs = runCliSpy.mock.calls[0][1] as string[];
-      const routingJson = callArgs[callArgs.indexOf('--phase-routing-json') + 1];
-      const routing = JSON.parse(routingJson);
+      const routingJson = getExecInput(runtime, 'claude-task-phase-routing.json');
+      expect(routingJson).toBeDefined();
+      const routing = JSON.parse(routingJson!);
       expect(routing.execution.backend).toBe('opencode');
       expect(routing.execution.provider).toBe('openrouter');
       expect(routing.review.backend).toBe('claude');
@@ -682,18 +592,13 @@ describe('StackManager', () => {
 
     it('always includes --phase-routing-json (never falls back to --backend/--backend-model)', async () => {
       registry.createStack(makeStack('claude-backend'));
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'Task dispatched.',
-        stderr: '',
-        exitCode: 0,
-      });
 
       await manager.dispatchTask('claude-backend', 'Fix bug', 'sonnet');
 
-      const callArgs = runCliSpy.mock.calls[0][1] as string[];
-      expect(callArgs).toContain('--phase-routing-json');
-      expect(callArgs).not.toContain('--backend');
-      expect(callArgs).not.toContain('--backend-model');
+      const routingJson = getExecInput(runtime, 'claude-task-phase-routing.json');
+      expect(routingJson).toBeDefined();
+      expect(getExecInput(runtime, 'claude-task-backend.txt')).toBeUndefined();
+      expect(getExecInput(runtime, 'claude-task-backend-model.txt')).toBeUndefined();
     });
   });
 
@@ -719,22 +624,13 @@ describe('StackManager', () => {
       // Seed a prior task → stack has been dispatched to before.
       registry.createTask('gate-resume', 'initial prompt', 'sonnet');
 
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: 'ok',
-        stderr: '',
-        exitCode: 0,
-      });
-
       // No gateApproved, no forceBypass — but should succeed because it's a resume.
       await expect(
         manager.dispatchTask('gate-resume', 'Continue from where you left off')
       ).resolves.toEqual(expect.objectContaining({ stack_id: 'gate-resume' }));
 
-      // Verify we reached the CLI dispatch, i.e. we didn't bail early on the gate.
-      expect(runCliSpy).toHaveBeenCalledWith(
-        '/proj',
-        expect.arrayContaining(['task', 'gate-resume'])
-      );
+      // Verify dispatch reached runtime.exec (didn't bail early on the gate)
+      expect(getExecInput(runtime, 'claude-task-prompt.txt')).toBeDefined();
     });
 
     it('still honors forceBypass on the first dispatch when gate is not approved', async () => {
@@ -783,11 +679,8 @@ describe('StackManager', () => {
       expect(startCall).toBeDefined();
       expect(startCall![1]).toEqual(['up', 'autostart']);
 
-      // Dispatch itself still runs after the start.
-      const taskCall = runCliSpy.mock.calls.find(
-        ([, args]) => Array.isArray(args) && args[0] === 'task'
-      );
-      expect(taskCall).toBeDefined();
+      // Dispatch itself still runs after the start via runtime.exec.
+      expect(getExecInput(runtime, 'claude-task-prompt.txt')).toBeDefined();
     });
 
     it('does NOT run the start CLI when the claude container is already running', async () => {
@@ -2141,22 +2034,17 @@ describe('StackManager', () => {
       // Must set session_paused AFTER createTask — createTask calls updateStackStatus('running')
       registry.updateStackStatus('resume-a', 'session_paused');
 
+      // runCli still needed for ensureStackContainersRunning (up call)
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
       vi.spyOn(manager, 'waitForClaudeReady').mockResolvedValue(undefined);
       vi.spyOn(taskWatcher, 'watch').mockImplementation(() => {});
       vi.spyOn(taskWatcher, 'streamOutput').mockResolvedValue(undefined);
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: '', stderr: '', exitCode: 0,
-      });
 
       const result = await manager.resumeStackWithContinuation('resume-a');
       expect(result.outcome).toBe('resuming_with_session');
 
-      // CLI should include --resume and the session ID
-      const resumeCall = runCliSpy.mock.calls.find(
-        ([, args]) => Array.isArray(args) && args.includes('--resume')
-      );
-      expect(resumeCall).toBeDefined();
-      expect(resumeCall![1]).toContain('sess-abc123');
+      // Resume session ID delivered via runtime.exec stdin
+      expect(getExecInput(runtime, 'claude-task-resume.txt')).toBe('sess-abc123');
 
       // resumed_at should be stamped on the task
       const tasks = registry.getTasksForStack('resume-a');
@@ -2171,10 +2059,9 @@ describe('StackManager', () => {
       // session_id is null by default; set session_paused after createTask
       registry.updateStackStatus('resume-b', 'session_paused');
 
+      // runCli still needed for ensureStackContainersRunning (up call)
+      vi.spyOn(manager, 'runCli').mockResolvedValue({ stdout: '', stderr: '', exitCode: 0 });
       vi.spyOn(manager, 'waitForClaudeReady').mockResolvedValue(undefined);
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: '', stderr: '', exitCode: 0,
-      });
 
       const result = await manager.resumeStackWithContinuation('resume-b');
       expect(result.outcome).toBe('resumed_fresh');
@@ -2187,12 +2074,9 @@ describe('StackManager', () => {
       // A new task was created for the fresh dispatch
       expect(allTasks.length).toBeGreaterThan(1);
 
-      // CLI task call must NOT carry --resume
-      const taskCall = runCliSpy.mock.calls.find(
-        ([, args]) => Array.isArray(args) && args[0] === 'task'
-      );
-      expect(taskCall).toBeDefined();
-      expect(taskCall![1]).not.toContain('--resume');
+      // Redispatch delivers prompt but not a resume session ID
+      expect(getExecInput(runtime, 'claude-task-prompt.txt')).toBeDefined();
+      expect(getExecInput(runtime, 'claude-task-resume.txt')).toBeUndefined();
     });
 
     it('Case C: marks stack idle when no running task exists', async () => {

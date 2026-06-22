@@ -299,11 +299,13 @@ describe('Stack Lifecycle Integration', () => {
     it('marks task as failed when dispatch CLI fails', async () => {
       registry.createStack(makeStack('dispatch-fail'));
 
-      // First call succeeds (waitForClaudeReady), second fails (runCli for task)
-      vi.spyOn(manager, 'runCli').mockResolvedValue({
+      // Mock waitForClaudeReady to succeed so exec failure is only seen by deliverTask
+      vi.spyOn(manager, 'waitForClaudeReady').mockResolvedValue(undefined);
+      // exec fails (deliverTask will throw)
+      (runtime.exec as ReturnType<typeof vi.fn>).mockResolvedValue({
+        exitCode: 1,
         stdout: '',
         stderr: 'dispatch error',
-        exitCode: 1,
       });
 
       await expect(
