@@ -25,6 +25,11 @@ interface LocalContainer {
   labels: Record<string, string>;
 }
 
+interface LocalLoop {
+  stopped: boolean;
+  timer: ReturnType<typeof setInterval> | null;
+}
+
 /**
  * ContainerRuntime that runs commands as local subprocesses inside per-container
  * tmpdirs. Requires no Docker or Podman daemon — intended for unit testing and
@@ -40,6 +45,7 @@ export class LocalRuntime implements ContainerRuntime {
   private imageLabels = new Map<string, Record<string, string>>();
   private ownedTmpdirs: string[] = [];
   private composeContainers = new Map<string, string>();
+  private loops = new Map<string, LocalLoop>();
 
   /**
    * Register a fake container. Returns the tmpdir path created for it.
@@ -77,6 +83,9 @@ export class LocalRuntime implements ContainerRuntime {
 
   /** Remove all registered containers and clean up owned tmpdirs. */
   destroy(): void {
+    for (const id of [...this.loops.keys()]) {
+      this.stopLocalLoop(id);
+    }
     this.containers.clear();
     this.imageLabels.clear();
     this.composeContainers.clear();
@@ -86,20 +95,70 @@ export class LocalRuntime implements ContainerRuntime {
     this.ownedTmpdirs = [];
   }
 
+  /** Return the container id registered for a compose project name. */
+  getProjectContainerId(projectName: string): string | undefined {
+    return this.composeContainers.get(projectName);
+  }
+
+  /** Return the per-container tmpdir path for the given container id. */
+  getContainerTmpdir(containerId: string): string | undefined {
+    return this.containers.get(containerId)?.tmpdir;
+  }
+
+  private startLocalLoop(id: string, tmpdir: string): void {
+    const loop: LocalLoop = { stopped: false, timer: null };
+    this.loops.set(id, loop);
+
+    try { fs.writeFileSync(path.join(tmpdir, 'claude-ready'), 'ready', 'utf8'); } catch { /* ignore */ }
+
+    loop.timer = setInterval(() => {
+      if (loop.stopped) return;
+      const triggerPath = path.join(tmpdir, 'claude-task-trigger');
+      if (!fs.existsSync(triggerPath)) return;
+
+      try { fs.unlinkSync(triggerPath); } catch { return; }
+
+      try {
+        try { fs.unlinkSync(path.join(tmpdir, 'claude-ready')); } catch { /* ignore */ }
+        fs.writeFileSync(path.join(tmpdir, 'claude-task.status'), 'running', 'utf8');
+        fs.writeFileSync(path.join(tmpdir, 'claude-task.pid'), String(process.pid), 'utf8');
+        fs.writeFileSync(path.join(tmpdir, 'claude-task.review-iterations'), '0', 'utf8');
+        fs.writeFileSync(path.join(tmpdir, 'claude-task.verify-retries'), '0', 'utf8');
+        fs.writeFileSync(path.join(tmpdir, 'claude-task.log'), 'fake local loop: task simulated\n', 'utf8');
+        fs.writeFileSync(path.join(tmpdir, 'claude-task.status'), 'completed', 'utf8');
+        fs.writeFileSync(path.join(tmpdir, 'claude-task.exit'), '0', 'utf8');
+        fs.writeFileSync(path.join(tmpdir, 'claude-ready'), 'ready', 'utf8');
+      } catch { /* tmpdir removed during teardown */ }
+    }, 50);
+  }
+
+  private stopLocalLoop(id: string): void {
+    const loop = this.loops.get(id);
+    if (!loop) return;
+    loop.stopped = true;
+    if (loop.timer !== null) {
+      clearInterval(loop.timer);
+      loop.timer = null;
+    }
+    this.loops.delete(id);
+  }
+
   async composeUp(_projectDir: string, opts: ComposeOpts): Promise<void> {
     const id = opts.projectName;
-    this.registerContainer(id, {
+    const tmpdir = this.registerContainer(id, {
       name: opts.projectName,
       image: 'local',
       status: 'running',
       labels: { 'com.docker.compose.project': opts.projectName },
     });
     this.composeContainers.set(opts.projectName, id);
+    this.startLocalLoop(id, tmpdir);
   }
 
   async composeDown(_projectDir: string, opts: ComposeOpts): Promise<void> {
     const id = this.composeContainers.get(opts.projectName);
     if (id) {
+      this.stopLocalLoop(id);
       const c = this.containers.get(id);
       if (c && this.ownedTmpdirs.includes(c.tmpdir)) {
         try { fs.rmSync(c.tmpdir, { recursive: true, force: true }); } catch { /* ignore */ }
@@ -179,6 +238,8 @@ export class LocalRuntime implements ContainerRuntime {
       : c.tmpdir;
 
     const env: NodeJS.ProcessEnv = { ...process.env };
+    // Redirect $TMPDIR so shell scripts using it also resolve under the container tmpdir
+    env['TMPDIR'] = c.tmpdir;
     if (opts?.env) {
       for (const entry of opts.env) {
         const eq = entry.indexOf('=');
@@ -186,8 +247,10 @@ export class LocalRuntime implements ContainerRuntime {
       }
     }
 
+    // Rewrite absolute /tmp/ path references in command args to the per-container tmpdir
+    const rewrittenCmd = cmd.map((arg) => arg.split('/tmp/').join(c.tmpdir + '/'));
     const hasInput = opts?.input != null;
-    const [bin, ...args] = cmd;
+    const [bin, ...args] = rewrittenCmd;
 
     return new Promise((resolve, reject) => {
       const child = spawn(bin, args, {
