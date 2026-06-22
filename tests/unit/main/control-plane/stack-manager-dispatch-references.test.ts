@@ -80,6 +80,17 @@ function makeStack(id: string) {
   };
 }
 
+/** Find the `input` content passed to runtime.exec for a specific tmpfile write. */
+function getExecInput(rt: ContainerRuntime, filename: string): string | undefined {
+  const calls = (rt.exec as ReturnType<typeof vi.fn>).mock.calls;
+  for (const [, cmd, opts] of calls) {
+    if (Array.isArray(cmd) && cmd[2]?.includes(filename)) {
+      return opts?.input as string | undefined;
+    }
+  }
+  return undefined;
+}
+
 const REFS_SECTION = '## Resolved References\n\n### https://gist.github.com/user/abc\n\n```\nmockup content\n```\n';
 
 /** Read the prompt delivered to runCli, handling the --file <path> dispatch pattern. */
@@ -123,9 +134,6 @@ describe('dispatchTask — reference resolution', () => {
 
   it('appends resolved references block to the prompt delivered to runCli', async () => {
     registry.createStack(makeStack('ref-stack'));
-    const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-      stdout: 'ok', stderr: '', exitCode: 0,
-    });
 
     // Simulate a gist reference being resolved
     mockResolveTicketReferences.mockResolvedValue([
@@ -136,9 +144,7 @@ describe('dispatchTask — reference resolution', () => {
     const prompt = 'Implement the mockup at https://gist.github.com/user/abc';
     await manager.dispatchTask('ref-stack', prompt, undefined, { forceBypass: true });
 
-    // Prompt is delivered via --file (temp file) to avoid argv E2BIG; read file for content verification.
-    const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
-    const deliveredPrompt = readDeliveredPrompt(cliArgs);
+    const deliveredPrompt = getExecInput(runtime, 'claude-task-prompt.txt')!;
 
     expect(deliveredPrompt).toContain('## Resolved References');
     expect(deliveredPrompt).toContain('mockup content');
@@ -147,9 +153,6 @@ describe('dispatchTask — reference resolution', () => {
 
   it('leaves prompt unchanged when the body has no external links (no-op)', async () => {
     registry.createStack(makeStack('noref-stack'));
-    const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-      stdout: 'ok', stderr: '', exitCode: 0,
-    });
 
     // No references
     mockResolveTicketReferences.mockResolvedValue([]);
@@ -158,9 +161,7 @@ describe('dispatchTask — reference resolution', () => {
     const prompt = 'Fix the bug in the auth module';
     await manager.dispatchTask('noref-stack', prompt, undefined, { forceBypass: true });
 
-    // Prompt is delivered via --file (temp file); read file for content verification.
-    const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
-    const deliveredPrompt = readDeliveredPrompt(cliArgs);
+    const deliveredPrompt = getExecInput(runtime, 'claude-task-prompt.txt')!;
 
     expect(deliveredPrompt).toBe(prompt);
     expect(deliveredPrompt).not.toContain('## Resolved References');
@@ -182,9 +183,6 @@ describe('dispatchTask — reference resolution', () => {
 
   it('appended section is separated by a horizontal rule', async () => {
     registry.createStack(makeStack('sep-stack'));
-    const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-      stdout: 'ok', stderr: '', exitCode: 0,
-    });
 
     mockResolveTicketReferences.mockResolvedValue([
       { url: 'https://example.com/doc', kind: 'other', content: 'design doc' },
@@ -193,9 +191,7 @@ describe('dispatchTask — reference resolution', () => {
 
     await manager.dispatchTask('sep-stack', 'Build per spec at https://example.com/doc', undefined, { forceBypass: true });
 
-    // Prompt is delivered via --file (temp file); read file for content verification.
-    const cliArgs: string[] = runCliSpy.mock.calls[0][1] as string[];
-    const deliveredPrompt = readDeliveredPrompt(cliArgs);
+    const deliveredPrompt = getExecInput(runtime, 'claude-task-prompt.txt')!;
 
     expect(deliveredPrompt).toContain('\n\n---\n\n');
     expect(deliveredPrompt).toContain('## Resolved References');

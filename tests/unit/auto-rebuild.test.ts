@@ -90,13 +90,6 @@ describe('Auto-rebuild mechanism', () => {
 
   describe('createStack sets rebuilding status', () => {
     it('passes SANDSTORM_APP_VERSION to CLI via runCli', async () => {
-      // Spy on runCli to verify the env var is passed
-      const runCliSpy = vi.spyOn(manager, 'runCli').mockResolvedValue({
-        stdout: '',
-        stderr: '',
-        exitCode: 0,
-      });
-
       // Mock checkImageNeedsRebuild to return false (no rebuild)
       vi.spyOn(manager, 'checkImageNeedsRebuild').mockResolvedValue(false);
 
@@ -113,13 +106,12 @@ describe('Auto-rebuild mechanism', () => {
           runtime: 'docker',
         });
 
-        // Wait for background build to reach runCli
+        // Wait for background build to reach composeUp
         await new Promise((resolve) => setTimeout(resolve, 200));
 
-        expect(runCliSpy).toHaveBeenCalled();
-        const envArg = runCliSpy.mock.calls[0][2];
-        expect(envArg).toBeDefined();
-        expect(envArg!['SANDSTORM_APP_VERSION']).toBe('test');
+        expect(runtime.composeUp).toHaveBeenCalled();
+        const composeOpts = (runtime.composeUp as ReturnType<typeof vi.fn>).mock.calls[0][1];
+        expect(composeOpts?.env?.['SANDSTORM_APP_VERSION']).toBe('test');
       } finally {
         fs.rmSync(tmpDir, { recursive: true, force: true });
       }
