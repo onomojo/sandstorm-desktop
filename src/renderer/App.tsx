@@ -1,5 +1,6 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 import { useAppStore, ThresholdLevel } from './store';
+import { EVENT_CHANNELS } from '../main/ipc-channels';
 import { StackDetail } from './components/StackDetail';
 import { RefineTicketDialog } from './components/RefineTicketDialog';
 import { CreateTicketDialog } from './components/CreateTicketDialog';
@@ -119,12 +120,12 @@ export default function App() {
       setDockerConnected(connected);
     }).catch(() => {});
 
-    const unsubConnected = window.sandstorm.on('docker:connected', () => {
+    const unsubConnected = window.sandstorm.on(EVENT_CHANNELS.DOCKER_CONNECTED, () => {
       setDockerConnected(true);
       refreshStacks();
       refreshMetrics();
     });
-    const unsubDisconnected = window.sandstorm.on('docker:disconnected', () => {
+    const unsubDisconnected = window.sandstorm.on(EVENT_CHANNELS.DOCKER_DISCONNECTED, () => {
       setDockerConnected(false);
     });
 
@@ -174,11 +175,11 @@ export default function App() {
       sessions.forEach((s) => upsertRefinementSession(s, { replay: true }));
     }).catch(() => {});
 
-    const unsubRefinement = window.sandstorm.on('refinement:update', (data: unknown) => {
+    const unsubRefinement = window.sandstorm.on(EVENT_CHANNELS.REFINEMENT_UPDATE, (data: unknown) => {
       upsertRefinementSession(data as Parameters<typeof upsertRefinementSession>[0]);
     });
 
-    const unsubProgress = window.sandstorm.on('refinement:progress', (data: unknown) => {
+    const unsubProgress = window.sandstorm.on(EVENT_CHANNELS.REFINEMENT_PROGRESS, (data: unknown) => {
       const { sessionId, delta } = data as { sessionId: string; delta: string };
       appendRefinementStreamChunk(sessionId, delta);
     });
@@ -194,7 +195,7 @@ export default function App() {
   useEffect(() => {
     refreshSessionState();
 
-    const unsubThreshold = window.sandstorm.on('session:threshold', (data: unknown) => {
+    const unsubThreshold = window.sandstorm.on(EVENT_CHANNELS.SESSION_THRESHOLD, (data: unknown) => {
       const { level } = data as { level: ThresholdLevel; usage: unknown };
       useAppStore.setState({ sessionWarningLevel: level });
       if (level === 'critical' || level === 'limit' || level === 'over_limit') {
@@ -203,22 +204,22 @@ export default function App() {
       refreshSessionState();
     });
 
-    const unsubHalted = window.sandstorm.on('session:halted', () => {
+    const unsubHalted = window.sandstorm.on(EVENT_CHANNELS.SESSION_HALTED, () => {
       refreshSessionState();
       refreshStacks();
     });
 
-    const unsubReset = window.sandstorm.on('session:reset', () => {
+    const unsubReset = window.sandstorm.on(EVENT_CHANNELS.SESSION_RESET, () => {
       useAppStore.setState({ sessionWarningLevel: null, showSessionWarningModal: false });
       refreshSessionState();
       refreshStacks();
     });
 
-    const unsubState = window.sandstorm.on('session:state', () => {
+    const unsubState = window.sandstorm.on(EVENT_CHANNELS.SESSION_STATE, () => {
       refreshSessionState();
     });
 
-    const unsubCronHealth = window.sandstorm.on('scheduler:cronHealth', (data: unknown) => {
+    const unsubCronHealth = window.sandstorm.on(EVENT_CHANNELS.SCHEDULER_CRON_HEALTH, (data: unknown) => {
       const { running } = data as { running: boolean };
       useAppStore.setState({ cronHealthy: running });
     });
@@ -246,19 +247,19 @@ export default function App() {
       ? setInterval(refreshMetrics, METRICS_POLL_INTERVAL)
       : null;
 
-    const unsubCompleted = window.sandstorm.on('task:completed', () => {
+    const unsubCompleted = window.sandstorm.on(EVENT_CHANNELS.TASK_COMPLETED, () => {
       refreshStacks();
     });
-    const unsubFailed = window.sandstorm.on('task:failed', () => {
+    const unsubFailed = window.sandstorm.on(EVENT_CHANNELS.TASK_FAILED, () => {
       refreshStacks();
     });
     const unsubNavigate = window.sandstorm.on(
-      'navigate:stack',
+      EVENT_CHANNELS.NAVIGATE_STACK,
       (stackId: unknown) => {
         selectStack(stackId as string);
       }
     );
-    const unsubStacksUpdated = window.sandstorm.on('stacks:updated', () => {
+    const unsubStacksUpdated = window.sandstorm.on(EVENT_CHANNELS.STACKS_UPDATED, () => {
       refreshStacks();
       const state = useAppStore.getState();
       const project = state.activeProject();

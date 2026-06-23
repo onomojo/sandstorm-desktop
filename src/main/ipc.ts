@@ -95,6 +95,7 @@ import { listTicketsWithConfig } from './control-plane/ticket-lister';
 import { listTicketComments, postComment } from './control-plane/ticket-comments';
 import { getLatestUserAnswers, ANSWER_COMMENT_MARKER, GATE_FAIL_REPORT_MARKER } from './scheduler/refine-to-comments';
 import { KANBAN_COLUMNS } from '../shared/kanban';
+import { INVOKE_CHANNELS, EVENT_CHANNELS } from './ipc-channels';
 import os from 'os';
 import { createUsageEngine, clearUsageCache } from './telemetry/usage-engine';
 import type { DateRange, ByTicketEntry, ByEpicEntry } from './telemetry/usage-engine';
@@ -235,12 +236,12 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   epicRunner.setOnStatusUpdate((_epicId, snapshot) => {
-    mainWindow?.webContents.send('epic:status', snapshot);
+    mainWindow?.webContents.send(EVENT_CHANNELS.EPIC_STATUS, snapshot);
   });
 
   // Wire up stack update notifications to the renderer and advance any running epics
   stackManager.setOnStackUpdate(() => {
-    mainWindow?.webContents.send('stacks:updated');
+    mainWindow?.webContents.send(EVENT_CHANNELS.STACKS_UPDATED);
     getEpicRunner().onAnyStackUpdated().catch((err) => {
       console.warn('[EpicRunner] onAnyStackUpdated error:', err);
     });
@@ -249,38 +250,38 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   // --- Agent Sessions (backend-agnostic) ---
 
   ipcMain.handle(
-    'agent:send',
+    INVOKE_CHANNELS.AGENT_SEND,
     (_event, tabId: string, message: string, projectDir?: string) => {
       agentBackend.sendMessage(tabId, message, projectDir);
     }
   );
 
-  ipcMain.handle('agent:cancel', (_event, tabId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.AGENT_CANCEL, (_event, tabId: string) => {
     agentBackend.cancelSession(tabId);
   });
 
-  ipcMain.handle('agent:reset', (_event, tabId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.AGENT_RESET, (_event, tabId: string) => {
     agentBackend.resetSession(tabId);
   });
 
-  ipcMain.handle('agent:history', (_event, tabId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.AGENT_HISTORY, (_event, tabId: string) => {
     return agentBackend.getHistory(tabId);
   });
 
-  ipcMain.handle('agent:tokenUsage', (_event, tabId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.AGENT_TOKEN_USAGE, (_event, tabId: string) => {
     return agentBackend.getSessionTokens(tabId);
   });
   // --- Projects ---
 
-  ipcMain.handle('projects:list', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECTS_LIST, async () => {
     return registry.listProjects();
   });
 
-  ipcMain.handle('projects:add', async (_event, directory: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECTS_ADD, async (_event, directory: string) => {
     return registry.addProject(directory);
   });
 
-  ipcMain.handle('projects:remove', async (_event, id: number) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECTS_REMOVE, async (_event, id: number) => {
     // Look up project directory before removal so we can clean up crontab entries
     const project = registry.getProject(id);
     registry.removeProject(id);
@@ -293,7 +294,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('projects:browse', async (event) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECTS_BROWSE, async (event) => {
     const win = BrowserWindow.fromWebContents(event.sender);
     const result = await dialog.showOpenDialog(win!, {
       properties: ['openDirectory'],
@@ -304,7 +305,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return result.filePaths[0];
   });
 
-  ipcMain.handle('projects:checkInit', async (_event, directory: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECTS_CHECK_INIT, async (_event, directory: string) => {
     try {
       const state = checkInitState(directory);
 
@@ -320,7 +321,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('projects:initialize', async (_event, directory: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECTS_INITIALIZE, async (_event, directory: string) => {
     // Try CLI init first (full scaffolding with compose parsing)
     const cliBin = path.join(cliDir, 'bin', 'sandstorm');
     let cliError = '';
@@ -468,7 +469,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Migration Detection ---
 
-  ipcMain.handle('projects:checkMigration', async (_event, directory: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECTS_CHECK_MIGRATION, async (_event, directory: string) => {
     try {
       const sandstormDir = path.join(directory, '.sandstorm');
       if (!fs.existsSync(path.join(sandstormDir, 'config'))) {
@@ -529,15 +530,15 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Project Ticket Config ---
 
-  ipcMain.handle('projectTicketConfig:get', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECT_TICKET_CONFIG_GET, (_event, projectDir: string) => {
     return registry.getProjectTicketConfig(projectDir);
   });
 
-  ipcMain.handle('projectTicketConfig:set', (_event, projectDir: string, config: ProjectTicketConfig) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECT_TICKET_CONFIG_SET, (_event, projectDir: string, config: ProjectTicketConfig) => {
     registry.setProjectTicketConfig(projectDir, config);
   });
 
-  ipcMain.handle('projects:autoDetectVerify', async (_event, directory: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECTS_AUTO_DETECT_VERIFY, async (_event, directory: string) => {
     try {
       const lines = autoDetectVerifyLines(directory);
 
@@ -567,7 +568,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   ipcMain.handle(
-    'projects:saveMigration',
+    INVOKE_CHANNELS.PROJECTS_SAVE_MIGRATION,
     async (
       _event,
       directory: string,
@@ -617,7 +618,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Compose Setup ---
 
-  ipcMain.handle('projects:generateCompose', async (_event, directory: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROJECTS_GENERATE_COMPOSE, async (_event, directory: string) => {
     try {
       const configComposeFile = readComposeFileFromConfig(directory);
       const composeFile = findProjectComposeFile(directory, configComposeFile);
@@ -655,7 +656,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   ipcMain.handle(
-    'projects:saveComposeSetup',
+    INVOKE_CHANNELS.PROJECTS_SAVE_COMPOSE_SETUP,
     async (_event, directory: string, composeYaml: string, composeFile: string) => {
       const validation = validateComposeYaml(composeYaml);
       if (!validation.valid) {
@@ -667,38 +668,38 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Stacks ---
 
-  ipcMain.handle('stacks:list', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_LIST, async () => {
     return stackManager.listStacksWithServices();
   });
 
-  ipcMain.handle('stacks:get', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_GET, async (_event, stackId: string) => {
     return stackManager.getStackWithServices(stackId);
   });
 
-  ipcMain.handle('stacks:create', (_event, opts: CreateStackOpts) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_CREATE, (_event, opts: CreateStackOpts) => {
     return stackManager.createStack(opts);
   });
 
-  ipcMain.handle('stacks:teardown', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_TEARDOWN, async (_event, stackId: string) => {
     await stackManager.teardownStack(stackId);
   });
 
-  ipcMain.handle('stacks:stop', (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_STOP, (_event, stackId: string) => {
     stackManager.stopStack(stackId);
   });
 
-  ipcMain.handle('stacks:start', (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_START, (_event, stackId: string) => {
     stackManager.startStack(stackId);
   });
 
-  ipcMain.handle('stacks:history', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_HISTORY, async () => {
     return stackManager.listStackHistory();
   });
 
   // --- Tasks ---
 
   ipcMain.handle(
-    'tasks:dispatch',
+    INVOKE_CHANNELS.TASKS_DISPATCH,
     async (
       _event,
       stackId: string,
@@ -710,35 +711,35 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   );
 
-  ipcMain.handle('tasks:list', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.TASKS_LIST, async (_event, stackId: string) => {
     return stackManager.getTasksForStack(stackId);
   });
 
-  ipcMain.handle('tasks:tokenSteps', async (_event, taskId: number) => {
+  ipcMain.handle(INVOKE_CHANNELS.TASKS_TOKEN_STEPS, async (_event, taskId: number) => {
     return registry.getTaskTokenSteps(taskId);
   });
 
-  ipcMain.handle('tasks:workflowProgress', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.TASKS_WORKFLOW_PROGRESS, async (_event, stackId: string) => {
     return stackManager.getWorkflowProgress(stackId);
   });
 
   // --- Diff ---
 
-  ipcMain.handle('diff:get', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.DIFF_GET, async (_event, stackId: string) => {
     return stackManager.getDiff(stackId);
   });
 
   // --- Push ---
 
   ipcMain.handle(
-    'push:execute',
+    INVOKE_CHANNELS.PUSH_EXECUTE,
     async (_event, stackId: string, message?: string) => {
       await stackManager.push(stackId, message);
     }
   );
 
   ipcMain.handle(
-    'stacks:setPr',
+    INVOKE_CHANNELS.STACKS_SET_PR,
     (_event, stackId: string, prUrl: string, prNumber: number) => {
       stackManager.setPullRequest(stackId, prUrl, prNumber);
     }
@@ -746,32 +747,32 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Ports ---
 
-  ipcMain.handle('ports:get', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PORTS_GET, async (_event, stackId: string) => {
     return registry.getPorts(stackId);
   });
 
   ipcMain.handle(
-    'stack:expose-port',
+    INVOKE_CHANNELS.STACK_EXPOSE_PORT,
     async (_event, stackId: string, service: string, containerPort: number) => {
       return stackManager.exposePort(stackId, service, containerPort);
     }
   );
 
   ipcMain.handle(
-    'stack:unexpose-port',
+    INVOKE_CHANNELS.STACK_UNEXPOSE_PORT,
     async (_event, stackId: string, service: string, containerPort: number) => {
       await stackManager.unexposePort(stackId, service, containerPort);
     }
   );
 
-  ipcMain.handle('ports:cleanupLegacy', async (_event, directory: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PORTS_CLEANUP_LEGACY, async (_event, directory: string) => {
     return cleanupLegacyPorts(directory);
   });
 
   // --- Logs ---
 
   ipcMain.handle(
-    'logs:stream',
+    INVOKE_CHANNELS.LOGS_STREAM,
     async (_event, containerId: string, runtime: 'docker' | 'podman') => {
       const rt = runtime === 'podman' ? podmanRuntime : dockerRuntime;
       const lines: string[] = [];
@@ -784,31 +785,31 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Stats ---
 
-  ipcMain.handle('stats:stack-memory', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_STACK_MEMORY, async (_event, stackId: string) => {
     return stackManager.getStackMemoryUsage(stackId);
   });
 
-  ipcMain.handle('stats:stack-detailed', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_STACK_DETAILED, async (_event, stackId: string) => {
     return stackManager.getStackDetailedStats(stackId);
   });
 
-  ipcMain.handle('stats:task-metrics', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_TASK_METRICS, async (_event, stackId: string) => {
     return stackManager.getStackTaskMetrics(stackId);
   });
 
-  ipcMain.handle('stats:token-usage', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_TOKEN_USAGE, async (_event, stackId: string) => {
     return stackManager.getStackTokenUsage(stackId);
   });
 
-  ipcMain.handle('stats:global-token-usage', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_GLOBAL_TOKEN_USAGE, async () => {
     return stackManager.getGlobalTokenUsage();
   });
 
-  ipcMain.handle('stats:rate-limit', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_RATE_LIMIT, async () => {
     return stackManager.getRateLimitState();
   });
 
-  ipcMain.handle('stats:account-usage', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_ACCOUNT_USAGE, async () => {
     return fetchAccountUsage();
   });
 
@@ -836,7 +837,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return [hostRoot, ...stackRoots];
   }
 
-  ipcMain.handle('stats:telemetry:summary', async (_event, range: DateRange) => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_TELEMETRY_SUMMARY, async (_event, range: DateRange) => {
     const engine = createUsageEngine(buildTelemetryRoots());
     const summary = engine.getSummary(range);
     const shipped = rollupStore.ticketsShipped();
@@ -852,19 +853,19 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     };
   });
 
-  ipcMain.handle('stats:telemetry:daily', async (_event, range: DateRange) => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_TELEMETRY_DAILY, async (_event, range: DateRange) => {
     return createUsageEngine(buildTelemetryRoots()).getDaily(range);
   });
 
-  ipcMain.handle('stats:telemetry:byModel', async (_event, range: DateRange) => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_TELEMETRY_BY_MODEL, async (_event, range: DateRange) => {
     return createUsageEngine(buildTelemetryRoots()).getByModel(range);
   });
 
-  ipcMain.handle('stats:telemetry:session', async (_event, range: DateRange) => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_TELEMETRY_SESSION, async (_event, range: DateRange) => {
     return createUsageEngine(buildTelemetryRoots()).getSessions(range);
   });
 
-  ipcMain.handle('stats:telemetry:byTicket', async (_event, range?: DateRange): Promise<ByTicketEntry[]> => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_TELEMETRY_BY_TICKET, async (_event, range?: DateRange): Promise<ByTicketEntry[]> => {
     const stepWeights = registry.getStepWeightsByTicket();
     const taskPhaseWeights = registry.getTaskPhaseTokensByTicket();
     const allEphemeral = readEphemeralTimingRecords(agentBackend.getEphemeralTimingPath());
@@ -874,7 +875,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords, taskPhaseWeights).getByTicket(range);
   });
 
-  ipcMain.handle('stats:telemetry:byEpic', async (_event, range?: DateRange): Promise<ByEpicEntry[]> => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_TELEMETRY_BY_EPIC, async (_event, range?: DateRange): Promise<ByEpicEntry[]> => {
     const stepWeights = registry.getStepWeightsByTicket();
     const taskPhaseWeights = registry.getTaskPhaseTokensByTicket();
     const allEphemeral = readEphemeralTimingRecords(agentBackend.getEphemeralTimingPath());
@@ -885,55 +886,55 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return createUsageEngine(buildTelemetryRoots(), stepWeights, ephemeralRecords, taskPhaseWeights).getByEpic(epicTasks, range);
   });
 
-  ipcMain.handle('stats:telemetry:refresh', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.STATS_TELEMETRY_REFRESH, async () => {
     clearUsageCache();
     return { ok: true };
   });
 
   // --- Custom Context ---
 
-  ipcMain.handle('context:get', async (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.CONTEXT_GET, async (_event, projectDir: string) => {
     return getCustomContext(projectDir);
   });
 
   ipcMain.handle(
-    'context:saveInstructions',
+    INVOKE_CHANNELS.CONTEXT_SAVE_INSTRUCTIONS,
     async (_event, projectDir: string, content: string) => {
       saveCustomInstructions(projectDir, content);
     }
   );
 
-  ipcMain.handle('context:listSkills', async (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.CONTEXT_LIST_SKILLS, async (_event, projectDir: string) => {
     return listCustomSkills(projectDir);
   });
 
   ipcMain.handle(
-    'context:getSkill',
+    INVOKE_CHANNELS.CONTEXT_GET_SKILL,
     async (_event, projectDir: string, name: string) => {
       return getCustomSkill(projectDir, name);
     }
   );
 
   ipcMain.handle(
-    'context:saveSkill',
+    INVOKE_CHANNELS.CONTEXT_SAVE_SKILL,
     async (_event, projectDir: string, name: string, content: string) => {
       saveCustomSkill(projectDir, name, content);
     }
   );
 
   ipcMain.handle(
-    'context:deleteSkill',
+    INVOKE_CHANNELS.CONTEXT_DELETE_SKILL,
     async (_event, projectDir: string, name: string) => {
       deleteCustomSkill(projectDir, name);
     }
   );
 
-  ipcMain.handle('context:getSettings', async (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.CONTEXT_GET_SETTINGS, async (_event, projectDir: string) => {
     return getCustomSettings(projectDir);
   });
 
   ipcMain.handle(
-    'context:saveSettings',
+    INVOKE_CHANNELS.CONTEXT_SAVE_SETTINGS,
     async (_event, projectDir: string, content: string) => {
       saveCustomSettings(projectDir, content);
     }
@@ -941,23 +942,23 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Review Prompt ---
 
-  ipcMain.handle('reviewPrompt:getDefault', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.REVIEW_PROMPT_GET_DEFAULT, async () => {
     return getDefaultReviewPrompt();
   });
 
   // --- Stale Workspace Detection & Cleanup ---
 
-  ipcMain.handle('stacks:detectStale', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_DETECT_STALE, async () => {
     return stackManager.detectStaleWorkspaces();
   });
 
-  ipcMain.handle('stacks:cleanupStale', async (_event, workspacePaths: string[]) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_CLEANUP_STALE, async (_event, workspacePaths: string[]) => {
     return stackManager.cleanupStaleWorkspaces(workspacePaths);
   });
 
   // --- Runtime ---
 
-  ipcMain.handle('runtime:available', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.RUNTIME_AVAILABLE, async () => {
     const [dockerAvail, podmanAvail] = await Promise.all([
       dockerRuntime.isAvailable(),
       podmanRuntime.isAvailable(),
@@ -967,107 +968,107 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Model Settings ---
 
-  ipcMain.handle('modelSettings:getGlobal', () => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_SETTINGS_GET_GLOBAL, () => {
     return registry.getGlobalModelSettings();
   });
 
-  ipcMain.handle('modelSettings:setGlobal', (_event, settings: { inner_model?: string; outer_model?: string }) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_SETTINGS_SET_GLOBAL, (_event, settings: { inner_model?: string; outer_model?: string }) => {
     registry.setGlobalModelSettings(settings);
   });
 
-  ipcMain.handle('modelSettings:getProject', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_SETTINGS_GET_PROJECT, (_event, projectDir: string) => {
     return registry.getProjectModelSettings(projectDir);
   });
 
-  ipcMain.handle('modelSettings:setProject', (_event, projectDir: string, settings: { inner_model?: string; outer_model?: string }) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_SETTINGS_SET_PROJECT, (_event, projectDir: string, settings: { inner_model?: string; outer_model?: string }) => {
     registry.setProjectModelSettings(projectDir, settings);
   });
 
-  ipcMain.handle('modelSettings:removeProject', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_SETTINGS_REMOVE_PROJECT, (_event, projectDir: string) => {
     registry.removeProjectModelSettings(projectDir);
   });
 
-  ipcMain.handle('modelSettings:getEffective', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_SETTINGS_GET_EFFECTIVE, (_event, projectDir: string) => {
     return registry.getEffectiveModels(projectDir);
   });
 
   // --- Backend Settings ---
 
-  ipcMain.handle('backendSettings:getGlobal', () => {
+  ipcMain.handle(INVOKE_CHANNELS.BACKEND_SETTINGS_GET_GLOBAL, () => {
     return registry.getGlobalBackendSettings();
   });
 
-  ipcMain.handle('backendSettings:setGlobal', (_event, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => {
+  ipcMain.handle(INVOKE_CHANNELS.BACKEND_SETTINGS_SET_GLOBAL, (_event, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => {
     registry.setGlobalBackendSettings(settings);
   });
 
-  ipcMain.handle('backendSettings:getProject', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.BACKEND_SETTINGS_GET_PROJECT, (_event, projectDir: string) => {
     return registry.getProjectBackendSettings(projectDir);
   });
 
-  ipcMain.handle('backendSettings:setProject', (_event, projectDir: string, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => {
+  ipcMain.handle(INVOKE_CHANNELS.BACKEND_SETTINGS_SET_PROJECT, (_event, projectDir: string, settings: { inner_backend?: string; outer_backend?: string; inner_provider?: string | null; inner_model?: string | null; outer_provider?: string | null; outer_model?: string | null }) => {
     registry.setProjectBackendSettings(projectDir, settings);
   });
 
-  ipcMain.handle('backendSettings:getEffective', (_event, projectDir: string, surface: 'inner' | 'outer') => {
+  ipcMain.handle(INVOKE_CHANNELS.BACKEND_SETTINGS_GET_EFFECTIVE, (_event, projectDir: string, surface: 'inner' | 'outer') => {
     return registry.getEffectiveBackend(projectDir, surface);
   });
 
-  ipcMain.handle('backendSettings:setSecret', (_event, scope: string, surface: 'inner' | 'outer', name: string, value: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.BACKEND_SETTINGS_SET_SECRET, (_event, scope: string, surface: 'inner' | 'outer', name: string, value: string) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     registry.setBackendSecret(key, surface, name, value);
   });
 
-  ipcMain.handle('backendSettings:secretStatus', (_event, scope: string, surface: 'inner' | 'outer') => {
+  ipcMain.handle(INVOKE_CHANNELS.BACKEND_SETTINGS_SECRET_STATUS, (_event, scope: string, surface: 'inner' | 'outer') => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     return { set: registry.hasBackendSecret(key, surface) };
   });
 
-  ipcMain.handle('backendSettings:setSecretBundle', (_event, scope: string, surface: 'inner' | 'outer', bundle: Record<string, string>) => {
+  ipcMain.handle(INVOKE_CHANNELS.BACKEND_SETTINGS_SET_SECRET_BUNDLE, (_event, scope: string, surface: 'inner' | 'outer', bundle: Record<string, string>) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     registry.setBackendSecretBundle(key, surface, bundle);
   });
 
-  ipcMain.handle('backendSettings:getSecretBundle', (_event, scope: string, surface: 'inner' | 'outer') => {
+  ipcMain.handle(INVOKE_CHANNELS.BACKEND_SETTINGS_GET_SECRET_BUNDLE, (_event, scope: string, surface: 'inner' | 'outer') => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     return registry.getBackendSecretBundle(key, surface);
   });
 
   // --- Model Routing ---
 
-  ipcMain.handle('modelRouting:getEffective', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_ROUTING_GET_EFFECTIVE, (_event, projectDir: string) => {
     return registry.getEffectiveRouting(projectDir);
   });
 
-  ipcMain.handle('modelRouting:getProject', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_ROUTING_GET_PROJECT, (_event, projectDir: string) => {
     return registry.getProjectRouting(projectDir);
   });
 
-  ipcMain.handle('modelRouting:setProject', (_event, projectDir: string, config: { assignments?: Partial<Record<string, RoutingAssignment>>; preset?: PresetId | null }) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_ROUTING_SET_PROJECT, (_event, projectDir: string, config: { assignments?: Partial<Record<string, RoutingAssignment>>; preset?: PresetId | null }) => {
     registry.setProjectRouting(projectDir, config);
   });
 
-  ipcMain.handle('modelRouting:removeProject', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_ROUTING_REMOVE_PROJECT, (_event, projectDir: string) => {
     registry.removeProjectRouting(projectDir);
   });
 
-  ipcMain.handle('modelRouting:getGlobal', () => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_ROUTING_GET_GLOBAL, () => {
     return registry.getGlobalRouting();
   });
 
-  ipcMain.handle('modelRouting:setGlobal', (_event, config: { assignments?: Partial<Record<string, RoutingAssignment>>; preset?: PresetId | null }) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_ROUTING_SET_GLOBAL, (_event, config: { assignments?: Partial<Record<string, RoutingAssignment>>; preset?: PresetId | null }) => {
     registry.setGlobalRouting(config);
   });
 
-  ipcMain.handle('modelRouting:applyPreset', (_event, projectDir: string, presetId: PresetId) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_ROUTING_APPLY_PRESET, (_event, projectDir: string, presetId: PresetId) => {
     registry.applyPreset(projectDir, presetId);
   });
 
-  ipcMain.handle('modelRouting:getAvailableModels', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_ROUTING_GET_AVAILABLE_MODELS, (_event, projectDir: string) => {
     return getAvailableModels(projectDir, (key, provider) => registry.hasProviderSecret(key, provider));
   });
 
-  ipcMain.handle('modelRouting:getAvailableModelsWithCatalog', async (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.MODEL_ROUTING_GET_AVAILABLE_MODELS_WITH_CATALOG, async (_event, projectDir: string) => {
     const catalog = await fetchProviderCatalog(getBackendServerUrl());
     return getAvailableModels(
       projectDir,
@@ -1078,58 +1079,58 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Provider Secrets ---
 
-  ipcMain.handle('providerSecrets:status', (_event, scope: string, provider: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROVIDER_SECRETS_STATUS, (_event, scope: string, provider: string) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     return { set: registry.hasProviderSecret(key, provider) };
   });
 
-  ipcMain.handle('providerSecrets:get', (_event, scope: string, provider: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROVIDER_SECRETS_GET, (_event, scope: string, provider: string) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     return registry.getProviderSecretBundle(key, provider);
   });
 
-  ipcMain.handle('providerSecrets:getBundle', (_event, scope: string, provider: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROVIDER_SECRETS_GET_BUNDLE, (_event, scope: string, provider: string) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     return registry.getProviderSecretBundle(key, provider);
   });
 
-  ipcMain.handle('providerSecrets:set', (_event, scope: string, provider: string, bundle: Record<string, string>) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROVIDER_SECRETS_SET, (_event, scope: string, provider: string, bundle: Record<string, string>) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     registry.setProviderSecretBundle(key, provider, bundle);
   });
 
-  ipcMain.handle('providerSecrets:setBundle', (_event, scope: string, provider: string, bundle: Record<string, string>) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROVIDER_SECRETS_SET_BUNDLE, (_event, scope: string, provider: string, bundle: Record<string, string>) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     registry.setProviderSecretBundle(key, provider, bundle);
   });
 
-  ipcMain.handle('providerSecrets:remove', (_event, scope: string, provider: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROVIDER_SECRETS_REMOVE, (_event, scope: string, provider: string) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     registry.removeProviderSecret(key, provider);
   });
 
   // --- Provider Catalog ---
 
-  ipcMain.handle('providers:catalog', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.PROVIDERS_CATALOG, async () => {
     return fetchProviderCatalog(getBackendServerUrl());
   });
 
-  ipcMain.handle('providers:configured', (_event, scope: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PROVIDERS_CONFIGURED, (_event, scope: string) => {
     const key = scope === 'global' ? 'global' : `project:${path.resolve(scope)}`;
     return registry.getStoredProviderKeys(key);
   });
 
   // --- Session Monitor ---
 
-  ipcMain.handle('session:getState', () => {
+  ipcMain.handle(INVOKE_CHANNELS.SESSION_GET_STATE, () => {
     return sessionMonitor.getState();
   });
 
-  ipcMain.handle('session:getSettings', () => {
+  ipcMain.handle(INVOKE_CHANNELS.SESSION_GET_SETTINGS, () => {
     return registry.getSessionMonitorSettings();
   });
 
-  ipcMain.handle('session:updateSettings', (_event, settings: Record<string, unknown>) => {
+  ipcMain.handle(INVOKE_CHANNELS.SESSION_UPDATE_SETTINGS, (_event, settings: Record<string, unknown>) => {
     registry.setSessionMonitorSettings(settings as Partial<{
       warningThreshold: number;
       criticalThreshold: number;
@@ -1143,24 +1144,24 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     sessionMonitor.updateSettings(registry.getSessionMonitorSettings());
   });
 
-  ipcMain.handle('session:acknowledgeCritical', () => {
+  ipcMain.handle(INVOKE_CHANNELS.SESSION_ACKNOWLEDGE_CRITICAL, () => {
     sessionMonitor.acknowledgeCritical();
   });
 
-  ipcMain.handle('session:haltAll', () => {
+  ipcMain.handle(INVOKE_CHANNELS.SESSION_HALT_ALL, () => {
     return stackManager.sessionPauseAllStacks();
   });
 
-  ipcMain.handle('session:resumeAll', () => {
+  ipcMain.handle(INVOKE_CHANNELS.SESSION_RESUME_ALL, () => {
     sessionMonitor.markResumed();
     return stackManager.sessionResumeAllStacks();
   });
 
-  ipcMain.handle('session:resumeStack', (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.SESSION_RESUME_STACK, (_event, stackId: string) => {
     stackManager.sessionResumeStack(stackId);
   });
 
-  ipcMain.handle('session:resumeStackWithContinuation', async (_event, stackId: string, manual: boolean = false) => {
+  ipcMain.handle(INVOKE_CHANNELS.SESSION_RESUME_STACK_WITH_CONTINUATION, async (_event, stackId: string, manual: boolean = false) => {
     try {
       const result = await stackManager.resumeStackWithContinuation(
         stackId,
@@ -1177,43 +1178,43 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('session:forcePoll', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.SESSION_FORCE_POLL, async () => {
     return sessionMonitor.forcePoll();
   });
 
-  ipcMain.handle('stacks:getNeedsHumanQuestions', (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_GET_NEEDS_HUMAN_QUESTIONS, (_event, stackId: string) => {
     return registry.getNeedsHumanQuestions(stackId);
   });
 
-  ipcMain.handle('stacks:resumeNeedsHuman', async (_event, stackId: string, answers: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_RESUME_NEEDS_HUMAN, async (_event, stackId: string, answers: string) => {
     await stackManager.resumeNeedsHumanStack(stackId, answers);
   });
 
-  ipcMain.handle('stacks:askClarifyingQuestions', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_ASK_CLARIFYING_QUESTIONS, async (_event, stackId: string) => {
     await stackManager.askClarifyingQuestions(stackId);
   });
 
-  ipcMain.handle('stacks:recheckCompleted', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_RECHECK_COMPLETED, async (_event, stackId: string) => {
     return stackManager.recheckCompletedStack(stackId);
   });
 
-  ipcMain.handle('stacks:reconcileStatus', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_RECONCILE_STATUS, async (_event, stackId: string) => {
     return stackManager.reconcileStatus(stackId);
   });
 
-  ipcMain.handle('stacks:selfHealContinue', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_SELF_HEAL_CONTINUE, async (_event, stackId: string) => {
     await stackManager.selfHealContinue(stackId);
   });
 
-  ipcMain.handle('stacks:restartWithFindings', async (_event, stackId: string, findings: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.STACKS_RESTART_WITH_FINDINGS, async (_event, stackId: string, findings: string) => {
     return stackManager.restartWithFindings(stackId, findings);
   });
 
-  ipcMain.on('session:activity', () => {
+  ipcMain.on(INVOKE_CHANNELS.SESSION_ACTIVITY, () => {
     sessionMonitor.reportActivity();
   });
 
-  ipcMain.handle('docker:status', () => {
+  ipcMain.handle(INVOKE_CHANNELS.DOCKER_STATUS, () => {
     return {
       connected: dockerConnectionManager?.isConnected ?? false,
     };
@@ -1221,11 +1222,11 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Auth (delegated to agent backend) ---
 
-  ipcMain.handle('auth:status', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.AUTH_STATUS, async () => {
     return agentBackend.getAuthStatus();
   });
 
-  ipcMain.handle('auth:login', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.AUTH_LOGIN, async () => {
     const result = await agentBackend.login(mainWindow ?? undefined);
     if (result.success) {
       // Sync credentials to running stacks after successful login
@@ -1237,14 +1238,14 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Schedules ---
 
-  ipcMain.handle('schedules:list', async (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.SCHEDULES_LIST, async (_event, projectDir: string) => {
     const dirError = validateProjectDir(projectDir);
     if (dirError) throw new Error(dirError.error);
     return listSchedules(projectDir);
   });
 
   ipcMain.handle(
-    'schedules:create',
+    INVOKE_CHANNELS.SCHEDULES_CREATE,
     async (_event, projectDir: string, data: { label?: string; cronExpression: string; action: ScheduleAction; enabled?: boolean }) => {
       const dirError = validateProjectDir(projectDir);
       if (dirError) throw new Error(dirError.error);
@@ -1265,7 +1266,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   );
 
   ipcMain.handle(
-    'schedules:update',
+    INVOKE_CHANNELS.SCHEDULES_UPDATE,
     async (_event, projectDir: string, id: string, patch: { label?: string; cronExpression?: string; action?: ScheduleAction; enabled?: boolean }) => {
       const dirError = validateProjectDir(projectDir);
       if (dirError) throw new Error(dirError.error);
@@ -1280,7 +1281,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   );
 
   ipcMain.handle(
-    'schedules:delete',
+    INVOKE_CHANNELS.SCHEDULES_DELETE,
     async (_event, projectDir: string, id: string) => {
       const dirError = validateProjectDir(projectDir);
       if (dirError) throw new Error(dirError.error);
@@ -1293,15 +1294,15 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   );
 
-  ipcMain.handle('schedules:cronHealth', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.SCHEDULES_CRON_HEALTH, async () => {
     return { running: isCronRunning() };
   });
 
-  ipcMain.handle('scheduler:listBuiltInActions', async () => {
+  ipcMain.handle(INVOKE_CHANNELS.SCHEDULER_LIST_BUILT_IN_ACTIONS, async () => {
     return BUILT_IN_ACTIONS;
   });
 
-  ipcMain.handle('schedules:listScripts', async (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.SCHEDULES_LIST_SCRIPTS, async (_event, projectDir: string) => {
     const dirError = validateProjectDir(projectDir);
     if (dirError) throw new Error(dirError.error);
     const scriptsDir = path.join(projectDir, '.sandstorm', 'scripts', 'scheduled');
@@ -1334,7 +1335,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   /** Emit a refinement session update to the renderer. */
   function emitRefinementUpdate(session: RefinementSession): void {
-    mainWindow?.webContents.send('refinement:update', session);
+    mainWindow?.webContents.send(EVENT_CHANNELS.REFINEMENT_UPDATE, session);
   }
 
   /** Cancel a refinement session: abort in-flight agent, remove from map, delete from disk, broadcast cancelled. */
@@ -1345,7 +1346,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       activeRefinements.delete(id);
       deleteRefinement(id);
       if (broadcast) {
-        mainWindow?.webContents.send('refinement:update', { id, status: 'cancelled' });
+        mainWindow?.webContents.send(EVENT_CHANNELS.REFINEMENT_UPDATE, { id, status: 'cancelled' });
       }
     }
   }
@@ -1419,7 +1420,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
       const delta = event.kind === 'tool_use'
         ? `→ ${event.summary}\n`
         : event.delta;
-      mainWindow?.webContents.send('refinement:progress', { sessionId: id, delta });
+      mainWindow?.webContents.send(EVENT_CHANNELS.REFINEMENT_PROGRESS, { sessionId: id, delta });
     };
 
     const { promise, cancel } = phase === 'check'
@@ -1504,26 +1505,26 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return id;
   }
 
-  ipcMain.handle('tickets:fetch', async (_event, ticketId: string, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.TICKETS_FETCH, async (_event, ticketId: string, projectDir: string) => {
     const config = registry.getProjectTicketConfig(projectDir);
     return fetchTicketForRenderer(ticketId, config, projectDir);
   });
 
-  ipcMain.handle('tickets:specCheck', async (_event, ticketId: string, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.TICKETS_SPEC_CHECK, async (_event, ticketId: string, projectDir: string) => {
     return runSpecCheck(ticketId, projectDir, specDeps);
   });
 
   ipcMain.handle(
-    'tickets:specRefine',
+    INVOKE_CHANNELS.TICKETS_SPEC_REFINE,
     async (_event, ticketId: string, projectDir: string, userAnswers: string) => {
       return runSpecRefine(ticketId, projectDir, userAnswers, specDeps);
     },
   );
 
   // Async (non-blocking) variants — return a session ID immediately and
-  // emit 'refinement:update' events as the operation progresses.
+  // emit EVENT_CHANNELS.REFINEMENT_UPDATE events as the operation progresses.
   ipcMain.handle(
-    'tickets:specCheckAsync',
+    INVOKE_CHANNELS.TICKETS_SPEC_CHECK_ASYNC,
     (_event, ticketId: string, projectDir: string) => {
       const sessionId = startRefinementAsync(ticketId, projectDir, null, 'check');
       return { sessionId };
@@ -1531,22 +1532,22 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   );
 
   ipcMain.handle(
-    'tickets:specRefineAsync',
+    INVOKE_CHANNELS.TICKETS_SPEC_REFINE_ASYNC,
     (_event, sessionId: string, ticketId: string, projectDir: string, userAnswers: string) => {
       startRefinementAsync(ticketId, projectDir, sessionId, 'refine', userAnswers);
     },
   );
 
-  ipcMain.handle('tickets:cancelRefinement', (_event, id: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.TICKETS_CANCEL_REFINEMENT, (_event, id: string) => {
     cancelRefinementSession(id);
   });
 
-  ipcMain.handle('tickets:listRefinements', () => {
+  ipcMain.handle(INVOKE_CHANNELS.TICKETS_LIST_REFINEMENTS, () => {
     return Array.from(activeRefinements.values()).map((e) => e.session);
   });
 
   ipcMain.handle(
-    'tickets:retryRefinementAsync',
+    INVOKE_CHANNELS.TICKETS_RETRY_REFINEMENT_ASYNC,
     async (_event, sessionId: string, ticketId: string, projectDir: string) => {
       // Read the existing session to determine phase before cancelling it.
       const existingEntry = sessionId ? activeRefinements.get(sessionId) : undefined;
@@ -1581,7 +1582,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   );
 
   ipcMain.handle(
-    'tickets:postAnswers',
+    INVOKE_CHANNELS.TICKETS_POST_ANSWERS,
     async (_event, ticketId: string, projectDir: string, answersBody: string) => {
       if (!answersBody.trim()) return;
       const body = `${ANSWER_COMMENT_MARKER}\n\n${answersBody}`;
@@ -1590,7 +1591,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   );
 
   ipcMain.handle(
-    'tickets:create',
+    INVOKE_CHANNELS.TICKETS_CREATE,
     async (_event, projectDir: string, title: string, body: string) => {
       const config = registry.getProjectTicketConfig(projectDir);
       if (!config) {
@@ -1603,7 +1604,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   );
 
   ipcMain.handle(
-    'tickets:fetchRaw',
+    INVOKE_CHANNELS.TICKETS_FETCH_RAW,
     async (_event, ticketId: string, projectDir: string) => {
       const config = registry.getProjectTicketConfig(projectDir);
       if (!config) {
@@ -1614,7 +1615,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   );
 
   ipcMain.handle(
-    'tickets:update',
+    INVOKE_CHANNELS.TICKETS_UPDATE,
     async (_event, projectDir: string, ticketId: string, body: string) => {
       const config = registry.getProjectTicketConfig(projectDir);
       if (!config) {
@@ -1628,7 +1629,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   const VALID_KANBAN_COLUMNS: readonly string[] = KANBAN_COLUMNS;
 
-  ipcMain.handle('tickets:list', async (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.TICKETS_LIST, async (_event, projectDir: string) => {
     const dirError = validateProjectDir(projectDir);
     if (dirError) throw new Error(dirError.error);
     const normalizedDir = path.resolve(projectDir);
@@ -1665,7 +1666,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return { tickets, error: listError };
   });
 
-  ipcMain.handle('tickets:testJiraConnection', async (_event, params: {
+  ipcMain.handle(INVOKE_CHANNELS.TICKETS_TEST_JIRA_CONNECTION, async (_event, params: {
     jiraUrl: string;
     jiraUsername: string;
     jiraApiToken: string;
@@ -1679,7 +1680,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     return testJiraConnection(params);
   });
 
-  ipcMain.handle('ticket-board:set-column', async (_event, ticketId: string, projectDir: string, column: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.TICKET_BOARD_SET_COLUMN, async (_event, ticketId: string, projectDir: string, column: string) => {
     if (!ticketId?.trim()) throw new Error('ticketId is required');
     const dirError = validateProjectDir(projectDir);
     if (dirError) throw new Error(dirError.error);
@@ -1688,7 +1689,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     darkFactoryOrchestrator?.handleTicketColumnChanged(ticketId, path.resolve(projectDir), column);
   });
 
-  ipcMain.handle('ticket:close', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
+  ipcMain.handle(INVOKE_CHANNELS.TICKET_CLOSE, async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
     if (!ticketId?.trim()) throw new Error('ticketId is required');
     const dirError = validateProjectDir(projectDir);
     if (dirError) throw new Error(dirError.error);
@@ -1697,7 +1698,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     await closeTicketWithConfig(ticketId, config, path.resolve(projectDir));
   });
 
-  ipcMain.handle('ticket:mark-done', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
+  ipcMain.handle(INVOKE_CHANNELS.TICKET_MARK_DONE, async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
     const resolvedDir = path.resolve(projectDir);
     const config = registry.getProjectTicketConfig(resolvedDir);
     if (!config) return { ok: true }; // no ticket provider configured — skip silently
@@ -1713,7 +1714,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('ticket-board:delete', async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
+  ipcMain.handle(INVOKE_CHANNELS.TICKET_BOARD_DELETE, async (_event, { ticketId, projectDir }: { ticketId: string; projectDir: string }) => {
     if (!ticketId?.trim()) throw new Error('ticketId is required');
     const dirError = validateProjectDir(projectDir);
     if (dirError) throw new Error(dirError.error);
@@ -1722,7 +1723,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- PR creation (deterministic UI for make-PR workflow, #310) ---
 
-  ipcMain.handle('pr:draftBody', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PR_DRAFT_BODY, async (_event, stackId: string) => {
     const stack = await stackManager.getStackWithServices(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
     const prDescriptor = registry.getEffectiveTouchpointDescriptor(stack.project_dir, 'pr_description');
@@ -1744,7 +1745,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
   });
 
   ipcMain.handle(
-    'pr:create',
+    INVOKE_CHANNELS.PR_CREATE,
     async (_event, stackId: string, title: string, body: string) => {
       const stack = await stackManager.getStackWithServices(stackId);
       if (!stack) throw new Error(`Stack "${stackId}" not found`);
@@ -1777,7 +1778,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     },
   );
 
-  ipcMain.handle('pr:merge', async (_event, stackId: string, prNumber: number) => {
+  ipcMain.handle(INVOKE_CHANNELS.PR_MERGE, async (_event, stackId: string, prNumber: number) => {
     const stack = await stackManager.getStackWithServices(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
     const workspace = workspacePathFor(stack.project_dir, stackId);
@@ -1812,7 +1813,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('pr:createAuto', async (_event, stackId: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PR_CREATE_AUTO, async (_event, stackId: string) => {
     const stack = await stackManager.getStackWithServices(stackId);
     if (!stack) throw new Error(`Stack "${stackId}" not found`);
 
@@ -1873,11 +1874,11 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
   // --- Dark Factory ---
 
-  ipcMain.handle('darkFactory:getEnabled', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.DARK_FACTORY_GET_ENABLED, (_event, projectDir: string) => {
     return registry.getDarkFactoryEnabled(projectDir);
   });
 
-  ipcMain.handle('darkFactory:setEnabled', (_event, projectDir: string, enabled: boolean) => {
+  ipcMain.handle(INVOKE_CHANNELS.DARK_FACTORY_SET_ENABLED, (_event, projectDir: string, enabled: boolean) => {
     const prior = registry.getDarkFactoryEnabled(projectDir);
     registry.setDarkFactoryEnabled(projectDir, enabled);
     if (!prior && enabled) {
@@ -1887,25 +1888,25 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     }
   });
 
-  ipcMain.handle('darkFactory:getConfig', (_event, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.DARK_FACTORY_GET_CONFIG, (_event, projectDir: string) => {
     return registry.getDarkFactoryConfig(projectDir);
   });
 
-  ipcMain.handle('darkFactory:setConfig', (_event, projectDir: string, config: { level: string; merge_strategy: string }) => {
+  ipcMain.handle(INVOKE_CHANNELS.DARK_FACTORY_SET_CONFIG, (_event, projectDir: string, config: { level: string; merge_strategy: string }) => {
     registry.setDarkFactoryConfig(projectDir, config);
   });
 
-  ipcMain.handle('pr:autoResolve', async (_event, ticketId: string, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.PR_AUTO_RESOLVE, async (_event, ticketId: string, projectDir: string) => {
     return stackManager.autoResolveConflicts(ticketId, projectDir);
   });
 
   // --- Epic Runner ---
 
-  ipcMain.handle('epic:start', async (_event, epicId: string, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.EPIC_START, async (_event, epicId: string, projectDir: string) => {
     return getEpicRunner().startEpic(epicId, projectDir);
   });
 
-  ipcMain.handle('epic:getRunPlan', async (_event, epicId: string, projectDir: string) => {
+  ipcMain.handle(INVOKE_CHANNELS.EPIC_GET_RUN_PLAN, async (_event, epicId: string, projectDir: string) => {
     return getEpicRunner().getRunPlan(epicId, projectDir);
   });
 

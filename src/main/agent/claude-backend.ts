@@ -13,6 +13,7 @@ import { app } from 'electron';
 import { handleToolCall } from '../claude/tools';
 import { acquireBridge, type BridgeHandle } from './bridge-server';
 import { cliDir } from '../index';
+import { AGENT_DONE, AGENT_ERROR, AGENT_OUTPUT, AGENT_QUEUED, AGENT_TOKEN_USAGE_EVENT, AGENT_USER_MESSAGE, EVENT_CHANNELS } from '../ipc-channels';
 import {
   AgentBackend,
   ChatMessage,
@@ -166,7 +167,7 @@ export class ClaudeBackend implements AgentBackend {
   /** Push the current session token totals to the renderer for the given tab. */
   private emitSessionTokens(tabId: string): void {
     const tokens = this.getSessionTokens(tabId);
-    this.mainWindow?.webContents.send(`agent:token-usage:${tabId}`, tokens);
+    this.mainWindow?.webContents.send(AGENT_TOKEN_USAGE_EVENT(tabId), tokens);
   }
 
   private initLogger(): void {
@@ -235,14 +236,14 @@ export class ClaudeBackend implements AgentBackend {
 
     session.messages.push({ role: 'user', content: message });
     session.processing = true;
-    this.mainWindow?.webContents.send(`agent:user-message:${tabId}`, message);
+    this.mainWindow?.webContents.send(AGENT_USER_MESSAGE(tabId), message);
     this.log(`Message received for tab=${tabId}`);
 
     // If process is alive and currently processing a response (or finishing a cancelled turn), queue the message
     if (session.process && (session.fullResponse !== '' || session.cancelledTurn)) {
       session.pendingMessages.push(message);
       this.log(`Message queued for tab=${tabId} (queue size: ${session.pendingMessages.length})`);
-      this.mainWindow?.webContents.send(`agent:queued:${tabId}`);
+      this.mainWindow?.webContents.send(AGENT_QUEUED(tabId));
       return;
     }
 
@@ -301,7 +302,7 @@ export class ClaudeBackend implements AgentBackend {
       session.cancelledTurn = true;
       session.processing = false;
       session.pendingMessages = [];
-      this.mainWindow?.webContents.send(`agent:done:${tabId}`);
+      this.mainWindow?.webContents.send(AGENT_DONE(tabId));
       this.log(`Turn cancelled for tab=${tabId} (process kept alive, pid=${session.process.pid})`);
 
       // Fallback: if the process produces no result within 30s, kill it
@@ -777,7 +778,7 @@ export class ClaudeBackend implements AgentBackend {
         if (urlMatch && !urlOpened) {
           urlOpened = true;
           shell.openExternal(urlMatch[1]);
-          win?.webContents.send('auth:url-opened', urlMatch[1]);
+          win?.webContents.send(EVENT_CHANNELS.AUTH_URL_OPENED, urlMatch[1]);
         }
       });
 
@@ -791,10 +792,10 @@ export class ClaudeBackend implements AgentBackend {
 
       child.on('close', async (code) => {
         if (code === 0) {
-          win?.webContents.send('auth:completed', true);
+          win?.webContents.send(EVENT_CHANNELS.AUTH_COMPLETED, true);
           resolve({ success: true });
         } else {
-          win?.webContents.send('auth:completed', false);
+          win?.webContents.send(EVENT_CHANNELS.AUTH_COMPLETED, false);
           resolve({ success: false, error: stderr.trim() || 'Auth login failed' });
         }
       });
@@ -1019,7 +1020,7 @@ export class ClaudeBackend implements AgentBackend {
 
     this.log(`Persistent Claude process spawned for tab=${tabId} pid=${child.pid}`);
 
-    const send = (channel: string, ...data: unknown[]): void => {
+    const send = (channel: `agent:${string}:${string}`, ...data: unknown[]): void => {
       this.mainWindow?.webContents.send(channel, ...data);
     };
 
@@ -1098,7 +1099,7 @@ export class ClaudeBackend implements AgentBackend {
             if (session.fullResponse) {
               session.messages.push({ role: 'assistant', content: session.fullResponse });
             }
-            send(`agent:done:${tabId}`);
+            send(AGENT_DONE(tabId));
 
             // Dequeue next pending message
             if (session.pendingMessages.length > 0) {
@@ -1140,7 +1141,7 @@ export class ClaudeBackend implements AgentBackend {
               session.fullResponse += extracted;
             } else {
               session.fullResponse += extracted;
-              send(`agent:output:${tabId}`, extracted);
+              send(AGENT_OUTPUT(tabId), extracted);
             }
             // Reset watchdog on any streaming output — only fire during TRUE silence
             this.resetWatchdog(tabId);
@@ -1171,7 +1172,7 @@ export class ClaudeBackend implements AgentBackend {
         // Process died while we were expecting a response
         const errorMsg = session.stderrBuffer.trim()
           || `Claude process exited unexpectedly (code ${code})`;
-        send(`agent:error:${tabId}`, errorMsg);
+        send(AGENT_ERROR(tabId), errorMsg);
         session.processing = false;
         session.pendingMessages = [];
       }
@@ -1192,7 +1193,7 @@ export class ClaudeBackend implements AgentBackend {
       session.cancelledTurn = false;
       session.pendingMessages = [];
       this.log(`Spawn error for tab=${tabId}: ${err.message}`);
-      send(`agent:error:${tabId}`, err.message);
+      send(AGENT_ERROR(tabId), err.message);
     });
   }
 
