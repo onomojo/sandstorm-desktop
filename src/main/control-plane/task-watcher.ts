@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import { Registry, Task } from './registry';
+import { TaskLifecycleManager } from './task-lifecycle-manager';
 import { ContainerRuntime } from '../runtime/types';
 import { parseTokenUsage, parsePhaseTokenTotals, parsePhaseTokenSteps } from './token-parser';
 
@@ -84,6 +85,8 @@ export class TaskWatcher extends EventEmitter {
   /** Callback invoked when a stall is confirmed and investigation should be dispatched */
   private onDispatchInvestigation?: (stackId: string, task: Task) => Promise<void>;
 
+  private tlm: TaskLifecycleManager;
+
   constructor(
     private registry: Registry,
     private dockerRuntime: ContainerRuntime,
@@ -93,9 +96,11 @@ export class TaskWatcher extends EventEmitter {
       tokenPollInterval?: number;
       livenessCheckInterval?: number;
       livenessStallThreshold?: number;
+      lifecycleManager?: TaskLifecycleManager;
     }
   ) {
     super();
+    this.tlm = options?.lifecycleManager ?? new TaskLifecycleManager(registry);
     this.pollInterval = options?.pollInterval ?? 2000;
     this.tokenPollInterval = options?.tokenPollInterval ?? 5_000;
     this.livenessCheckIntervalMs = options?.livenessCheckInterval ?? LIVENESS_CHECK_INTERVAL_MS;
@@ -192,9 +197,9 @@ export class TaskWatcher extends EventEmitter {
     questionsJson?: string | null
   ): void {
     if (status === 'needs_human') {
-      this.registry.completeTaskNeedsHuman(task.id, stopReason ?? 'Agent signaled STOP_AND_ASK — needs human intervention', questionsJson);
+      this.tlm.markNeedsHuman(task.id, stopReason ?? 'Agent signaled STOP_AND_ASK — needs human intervention', questionsJson);
     } else {
-      this.registry.completeTask(task.id, exitCode);
+      this.tlm.markCompleted(task.id, exitCode);
     }
 
     // Check for suspicious completion: fast exit with no changes
@@ -664,7 +669,7 @@ export class TaskWatcher extends EventEmitter {
 
     if (!task.session_id) {
       // No session_id — cannot resume; mark needs_human (edge case 2)
-      this.registry.completeTaskNeedsHuman(
+      this.tlm.markNeedsHuman(
         task.id,
         'Task stalled with no resumable session — needs human review'
       );
@@ -763,7 +768,7 @@ export class TaskWatcher extends EventEmitter {
         // Transition to session_paused WITHOUT completing the task — the
         // running task and its session_id remain intact so resumeStackWithContinuation
         // enters Case A rather than Case C.
-        this.registry.updateStackStatus(stackId, 'session_paused');
+        this.tlm.updateStackStatus(stackId, 'session_paused');
         this.onStatusChange?.();
         this.unwatch(stackId);
         return;
@@ -804,7 +809,7 @@ export class TaskWatcher extends EventEmitter {
           const reasonResult = await runtime.exec(containerId, ['cat', '/tmp/claude-task-needs-key.txt']);
           if (reasonResult.stdout.trim()) keyReason = reasonResult.stdout.trim();
         } catch { /* best effort */ }
-        this.registry.completeTaskNeedsKey(task.id, keyReason);
+        this.tlm.markNeedsKey(task.id, keyReason);
         const needsKeyTask = {
           ...task,
           status: 'needs_key' as const,
@@ -866,7 +871,7 @@ export class TaskWatcher extends EventEmitter {
               envReason = `Verify blocked (environmental): ${envResult.stdout.trim()}`;
             }
           } catch { /* best effort */ }
-          this.registry.completeTaskVerifyBlockedEnvironmental(task.id, envReason);
+          this.tlm.markVerifyBlockedEnvironmental(task.id, envReason);
           const updatedTask = {
             ...task,
             status: 'needs_human' as const,
