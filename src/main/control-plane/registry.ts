@@ -2,17 +2,29 @@ import Database from 'better-sqlite3';
 import { app } from 'electron';
 import path from 'path';
 import fs from 'fs';
-import { KANBAN_COLUMNS } from '../../shared/kanban';
-import { resolveEffectiveBackend } from './backend-resolution';
-import type { GlobalBackendInput, ProjectBackendInput, EffectiveBackend, BackendType } from './backend-resolution';
+import type { EffectiveBackend, BackendType } from './backend-resolution';
 import {
-  TOUCHPOINTS,
-  PRESETS,
   type TouchpointId,
   type RoutingAssignment,
   type PresetId,
   type AgentBackendKind,
 } from './routing';
+
+import { ProjectsModule } from './registry/projects';
+import { StacksModule } from './registry/stacks';
+import { TasksModule } from './registry/tasks';
+import { TokensModule } from './registry/tokens';
+import { PortsModule } from './registry/ports';
+import { HistoryModule } from './registry/history';
+import { ModelSettingsModule } from './registry/model-settings';
+import { RoutingConfigModule } from './registry/routing-config';
+import { TicketConfigModule } from './registry/ticket-config';
+import { DarkFactoryModule } from './registry/dark-factory';
+import { BoardModule } from './registry/board';
+import { BackendSettingsModule } from './registry/backend-settings';
+import { SecretsModule } from './registry/secrets';
+import { SessionModule } from './registry/session';
+import { EpicsModule } from './registry/epics';
 
 /** Per-ticket phase token totals from tasks columns (backfill when task_token_steps absent). */
 export interface TaskPhaseWeightRow {
@@ -207,19 +219,6 @@ export interface SessionMonitorSettingsRecord {
   pollingDisabled: boolean;
 }
 
-/** Raw DB row shape for session_monitor_settings */
-interface SessionMonitorSettingsRow {
-  key: string;
-  warning_threshold: number;
-  critical_threshold: number;
-  auto_halt_threshold: number;
-  auto_halt_enabled: number;
-  auto_resume_after_reset: number;
-  poll_interval_ms: number;
-  idle_timeout_ms: number;
-  polling_disabled: number;
-}
-
 export type EpicStatus = 'running' | 'paused' | 'completed' | 'needs_human';
 export type EpicTaskRole = 'build' | 'reconcile';
 export type EpicTaskOrigin = 'planned' | 'gap';
@@ -247,9 +246,50 @@ export class Registry {
   private dbPath: string;
   private sessionProtectedTickets = new Set<string>();
 
+  // Domain modules
+  private projects: ProjectsModule;
+  private stacks: StacksModule;
+  private tasks: TasksModule;
+  private tokens: TokensModule;
+  private ports: PortsModule;
+  private history: HistoryModule;
+  private modelSettings: ModelSettingsModule;
+  private routingConfig: RoutingConfigModule;
+  private ticketConfig: TicketConfigModule;
+  private darkFactory: DarkFactoryModule;
+  private board: BoardModule;
+  private backendSettings: BackendSettingsModule;
+  private secrets: SecretsModule;
+  private session: SessionModule;
+  private epics: EpicsModule;
+
+  /** Optional callback invoked after archiveStack — used by rollup store for cache invalidation. */
+  onStackArchived?: (stackId: string) => void;
+  /** Listeners invoked after setBoardTicketColumn. Signature includes projectDir so subscribers can key by (ticketId, projectDir). */
+  private _boardTicketMovedListeners: Array<(ticketId: string, projectDir: string, column: string) => void> = [];
+
   private constructor(db: Database.Database, dbPath: string) {
     this.db = db;
     this.dbPath = dbPath;
+    this.projects = new ProjectsModule(db);
+    this.stacks = new StacksModule(db);
+    this.tasks = new TasksModule(db);
+    this.tokens = new TokensModule(db);
+    this.ports = new PortsModule(db);
+    this.history = new HistoryModule(db);
+    this.modelSettings = new ModelSettingsModule(db);
+    this.routingConfig = new RoutingConfigModule(db, this.modelSettings);
+    this.ticketConfig = new TicketConfigModule(db);
+    this.darkFactory = new DarkFactoryModule(db);
+    this.board = new BoardModule(db, this.sessionProtectedTickets, (ticketId, projectDir, column) => {
+      for (const listener of this._boardTicketMovedListeners) {
+        listener(ticketId, projectDir, column);
+      }
+    });
+    this.backendSettings = new BackendSettingsModule(db);
+    this.secrets = new SecretsModule(db);
+    this.session = new SessionModule(db);
+    this.epics = new EpicsModule(db);
   }
 
   static async create(dbPath?: string): Promise<Registry> {
@@ -794,7 +834,7 @@ export class Registry {
       for (const { key } of secretKeys) {
         const staged: Record<string, Record<string, string>> = {};
         for (const surface of ['inner', 'outer'] as const) {
-          const bundle = this.getBackendSecretBundle(key, surface);
+          const bundle = this.secrets.getBackendSecretBundle(key, surface);
           if (!bundle) continue;
           const ocRow = this.db.prepare(
             'SELECT provider FROM opencode_settings WHERE key = ? AND surface = ?'
@@ -880,328 +920,91 @@ export class Registry {
 
   // --- Projects ---
 
-  addProject(directory: string, name?: string): Project {
-    const normalizedDir = path.resolve(directory);
-    const projectName = name ?? path.basename(normalizedDir);
-    const result = this.db.prepare(
-      'INSERT INTO projects (name, directory) VALUES (?, ?)'
-    ).run(projectName, normalizedDir);
-    return this.db.prepare('SELECT * FROM projects WHERE id = ?').get(result.lastInsertRowid) as Project;
-  }
-
-  listProjects(): Project[] {
-    return this.db.prepare('SELECT * FROM projects ORDER BY added_at ASC').all() as Project[];
-  }
-
-  removeProject(id: number): void {
-    this.db.prepare('DELETE FROM projects WHERE id = ?').run(id);
-  }
-
-  getProject(id: number): Project | undefined {
-    return this.db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Project | undefined;
-  }
+  addProject(directory: string, name?: string): Project { return this.projects.addProject(directory, name); }
+  listProjects(): Project[] { return this.projects.listProjects(); }
+  removeProject(id: number): void { this.projects.removeProject(id); }
+  getProject(id: number): Project | undefined { return this.projects.getProject(id); }
 
   // --- Stacks ---
 
   createStack(stack: Omit<Stack, 'created_at' | 'updated_at' | 'error' | 'pr_url' | 'pr_number' | 'total_input_tokens' | 'total_output_tokens' | 'total_execution_input_tokens' | 'total_execution_output_tokens' | 'total_review_input_tokens' | 'total_review_output_tokens' | 'total_cache_read_tokens' | 'total_cache_creation_tokens' | 'rate_limit_reset_at' | 'current_model' | 'selfheal_continue_used' | 'latest_task_token_limited'>): Stack {
-    if (!stack.id) {
-      throw new Error('Stack id is required and cannot be null or empty');
-    }
-    const normalizedDir = path.resolve(stack.project_dir);
-    this.db.prepare(
-      `INSERT INTO stacks (id, project, project_dir, ticket, branch, description, status, runtime)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(stack.id, stack.project, normalizedDir, stack.ticket, stack.branch, stack.description, stack.status, stack.runtime);
-    return this.getStack(stack.id)!;
+    return this.stacks.createStack(stack);
   }
+  getStack(id: string): Stack | undefined { return this.stacks.getStack(id); }
+  listStacks(): Stack[] { return this.stacks.listStacks(); }
+  updateStackStatus(id: string, status: StackStatus, error?: string): void { this.stacks.updateStackStatus(id, status, error); }
+  setPullRequest(id: string, prUrl: string, prNumber: number): void { this.stacks.setPullRequest(id, prUrl, prNumber); }
+  deleteStack(id: string): void { this.stacks.deleteStack(id); }
 
-  getStack(id: string): Stack | undefined {
-    const row = this.db.prepare(
-      `SELECT s.*,
-       (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model,
-       COALESCE(
-         (SELECT CASE WHEN LOWER(execution_summary) LIKE '%you''ve hit your session limit%' THEN 1 ELSE 0 END
-          FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1),
-         0
-       ) as latest_task_token_limited
-       FROM stacks s WHERE s.id = ?`
-    ).get(id) as (Omit<Stack, 'latest_task_token_limited'> & { latest_task_token_limited: number }) | undefined;
-    if (!row) return undefined;
-    return { ...row, latest_task_token_limited: row.latest_task_token_limited !== 0 };
-  }
-
-  listStacks(): Stack[] {
-    const rows = (this.db.prepare(
-      `SELECT s.*,
-       (SELECT model FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1) as current_model,
-       COALESCE(
-         (SELECT CASE WHEN LOWER(execution_summary) LIKE '%you''ve hit your session limit%' THEN 1 ELSE 0 END
-          FROM tasks WHERE stack_id = s.id ORDER BY id DESC LIMIT 1),
-         0
-       ) as latest_task_token_limited
-       FROM stacks s WHERE s.id IS NOT NULL ORDER BY s.created_at DESC`
-    ).all() as (Omit<Stack, 'latest_task_token_limited'> & { latest_task_token_limited: number })[]);
-    return rows.map(row => ({ ...row, latest_task_token_limited: row.latest_task_token_limited !== 0 }));
-  }
-
-  updateStackStatus(id: string, status: StackStatus, error?: string): void {
-    if (error !== undefined) {
-      this.db.prepare(
-        "UPDATE stacks SET status = ?, error = ?, updated_at = datetime('now') WHERE id = ?"
-      ).run(status, error, id);
-    } else {
-      this.db.prepare(
-        "UPDATE stacks SET status = ?, updated_at = datetime('now') WHERE id = ?"
-      ).run(status, id);
-    }
-  }
-
-  setPullRequest(id: string, prUrl: string, prNumber: number): void {
-    this.db.prepare(
-      "UPDATE stacks SET status = 'pr_created', pr_url = ?, pr_number = ?, updated_at = datetime('now') WHERE id = ?"
-    ).run(prUrl, prNumber, id);
-  }
-
-  deleteStack(id: string): void {
-    this.db.prepare('DELETE FROM stacks WHERE id = ?').run(id);
-  }
-
-  // --- Tasks ---
+  // --- Tasks (cross-domain: write task row + update stack status) ---
 
   createTask(stackId: string, prompt: string, model?: string): Task {
-    const result = this.db.prepare(
-      "INSERT INTO tasks (stack_id, prompt, model, status) VALUES (?, ?, ?, 'running')"
-    ).run(stackId, prompt, model ?? null);
-    this.updateStackStatus(stackId, 'running');
-    return this.db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid) as Task;
+    const task = this.tasks.insertTask(stackId, prompt, model);
+    this.stacks.updateStackStatus(stackId, 'running');
+    return task;
   }
 
   completeTask(taskId: number, exitCode: number): void {
     const status = exitCode === 0 ? 'completed' : 'failed';
-    this.db.prepare(
-      "UPDATE tasks SET status = ?, exit_code = ?, finished_at = datetime('now') WHERE id = ?"
-    ).run(status, exitCode, taskId);
-
-    const task = this.db.prepare(
-      'SELECT stack_id FROM tasks WHERE id = ?'
-    ).get(taskId) as { stack_id: string } | undefined;
+    const task = this.tasks.updateTaskStatus(taskId, status, exitCode);
     if (task) {
-      this.updateStackStatus(
-        task.stack_id,
-        exitCode === 0 ? 'completed' : 'failed'
-      );
+      this.stacks.updateStackStatus(task.stack_id, exitCode === 0 ? 'completed' : 'failed');
     }
   }
 
   completeTaskNeedsHuman(taskId: number, reason: string, questionsJson?: string | null): void {
-    this.db.prepare(
-      "UPDATE tasks SET status = 'needs_human', exit_code = 1, warnings = ?, needs_human_questions = ?, finished_at = datetime('now') WHERE id = ?"
-    ).run(reason, questionsJson ?? null, taskId);
-
-    const task = this.db.prepare(
-      'SELECT stack_id FROM tasks WHERE id = ?'
-    ).get(taskId) as { stack_id: string } | undefined;
+    const task = this.tasks.updateTaskStatus(taskId, 'needs_human', 1, {
+      warnings: reason,
+      needs_human_questions: questionsJson ?? null,
+    });
     if (task) {
-      this.updateStackStatus(task.stack_id, 'needs_human');
+      this.stacks.updateStackStatus(task.stack_id, 'needs_human');
     }
   }
 
-  reopenTaskForResume(taskId: number): void {
-    this.db.prepare(
-      "UPDATE tasks SET status = 'running', finished_at = NULL, exit_code = NULL WHERE id = ?"
-    ).run(taskId);
-  }
-
-  getNeedsHumanQuestions(stackId: string): string | null {
-    const task = this.getMostRecentTask(stackId);
-    if (!task || task.status !== 'needs_human') return null;
-    return task.needs_human_questions ?? null;
-  }
-
-  setSelfhealContinueUsed(stackId: string, value: 0 | 1): void {
-    this.db.prepare('UPDATE stacks SET selfheal_continue_used = ? WHERE id = ?').run(value, stackId);
-  }
-
-  /** Return all branch names (active stacks + stack_history) for the given ticket. */
-  getBranchesForTicket(ticketId: string): string[] {
-    const active = this.db.prepare(
-      "SELECT branch FROM stacks WHERE ticket = ? AND branch IS NOT NULL"
-    ).all(ticketId) as { branch: string }[];
-    const history = this.db.prepare(
-      "SELECT branch FROM stack_history WHERE ticket = ? AND branch IS NOT NULL"
-    ).all(ticketId) as { branch: string }[];
-    return [...active, ...history].map((r) => r.branch);
-  }
-
   completeTaskNeedsKey(taskId: number, reason: string): void {
-    this.db.prepare(
-      "UPDATE tasks SET status = 'needs_key', exit_code = 1, warnings = ?, finished_at = datetime('now') WHERE id = ?"
-    ).run(reason, taskId);
-
-    const task = this.db.prepare(
-      'SELECT stack_id FROM tasks WHERE id = ?'
-    ).get(taskId) as { stack_id: string } | undefined;
+    const task = this.tasks.updateTaskStatus(taskId, 'needs_key', 1, { warnings: reason });
     if (task) {
-      this.updateStackStatus(task.stack_id, 'needs_key');
+      this.stacks.updateStackStatus(task.stack_id, 'needs_key');
     }
   }
 
   completeTaskVerifyBlockedEnvironmental(taskId: number, reason: string): void {
-    this.db.prepare(
-      "UPDATE tasks SET status = 'needs_human', exit_code = 1, warnings = ?, finished_at = datetime('now') WHERE id = ?"
-    ).run(reason, taskId);
-
-    const task = this.db.prepare(
-      'SELECT stack_id FROM tasks WHERE id = ?'
-    ).get(taskId) as { stack_id: string } | undefined;
+    const task = this.tasks.updateTaskStatus(taskId, 'needs_human', 1, { warnings: reason });
     if (task) {
-      this.updateStackStatus(task.stack_id, 'verify_blocked_environmental');
+      this.stacks.updateStackStatus(task.stack_id, 'verify_blocked_environmental');
     }
   }
 
-  getTasksForStack(stackId: string): Task[] {
-    return this.db.prepare(
-      'SELECT * FROM tasks WHERE stack_id = ? ORDER BY started_at DESC'
-    ).all(stackId) as Task[];
-  }
-
-  setTaskWarning(taskId: number, warning: string): void {
-    this.db.prepare(
-      'UPDATE tasks SET warnings = ? WHERE id = ?'
-    ).run(warning, taskId);
-  }
-
-  updateTaskResolvedModel(taskId: number, resolvedModel: string): void {
-    this.db.prepare(
-      'UPDATE tasks SET resolved_model = ? WHERE id = ?'
-    ).run(resolvedModel, taskId);
-  }
-
-  getRunningTask(stackId: string): Task | undefined {
-    return this.db.prepare(
-      "SELECT * FROM tasks WHERE stack_id = ? AND status = 'running' LIMIT 1"
-    ).get(stackId) as Task | undefined;
-  }
-
-  getMostRecentTask(stackId: string): Task | undefined {
-    return this.db.prepare(
-      'SELECT * FROM tasks WHERE stack_id = ? ORDER BY started_at DESC LIMIT 1'
-    ).get(stackId) as Task | undefined;
-  }
-
-  // --- Token Usage ---
-
-  /** Optional callback invoked after archiveStack — used by rollup store for cache invalidation. */
-  onStackArchived?: (stackId: string) => void;
-  /** Listeners invoked after setBoardTicketColumn. Signature includes projectDir so subscribers can key by (ticketId, projectDir). */
-  private _boardTicketMovedListeners: Array<(ticketId: string, projectDir: string, column: string) => void> = [];
+  reopenTaskForResume(taskId: number): void { this.tasks.reopenTaskForResume(taskId); }
+  getNeedsHumanQuestions(stackId: string): string | null { return this.tasks.getNeedsHumanQuestions(stackId); }
+  setSelfhealContinueUsed(stackId: string, value: 0 | 1): void { this.stacks.setSelfhealContinueUsed(stackId, value); }
+  getBranchesForTicket(ticketId: string): string[] { return this.stacks.getBranchesForTicket(ticketId); }
+  getTasksForStack(stackId: string): Task[] { return this.tasks.getTasksForStack(stackId); }
+  setTaskWarning(taskId: number, warning: string): void { this.tasks.setTaskWarning(taskId, warning); }
+  updateTaskResolvedModel(taskId: number, resolvedModel: string): void { this.tasks.updateTaskResolvedModel(taskId, resolvedModel); }
+  getRunningTask(stackId: string): Task | undefined { return this.tasks.getRunningTask(stackId); }
+  getMostRecentTask(stackId: string): Task | undefined { return this.tasks.getMostRecentTask(stackId); }
 
   onBoardTicketMoved(listener: (ticketId: string, projectDir: string, column: string) => void): void {
     this._boardTicketMovedListeners.push(listener);
   }
 
   /** Exposes the underlying Database instance for modules that need direct SQL access (e.g. rollup store). */
-  getDb(): Database.Database {
-    return this.db;
-  }
+  getDb(): Database.Database { return this.db; }
+
+  // --- Token Usage ---
 
   updateTaskTokens(
     taskId: number,
     inputTokens: number,
     outputTokens: number,
-    phaseBreakdown?: {
-      executionInput: number;
-      executionOutput: number;
-      reviewInput: number;
-      reviewOutput: number;
-    },
-    cacheTokens?: {
-      cacheRead: number;
-      cacheCreation: number;
-    }
-  ): void {
-    // Wrap in a transaction to prevent race conditions from concurrent task completions
-    const updateFn = this.db.transaction(() => {
-      // Read old values first so we can compute the delta for the stack aggregate
-      const old = this.db.prepare(
-        'SELECT stack_id, input_tokens, output_tokens, execution_input_tokens, execution_output_tokens, review_input_tokens, review_output_tokens, cache_read_tokens, cache_creation_tokens FROM tasks WHERE id = ?'
-      ).get(taskId) as {
-        stack_id: string;
-        input_tokens: number;
-        output_tokens: number;
-        execution_input_tokens: number;
-        execution_output_tokens: number;
-        review_input_tokens: number;
-        review_output_tokens: number;
-        cache_read_tokens: number;
-        cache_creation_tokens: number;
-      } | undefined;
-      if (!old) return;
+    phaseBreakdown?: { executionInput: number; executionOutput: number; reviewInput: number; reviewOutput: number },
+    cacheTokens?: { cacheRead: number; cacheCreation: number }
+  ): void { this.tokens.updateTaskTokens(taskId, inputTokens, outputTokens, phaseBreakdown, cacheTokens); }
 
-      const inputDelta = inputTokens - old.input_tokens;
-      const outputDelta = outputTokens - old.output_tokens;
-      const cacheReadDelta = (cacheTokens?.cacheRead ?? old.cache_read_tokens) - old.cache_read_tokens;
-      const cacheCreationDelta = (cacheTokens?.cacheCreation ?? old.cache_creation_tokens) - old.cache_creation_tokens;
-
-      if (phaseBreakdown) {
-        const execInDelta = phaseBreakdown.executionInput - old.execution_input_tokens;
-        const execOutDelta = phaseBreakdown.executionOutput - old.execution_output_tokens;
-        const revInDelta = phaseBreakdown.reviewInput - old.review_input_tokens;
-        const revOutDelta = phaseBreakdown.reviewOutput - old.review_output_tokens;
-
-        // SET (not increment) — phase totals are cumulative values
-        this.db.prepare(
-          'UPDATE tasks SET input_tokens = ?, output_tokens = ?, execution_input_tokens = ?, execution_output_tokens = ?, review_input_tokens = ?, review_output_tokens = ?, cache_read_tokens = ?, cache_creation_tokens = ? WHERE id = ?'
-        ).run(
-          inputTokens, outputTokens,
-          phaseBreakdown.executionInput, phaseBreakdown.executionOutput,
-          phaseBreakdown.reviewInput, phaseBreakdown.reviewOutput,
-          cacheTokens?.cacheRead ?? old.cache_read_tokens,
-          cacheTokens?.cacheCreation ?? old.cache_creation_tokens,
-          taskId
-        );
-
-        // Update stack aggregate by the delta
-        if (inputDelta !== 0 || outputDelta !== 0 || execInDelta !== 0 || execOutDelta !== 0 || revInDelta !== 0 || revOutDelta !== 0 || cacheReadDelta !== 0 || cacheCreationDelta !== 0) {
-          this.db.prepare(
-            `UPDATE stacks SET
-              total_input_tokens = total_input_tokens + ?,
-              total_output_tokens = total_output_tokens + ?,
-              total_execution_input_tokens = total_execution_input_tokens + ?,
-              total_execution_output_tokens = total_execution_output_tokens + ?,
-              total_review_input_tokens = total_review_input_tokens + ?,
-              total_review_output_tokens = total_review_output_tokens + ?,
-              total_cache_read_tokens = total_cache_read_tokens + ?,
-              total_cache_creation_tokens = total_cache_creation_tokens + ?
-            WHERE id = ?`
-          ).run(inputDelta, outputDelta, execInDelta, execOutDelta, revInDelta, revOutDelta, cacheReadDelta, cacheCreationDelta, old.stack_id);
-        }
-      } else {
-        // Legacy path — no phase breakdown
-        this.db.prepare(
-          'UPDATE tasks SET input_tokens = ?, output_tokens = ?, cache_read_tokens = ?, cache_creation_tokens = ? WHERE id = ?'
-        ).run(inputTokens, outputTokens, cacheTokens?.cacheRead ?? old.cache_read_tokens, cacheTokens?.cacheCreation ?? old.cache_creation_tokens, taskId);
-
-        // Update stack aggregate by the delta
-        if (inputDelta !== 0 || outputDelta !== 0 || cacheReadDelta !== 0 || cacheCreationDelta !== 0) {
-          this.db.prepare(
-            'UPDATE stacks SET total_input_tokens = total_input_tokens + ?, total_output_tokens = total_output_tokens + ?, total_cache_read_tokens = total_cache_read_tokens + ?, total_cache_creation_tokens = total_cache_creation_tokens + ? WHERE id = ?'
-          ).run(inputDelta, outputDelta, cacheReadDelta, cacheCreationDelta, old.stack_id);
-        }
-      }
-    });
-    updateFn();
-  }
-
-  setTaskSessionId(taskId: number, sessionId: string): void {
-    this.db.prepare('UPDATE tasks SET session_id = ? WHERE id = ?').run(sessionId, taskId);
-  }
-
-  setTaskIterations(taskId: number, reviewIterations: number, verifyRetries: number): void {
-    this.db.prepare(
-      'UPDATE tasks SET review_iterations = ?, verify_retries = ? WHERE id = ?'
-    ).run(reviewIterations, verifyRetries, taskId);
-  }
+  setTaskSessionId(taskId: number, sessionId: string): void { this.tokens.setTaskSessionId(taskId, sessionId); }
+  setTaskIterations(taskId: number, reviewIterations: number, verifyRetries: number): void { this.tokens.setTaskIterations(taskId, reviewIterations, verifyRetries); }
 
   updateTaskMetadata(taskId: number, metadata: {
     review_verdicts?: string;
@@ -1214,965 +1017,126 @@ export class Registry {
     review_finished_at?: string;
     verify_started_at?: string;
     verify_finished_at?: string;
-  }): void {
-    const sets: string[] = [];
-    const values: unknown[] = [];
-    for (const [key, value] of Object.entries(metadata)) {
-      if (value !== undefined) {
-        sets.push(`${key} = ?`);
-        values.push(value);
-      }
-    }
-    if (sets.length === 0) return;
-    values.push(taskId);
-    this.db.prepare(`UPDATE tasks SET ${sets.join(', ')} WHERE id = ?`).run(...values);
-  }
-
-  // --- Task Token Steps ---
+  }): void { this.tokens.updateTaskMetadata(taskId, metadata); }
 
   setTaskTokenSteps(taskId: number, steps: { iteration: number; phase: string; input_tokens: number; output_tokens: number }[]): void {
-    const insertOrUpdate = this.db.transaction(() => {
-      // Clear existing steps for this task
-      this.db.prepare('DELETE FROM task_token_steps WHERE task_id = ?').run(taskId);
-      const insert = this.db.prepare(
-        'INSERT INTO task_token_steps (task_id, iteration, phase, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?)'
-      );
-      for (const step of steps) {
-        insert.run(taskId, step.iteration, step.phase, step.input_tokens, step.output_tokens);
-      }
-    });
-    insertOrUpdate();
+    this.tokens.setTaskTokenSteps(taskId, steps);
   }
-
-  getTaskTokenSteps(taskId: number): TaskTokenStep[] {
-    return this.db.prepare(
-      'SELECT * FROM task_token_steps WHERE task_id = ? ORDER BY iteration ASC, CASE phase WHEN \'execution\' THEN 0 WHEN \'review\' THEN 1 WHEN \'verify\' THEN 2 ELSE 99 END ASC'
-    ).all(taskId) as TaskTokenStep[];
-  }
-
-  /**
-   * Return per-ticket, per-phase token weight totals for lifecycle cost splitting.
-   * Joins task_token_steps → tasks → stacks to resolve the ticket for each step.
-   * Only rows where stacks.ticket IS NOT NULL are included (excludes ad-hoc stacks).
-   */
-  getStepWeightsByTicket(): { ticket: string; phase: string; totalTokens: number }[] {
-    return this.db.prepare(`
-      SELECT s.ticket, tts.phase, SUM(tts.input_tokens + tts.output_tokens) AS totalTokens
-      FROM task_token_steps tts
-      JOIN tasks t ON t.id = tts.task_id
-      JOIN stacks s ON s.id = t.stack_id
-      WHERE s.ticket IS NOT NULL
-      GROUP BY s.ticket, tts.phase
-    `).all() as { ticket: string; phase: string; totalTokens: number }[];
-  }
-
-  /**
-   * Return per-ticket phase token totals from the tasks columns as a backfill
-   * source for lifecycle cost splitting. Used when task_token_steps rows are
-   * absent (e.g. container torn down before step file read).
-   *
-   * Shape mirrors getStepWeightsByTicket: one row per (ticket, phase).
-   * Unit: input_tokens + output_tokens (no cache), same as getStepWeightsByTicket.
-   */
-  getTaskPhaseTokensByTicket(): TaskPhaseWeightRow[] {
-    return this.db.prepare(`
-      SELECT s.ticket, 'execution' AS phase,
-             SUM(t.execution_input_tokens + t.execution_output_tokens) AS totalTokens
-      FROM tasks t
-      JOIN stacks s ON s.id = t.stack_id
-      WHERE s.ticket IS NOT NULL
-      GROUP BY s.ticket
-      HAVING SUM(t.execution_input_tokens + t.execution_output_tokens) > 0
-      UNION ALL
-      SELECT s.ticket, 'review' AS phase,
-             SUM(t.review_input_tokens + t.review_output_tokens) AS totalTokens
-      FROM tasks t
-      JOIN stacks s ON s.id = t.stack_id
-      WHERE s.ticket IS NOT NULL
-      GROUP BY s.ticket
-      HAVING SUM(t.review_input_tokens + t.review_output_tokens) > 0
-    `).all() as TaskPhaseWeightRow[];
-  }
-
-  /**
-   * Validate that per-step token sums match phase totals and grand total.
-   * Returns validation result with computed sums.
-   */
-  validateTaskTokens(taskId: number): TokenValidationResult {
-    const task = this.db.prepare(
-      'SELECT input_tokens, output_tokens, execution_input_tokens, execution_output_tokens, review_input_tokens, review_output_tokens FROM tasks WHERE id = ?'
-    ).get(taskId) as {
-      input_tokens: number; output_tokens: number;
-      execution_input_tokens: number; execution_output_tokens: number;
-      review_input_tokens: number; review_output_tokens: number;
-    } | undefined;
-
-    if (!task) {
-      return { valid: true, stepTotal: { input: 0, output: 0 }, phaseTotal: { executionInput: 0, executionOutput: 0, reviewInput: 0, reviewOutput: 0 }, taskTotal: { input: 0, output: 0 } };
-    }
-
-    const steps = this.getTaskTokenSteps(taskId);
-
-    // Sum steps by phase
-    let stepExecIn = 0, stepExecOut = 0, stepRevIn = 0, stepRevOut = 0;
-    let stepTotalIn = 0, stepTotalOut = 0;
-
-    for (const step of steps) {
-      stepTotalIn += step.input_tokens;
-      stepTotalOut += step.output_tokens;
-      if (step.phase === 'execution') {
-        stepExecIn += step.input_tokens;
-        stepExecOut += step.output_tokens;
-      } else if (step.phase === 'review') {
-        stepRevIn += step.input_tokens;
-        stepRevOut += step.output_tokens;
-      }
-      // verify tokens contribute to total but not to exec/review phase fields
-    }
-
-    const phaseTotalIn = task.execution_input_tokens + task.review_input_tokens;
-    const phaseTotalOut = task.execution_output_tokens + task.review_output_tokens;
-
-    // Steps should match phase totals (execution steps = execution phase, review steps = review phase)
-    const stepsMatchPhases =
-      stepExecIn === task.execution_input_tokens &&
-      stepExecOut === task.execution_output_tokens &&
-      stepRevIn === task.review_input_tokens &&
-      stepRevOut === task.review_output_tokens;
-
-    // Phase totals should match grand total (verify tokens account for the difference)
-    const phasesMatchTotal =
-      phaseTotalIn <= task.input_tokens &&
-      phaseTotalOut <= task.output_tokens;
-
-    return {
-      valid: steps.length === 0 || (stepsMatchPhases && phasesMatchTotal),
-      stepTotal: { input: stepTotalIn, output: stepTotalOut },
-      phaseTotal: {
-        executionInput: task.execution_input_tokens,
-        executionOutput: task.execution_output_tokens,
-        reviewInput: task.review_input_tokens,
-        reviewOutput: task.review_output_tokens,
-      },
-      taskTotal: { input: task.input_tokens, output: task.output_tokens },
-    };
-  }
-
-  interruptTask(taskId: number): void {
-    this.db.prepare(
-      "UPDATE tasks SET status = 'interrupted', finished_at = datetime('now') WHERE id = ? AND status = 'running'"
-    ).run(taskId);
-  }
-
-  setTaskResumedAt(taskId: number, ts: string): void {
-    this.db.prepare(
-      'UPDATE tasks SET resumed_at = ? WHERE id = ?'
-    ).run(ts, taskId);
-  }
-
-  getStackTokenUsage(stackId: string): TokenUsage {
-    const row = this.db.prepare(
-      'SELECT total_input_tokens, total_output_tokens FROM stacks WHERE id = ?'
-    ).get(stackId) as { total_input_tokens: number; total_output_tokens: number } | undefined;
-    return {
-      input_tokens: row?.total_input_tokens ?? 0,
-      output_tokens: row?.total_output_tokens ?? 0,
-    };
-  }
+  getTaskTokenSteps(taskId: number): TaskTokenStep[] { return this.tokens.getTaskTokenSteps(taskId); }
+  getStepWeightsByTicket(): { ticket: string; phase: string; totalTokens: number }[] { return this.tokens.getStepWeightsByTicket(); }
+  getTaskPhaseTokensByTicket(): TaskPhaseWeightRow[] { return this.tokens.getTaskPhaseTokensByTicket(); }
+  validateTaskTokens(taskId: number): TokenValidationResult { return this.tokens.validateTaskTokens(taskId); }
+  interruptTask(taskId: number): void { this.tokens.interruptTask(taskId); }
+  setTaskResumedAt(taskId: number, ts: string): void { this.tokens.setTaskResumedAt(taskId, ts); }
+  getStackTokenUsage(stackId: string): TokenUsage { return this.tokens.getStackTokenUsage(stackId); }
 
   // --- Ports ---
 
-  setPorts(stackId: string, ports: Omit<PortMapping, 'stack_id'>[]): void {
-    const insertPort = this.db.prepare(
-      'INSERT INTO ports (stack_id, service, host_port, container_port) VALUES (?, ?, ?, ?)'
-    );
-    const insertMany = this.db.transaction((items: Omit<PortMapping, 'stack_id'>[]) => {
-      for (const p of items) {
-        insertPort.run(stackId, p.service, p.host_port, p.container_port);
-      }
-    });
-    insertMany(ports);
-  }
+  setPorts(stackId: string, ports: Omit<PortMapping, 'stack_id'>[]): void { this.ports.setPorts(stackId, ports); }
+  getPorts(stackId: string): PortMapping[] { return this.ports.getPorts(stackId); }
+  getAllAllocatedPorts(): number[] { return this.ports.getAllAllocatedPorts(); }
+  releasePorts(stackId: string): void { this.ports.releasePorts(stackId); }
+  getPortByService(stackId: string, service: string, containerPort: number): PortMapping | undefined { return this.ports.getPortByService(stackId, service, containerPort); }
+  setPort(stackId: string, service: string, hostPort: number, containerPort: number): void { this.ports.setPort(stackId, service, hostPort, containerPort); }
+  setProxyContainerId(stackId: string, service: string, containerPort: number, proxyContainerId: string): void { this.ports.setProxyContainerId(stackId, service, containerPort, proxyContainerId); }
+  releasePort(stackId: string, service: string, containerPort: number): void { this.ports.releasePort(stackId, service, containerPort); }
 
-  getPorts(stackId: string): PortMapping[] {
-    return this.db.prepare(
-      'SELECT * FROM ports WHERE stack_id = ? ORDER BY host_port ASC'
-    ).all(stackId) as PortMapping[];
-  }
-
-  getAllAllocatedPorts(): number[] {
-    return (this.db.prepare(
-      'SELECT host_port FROM ports'
-    ).all() as { host_port: number }[]).map((r) => r.host_port);
-  }
-
-  releasePorts(stackId: string): void {
-    this.db.prepare('DELETE FROM ports WHERE stack_id = ?').run(stackId);
-  }
-
-  getPortByService(stackId: string, service: string, containerPort: number): PortMapping | undefined {
-    return this.db.prepare(
-      'SELECT * FROM ports WHERE stack_id = ? AND service = ? AND container_port = ?'
-    ).get(stackId, service, containerPort) as PortMapping | undefined;
-  }
-
-  setPort(stackId: string, service: string, hostPort: number, containerPort: number): void {
-    this.db.prepare(
-      'INSERT INTO ports (stack_id, service, host_port, container_port) VALUES (?, ?, ?, ?)'
-    ).run(stackId, service, hostPort, containerPort);
-  }
-
-  setProxyContainerId(stackId: string, service: string, containerPort: number, proxyContainerId: string): void {
-    this.db.prepare(
-      'UPDATE ports SET proxy_container_id = ? WHERE stack_id = ? AND service = ? AND container_port = ?'
-    ).run(proxyContainerId, stackId, service, containerPort);
-  }
-
-  releasePort(stackId: string, service: string, containerPort: number): void {
-    this.db.prepare(
-      'DELETE FROM ports WHERE stack_id = ? AND service = ? AND container_port = ?'
-    ).run(stackId, service, containerPort);
-  }
-
-  // --- Stack History ---
+  // --- Stack History (cross-domain: reads stacks + tasks, writes history, fires callback) ---
 
   archiveStack(id: string, finalStatus: HistoryStatus): void {
-    const stack = this.getStack(id);
+    const stack = this.stacks.getStack(id);
     if (!stack) return;
-
-    const latestTask = this.db.prepare(
-      'SELECT prompt FROM tasks WHERE stack_id = ? ORDER BY started_at DESC LIMIT 1'
-    ).get(id) as { prompt: string } | undefined;
-
-    // Archive all task data as JSON before CASCADE deletion removes them
-    const tasks = this.getTasksForStack(id);
-    const taskHistory = tasks.length > 0 ? JSON.stringify(tasks) : null;
-
-    const createdMs = new Date(stack.created_at + 'Z').getTime();
-    const nowMs = Date.now();
-    const durationSeconds = Math.max(0, Math.floor((nowMs - createdMs) / 1000));
-
-    this.db.prepare(
-      `INSERT INTO stack_history
-        (stack_id, project, project_dir, ticket, branch, description, final_status, error, runtime, task_prompt, task_history, created_at, duration_seconds, selfheal_continue_used)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      stack.id,
-      stack.project,
-      stack.project_dir,
-      stack.ticket,
-      stack.branch,
-      stack.description,
-      finalStatus,
-      stack.error,
-      stack.runtime,
-      latestTask?.prompt ?? null,
-      taskHistory,
-      stack.created_at,
-      durationSeconds,
-      stack.selfheal_continue_used ?? 0,
-    );
-
+    const latestTaskPrompt = this.tasks.getMostRecentTask(id)?.prompt ?? null;
+    const tasks = this.tasks.getTasksForStack(id);
+    this.history.insertArchiveRecord(stack, latestTaskPrompt, tasks, finalStatus);
     this.onStackArchived?.(id);
   }
 
-  listStackHistory(): StackHistoryRecord[] {
-    return this.db.prepare(
-      'SELECT * FROM stack_history ORDER BY finished_at DESC'
-    ).all() as StackHistoryRecord[];
-  }
-
-  purgeOldHistory(retentionDays: number = 14): number {
-    const result = this.db.prepare(
-      "DELETE FROM stack_history WHERE finished_at < datetime('now', ? || ' days')"
-    ).run(`-${retentionDays}`);
-    return result.changes;
-  }
-
-  // --- Legacy Migration ---
-
-  /**
-   * Removes legacy JSON stack files left over from before the SQLite migration.
-   * Safe to call even if the directory does not exist — it is a no-op in that case.
-   */
-  cleanupLegacyStackJsonFiles(projectDir: string): void {
-    const stacksDir = path.join(projectDir, '.sandstorm', 'stacks');
-    if (!fs.existsSync(stacksDir)) return;
-
-    try {
-      const entries = fs.readdirSync(stacksDir);
-      for (const entry of entries) {
-        if (entry.endsWith('.json')) {
-          try {
-            fs.unlinkSync(path.join(stacksDir, entry));
-          } catch { /* best effort */ }
-        }
-      }
-    } catch { /* best effort */ }
-
-    const archiveDir = path.join(stacksDir, 'archive');
-    if (fs.existsSync(archiveDir)) {
-      try {
-        fs.rmSync(archiveDir, { recursive: true, force: true });
-      } catch { /* best effort */ }
-    }
-
-    // Remove the now-empty stacks directory itself
-    try {
-      const remaining = fs.readdirSync(stacksDir);
-      if (remaining.length === 0) {
-        fs.rmdirSync(stacksDir);
-      }
-    } catch { /* best effort */ }
-  }
+  listStackHistory(): StackHistoryRecord[] { return this.history.listStackHistory(); }
+  purgeOldHistory(retentionDays: number = 14): number { return this.history.purgeOldHistory(retentionDays); }
+  cleanupLegacyStackJsonFiles(projectDir: string): void { this.history.cleanupLegacyStackJsonFiles(projectDir); }
 
   // --- Model Settings ---
 
-  getGlobalModelSettings(): ModelSettings {
-    const row = this.db.prepare(
-      "SELECT inner_model, outer_model FROM model_settings WHERE key = 'global'"
-    ).get() as ModelSettings | undefined;
-    return row ?? { inner_model: 'sonnet', outer_model: 'opus' };
-  }
-
-  setGlobalModelSettings(settings: Partial<ModelSettings>): void {
-    const current = this.getGlobalModelSettings();
-    // Use UPDATE to avoid resetting the new inner_backend/outer_backend columns
-    this.db.prepare(
-      "UPDATE model_settings SET inner_model = ?, outer_model = ? WHERE key = 'global'"
-    ).run(
-      settings.inner_model ?? current.inner_model,
-      settings.outer_model ?? current.outer_model,
-    );
-  }
-
-  getProjectModelSettings(projectDir: string): ModelSettings | null {
-    const key = `project:${path.resolve(projectDir)}`;
-    const row = this.db.prepare(
-      'SELECT inner_model, outer_model FROM model_settings WHERE key = ?'
-    ).get(key) as ModelSettings | undefined;
-    return row ?? null;
-  }
-
-  setProjectModelSettings(projectDir: string, settings: Partial<ModelSettings>): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    const existing = this.getProjectModelSettings(projectDir);
-    const inner = settings.inner_model ?? existing?.inner_model ?? 'global';
-    const outer = settings.outer_model ?? existing?.outer_model ?? 'global';
-    // INSERT OR IGNORE ensures row exists with backend defaults; UPDATE sets only model columns
-    this.db.prepare(
-      "INSERT OR IGNORE INTO model_settings (key, inner_model, outer_model, inner_backend, outer_backend) VALUES (?, 'global', 'global', 'global', 'global')"
-    ).run(key);
-    this.db.prepare(
-      'UPDATE model_settings SET inner_model = ?, outer_model = ? WHERE key = ?'
-    ).run(inner, outer, key);
-  }
-
-  removeProjectModelSettings(projectDir: string): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    this.db.prepare('DELETE FROM model_settings WHERE key = ?').run(key);
-  }
+  getGlobalModelSettings(): ModelSettings { return this.modelSettings.getGlobalModelSettings(); }
+  setGlobalModelSettings(settings: Partial<ModelSettings>): void { this.modelSettings.setGlobalModelSettings(settings); }
+  getProjectModelSettings(projectDir: string): ModelSettings | null { return this.modelSettings.getProjectModelSettings(projectDir); }
+  setProjectModelSettings(projectDir: string, settings: Partial<ModelSettings>): void { this.modelSettings.setProjectModelSettings(projectDir, settings); }
+  removeProjectModelSettings(projectDir: string): void { this.modelSettings.removeProjectModelSettings(projectDir); }
 
   // --- Model Routing ---
 
-  private parseAssignments(json: string): Partial<Record<TouchpointId, RoutingAssignment>> {
-    try {
-      const parsed = JSON.parse(json);
-      if (typeof parsed === 'object' && parsed !== null && !Array.isArray(parsed)) {
-        return parsed as Partial<Record<TouchpointId, RoutingAssignment>>;
-      }
-      return {};
-    } catch {
-      return {};
-    }
-  }
-
-  getLegacyEffectiveModels(projectDir: string): ModelSettings {
-    const global = this.getGlobalModelSettings();
-    const project = this.getProjectModelSettings(projectDir);
-    if (!project) return global;
-    return {
-      inner_model: project.inner_model === 'global' ? global.inner_model : project.inner_model,
-      outer_model: project.outer_model === 'global' ? global.outer_model : project.outer_model,
-    };
-  }
-
-  getGlobalRouting(): RoutingConfig {
-    const row = this.db.prepare(
-      "SELECT assignments, preset FROM model_routing WHERE key = 'global'"
-    ).get() as { assignments: string; preset: string | null } | undefined;
-    if (!row) return { assignments: {}, preset: null };
-    return {
-      assignments: this.parseAssignments(row.assignments),
-      preset: (row.preset as PresetId | null) ?? null,
-    };
-  }
-
-  setGlobalRouting(config: Partial<RoutingConfig>): void {
-    const current = this.getGlobalRouting();
-    const assignments = config.assignments !== undefined ? config.assignments : current.assignments;
-    const preset = config.preset !== undefined ? config.preset : current.preset;
-    this.db.prepare(
-      "INSERT OR REPLACE INTO model_routing (key, assignments, preset) VALUES ('global', ?, ?)"
-    ).run(JSON.stringify(assignments), preset ?? null);
-  }
-
-  getProjectRouting(projectDir: string): RoutingConfig | null {
-    const key = `project:${path.resolve(projectDir)}`;
-    const row = this.db.prepare(
-      'SELECT assignments, preset FROM model_routing WHERE key = ?'
-    ).get(key) as { assignments: string; preset: string | null } | undefined;
-    if (!row) return null;
-    return {
-      assignments: this.parseAssignments(row.assignments),
-      preset: (row.preset as PresetId | null) ?? null,
-    };
-  }
-
-  setProjectRouting(projectDir: string, config: Partial<RoutingConfig>): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    const existing = this.getProjectRouting(projectDir);
-    const assignments = config.assignments !== undefined ? config.assignments : (existing?.assignments ?? {});
-    const preset = config.preset !== undefined ? config.preset : (existing?.preset ?? null);
-    this.db.prepare(
-      'INSERT OR REPLACE INTO model_routing (key, assignments, preset) VALUES (?, ?, ?)'
-    ).run(key, JSON.stringify(assignments), preset ?? null);
-  }
-
-  removeProjectRouting(projectDir: string): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    this.db.prepare('DELETE FROM model_routing WHERE key = ?').run(key);
-  }
-
-  applyPreset(projectDir: string, presetId: PresetId): void {
-    if (!(presetId in PRESETS)) throw new Error(`Unknown preset: ${presetId}`);
-    const key = `project:${path.resolve(projectDir)}`;
-    this.db.prepare(
-      'INSERT OR REPLACE INTO model_routing (key, assignments, preset) VALUES (?, ?, ?)'
-    ).run(key, '{}', presetId);
-  }
-
-  getEffectiveRoutingFor(projectDir: string, touchpoint: TouchpointId): RoutingAssignment {
-    const projectRow = this.getProjectRouting(projectDir);
-    if (projectRow) {
-      if (projectRow.assignments[touchpoint]) {
-        return projectRow.assignments[touchpoint]!;
-      }
-      if (projectRow.preset && projectRow.preset in PRESETS) {
-        return PRESETS[projectRow.preset][touchpoint];
-      }
-    }
-
-    const globalRow = this.getGlobalRouting();
-    if (globalRow.assignments[touchpoint]) {
-      return globalRow.assignments[touchpoint]!;
-    }
-    if (globalRow.preset && globalRow.preset in PRESETS) {
-      return PRESETS[globalRow.preset][touchpoint];
-    }
-
-    const legacy = this.getLegacyEffectiveModels(projectDir);
-    const outerTouchpoints: TouchpointId[] = ['outer', 'refine', 'pr_description'];
-    if (outerTouchpoints.includes(touchpoint)) {
-      return { backend: 'claude', provider: 'anthropic', model: legacy.outer_model };
-    }
-    return { backend: 'claude', provider: 'anthropic', model: legacy.inner_model };
-  }
-
-  getEffectiveRouting(projectDir: string): Record<TouchpointId, RoutingAssignment> {
-    const result = {} as Record<TouchpointId, RoutingAssignment>;
-    for (const t of TOUCHPOINTS) {
-      result[t] = this.getEffectiveRoutingFor(projectDir, t);
-    }
-    return result;
-  }
-
-  getContainerPhaseModels(projectDir: string): Record<'execution' | 'review' | 'meta_review', RoutingAssignment> {
-    return {
-      execution:   this.getEffectiveRoutingFor(projectDir, 'execution'),
-      review:      this.getEffectiveRoutingFor(projectDir, 'review'),
-      meta_review: this.getEffectiveRoutingFor(projectDir, 'meta_review'),
-    };
-  }
+  getLegacyEffectiveModels(projectDir: string): ModelSettings { return this.routingConfig.getLegacyEffectiveModels(projectDir); }
+  getGlobalRouting(): RoutingConfig { return this.routingConfig.getGlobalRouting(); }
+  setGlobalRouting(config: Partial<RoutingConfig>): void { this.routingConfig.setGlobalRouting(config); }
+  getProjectRouting(projectDir: string): RoutingConfig | null { return this.routingConfig.getProjectRouting(projectDir); }
+  setProjectRouting(projectDir: string, config: Partial<RoutingConfig>): void { this.routingConfig.setProjectRouting(projectDir, config); }
+  removeProjectRouting(projectDir: string): void { this.routingConfig.removeProjectRouting(projectDir); }
+  applyPreset(projectDir: string, presetId: PresetId): void { this.routingConfig.applyPreset(projectDir, presetId); }
+  getEffectiveRoutingFor(projectDir: string, touchpoint: TouchpointId): RoutingAssignment { return this.routingConfig.getEffectiveRoutingFor(projectDir, touchpoint); }
+  getEffectiveRouting(projectDir: string): Record<TouchpointId, RoutingAssignment> { return this.routingConfig.getEffectiveRouting(projectDir); }
+  getContainerPhaseModels(projectDir: string): Record<'execution' | 'review' | 'meta_review', RoutingAssignment> { return this.routingConfig.getContainerPhaseModels(projectDir); }
 
   // --- Project Ticket Config ---
 
-  getProjectTicketConfig(projectDir: string): ProjectTicketConfig | null {
-    const key = `project:${path.resolve(projectDir)}`;
-    const row = this.db.prepare(
-      'SELECT provider, jira_url, jira_username, jira_api_token, jira_project_key, jira_issue_type, ticket_prefix, filter_mode, filter_ownership, filter_open_only, filter_query FROM project_ticket_config WHERE key = ?'
-    ).get(key) as (Omit<ProjectTicketConfig, 'provider' | 'filter_open_only'> & { provider: string; filter_open_only: number | null }) | undefined;
-    if (!row) return null;
-    return {
-      provider: row.provider as TicketProvider,
-      jira_url: row.jira_url,
-      jira_username: row.jira_username,
-      jira_api_token: row.jira_api_token,
-      jira_project_key: row.jira_project_key,
-      jira_issue_type: row.jira_issue_type,
-      ticket_prefix: row.ticket_prefix,
-      filter_mode: (row.filter_mode as 'assisted' | 'advanced' | null) ?? null,
-      filter_ownership: (row.filter_ownership as 'created' | 'assigned' | null) ?? null,
-      filter_open_only: row.filter_open_only != null ? row.filter_open_only !== 0 : null,
-      filter_query: row.filter_query ?? null,
-    };
-  }
-
-  setProjectTicketConfig(projectDir: string, config: ProjectTicketConfig): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    this.db.prepare(
-      `INSERT OR REPLACE INTO project_ticket_config
-        (key, provider, jira_url, jira_username, jira_api_token, jira_project_key, jira_issue_type, ticket_prefix, filter_mode, filter_ownership, filter_open_only, filter_query)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      key,
-      config.provider,
-      config.jira_url ?? null,
-      config.jira_username ?? null,
-      config.jira_api_token ?? null,
-      config.jira_project_key ?? null,
-      config.jira_issue_type ?? null,
-      config.ticket_prefix ?? null,
-      config.filter_mode ?? null,
-      config.filter_ownership ?? null,
-      config.filter_open_only != null ? (config.filter_open_only ? 1 : 0) : null,
-      config.filter_query ?? null,
-    );
-  }
-
-  removeProjectTicketConfig(projectDir: string): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    this.db.prepare('DELETE FROM project_ticket_config WHERE key = ?').run(key);
-  }
+  getProjectTicketConfig(projectDir: string): ProjectTicketConfig | null { return this.ticketConfig.getProjectTicketConfig(projectDir); }
+  setProjectTicketConfig(projectDir: string, config: ProjectTicketConfig): void { this.ticketConfig.setProjectTicketConfig(projectDir, config); }
+  removeProjectTicketConfig(projectDir: string): void { this.ticketConfig.removeProjectTicketConfig(projectDir); }
 
   // --- Dark Factory ---
 
-  getDarkFactoryEnabled(projectDir: string): boolean {
-    const key = `project:${path.resolve(projectDir)}`;
-    const row = this.db.prepare('SELECT level FROM project_dark_factory WHERE key = ?').get(key) as { level: string } | undefined;
-    return row ? row.level === 'dark_factory' : false;
-  }
-
-  setDarkFactoryEnabled(projectDir: string, enabled: boolean): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    if (enabled) {
-      this.db.prepare(
-        `INSERT INTO project_dark_factory (key, enabled, level, merge_strategy) VALUES (?, 1, 'dark_factory', 'squash')
-         ON CONFLICT(key) DO UPDATE SET enabled = 1, level = 'dark_factory'`
-      ).run(key);
-    } else {
-      const current = this.db.prepare('SELECT level FROM project_dark_factory WHERE key = ?').get(key) as { level: string } | undefined;
-      if (!current) {
-        this.db.prepare(
-          `INSERT INTO project_dark_factory (key, enabled, level, merge_strategy) VALUES (?, 0, 'manual', 'squash')`
-        ).run(key);
-      } else if (current.level === 'dark_factory') {
-        this.db.prepare(`UPDATE project_dark_factory SET enabled = 0, level = 'manual' WHERE key = ?`).run(key);
-      }
-      // If level is 'assisted', leave it unchanged — getDarkFactoryEnabled already returns false for non-dark_factory levels
-    }
-  }
-
-  getDarkFactoryConfig(projectDir: string): { level: string; merge_strategy: string } {
-    const key = `project:${path.resolve(projectDir)}`;
-    const row = this.db.prepare('SELECT level, merge_strategy FROM project_dark_factory WHERE key = ?').get(key) as { level: string; merge_strategy: string } | undefined;
-    return row ? { level: row.level, merge_strategy: row.merge_strategy } : { level: 'manual', merge_strategy: 'squash' };
-  }
-
-  setDarkFactoryConfig(projectDir: string, config: { level: string; merge_strategy: string }): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    const enabled = config.level === 'dark_factory' ? 1 : 0;
-    this.db.prepare(
-      `INSERT INTO project_dark_factory (key, enabled, level, merge_strategy) VALUES (?, ?, ?, ?)
-       ON CONFLICT(key) DO UPDATE SET enabled = excluded.enabled, level = excluded.level, merge_strategy = excluded.merge_strategy`
-    ).run(key, enabled, config.level, config.merge_strategy);
-  }
+  getDarkFactoryEnabled(projectDir: string): boolean { return this.darkFactory.getDarkFactoryEnabled(projectDir); }
+  setDarkFactoryEnabled(projectDir: string, enabled: boolean): void { this.darkFactory.setDarkFactoryEnabled(projectDir, enabled); }
+  getDarkFactoryConfig(projectDir: string): { level: string; merge_strategy: string } { return this.darkFactory.getDarkFactoryConfig(projectDir); }
+  setDarkFactoryConfig(projectDir: string, config: { level: string; merge_strategy: string }): void { this.darkFactory.setDarkFactoryConfig(projectDir, config); }
 
   // --- Ticket Board ---
 
-  /** Lazily inserts a ticket at 'backlog' if it doesn't exist; leaves column untouched if it does. */
-  seedBoardTicket(ticketId: string, projectDir: string, title: string): void {
-    const normalizedDir = path.resolve(projectDir);
-    this.db.prepare(
-      `INSERT INTO ticket_board (ticket_id, project_dir, column, title)
-       VALUES (?, ?, 'backlog', ?)
-       ON CONFLICT(ticket_id, project_dir) DO UPDATE SET title = excluded.title`
-    ).run(ticketId, normalizedDir, title);
-    this.sessionProtectedTickets.add(`${ticketId}|${normalizedDir}`);
-  }
+  seedBoardTicket(ticketId: string, projectDir: string, title: string): void { this.board.seedBoardTicket(ticketId, projectDir, title); }
+  setBoardTicketColumn(ticketId: string, projectDir: string, column: string): void { this.board.setBoardTicketColumn(ticketId, projectDir, column); }
+  advanceTicketToPrOpenIfInStack(ticketId: string, projectDir: string): void { this.board.advanceTicketToPrOpenIfInStack(ticketId, projectDir); }
+  reconcilePrOpenStuckTickets(): void { this.board.reconcilePrOpenStuckTickets(); }
+  reconcilePrCreatedTickets(): void { this.board.reconcilePrCreatedTickets(); }
+  listBoardTickets(projectDir: string): { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[] { return this.board.listBoardTickets(projectDir); }
+  listBoardTicketsInOrder(projectDir: string, orderedIds: string[]): { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[] { return this.board.listBoardTicketsInOrder(projectDir, orderedIds); }
+  deleteClosedEarlyColumnTickets(projectDir: string, openTicketIds: string[]): number { return this.board.deleteClosedEarlyColumnTickets(projectDir, openTicketIds); }
+  deleteBoardTicket(ticketId: string, projectDir: string): void { this.board.deleteBoardTicket(ticketId, projectDir); }
 
-  /** Moves a ticket to a new column. Inserts at the target column if the row doesn't exist. */
-  setBoardTicketColumn(ticketId: string, projectDir: string, column: string): void {
-    const normalizedDir = path.resolve(projectDir);
-    this.db.prepare(
-      `INSERT INTO ticket_board (ticket_id, project_dir, column, title)
-       VALUES (?, ?, ?, '')
-       ON CONFLICT(ticket_id, project_dir) DO UPDATE SET column = excluded.column, updated_at = datetime('now')`
-    ).run(ticketId, normalizedDir, column);
-    this.sessionProtectedTickets.add(`${ticketId}|${normalizedDir}`);
-    for (const listener of this._boardTicketMovedListeners) {
-      listener(ticketId, normalizedDir, column);
-    }
-  }
-
-  /**
-   * Forward-only guard: advances a linked ticket from in_stack → pr_open.
-   * No-op if the ticket does not exist or is not currently in in_stack.
-   */
-  advanceTicketToPrOpenIfInStack(ticketId: string, projectDir: string): void {
-    const tickets = this.listBoardTickets(projectDir);
-    const ticket = tickets.find(t => t.ticket_id === ticketId);
-    if (ticket?.column === 'in_stack') {
-      this.setBoardTicketColumn(ticketId, projectDir, 'pr_open');
-    }
-  }
-
-  /**
-   * Startup repair: for every pr_open board ticket whose linked stack has pr_number == null,
-   * move the ticket back to in_stack. This repairs cards stranded in pr_open after a failed
-   * PR creation (pr_number is set atomically with pr_url only on success).
-   * Cards with no linked stack are left unchanged — the stack may be gone and moving back
-   * could be wrong.
-   */
-  reconcilePrOpenStuckTickets(): void {
-    const rows = this.db.prepare(
-      `SELECT tb.ticket_id, tb.project_dir
-       FROM ticket_board tb
-       JOIN stacks s ON s.ticket = tb.ticket_id AND s.project_dir = tb.project_dir
-       WHERE tb.column = 'pr_open' AND s.pr_number IS NULL`
-    ).all() as { ticket_id: string; project_dir: string }[];
-    for (const row of rows) {
-      this.setBoardTicketColumn(row.ticket_id, row.project_dir, 'in_stack');
-    }
-  }
-
-  /**
-   * Backfill: for every stack with status='pr_created' and a non-null ticket,
-   * advance the linked ticket from in_stack → pr_open (forward-only, idempotent).
-   */
-  reconcilePrCreatedTickets(): void {
-    const stacks = this.db.prepare(
-      "SELECT ticket, project_dir FROM stacks WHERE status = 'pr_created' AND ticket IS NOT NULL"
-    ).all() as { ticket: string; project_dir: string }[];
-    for (const stack of stacks) {
-      this.advanceTicketToPrOpenIfInStack(stack.ticket, stack.project_dir);
-    }
-  }
-
-  /** Returns all ticket_board rows for a project, ordered by created_at asc. */
-  listBoardTickets(projectDir: string): { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[] {
-    const normalizedDir = path.resolve(projectDir);
-    return this.db.prepare(
-      `SELECT ticket_id, project_dir, column, title, created_at, updated_at
-       FROM ticket_board WHERE project_dir = ? ORDER BY created_at ASC`
-    ).all(normalizedDir) as { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[];
-  }
-
-  /**
-   * Returns ticket_board rows for a project ordered by provider fetch position.
-   * Rows present in orderedIds appear first, in that order.
-   * Rows absent from the fetch (closed/filtered-out) are appended after, ordered by created_at ASC.
-   */
-  listBoardTicketsInOrder(
-    projectDir: string,
-    orderedIds: string[],
-  ): { ticket_id: string; project_dir: string; column: string; title: string; created_at: string; updated_at: string }[] {
-    const allRows = this.listBoardTickets(projectDir);
-    const rowMap = new Map(allRows.map(r => [r.ticket_id, r]));
-    const fetchedSet = new Set(orderedIds);
-    const result: typeof allRows = [];
-    for (const id of orderedIds) {
-      const row = rowMap.get(id);
-      if (row) result.push(row);
-    }
-    for (const row of allRows) {
-      if (!fetchedSet.has(row.ticket_id)) result.push(row);
-    }
-    return result;
-  }
-
-  /**
-   * Hard-deletes board tickets in early columns (backlog, refining, spec_ready) whose ticket_id
-   * is not in openTicketIds. Called after a successful provider sync to remove closed tickets.
-   * Tickets in started columns (in_stack, pr_open, merged) are never touched.
-   * Returns the number of rows deleted so the caller can log it.
-   */
-  deleteClosedEarlyColumnTickets(projectDir: string, openTicketIds: string[]): number {
-    const normalizedDir = path.resolve(projectDir);
-    // Derive early columns from the canonical KANBAN_COLUMNS constant (first 3 entries).
-    const earlyColumns = KANBAN_COLUMNS.filter(c =>
-      (['backlog', 'refining', 'spec_ready'] as readonly string[]).includes(c)
-    );
-    const earlyColSql = earlyColumns.map(c => `'${c}'`).join(',');
-
-    const sessionKept = [...this.sessionProtectedTickets]
-      .filter(k => k.endsWith(`|${normalizedDir}`))
-      .map(k => k.split('|')[0]);
-    const effectiveKeepIds = [...new Set([...openTicketIds, ...sessionKept])];
-
-    if (effectiveKeepIds.length === 0) {
-      return this.db.prepare(
-        `DELETE FROM ticket_board WHERE project_dir = ? AND column IN (${earlyColSql})`
-      ).run(normalizedDir).changes;
-    }
-
-    const idPlaceholders = effectiveKeepIds.map(() => '?').join(',');
-    return this.db.prepare(
-      `DELETE FROM ticket_board WHERE project_dir = ? AND column IN (${earlyColSql}) AND ticket_id NOT IN (${idPlaceholders})`
-    ).run(normalizedDir, ...effectiveKeepIds).changes;
-  }
-
-  /** Hard-deletes exactly one ticket_board row. No-op when the row is absent. */
-  deleteBoardTicket(ticketId: string, projectDir: string): void {
-    const normalizedDir = path.resolve(projectDir);
-    this.db.prepare(
-      `DELETE FROM ticket_board WHERE ticket_id = ? AND project_dir = ?`
-    ).run(ticketId, normalizedDir);
-  }
-
-  getEffectiveModels(projectDir: string): ModelSettings {
-    return {
-      inner_model: this.getEffectiveRoutingFor(projectDir, 'execution').model,
-      outer_model: this.getEffectiveRoutingFor(projectDir, 'outer').model,
-    };
-  }
+  getEffectiveModels(projectDir: string): ModelSettings { return this.routingConfig.getEffectiveModels(projectDir); }
 
   // --- Backend Settings ---
 
-  getGlobalBackendSettings(): BackendSettings {
-    const modelRow = this.db.prepare(
-      "SELECT inner_backend, outer_backend FROM model_settings WHERE key = 'global'"
-    ).get() as { inner_backend: string; outer_backend: string } | undefined;
-
-    const innerOC = this.db.prepare(
-      "SELECT provider, model FROM opencode_settings WHERE key = 'global' AND surface = 'inner'"
-    ).get() as { provider: string | null; model: string | null } | undefined;
-
-    const outerOC = this.db.prepare(
-      "SELECT provider, model FROM opencode_settings WHERE key = 'global' AND surface = 'outer'"
-    ).get() as { provider: string | null; model: string | null } | undefined;
-
-    return {
-      inner_backend: modelRow?.inner_backend ?? 'claude',
-      outer_backend: modelRow?.outer_backend ?? 'claude',
-      inner_provider: innerOC?.provider ?? null,
-      inner_model: innerOC?.model ?? null,
-      outer_provider: outerOC?.provider ?? null,
-      outer_model: outerOC?.model ?? null,
-    };
-  }
-
-  setGlobalBackendSettings(settings: Partial<BackendSettings>): void {
-    const current = this.getGlobalBackendSettings();
-
-    this.db.prepare(
-      "UPDATE model_settings SET inner_backend = ?, outer_backend = ? WHERE key = 'global'"
-    ).run(
-      settings.inner_backend ?? current.inner_backend,
-      settings.outer_backend ?? current.outer_backend,
-    );
-
-    this.db.prepare(
-      "INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'inner', ?, ?)"
-    ).run(
-      settings.inner_provider !== undefined ? settings.inner_provider : current.inner_provider,
-      settings.inner_model !== undefined ? settings.inner_model : current.inner_model,
-    );
-
-    this.db.prepare(
-      "INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES ('global', 'outer', ?, ?)"
-    ).run(
-      settings.outer_provider !== undefined ? settings.outer_provider : current.outer_provider,
-      settings.outer_model !== undefined ? settings.outer_model : current.outer_model,
-    );
-  }
-
-  getProjectBackendSettings(projectDir: string): BackendSettings | null {
-    const key = `project:${path.resolve(projectDir)}`;
-
-    const modelRow = this.db.prepare(
-      'SELECT inner_backend, outer_backend FROM model_settings WHERE key = ?'
-    ).get(key) as { inner_backend: string; outer_backend: string } | undefined;
-
-    if (!modelRow) return null;
-
-    const innerOC = this.db.prepare(
-      "SELECT provider, model FROM opencode_settings WHERE key = ? AND surface = 'inner'"
-    ).get(key) as { provider: string | null; model: string | null } | undefined;
-
-    const outerOC = this.db.prepare(
-      "SELECT provider, model FROM opencode_settings WHERE key = ? AND surface = 'outer'"
-    ).get(key) as { provider: string | null; model: string | null } | undefined;
-
-    return {
-      inner_backend: modelRow.inner_backend,
-      outer_backend: modelRow.outer_backend,
-      inner_provider: innerOC?.provider ?? null,
-      inner_model: innerOC?.model ?? null,
-      outer_provider: outerOC?.provider ?? null,
-      outer_model: outerOC?.model ?? null,
-    };
-  }
-
-  setProjectBackendSettings(projectDir: string, settings: Partial<BackendSettings>): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    const existing = this.getProjectBackendSettings(projectDir);
-
-    const inner_backend = settings.inner_backend ?? existing?.inner_backend ?? 'global';
-    const outer_backend = settings.outer_backend ?? existing?.outer_backend ?? 'global';
-
-    // Ensure row exists with safe defaults; then update only backend columns
-    this.db.prepare(
-      "INSERT OR IGNORE INTO model_settings (key, inner_model, outer_model, inner_backend, outer_backend) VALUES (?, 'global', 'global', 'global', 'global')"
-    ).run(key);
-    this.db.prepare(
-      'UPDATE model_settings SET inner_backend = ?, outer_backend = ? WHERE key = ?'
-    ).run(inner_backend, outer_backend, key);
-
-    const inner_provider = settings.inner_provider !== undefined ? settings.inner_provider : (existing?.inner_provider ?? null);
-    const inner_model = settings.inner_model !== undefined ? settings.inner_model : (existing?.inner_model ?? null);
-    const outer_provider = settings.outer_provider !== undefined ? settings.outer_provider : (existing?.outer_provider ?? null);
-    const outer_model = settings.outer_model !== undefined ? settings.outer_model : (existing?.outer_model ?? null);
-
-    this.db.prepare(
-      "INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES (?, 'inner', ?, ?)"
-    ).run(key, inner_provider, inner_model);
-
-    this.db.prepare(
-      "INSERT OR REPLACE INTO opencode_settings (key, surface, provider, model) VALUES (?, 'outer', ?, ?)"
-    ).run(key, outer_provider, outer_model);
-  }
-
-  getEffectiveBackend(projectDir: string, surface: 'inner' | 'outer'): EffectiveBackend {
-    const globalSettings = this.getGlobalBackendSettings();
-    const projectSettings = this.getProjectBackendSettings(projectDir);
-
-    const globalInput: GlobalBackendInput = {
-      inner_backend: globalSettings.inner_backend as BackendType,
-      outer_backend: globalSettings.outer_backend as BackendType,
-      inner_provider: globalSettings.inner_provider,
-      inner_model: globalSettings.inner_model,
-      outer_provider: globalSettings.outer_provider,
-      outer_model: globalSettings.outer_model,
-    };
-
-    const projectInput: ProjectBackendInput | null = projectSettings
-      ? {
-          inner_backend: projectSettings.inner_backend,
-          outer_backend: projectSettings.outer_backend,
-          inner_provider: projectSettings.inner_provider,
-          inner_model: projectSettings.inner_model,
-          outer_provider: projectSettings.outer_provider,
-          outer_model: projectSettings.outer_model,
-        }
-      : null;
-
-    return resolveEffectiveBackend(globalInput, projectInput, surface);
-  }
+  getGlobalBackendSettings(): BackendSettings { return this.backendSettings.getGlobalBackendSettings(); }
+  setGlobalBackendSettings(settings: Partial<BackendSettings>): void { this.backendSettings.setGlobalBackendSettings(settings); }
+  getProjectBackendSettings(projectDir: string): BackendSettings | null { return this.backendSettings.getProjectBackendSettings(projectDir); }
+  setProjectBackendSettings(projectDir: string, settings: Partial<BackendSettings>): void { this.backendSettings.setProjectBackendSettings(projectDir, settings); }
+  getEffectiveBackend(projectDir: string, surface: 'inner' | 'outer'): EffectiveBackend { return this.backendSettings.getEffectiveBackend(projectDir, surface); }
 
   // --- Backend Secrets ---
 
-  setBackendSecret(key: string, surface: 'inner' | 'outer', name: string, value: string): void {
-    this.db.prepare(
-      'INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES (?, ?, ?, ?)'
-    ).run(key, surface, name, value);
-  }
-
-  hasBackendSecret(key: string, surface: 'inner' | 'outer'): boolean {
-    const row = this.db.prepare(
-      'SELECT 1 FROM backend_secrets WHERE key = ? AND surface = ?'
-    ).get(key, surface);
-    return row != null;
-  }
-
-  getBackendSecret(key: string, surface: 'inner' | 'outer'): string | null {
-    const row = this.db.prepare(
-      'SELECT value FROM backend_secrets WHERE key = ? AND surface = ?'
-    ).get(key, surface) as { value: string } | undefined;
-    return row?.value ?? null;
-  }
-
-  /**
-   * Store a multi-field credential bundle for a provider.
-   * Serialises the bundle as JSON in the value column with name='__bundle__'.
-   * Supersedes single-field setBackendSecret for multi-field providers (Bedrock, Ollama).
-   */
-  setBackendSecretBundle(key: string, surface: 'inner' | 'outer', bundle: Record<string, string>): void {
-    this.db.prepare(
-      'INSERT OR REPLACE INTO backend_secrets (key, surface, name, value) VALUES (?, ?, ?, ?)'
-    ).run(key, surface, '__bundle__', JSON.stringify(bundle));
-  }
-
-  /**
-   * Read the credential bundle for a provider.
-   * Handles both v25 JSON bundles (name='__bundle__') and legacy single-field rows
-   * (written by setBackendSecret) — legacy rows are returned as { [name]: value }.
-   */
-  getBackendSecretBundle(key: string, surface: 'inner' | 'outer'): Record<string, string> | null {
-    const row = this.db.prepare(
-      'SELECT name, value FROM backend_secrets WHERE key = ? AND surface = ?'
-    ).get(key, surface) as { name: string; value: string } | undefined;
-    if (!row) return null;
-    if (row.name === '__bundle__') {
-      try {
-        return JSON.parse(row.value) as Record<string, string>;
-      } catch {
-        return null;
-      }
-    }
-    // Legacy single-field row: treat as { [name]: value }
-    return row.name && row.value ? { [row.name]: row.value } : null;
-  }
+  setBackendSecret(key: string, surface: 'inner' | 'outer', name: string, value: string): void { this.secrets.setBackendSecret(key, surface, name, value); }
+  hasBackendSecret(key: string, surface: 'inner' | 'outer'): boolean { return this.secrets.hasBackendSecret(key, surface); }
+  getBackendSecret(key: string, surface: 'inner' | 'outer'): string | null { return this.secrets.getBackendSecret(key, surface); }
+  setBackendSecretBundle(key: string, surface: 'inner' | 'outer', bundle: Record<string, string>): void { this.secrets.setBackendSecretBundle(key, surface, bundle); }
+  getBackendSecretBundle(key: string, surface: 'inner' | 'outer'): Record<string, string> | null { return this.secrets.getBackendSecretBundle(key, surface); }
 
   // --- Provider Secrets ---
 
-  hasProviderSecret(key: string, provider: string): boolean {
-    const row = this.db.prepare(
-      'SELECT 1 FROM provider_secrets WHERE key = ? AND provider = ?'
-    ).get(key, provider);
-    return row != null;
-  }
-
-  getProviderSecretBundle(key: string, provider: string): Record<string, string> | null {
-    const row = this.db.prepare(
-      'SELECT value FROM provider_secrets WHERE key = ? AND provider = ?'
-    ).get(key, provider) as { value: string } | undefined;
-    if (!row) return null;
-    try {
-      return JSON.parse(row.value) as Record<string, string>;
-    } catch {
-      return null;
-    }
-  }
-
-  setProviderSecretBundle(key: string, provider: string, bundle: Record<string, string>): void {
-    this.db.prepare(
-      'INSERT OR REPLACE INTO provider_secrets (key, provider, value) VALUES (?, ?, ?)'
-    ).run(key, provider, JSON.stringify(bundle));
-  }
-
-  removeProviderSecret(key: string, provider: string): void {
-    this.db.prepare(
-      'DELETE FROM provider_secrets WHERE key = ? AND provider = ?'
-    ).run(key, provider);
-  }
-
-  getStoredProviderKeys(scope: string): string[] {
-    const rows = this.db.prepare(
-      'SELECT provider FROM provider_secrets WHERE key = ?'
-    ).all(scope) as { provider: string }[];
-    return rows.map(r => r.provider);
-  }
+  hasProviderSecret(key: string, provider: string): boolean { return this.secrets.hasProviderSecret(key, provider); }
+  getProviderSecretBundle(key: string, provider: string): Record<string, string> | null { return this.secrets.getProviderSecretBundle(key, provider); }
+  setProviderSecretBundle(key: string, provider: string, bundle: Record<string, string>): void { this.secrets.setProviderSecretBundle(key, provider, bundle); }
+  removeProviderSecret(key: string, provider: string): void { this.secrets.removeProviderSecret(key, provider); }
+  getStoredProviderKeys(scope: string): string[] { return this.secrets.getStoredProviderKeys(scope); }
 
   getEffectiveTouchpointDescriptor(
     projectDir: string,
     touchpoint: TouchpointId,
   ): { backend: AgentBackendKind; provider: string; model: string; credentials: Record<string, string> | null } {
-    const assignment = this.getEffectiveRoutingFor(projectDir, touchpoint);
+    const assignment = this.routingConfig.getEffectiveRoutingFor(projectDir, touchpoint);
     const projectKey = `project:${path.resolve(projectDir)}`;
     const credentials =
-      this.getProviderSecretBundle(projectKey, assignment.provider) ??
-      this.getProviderSecretBundle('global', assignment.provider);
+      this.secrets.getProviderSecretBundle(projectKey, assignment.provider) ??
+      this.secrets.getProviderSecretBundle('global', assignment.provider);
     return {
       backend: assignment.backend,
       provider: assignment.provider,
@@ -2183,160 +1147,22 @@ export class Registry {
 
   // --- Session Monitor Settings ---
 
-  getSessionMonitorSettings(): SessionMonitorSettingsRecord {
-    const row = this.db.prepare(
-      "SELECT * FROM session_monitor_settings WHERE key = 'global'"
-    ).get() as SessionMonitorSettingsRow | undefined;
-    return row
-      ? {
-          warningThreshold: row.warning_threshold,
-          criticalThreshold: row.critical_threshold,
-          autoHaltThreshold: row.auto_halt_threshold,
-          autoHaltEnabled: row.auto_halt_enabled === 1,
-          autoResumeAfterReset: row.auto_resume_after_reset === 1,
-          pollIntervalMs: row.poll_interval_ms,
-          idleTimeoutMs: row.idle_timeout_ms,
-          pollingDisabled: row.polling_disabled === 1,
-        }
-      : {
-          warningThreshold: 80,
-          criticalThreshold: 90,
-          autoHaltThreshold: 95,
-          autoHaltEnabled: true,
-          autoResumeAfterReset: false,
-          pollIntervalMs: 120_000,
-          idleTimeoutMs: 300_000,
-          pollingDisabled: false,
-        };
-  }
-
-  setSessionMonitorSettings(settings: Partial<SessionMonitorSettingsRecord>): void {
-    const current = this.getSessionMonitorSettings();
-    this.db.prepare(
-      `INSERT OR REPLACE INTO session_monitor_settings
-        (key, warning_threshold, critical_threshold, auto_halt_threshold, auto_halt_enabled, auto_resume_after_reset, poll_interval_ms, idle_timeout_ms, polling_disabled)
-       VALUES ('global', ?, ?, ?, ?, ?, ?, ?, ?)`
-    ).run(
-      settings.warningThreshold ?? current.warningThreshold,
-      settings.criticalThreshold ?? current.criticalThreshold,
-      settings.autoHaltThreshold ?? current.autoHaltThreshold,
-      (settings.autoHaltEnabled ?? current.autoHaltEnabled) ? 1 : 0,
-      (settings.autoResumeAfterReset ?? current.autoResumeAfterReset) ? 1 : 0,
-      settings.pollIntervalMs ?? current.pollIntervalMs,
-      settings.idleTimeoutMs ?? current.idleTimeoutMs,
-      (settings.pollingDisabled ?? current.pollingDisabled) ? 1 : 0,
-    );
-  }
+  getSessionMonitorSettings(): SessionMonitorSettingsRecord { return this.session.getSessionMonitorSettings(); }
+  setSessionMonitorSettings(settings: Partial<SessionMonitorSettingsRecord>): void { this.session.setSessionMonitorSettings(settings); }
 
   // --- Epic Run State ---
 
-  private static readonly VALID_EPIC_STATUSES: ReadonlySet<string> = new Set(['running', 'paused', 'completed', 'needs_human']);
-
-  getEpicRunState(epicId: string): EpicRunState | null {
-    const row = this.db.prepare(
-      'SELECT epic_id, project_dir, status, created_at, updated_at FROM epics WHERE epic_id = ?'
-    ).get(epicId) as EpicRunState | undefined;
-    return row ?? null;
-  }
-
-  upsertEpicRunState(epicId: string, projectDir: string, status: EpicStatus): void {
-    if (!Registry.VALID_EPIC_STATUSES.has(status)) {
-      throw new Error(`Invalid epic status: ${status}`);
-    }
-    const normalizedDir = path.resolve(projectDir);
-    this.db.prepare(
-      `INSERT INTO epics (epic_id, project_dir, status, updated_at)
-       VALUES (?, ?, ?, datetime('now'))
-       ON CONFLICT(epic_id) DO UPDATE SET
-         status = excluded.status,
-         updated_at = excluded.updated_at`
-    ).run(epicId, normalizedDir, status);
-  }
-
-  getEpicTasks(epicId: string): EpicTask[] {
-    return this.db.prepare(
-      'SELECT epic_id, ticket_id, role, origin, crit_id, gap_cycles, done FROM epic_tasks WHERE epic_id = ?'
-    ).all(epicId) as EpicTask[];
-  }
-
-  getAllEpicTasks(): EpicTask[] {
-    return this.db.prepare(
-      'SELECT epic_id, ticket_id, role, origin, crit_id, gap_cycles, done FROM epic_tasks'
-    ).all() as EpicTask[];
-  }
-
-  getAllEpicIds(): string[] {
-    return (this.db.prepare(
-      'SELECT DISTINCT epic_id FROM epic_tasks ORDER BY epic_id'
-    ).all() as { epic_id: string }[]).map((r) => r.epic_id);
-  }
-
-  /**
-   * Reverse lookup: find the epic a ticket belongs to. Read-only; consumes the
-   * existing `epic_tasks` table shape (no write, no schema change).
-   *
-   * A ticket maps to at most one epic in practice. If multiple `epic_tasks`
-   * rows reference the same ticket, the first by `epic_id` ordering is returned
-   * deterministically so repeated calls are stable.
-   */
-  getEpicForTicket(
-    ticketId: string,
-  ): { epicId: string; role: EpicTaskRole; critId: string | null } | null {
-    const row = this.db.prepare(
-      'SELECT epic_id, role, crit_id FROM epic_tasks WHERE ticket_id = ? ORDER BY epic_id LIMIT 1'
-    ).get(ticketId) as { epic_id: string; role: EpicTaskRole; crit_id: string | null } | undefined;
-    if (!row) return null;
-    return { epicId: row.epic_id, role: row.role, critId: row.crit_id };
-  }
-
-  upsertEpicTask(
-    epicId: string,
-    ticketId: string,
-    opts: { role: EpicTaskRole; origin: EpicTaskOrigin; critId?: string | null },
-  ): void {
-    this.db.prepare(
-      `INSERT INTO epic_tasks (epic_id, ticket_id, role, origin, crit_id)
-       VALUES (?, ?, ?, ?, ?)
-       ON CONFLICT(epic_id, ticket_id) DO UPDATE SET
-         role = excluded.role,
-         origin = excluded.origin,
-         crit_id = excluded.crit_id`
-    ).run(epicId, ticketId, opts.role, opts.origin, opts.critId ?? null);
-  }
-
-  setEpicTaskDone(epicId: string, ticketId: string): void {
-    this.db.prepare(
-      'UPDATE epic_tasks SET done = 1 WHERE epic_id = ? AND ticket_id = ?'
-    ).run(epicId, ticketId);
-  }
-
-  incrementGapCycles(epicId: string, ticketId: string): number {
-    // Insert-or-increment: if row is missing, creates it at gap_cycles=1.
-    this.db.prepare(
-      `INSERT INTO epic_tasks (epic_id, ticket_id, role, origin, gap_cycles)
-       VALUES (?, ?, 'build', 'gap', 1)
-       ON CONFLICT(epic_id, ticket_id) DO UPDATE SET gap_cycles = gap_cycles + 1`
-    ).run(epicId, ticketId);
-    const row = this.db.prepare(
-      'SELECT gap_cycles FROM epic_tasks WHERE epic_id = ? AND ticket_id = ?'
-    ).get(epicId, ticketId) as { gap_cycles: number };
-    return row.gap_cycles;
-  }
-
-  getEpicMaxParallelStacks(projectDir: string): number {
-    const key = `project:${path.resolve(projectDir)}`;
-    const row = this.db.prepare(
-      'SELECT value FROM project_epic_settings WHERE key = ?'
-    ).get(key) as { value: string } | undefined;
-    return row ? parseInt(row.value, 10) : 3;
-  }
-
-  setEpicMaxParallelStacks(projectDir: string, n: number): void {
-    const key = `project:${path.resolve(projectDir)}`;
-    this.db.prepare(
-      'INSERT OR REPLACE INTO project_epic_settings (key, value) VALUES (?, ?)'
-    ).run(key, String(n));
-  }
+  getEpicRunState(epicId: string): EpicRunState | null { return this.epics.getEpicRunState(epicId); }
+  upsertEpicRunState(epicId: string, projectDir: string, status: EpicStatus): void { this.epics.upsertEpicRunState(epicId, projectDir, status); }
+  getEpicTasks(epicId: string): EpicTask[] { return this.epics.getEpicTasks(epicId); }
+  getAllEpicTasks(): EpicTask[] { return this.epics.getAllEpicTasks(); }
+  getAllEpicIds(): string[] { return this.epics.getAllEpicIds(); }
+  getEpicForTicket(ticketId: string): { epicId: string; role: EpicTaskRole; critId: string | null } | null { return this.epics.getEpicForTicket(ticketId); }
+  upsertEpicTask(epicId: string, ticketId: string, opts: { role: EpicTaskRole; origin: EpicTaskOrigin; critId?: string | null }): void { this.epics.upsertEpicTask(epicId, ticketId, opts); }
+  setEpicTaskDone(epicId: string, ticketId: string): void { this.epics.setEpicTaskDone(epicId, ticketId); }
+  incrementGapCycles(epicId: string, ticketId: string): number { return this.epics.incrementGapCycles(epicId, ticketId); }
+  getEpicMaxParallelStacks(projectDir: string): number { return this.epics.getEpicMaxParallelStacks(projectDir); }
+  setEpicMaxParallelStacks(projectDir: string, n: number): void { this.epics.setEpicMaxParallelStacks(projectDir, n); }
 
   // --- Cleanup ---
 
