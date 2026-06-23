@@ -454,9 +454,18 @@ export function RefineTicketDialog() {
 
             {showFailState && gate && (
               <div className="space-y-3" data-testid="refine-fail">
-                <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5">
-                  Spec gate failed. {gate.gateSummary}
-                </div>
+                {gate.contractError ? (
+                  <div
+                    className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5"
+                    data-testid="refine-contract-error"
+                  >
+                    Spec passed, but contract generation failed: {gate.contractError} Use Retry to re-run.
+                  </div>
+                ) : (
+                  <div className="text-xs text-amber-400 bg-amber-500/10 border border-amber-500/20 rounded-lg px-3 py-2.5">
+                    Spec gate failed. {gate.gateSummary}
+                  </div>
+                )}
                 {gate.questions.length > 0 ? (
                   <QuestionList
                     questions={gate.questions.map((q, i) => normalizeQuestion(q, i))}

@@ -8,7 +8,13 @@
  */
 
 import { stackManager, agentBackend, registry } from '../index';
-import { fetchTicketWithConfig, updateTicketWithConfig } from '../control-plane/ticket-config';
+import {
+  fetchTicketWithConfig,
+  updateTicketWithConfig,
+  upsertContractCommentWithConfig,
+} from '../control-plane/ticket-config';
+import { generateContract, buildContractComment } from '../control-plane/contract-generator';
+import { markContractReady } from '../control-plane/ticket-spec';
 import type { ProjectTicketConfig } from '../control-plane/registry';
 import { getDefaultSpecQualityGate } from '../spec-quality-gate';
 import { showNotification } from '../tray';
@@ -425,6 +431,40 @@ async function handleSpecCheck(
   return {
     passed,
     report: result,
+  };
+}
+
+/**
+ * Wire the contract-generation + storage deps consumed by the spec gate's
+ * atomic post-pass step. Resolves the `contract_generator` touchpoint for model
+ * routing, delegates the bounded ephemeral call to the agent backend, and
+ * stores the result as a marked ticket comment + `contract:sha` label.
+ */
+export function makeContractGateDeps(): {
+  generateContract: (ticketId: string, projectDir: string, specBody: string) => Promise<string>;
+  storeContract: (ticketId: string, projectDir: string, json: string, hash: string) => Promise<void>;
+} {
+  return {
+    generateContract: async (ticketId, projectDir, specBody) => {
+      const desc = registry.getEffectiveTouchpointDescriptor(projectDir, 'contract_generator');
+      if (desc.backend === 'opencode' && desc.credentials === null) {
+        throw new Error(`Contract generation blocked: provider ${desc.provider} needs an API key`);
+      }
+      const model = desc.backend === 'opencode' ? `${desc.provider}/${desc.model}` : desc.model;
+      const { json } = await generateContract(
+        { ticketId, projectDir, specBody },
+        {
+          runEphemeral: (prompt, dir, timeoutMs) =>
+            agentBackend.runEphemeralAgent(prompt, dir, timeoutMs, { ticketId, stage: 'contract' }, model, 'contract_generator'),
+        },
+      );
+      return json;
+    },
+    storeContract: async (ticketId, projectDir, json, hash) => {
+      const config = registry.getProjectTicketConfig(projectDir);
+      await upsertContractCommentWithConfig(ticketId, buildContractComment(json, hash), config, projectDir);
+      await markContractReady(ticketId, hash);
+    },
   };
 }
 

@@ -12,6 +12,7 @@ import { ConfigPane, ConfigPaneContext } from './types';
 const TOUCHPOINT_META: Record<TouchpointId, { label: string; description: string }> = {
   outer: { label: 'Outer orchestrator', description: 'Drives the chat session, plans & dispatches' },
   refine: { label: 'Refine', description: 'Turns a ticket into a detailed spec' },
+  contract_generator: { label: 'Contract generator', description: 'Turns the approved spec into a machine-verifiable contract' },
   execution: { label: 'Execution', description: 'Inner worker that writes the code' },
   review: { label: 'Review', description: 'Reviews the diff for bugs & quality' },
   meta_review: { label: 'Meta-review', description: 'Final gate; reviews the reviewer' },

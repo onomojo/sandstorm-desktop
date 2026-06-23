@@ -4,6 +4,7 @@ import type { CatalogProvider } from '../../shared/opencode-providers';
 export type TouchpointId =
   | 'outer'
   | 'refine'
+  | 'contract_generator'
   | 'execution'
   | 'review'
   | 'meta_review'
@@ -13,6 +14,7 @@ export type TouchpointId =
 export const TOUCHPOINTS: readonly TouchpointId[] = [
   'outer',
   'refine',
+  'contract_generator',
   'execution',
   'review',
   'meta_review',
@@ -34,6 +36,7 @@ export const PRESETS: Record<PresetId, Record<TouchpointId, RoutingAssignment>> 
   balanced: {
     outer:          { backend: 'claude', provider: 'anthropic', model: 'opus' },
     refine:         { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
+    contract_generator: { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
     execution:      { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
     review:         { backend: 'claude', provider: 'anthropic', model: 'opus' },
     meta_review:    { backend: 'claude', provider: 'anthropic', model: 'opus' },
@@ -43,6 +46,7 @@ export const PRESETS: Record<PresetId, Record<TouchpointId, RoutingAssignment>> 
   max_quality: {
     outer:          { backend: 'claude', provider: 'anthropic', model: 'opus' },
     refine:         { backend: 'claude', provider: 'anthropic', model: 'opus' },
+    contract_generator: { backend: 'claude', provider: 'anthropic', model: 'opus' },
     execution:      { backend: 'claude', provider: 'anthropic', model: 'opus' },
     review:         { backend: 'claude', provider: 'anthropic', model: 'opus' },
     meta_review:    { backend: 'claude', provider: 'anthropic', model: 'opus' },
@@ -52,6 +56,7 @@ export const PRESETS: Record<PresetId, Record<TouchpointId, RoutingAssignment>> 
   budget: {
     outer:          { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
     refine:         { backend: 'claude', provider: 'anthropic', model: 'haiku' },
+    contract_generator: { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
     execution:      { backend: 'claude', provider: 'anthropic', model: 'haiku' },
     review:         { backend: 'claude', provider: 'anthropic', model: 'sonnet' },
     meta_review:    { backend: 'claude', provider: 'anthropic', model: 'sonnet' },

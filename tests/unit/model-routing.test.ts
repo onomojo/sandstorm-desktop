@@ -35,8 +35,9 @@ describe('Model Routing', () => {
   // Contract: all touchpoints resolve for an unconfigured project
   // ==========================================================================
   describe('contract: unconfigured project resolves all touchpoints', () => {
-    it('resolves all 7 touchpoints to {backend, model} for a fresh database', () => {
-      expect(TOUCHPOINTS).toHaveLength(7);
+    it('resolves all 8 touchpoints to {backend, model} for a fresh database', () => {
+      expect(TOUCHPOINTS).toHaveLength(8);
+      expect(TOUCHPOINTS).toContain('contract_generator');
       for (const t of TOUCHPOINTS) {
         const result = registry.getEffectiveRoutingFor('/proj/unconfigured', t);
         expect(result).toHaveProperty('backend');
@@ -155,7 +156,7 @@ describe('Model Routing', () => {
     const presetIds: PresetId[] = ['max_quality', 'balanced', 'budget'];
 
     for (const presetId of presetIds) {
-      it(`PRESETS.${presetId} covers all 7 touchpoints with valid assignments`, () => {
+      it(`PRESETS.${presetId} covers all 8 touchpoints with valid assignments`, () => {
         const preset = PRESETS[presetId];
         for (const t of TOUCHPOINTS) {
           expect(preset[t]).toBeDefined();

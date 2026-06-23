@@ -5,6 +5,7 @@ import {
   shortBodyHash,
   runSpecCheck,
   runSpecRefine,
+  finalizeSpecGatePass,
   type SpecGateDeps,
 } from '../../src/main/control-plane/ticket-spec';
 import type { ProjectTicketConfig } from '../../src/main/control-plane/registry';
@@ -343,6 +344,39 @@ describe('runSpecCheck', () => {
     expect(deps.markSpecReady).not.toHaveBeenCalled();
   });
 
+  it('generates + stores the contract before marking spec-ready on PASS', async () => {
+    const body = '# Ticket body';
+    const generateContract = vi.fn().mockResolvedValue('{"contract_version":1}');
+    const storeContract = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({
+      fetchTicket: vi.fn().mockResolvedValue(body),
+      generateContract,
+      storeContract,
+    });
+    const result = await runSpecCheck('1', '/proj', deps);
+    expect(result.passed).toBe(true);
+    expect(result.contractError).toBeUndefined();
+    expect(generateContract).toHaveBeenCalledWith('1', '/proj', body);
+    expect(storeContract).toHaveBeenCalledWith('1', '/proj', '{"contract_version":1}', shortBodyHash(body));
+    expect(deps.markSpecReady).toHaveBeenCalledWith('1', shortBodyHash(body));
+  });
+
+  it('reports NOT passed with a contractError when contract generation fails (block-until-contract)', async () => {
+    const body = '# Ticket body';
+    const generateContract = vi.fn().mockRejectedValue(new Error('model returned non-JSON'));
+    const storeContract = vi.fn().mockResolvedValue(undefined);
+    const deps = makeDeps({
+      fetchTicket: vi.fn().mockResolvedValue(body),
+      generateContract,
+      storeContract,
+    });
+    const result = await runSpecCheck('1', '/proj', deps);
+    expect(result.passed).toBe(false);
+    expect(result.contractError).toContain('model returned non-JSON');
+    expect(storeContract).not.toHaveBeenCalled();
+    expect(deps.markSpecReady).not.toHaveBeenCalled();
+  });
+
   it('includes reportText on FAIL and null on PASS', async () => {
     const failDeps = makeDeps({
       runCheck: vi.fn().mockResolvedValue({ passed: false, report: FAIL_REPORT }),
@@ -427,5 +461,45 @@ describe('runSpecRefine', () => {
     const passDeps = makeDeps();
     const passResult = await runSpecRefine('1', '/proj', 'answers', passDeps);
     expect(passResult.reportText).toBeNull();
+  });
+});
+
+describe('finalizeSpecGatePass', () => {
+  const mkDeps = (over: Partial<Pick<SpecGateDeps, 'generateContract' | 'storeContract' | 'markSpecReady'>> = {}) => ({
+    markSpecReady: vi.fn().mockResolvedValue(undefined),
+    generateContract: vi.fn().mockResolvedValue('{"contract_version":1}'),
+    storeContract: vi.fn().mockResolvedValue(undefined),
+    ...over,
+  });
+
+  it('generates, stores, then marks spec-ready in order on success', async () => {
+    const deps = mkDeps();
+    const res = await finalizeSpecGatePass('7', '/p', 'body', 'abc123', deps);
+    expect(res).toEqual({ ok: true });
+    expect(deps.generateContract).toHaveBeenCalledWith('7', '/p', 'body');
+    expect(deps.storeContract).toHaveBeenCalledWith('7', '/p', '{"contract_version":1}', 'abc123');
+    expect(deps.markSpecReady).toHaveBeenCalledWith('7', 'abc123');
+  });
+
+  it('returns ok:false and does NOT mark spec-ready when generation throws', async () => {
+    const deps = mkDeps({ generateContract: vi.fn().mockRejectedValue(new Error('boom')) });
+    const res = await finalizeSpecGatePass('7', '/p', 'body', 'abc123', deps);
+    expect(res).toEqual({ ok: false, error: expect.stringContaining('boom') });
+    expect(deps.storeContract).not.toHaveBeenCalled();
+    expect(deps.markSpecReady).not.toHaveBeenCalled();
+  });
+
+  it('returns ok:false and does NOT mark spec-ready when storage throws', async () => {
+    const deps = mkDeps({ storeContract: vi.fn().mockRejectedValue(new Error('gh down')) });
+    const res = await finalizeSpecGatePass('7', '/p', 'body', 'abc123', deps);
+    expect(res).toEqual({ ok: false, error: expect.stringContaining('gh down') });
+    expect(deps.markSpecReady).not.toHaveBeenCalled();
+  });
+
+  it('falls back to mark-spec-ready-only when contract deps are absent (legacy)', async () => {
+    const markSpecReady = vi.fn().mockResolvedValue(undefined);
+    const res = await finalizeSpecGatePass('7', '/p', 'body', 'abc123', { markSpecReady });
+    expect(res).toEqual({ ok: true });
+    expect(markSpecReady).toHaveBeenCalledWith('7', 'abc123');
   });
 });

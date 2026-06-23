@@ -33,6 +33,13 @@ export interface SpecGateResult {
   error?: string;
   /** Full evaluator report text, capped at 64KB. Present on FAIL; null/absent on PASS or error. */
   reportText?: string | null;
+  /**
+   * Set when the spec gate passed but contract generation/storage failed. The
+   * ticket is reported as NOT passed (stays in Refining) so the existing Retry
+   * action re-attempts. Distinct from `error` (which is a gate-evaluation
+   * failure) and from `reportText` (gate FAIL questions).
+   */
+  contractError?: string;
 }
 
 const MAX_REPORT_TEXT_LEN = 64 * 1024;
@@ -210,11 +217,11 @@ export function shortBodyHash(body: string): string {
 }
 
 /**
- * Replace existing `spec-ready:sha-*` labels with a fresh one tracking the
- * current body. Best-effort — failures (no gh, no perms, network) are swallowed.
- * GitHub-specific; no-op for Jira tickets.
+ * Replace existing `<prefix>:sha-*` labels with a fresh one tracking the
+ * current body hash. Best-effort — failures (no gh, no perms, network) are
+ * swallowed. GitHub-specific; no-op for Jira tickets.
  */
-async function markSpecReady(ticketId: string, hash: string): Promise<void> {
+async function replaceShaLabel(ticketId: string, prefix: string, hash: string): Promise<void> {
   if (!hash) return;
   try {
     const { stdout } = await execFileAsync(
@@ -225,7 +232,7 @@ async function markSpecReady(ticketId: string, hash: string): Promise<void> {
     const stale = stdout
       .split('\n')
       .map((l) => l.trim())
-      .filter((l) => l.startsWith('spec-ready:sha-'));
+      .filter((l) => l.startsWith(`${prefix}:sha-`));
     for (const lab of stale) {
       try {
         await execFileAsync('gh', ['issue', 'edit', ticketId, '--remove-label', lab], { timeout: 15000 });
@@ -233,10 +240,24 @@ async function markSpecReady(ticketId: string, hash: string): Promise<void> {
         // ignore
       }
     }
-    await execFileAsync('gh', ['issue', 'edit', ticketId, '--add-label', `spec-ready:sha-${hash}`], { timeout: 15000 });
+    await execFileAsync('gh', ['issue', 'edit', ticketId, '--add-label', `${prefix}:sha-${hash}`], { timeout: 15000 });
   } catch {
     // ignore
   }
+}
+
+/** Mark a ticket spec-ready by stamping the current body hash as a label. */
+async function markSpecReady(ticketId: string, hash: string): Promise<void> {
+  return replaceShaLabel(ticketId, 'spec-ready', hash);
+}
+
+/**
+ * Mark a ticket as having a current execution contract by stamping the spec
+ * body hash as a `contract:sha-<hash>` label. Lets the board/dispatch check
+ * contract presence + freshness without fetching comments.
+ */
+export async function markContractReady(ticketId: string, hash: string): Promise<void> {
+  return replaceShaLabel(ticketId, 'contract', hash);
 }
 
 export interface SpecGateDeps {
@@ -252,6 +273,42 @@ export interface SpecGateDeps {
   readSpecReadyHash: (ticketId: string) => Promise<string>;
   readTicketUrl: (ticketId: string) => Promise<string>;
   markSpecReady: (ticketId: string, hash: string) => Promise<void>;
+  /**
+   * Generate the execution contract JSON for an approved ticket. Throws on
+   * failure. Optional: when absent, the gate falls back to legacy
+   * mark-spec-ready-only behavior (e.g. scheduler paths / tests not exercising
+   * contracts).
+   */
+  generateContract?: (ticketId: string, projectDir: string, specBody: string) => Promise<string>;
+  /** Persist the contract JSON on the ticket (comment + label). Throws on failure. */
+  storeContract?: (ticketId: string, projectDir: string, json: string, hash: string) => Promise<void>;
+}
+
+/**
+ * Atomic post-gate-pass step: generate the contract, store it, then mark the
+ * ticket spec-ready. Spec-ready is set ONLY on full success, so a cached "pass"
+ * always implies a stored, current contract. When contract deps are not wired,
+ * preserves the legacy behavior (mark spec-ready immediately).
+ */
+export async function finalizeSpecGatePass(
+  ticketId: string,
+  projectDir: string,
+  body: string,
+  hash: string,
+  deps: Pick<SpecGateDeps, 'generateContract' | 'storeContract' | 'markSpecReady'>,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  if (!deps.generateContract || !deps.storeContract) {
+    if (hash) await deps.markSpecReady(ticketId, hash);
+    return { ok: true };
+  }
+  try {
+    const json = await deps.generateContract(ticketId, projectDir, body);
+    await deps.storeContract(ticketId, projectDir, json, hash);
+    if (hash) await deps.markSpecReady(ticketId, hash);
+    return { ok: true };
+  } catch (e) {
+    return { ok: false, error: e instanceof Error ? e.message : String(e) };
+  }
 }
 
 /**
@@ -330,7 +387,19 @@ export async function runSpecCheck(
   const passed = !!report.passed;
   const reportText = report.report || '';
   if (passed && curHash) {
-    await deps.markSpecReady(ticketId, curHash);
+    const fin = await finalizeSpecGatePass(ticketId, projectDir, body, curHash, deps);
+    if (!fin.ok) {
+      // Gate passed but the contract step failed: report NOT passed so the
+      // ticket stays in Refining and the existing Retry re-attempts.
+      return {
+        passed: false,
+        questions: [],
+        gateSummary: 'Spec passed; contract generation failed',
+        ticketUrl: url || null,
+        cached: false,
+        contractError: fin.error,
+      };
+    }
   }
 
   return {
@@ -422,6 +491,7 @@ export function defaultSpecGateDeps(
     userAnswers?: string
   ) => Promise<SpecGateReport>,
   getProviderConfig: (projectDir: string) => ProjectTicketConfig | null,
+  contractDeps?: Pick<SpecGateDeps, 'generateContract' | 'storeContract'>,
 ): SpecGateDeps {
   return {
     fetchTicket: async (ticketId, projectDir) => {
@@ -435,6 +505,8 @@ export function defaultSpecGateDeps(
     readSpecReadyHash,
     readTicketUrl,
     markSpecReady,
+    generateContract: contractDeps?.generateContract,
+    storeContract: contractDeps?.storeContract,
   };
 }
 

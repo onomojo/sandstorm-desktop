@@ -124,6 +124,7 @@ vi.mock('../../src/main/index', () => ({
 // Mock tools so spawnSpecCheck is controllable — the key seam under test.
 vi.mock('../../src/main/claude/tools', () => ({
   handleToolCall: vi.fn(),
+  makeContractGateDeps: vi.fn(() => ({ generateContract: vi.fn(), storeContract: vi.fn() })),
   spawnSpecCheck: mockSpawnSpecCheck,
   spawnSpecRefine: mockSpawnSpecRefine,
   validateProjectDir: vi.fn().mockReturnValue(null),

@@ -299,7 +299,7 @@ async function initializeApp(): Promise<void> {
           }
           case 'refine-to-comments': {
             const { runRefineToComments, buildRefineToCommentsDeps } = await import('./scheduler/refine-to-comments');
-            const { handleToolCall } = await import('./claude/tools');
+            const { handleToolCall, makeContractGateDeps } = await import('./claude/tools');
             const { defaultSpecGateDeps, runSpecCheck, runSpecRefine } = await import('./control-plane/ticket-spec');
             const specDeps = defaultSpecGateDeps(
               (ticketId, projectDir) =>
@@ -307,6 +307,7 @@ async function initializeApp(): Promise<void> {
               (ticketId, projectDir, userAnswers) =>
                 handleToolCall('spec_refine', { ticketId, projectDir, userAnswers }) as Promise<import('./control-plane/ticket-spec').SpecGateReport>,
               (projectDir) => registry.getProjectTicketConfig(projectDir),
+              makeContractGateDeps(),
             );
             const deps = buildRefineToCommentsDeps(
               (ticketId, projectDir) => runSpecCheck(ticketId, projectDir, specDeps),
