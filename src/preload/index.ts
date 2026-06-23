@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer } from 'electron';
+import { INVOKE_CHANNELS, type EventChannel } from '../main/ipc-channels';
 import type { ByTicketEntry, ByEpicEntry } from '@main/telemetry/types';
 import type { CatalogProviderList } from '../shared/opencode-providers';
 
@@ -308,269 +309,269 @@ export interface SandstormAPI {
     start: (epicId: string, projectDir: string) => Promise<unknown>;
     getRunPlan: (epicId: string, projectDir: string) => Promise<unknown>;
   };
-  on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
+  on: (channel: EventChannel, callback: (...args: unknown[]) => void) => () => void;
 }
 
 const api: SandstormAPI = {
   projects: {
-    list: () => ipcRenderer.invoke('projects:list'),
-    add: (directory) => ipcRenderer.invoke('projects:add', directory),
-    remove: (id) => ipcRenderer.invoke('projects:remove', id),
-    browse: () => ipcRenderer.invoke('projects:browse'),
-    checkInit: (directory) => ipcRenderer.invoke('projects:checkInit', directory),
-    initialize: (directory) => ipcRenderer.invoke('projects:initialize', directory),
-    checkMigration: (directory) => ipcRenderer.invoke('projects:checkMigration', directory),
-    autoDetectVerify: (directory) => ipcRenderer.invoke('projects:autoDetectVerify', directory),
+    list: () => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_LIST),
+    add: (directory) => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_ADD, directory),
+    remove: (id) => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_REMOVE, id),
+    browse: () => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_BROWSE),
+    checkInit: (directory) => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_CHECK_INIT, directory),
+    initialize: (directory) => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_INITIALIZE, directory),
+    checkMigration: (directory) => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_CHECK_MIGRATION, directory),
+    autoDetectVerify: (directory) => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_AUTO_DETECT_VERIFY, directory),
     saveMigration: (directory: string, verifyScript: string, serviceDescriptions: Record<string, string>) =>
-      ipcRenderer.invoke('projects:saveMigration', directory, verifyScript, serviceDescriptions),
+      ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_SAVE_MIGRATION, directory, verifyScript, serviceDescriptions),
     generateCompose: (directory: string) =>
-      ipcRenderer.invoke('projects:generateCompose', directory),
+      ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_GENERATE_COMPOSE, directory),
     saveComposeSetup: (directory: string, composeYaml: string, composeFile: string) =>
-      ipcRenderer.invoke('projects:saveComposeSetup', directory, composeYaml, composeFile),
+      ipcRenderer.invoke(INVOKE_CHANNELS.PROJECTS_SAVE_COMPOSE_SETUP, directory, composeYaml, composeFile),
   },
   stacks: {
-    list: () => ipcRenderer.invoke('stacks:list'),
-    get: (id) => ipcRenderer.invoke('stacks:get', id),
-    create: (opts) => ipcRenderer.invoke('stacks:create', opts),
-    teardown: (id) => ipcRenderer.invoke('stacks:teardown', id),
-    stop: (id) => ipcRenderer.invoke('stacks:stop', id),
-    start: (id) => ipcRenderer.invoke('stacks:start', id),
-    history: () => ipcRenderer.invoke('stacks:history'),
+    list: () => ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_LIST),
+    get: (id) => ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_GET, id),
+    create: (opts) => ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_CREATE, opts),
+    teardown: (id) => ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_TEARDOWN, id),
+    stop: (id) => ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_STOP, id),
+    start: (id) => ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_START, id),
+    history: () => ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_HISTORY),
     setPr: (id: string, prUrl: string, prNumber: number) =>
-      ipcRenderer.invoke('stacks:setPr', id, prUrl, prNumber),
-    detectStale: () => ipcRenderer.invoke('stacks:detectStale'),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_SET_PR, id, prUrl, prNumber),
+    detectStale: () => ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_DETECT_STALE),
     cleanupStale: (workspacePaths: string[]) =>
-      ipcRenderer.invoke('stacks:cleanupStale', workspacePaths),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_CLEANUP_STALE, workspacePaths),
     getNeedsHumanQuestions: (stackId: string) =>
-      ipcRenderer.invoke('stacks:getNeedsHumanQuestions', stackId),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_GET_NEEDS_HUMAN_QUESTIONS, stackId),
     resumeNeedsHuman: (stackId: string, answers: string) =>
-      ipcRenderer.invoke('stacks:resumeNeedsHuman', stackId, answers),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_RESUME_NEEDS_HUMAN, stackId, answers),
     askClarifyingQuestions: (stackId: string) =>
-      ipcRenderer.invoke('stacks:askClarifyingQuestions', stackId),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_ASK_CLARIFYING_QUESTIONS, stackId),
     selfHealContinue: (stackId: string) =>
-      ipcRenderer.invoke('stacks:selfHealContinue', stackId),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_SELF_HEAL_CONTINUE, stackId),
     restartWithFindings: (stackId: string, updatedTicketBody: string) =>
-      ipcRenderer.invoke('stacks:restartWithFindings', stackId, updatedTicketBody),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_RESTART_WITH_FINDINGS, stackId, updatedTicketBody),
     recheckCompleted: (stackId: string) =>
-      ipcRenderer.invoke('stacks:recheckCompleted', stackId),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_RECHECK_COMPLETED, stackId),
     reconcileStatus: (stackId: string) =>
-      ipcRenderer.invoke('stacks:reconcileStatus', stackId),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACKS_RECONCILE_STATUS, stackId),
   },
   tasks: {
     dispatch: (stackId, prompt, model?) =>
-      ipcRenderer.invoke('tasks:dispatch', stackId, prompt, model),
-    list: (stackId) => ipcRenderer.invoke('tasks:list', stackId),
-    tokenSteps: (taskId) => ipcRenderer.invoke('tasks:tokenSteps', taskId),
-    workflowProgress: (stackId) => ipcRenderer.invoke('tasks:workflowProgress', stackId),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TASKS_DISPATCH, stackId, prompt, model),
+    list: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.TASKS_LIST, stackId),
+    tokenSteps: (taskId) => ipcRenderer.invoke(INVOKE_CHANNELS.TASKS_TOKEN_STEPS, taskId),
+    workflowProgress: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.TASKS_WORKFLOW_PROGRESS, stackId),
   },
   diff: {
-    get: (stackId) => ipcRenderer.invoke('diff:get', stackId),
+    get: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.DIFF_GET, stackId),
   },
   push: {
     execute: (stackId, message) =>
-      ipcRenderer.invoke('push:execute', stackId, message),
+      ipcRenderer.invoke(INVOKE_CHANNELS.PUSH_EXECUTE, stackId, message),
   },
   ports: {
-    get: (stackId) => ipcRenderer.invoke('ports:get', stackId),
+    get: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.PORTS_GET, stackId),
     expose: (stackId, service, containerPort) =>
-      ipcRenderer.invoke('stack:expose-port', stackId, service, containerPort),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACK_EXPOSE_PORT, stackId, service, containerPort),
     unexpose: (stackId, service, containerPort) =>
-      ipcRenderer.invoke('stack:unexpose-port', stackId, service, containerPort),
+      ipcRenderer.invoke(INVOKE_CHANNELS.STACK_UNEXPOSE_PORT, stackId, service, containerPort),
     cleanupLegacy: (directory) =>
-      ipcRenderer.invoke('ports:cleanupLegacy', directory),
+      ipcRenderer.invoke(INVOKE_CHANNELS.PORTS_CLEANUP_LEGACY, directory),
   },
   logs: {
     stream: (containerId, runtime) =>
-      ipcRenderer.invoke('logs:stream', containerId, runtime),
+      ipcRenderer.invoke(INVOKE_CHANNELS.LOGS_STREAM, containerId, runtime),
   },
   stats: {
-    stackMemory: (stackId) => ipcRenderer.invoke('stats:stack-memory', stackId),
-    stackDetailed: (stackId) => ipcRenderer.invoke('stats:stack-detailed', stackId),
-    taskMetrics: (stackId) => ipcRenderer.invoke('stats:task-metrics', stackId),
-    tokenUsage: (stackId) => ipcRenderer.invoke('stats:token-usage', stackId),
-    globalTokenUsage: () => ipcRenderer.invoke('stats:global-token-usage'),
-    rateLimit: () => ipcRenderer.invoke('stats:rate-limit'),
-    accountUsage: () => ipcRenderer.invoke('stats:account-usage'),
+    stackMemory: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_STACK_MEMORY, stackId),
+    stackDetailed: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_STACK_DETAILED, stackId),
+    taskMetrics: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_TASK_METRICS, stackId),
+    tokenUsage: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_TOKEN_USAGE, stackId),
+    globalTokenUsage: () => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_GLOBAL_TOKEN_USAGE),
+    rateLimit: () => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_RATE_LIMIT),
+    accountUsage: () => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_ACCOUNT_USAGE),
   },
   runtime: {
-    available: () => ipcRenderer.invoke('runtime:available'),
+    available: () => ipcRenderer.invoke(INVOKE_CHANNELS.RUNTIME_AVAILABLE),
   },
   agent: {
     send: (tabId, message, projectDir) =>
-      ipcRenderer.invoke('agent:send', tabId, message, projectDir),
-    cancel: (tabId) => ipcRenderer.invoke('agent:cancel', tabId),
-    reset: (tabId) => ipcRenderer.invoke('agent:reset', tabId),
-    history: (tabId) => ipcRenderer.invoke('agent:history', tabId),
-    tokenUsage: (tabId) => ipcRenderer.invoke('agent:tokenUsage', tabId),
+      ipcRenderer.invoke(INVOKE_CHANNELS.AGENT_SEND, tabId, message, projectDir),
+    cancel: (tabId) => ipcRenderer.invoke(INVOKE_CHANNELS.AGENT_CANCEL, tabId),
+    reset: (tabId) => ipcRenderer.invoke(INVOKE_CHANNELS.AGENT_RESET, tabId),
+    history: (tabId) => ipcRenderer.invoke(INVOKE_CHANNELS.AGENT_HISTORY, tabId),
+    tokenUsage: (tabId) => ipcRenderer.invoke(INVOKE_CHANNELS.AGENT_TOKEN_USAGE, tabId),
   },
   context: {
-    get: (projectDir) => ipcRenderer.invoke('context:get', projectDir),
+    get: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.CONTEXT_GET, projectDir),
     saveInstructions: (projectDir, content) =>
-      ipcRenderer.invoke('context:saveInstructions', projectDir, content),
+      ipcRenderer.invoke(INVOKE_CHANNELS.CONTEXT_SAVE_INSTRUCTIONS, projectDir, content),
     listSkills: (projectDir) =>
-      ipcRenderer.invoke('context:listSkills', projectDir),
+      ipcRenderer.invoke(INVOKE_CHANNELS.CONTEXT_LIST_SKILLS, projectDir),
     getSkill: (projectDir, name) =>
-      ipcRenderer.invoke('context:getSkill', projectDir, name),
+      ipcRenderer.invoke(INVOKE_CHANNELS.CONTEXT_GET_SKILL, projectDir, name),
     saveSkill: (projectDir, name, content) =>
-      ipcRenderer.invoke('context:saveSkill', projectDir, name, content),
+      ipcRenderer.invoke(INVOKE_CHANNELS.CONTEXT_SAVE_SKILL, projectDir, name, content),
     deleteSkill: (projectDir, name) =>
-      ipcRenderer.invoke('context:deleteSkill', projectDir, name),
+      ipcRenderer.invoke(INVOKE_CHANNELS.CONTEXT_DELETE_SKILL, projectDir, name),
     getSettings: (projectDir) =>
-      ipcRenderer.invoke('context:getSettings', projectDir),
+      ipcRenderer.invoke(INVOKE_CHANNELS.CONTEXT_GET_SETTINGS, projectDir),
     saveSettings: (projectDir, content) =>
-      ipcRenderer.invoke('context:saveSettings', projectDir, content),
+      ipcRenderer.invoke(INVOKE_CHANNELS.CONTEXT_SAVE_SETTINGS, projectDir, content),
   },
   reviewPrompt: {
-    getDefault: () => ipcRenderer.invoke('reviewPrompt:getDefault'),
+    getDefault: () => ipcRenderer.invoke(INVOKE_CHANNELS.REVIEW_PROMPT_GET_DEFAULT),
   },
   modelSettings: {
-    getGlobal: () => ipcRenderer.invoke('modelSettings:getGlobal'),
-    setGlobal: (settings) => ipcRenderer.invoke('modelSettings:setGlobal', settings),
-    getProject: (projectDir) => ipcRenderer.invoke('modelSettings:getProject', projectDir),
-    setProject: (projectDir, settings) => ipcRenderer.invoke('modelSettings:setProject', projectDir, settings),
-    removeProject: (projectDir) => ipcRenderer.invoke('modelSettings:removeProject', projectDir),
-    getEffective: (projectDir) => ipcRenderer.invoke('modelSettings:getEffective', projectDir),
+    getGlobal: () => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_SETTINGS_GET_GLOBAL),
+    setGlobal: (settings) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_SETTINGS_SET_GLOBAL, settings),
+    getProject: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_SETTINGS_GET_PROJECT, projectDir),
+    setProject: (projectDir, settings) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_SETTINGS_SET_PROJECT, projectDir, settings),
+    removeProject: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_SETTINGS_REMOVE_PROJECT, projectDir),
+    getEffective: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_SETTINGS_GET_EFFECTIVE, projectDir),
   },
   backendSettings: {
-    getGlobal: () => ipcRenderer.invoke('backendSettings:getGlobal'),
-    setGlobal: (settings) => ipcRenderer.invoke('backendSettings:setGlobal', settings),
-    getProject: (projectDir) => ipcRenderer.invoke('backendSettings:getProject', projectDir),
-    setProject: (projectDir, settings) => ipcRenderer.invoke('backendSettings:setProject', projectDir, settings),
-    getEffective: (projectDir, surface) => ipcRenderer.invoke('backendSettings:getEffective', projectDir, surface),
-    setSecret: (scope, surface, name, value) => ipcRenderer.invoke('backendSettings:setSecret', scope, surface, name, value),
-    secretStatus: (scope, surface) => ipcRenderer.invoke('backendSettings:secretStatus', scope, surface),
-    setSecretBundle: (scope, surface, bundle) => ipcRenderer.invoke('backendSettings:setSecretBundle', scope, surface, bundle),
-    getSecretBundle: (scope, surface) => ipcRenderer.invoke('backendSettings:getSecretBundle', scope, surface),
+    getGlobal: () => ipcRenderer.invoke(INVOKE_CHANNELS.BACKEND_SETTINGS_GET_GLOBAL),
+    setGlobal: (settings) => ipcRenderer.invoke(INVOKE_CHANNELS.BACKEND_SETTINGS_SET_GLOBAL, settings),
+    getProject: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.BACKEND_SETTINGS_GET_PROJECT, projectDir),
+    setProject: (projectDir, settings) => ipcRenderer.invoke(INVOKE_CHANNELS.BACKEND_SETTINGS_SET_PROJECT, projectDir, settings),
+    getEffective: (projectDir, surface) => ipcRenderer.invoke(INVOKE_CHANNELS.BACKEND_SETTINGS_GET_EFFECTIVE, projectDir, surface),
+    setSecret: (scope, surface, name, value) => ipcRenderer.invoke(INVOKE_CHANNELS.BACKEND_SETTINGS_SET_SECRET, scope, surface, name, value),
+    secretStatus: (scope, surface) => ipcRenderer.invoke(INVOKE_CHANNELS.BACKEND_SETTINGS_SECRET_STATUS, scope, surface),
+    setSecretBundle: (scope, surface, bundle) => ipcRenderer.invoke(INVOKE_CHANNELS.BACKEND_SETTINGS_SET_SECRET_BUNDLE, scope, surface, bundle),
+    getSecretBundle: (scope, surface) => ipcRenderer.invoke(INVOKE_CHANNELS.BACKEND_SETTINGS_GET_SECRET_BUNDLE, scope, surface),
   },
   providerSecrets: {
-    get: (scope, provider) => ipcRenderer.invoke('providerSecrets:get', scope, provider),
-    set: (scope, provider, bundle) => ipcRenderer.invoke('providerSecrets:set', scope, provider, bundle),
-    remove: (scope, provider) => ipcRenderer.invoke('providerSecrets:remove', scope, provider),
-    status: (scope, provider) => ipcRenderer.invoke('providerSecrets:status', scope, provider),
-    getBundle: (scope, provider) => ipcRenderer.invoke('providerSecrets:getBundle', scope, provider),
-    setBundle: (scope, provider, bundle) => ipcRenderer.invoke('providerSecrets:setBundle', scope, provider, bundle),
+    get: (scope, provider) => ipcRenderer.invoke(INVOKE_CHANNELS.PROVIDER_SECRETS_GET, scope, provider),
+    set: (scope, provider, bundle) => ipcRenderer.invoke(INVOKE_CHANNELS.PROVIDER_SECRETS_SET, scope, provider, bundle),
+    remove: (scope, provider) => ipcRenderer.invoke(INVOKE_CHANNELS.PROVIDER_SECRETS_REMOVE, scope, provider),
+    status: (scope, provider) => ipcRenderer.invoke(INVOKE_CHANNELS.PROVIDER_SECRETS_STATUS, scope, provider),
+    getBundle: (scope, provider) => ipcRenderer.invoke(INVOKE_CHANNELS.PROVIDER_SECRETS_GET_BUNDLE, scope, provider),
+    setBundle: (scope, provider, bundle) => ipcRenderer.invoke(INVOKE_CHANNELS.PROVIDER_SECRETS_SET_BUNDLE, scope, provider, bundle),
   },
   providers: {
-    catalog: () => ipcRenderer.invoke('providers:catalog'),
-    configured: (scope) => ipcRenderer.invoke('providers:configured', scope),
+    catalog: () => ipcRenderer.invoke(INVOKE_CHANNELS.PROVIDERS_CATALOG),
+    configured: (scope) => ipcRenderer.invoke(INVOKE_CHANNELS.PROVIDERS_CONFIGURED, scope),
   },
   modelRouting: {
-    getEffective: (projectDir) => ipcRenderer.invoke('modelRouting:getEffective', projectDir),
-    getProject: (projectDir) => ipcRenderer.invoke('modelRouting:getProject', projectDir),
-    setProject: (projectDir, config) => ipcRenderer.invoke('modelRouting:setProject', projectDir, config),
-    removeProject: (projectDir) => ipcRenderer.invoke('modelRouting:removeProject', projectDir),
-    getGlobal: () => ipcRenderer.invoke('modelRouting:getGlobal'),
-    setGlobal: (config) => ipcRenderer.invoke('modelRouting:setGlobal', config),
-    applyPreset: (projectDir, presetId) => ipcRenderer.invoke('modelRouting:applyPreset', projectDir, presetId),
-    getAvailableModels: (projectDir) => ipcRenderer.invoke('modelRouting:getAvailableModels', projectDir),
-    getAvailableModelsWithCatalog: (projectDir) => ipcRenderer.invoke('modelRouting:getAvailableModelsWithCatalog', projectDir),
+    getEffective: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_ROUTING_GET_EFFECTIVE, projectDir),
+    getProject: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_ROUTING_GET_PROJECT, projectDir),
+    setProject: (projectDir, config) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_ROUTING_SET_PROJECT, projectDir, config),
+    removeProject: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_ROUTING_REMOVE_PROJECT, projectDir),
+    getGlobal: () => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_ROUTING_GET_GLOBAL),
+    setGlobal: (config) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_ROUTING_SET_GLOBAL, config),
+    applyPreset: (projectDir, presetId) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_ROUTING_APPLY_PRESET, projectDir, presetId),
+    getAvailableModels: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_ROUTING_GET_AVAILABLE_MODELS, projectDir),
+    getAvailableModelsWithCatalog: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.MODEL_ROUTING_GET_AVAILABLE_MODELS_WITH_CATALOG, projectDir),
   },
   projectTicketConfig: {
-    get: (projectDir) => ipcRenderer.invoke('projectTicketConfig:get', projectDir),
-    set: (projectDir, config) => ipcRenderer.invoke('projectTicketConfig:set', projectDir, config),
+    get: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECT_TICKET_CONFIG_GET, projectDir),
+    set: (projectDir, config) => ipcRenderer.invoke(INVOKE_CHANNELS.PROJECT_TICKET_CONFIG_SET, projectDir, config),
   },
   session: {
-    getState: () => ipcRenderer.invoke('session:getState'),
-    getSettings: () => ipcRenderer.invoke('session:getSettings'),
-    updateSettings: (settings) => ipcRenderer.invoke('session:updateSettings', settings),
-    acknowledgeCritical: () => ipcRenderer.invoke('session:acknowledgeCritical'),
-    haltAll: () => ipcRenderer.invoke('session:haltAll'),
-    resumeAll: () => ipcRenderer.invoke('session:resumeAll'),
-    resumeStack: (stackId) => ipcRenderer.invoke('session:resumeStack', stackId),
+    getState: () => ipcRenderer.invoke(INVOKE_CHANNELS.SESSION_GET_STATE),
+    getSettings: () => ipcRenderer.invoke(INVOKE_CHANNELS.SESSION_GET_SETTINGS),
+    updateSettings: (settings) => ipcRenderer.invoke(INVOKE_CHANNELS.SESSION_UPDATE_SETTINGS, settings),
+    acknowledgeCritical: () => ipcRenderer.invoke(INVOKE_CHANNELS.SESSION_ACKNOWLEDGE_CRITICAL),
+    haltAll: () => ipcRenderer.invoke(INVOKE_CHANNELS.SESSION_HALT_ALL),
+    resumeAll: () => ipcRenderer.invoke(INVOKE_CHANNELS.SESSION_RESUME_ALL),
+    resumeStack: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.SESSION_RESUME_STACK, stackId),
     resumeStackWithContinuation: (stackId, manual) =>
-      ipcRenderer.invoke('session:resumeStackWithContinuation', stackId, manual),
-    forcePoll: () => ipcRenderer.invoke('session:forcePoll'),
-    reportActivity: () => { ipcRenderer.send('session:activity'); },
+      ipcRenderer.invoke(INVOKE_CHANNELS.SESSION_RESUME_STACK_WITH_CONTINUATION, stackId, manual),
+    forcePoll: () => ipcRenderer.invoke(INVOKE_CHANNELS.SESSION_FORCE_POLL),
+    reportActivity: () => { ipcRenderer.send(INVOKE_CHANNELS.SESSION_ACTIVITY); },
   },
   schedules: {
-    list: (projectDir) => ipcRenderer.invoke('schedules:list', projectDir),
-    create: (projectDir, data) => ipcRenderer.invoke('schedules:create', projectDir, data),
-    update: (projectDir, id, patch) => ipcRenderer.invoke('schedules:update', projectDir, id, patch),
-    delete: (projectDir, id) => ipcRenderer.invoke('schedules:delete', projectDir, id),
-    cronHealth: () => ipcRenderer.invoke('schedules:cronHealth'),
-    listBuiltInActions: () => ipcRenderer.invoke('scheduler:listBuiltInActions'),
-    listScripts: (projectDir) => ipcRenderer.invoke('schedules:listScripts', projectDir),
+    list: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.SCHEDULES_LIST, projectDir),
+    create: (projectDir, data) => ipcRenderer.invoke(INVOKE_CHANNELS.SCHEDULES_CREATE, projectDir, data),
+    update: (projectDir, id, patch) => ipcRenderer.invoke(INVOKE_CHANNELS.SCHEDULES_UPDATE, projectDir, id, patch),
+    delete: (projectDir, id) => ipcRenderer.invoke(INVOKE_CHANNELS.SCHEDULES_DELETE, projectDir, id),
+    cronHealth: () => ipcRenderer.invoke(INVOKE_CHANNELS.SCHEDULES_CRON_HEALTH),
+    listBuiltInActions: () => ipcRenderer.invoke(INVOKE_CHANNELS.SCHEDULER_LIST_BUILT_IN_ACTIONS),
+    listScripts: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.SCHEDULES_LIST_SCRIPTS, projectDir),
   },
   auth: {
-    status: () => ipcRenderer.invoke('auth:status'),
-    login: () => ipcRenderer.invoke('auth:login'),
+    status: () => ipcRenderer.invoke(INVOKE_CHANNELS.AUTH_STATUS),
+    login: () => ipcRenderer.invoke(INVOKE_CHANNELS.AUTH_LOGIN),
   },
   docker: {
-    status: () => ipcRenderer.invoke('docker:status'),
+    status: () => ipcRenderer.invoke(INVOKE_CHANNELS.DOCKER_STATUS),
   },
   tickets: {
     fetch: (ticketId, projectDir) =>
-      ipcRenderer.invoke('tickets:fetch', ticketId, projectDir),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_FETCH, ticketId, projectDir),
     specCheck: (ticketId, projectDir) =>
-      ipcRenderer.invoke('tickets:specCheck', ticketId, projectDir),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_SPEC_CHECK, ticketId, projectDir),
     specRefine: (ticketId, projectDir, userAnswers) =>
-      ipcRenderer.invoke('tickets:specRefine', ticketId, projectDir, userAnswers),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_SPEC_REFINE, ticketId, projectDir, userAnswers),
     specCheckAsync: (ticketId, projectDir) =>
-      ipcRenderer.invoke('tickets:specCheckAsync', ticketId, projectDir),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_SPEC_CHECK_ASYNC, ticketId, projectDir),
     specRefineAsync: (sessionId, ticketId, projectDir, userAnswers) =>
-      ipcRenderer.invoke('tickets:specRefineAsync', sessionId, ticketId, projectDir, userAnswers),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_SPEC_REFINE_ASYNC, sessionId, ticketId, projectDir, userAnswers),
     retryRefinementAsync: (sessionId, ticketId, projectDir) =>
-      ipcRenderer.invoke('tickets:retryRefinementAsync', sessionId, ticketId, projectDir),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_RETRY_REFINEMENT_ASYNC, sessionId, ticketId, projectDir),
     postAnswers: (ticketId, projectDir, answersBody) =>
-      ipcRenderer.invoke('tickets:postAnswers', ticketId, projectDir, answersBody),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_POST_ANSWERS, ticketId, projectDir, answersBody),
     cancelRefinement: (sessionId) =>
-      ipcRenderer.invoke('tickets:cancelRefinement', sessionId),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_CANCEL_REFINEMENT, sessionId),
     listRefinements: () =>
-      ipcRenderer.invoke('tickets:listRefinements'),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_LIST_REFINEMENTS),
     create: (projectDir, title, body) =>
-      ipcRenderer.invoke('tickets:create', projectDir, title, body),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_CREATE, projectDir, title, body),
     list: async (projectDir) => {
-      const raw = await ipcRenderer.invoke('tickets:list', projectDir);
+      const raw = await ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_LIST, projectDir);
       if (Array.isArray(raw)) return { tickets: raw, error: null };
       return raw;
     },
     fetchRaw: (ticketId, projectDir) =>
-      ipcRenderer.invoke('tickets:fetchRaw', ticketId, projectDir),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_FETCH_RAW, ticketId, projectDir),
     update: (projectDir, ticketId, body) =>
-      ipcRenderer.invoke('tickets:update', projectDir, ticketId, body),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_UPDATE, projectDir, ticketId, body),
     testJiraConnection: (params) =>
-      ipcRenderer.invoke('tickets:testJiraConnection', params),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKETS_TEST_JIRA_CONNECTION, params),
     close: (ticketId, projectDir) =>
-      ipcRenderer.invoke('ticket:close', { ticketId, projectDir }),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKET_CLOSE, { ticketId, projectDir }),
     markDone: (ticketId, projectDir) =>
-      ipcRenderer.invoke('ticket:mark-done', { ticketId, projectDir }),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKET_MARK_DONE, { ticketId, projectDir }),
   },
   ticketBoard: {
     setColumn: (ticketId, projectDir, column) =>
-      ipcRenderer.invoke('ticket-board:set-column', ticketId, projectDir, column),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKET_BOARD_SET_COLUMN, ticketId, projectDir, column),
     delete: (ticketId, projectDir) =>
-      ipcRenderer.invoke('ticket-board:delete', { ticketId, projectDir }),
+      ipcRenderer.invoke(INVOKE_CHANNELS.TICKET_BOARD_DELETE, { ticketId, projectDir }),
   },
   pr: {
-    draftBody: (stackId) => ipcRenderer.invoke('pr:draftBody', stackId),
+    draftBody: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.PR_DRAFT_BODY, stackId),
     create: (stackId, title, body) =>
-      ipcRenderer.invoke('pr:create', stackId, title, body),
+      ipcRenderer.invoke(INVOKE_CHANNELS.PR_CREATE, stackId, title, body),
     merge: (stackId, prNumber) =>
-      ipcRenderer.invoke('pr:merge', stackId, prNumber),
-    createAuto: (stackId) => ipcRenderer.invoke('pr:createAuto', stackId),
+      ipcRenderer.invoke(INVOKE_CHANNELS.PR_MERGE, stackId, prNumber),
+    createAuto: (stackId) => ipcRenderer.invoke(INVOKE_CHANNELS.PR_CREATE_AUTO, stackId),
     autoResolve: (ticketId, projectDir) =>
-      ipcRenderer.invoke('pr:autoResolve', ticketId, projectDir),
+      ipcRenderer.invoke(INVOKE_CHANNELS.PR_AUTO_RESOLVE, ticketId, projectDir),
   },
   darkFactory: {
-    getEnabled: (projectDir) => ipcRenderer.invoke('darkFactory:getEnabled', projectDir),
-    setEnabled: (projectDir, enabled) => ipcRenderer.invoke('darkFactory:setEnabled', projectDir, enabled),
-    getConfig: (projectDir) => ipcRenderer.invoke('darkFactory:getConfig', projectDir),
-    setConfig: (projectDir, config) => ipcRenderer.invoke('darkFactory:setConfig', projectDir, config),
+    getEnabled: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.DARK_FACTORY_GET_ENABLED, projectDir),
+    setEnabled: (projectDir, enabled) => ipcRenderer.invoke(INVOKE_CHANNELS.DARK_FACTORY_SET_ENABLED, projectDir, enabled),
+    getConfig: (projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.DARK_FACTORY_GET_CONFIG, projectDir),
+    setConfig: (projectDir, config) => ipcRenderer.invoke(INVOKE_CHANNELS.DARK_FACTORY_SET_CONFIG, projectDir, config),
   },
   telemetry: {
-    summary: (range) => ipcRenderer.invoke('stats:telemetry:summary', range),
-    daily: (range) => ipcRenderer.invoke('stats:telemetry:daily', range),
-    byModel: (range) => ipcRenderer.invoke('stats:telemetry:byModel', range),
-    session: (range) => ipcRenderer.invoke('stats:telemetry:session', range),
-    byTicket: (range) => ipcRenderer.invoke('stats:telemetry:byTicket', range),
-    byEpic: (range) => ipcRenderer.invoke('stats:telemetry:byEpic', range),
-    refresh: () => ipcRenderer.invoke('stats:telemetry:refresh'),
+    summary: (range) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_TELEMETRY_SUMMARY, range),
+    daily: (range) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_TELEMETRY_DAILY, range),
+    byModel: (range) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_TELEMETRY_BY_MODEL, range),
+    session: (range) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_TELEMETRY_SESSION, range),
+    byTicket: (range) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_TELEMETRY_BY_TICKET, range),
+    byEpic: (range) => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_TELEMETRY_BY_EPIC, range),
+    refresh: () => ipcRenderer.invoke(INVOKE_CHANNELS.STATS_TELEMETRY_REFRESH),
   },
   epic: {
-    start: (epicId, projectDir) => ipcRenderer.invoke('epic:start', epicId, projectDir),
-    getRunPlan: (epicId, projectDir) => ipcRenderer.invoke('epic:getRunPlan', epicId, projectDir),
+    start: (epicId, projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.EPIC_START, epicId, projectDir),
+    getRunPlan: (epicId, projectDir) => ipcRenderer.invoke(INVOKE_CHANNELS.EPIC_GET_RUN_PLAN, epicId, projectDir),
   },
-  on: (channel, callback) => {
+  on: (channel: EventChannel, callback: (...args: unknown[]) => void) => {
     const handler = (_event: Electron.IpcRendererEvent, ...args: unknown[]) =>
       callback(...args);
     ipcRenderer.on(channel, handler);

@@ -1,3 +1,4 @@
+import { EVENT_CHANNELS } from '../../main/ipc-channels';
 import { useState, useEffect, useCallback } from 'react';
 
 export function useTaskOutput(stackId: string) {
@@ -5,7 +6,7 @@ export function useTaskOutput(stackId: string) {
 
   useEffect(() => {
     const unsub = window.sandstorm.on(
-      'task:output',
+      EVENT_CHANNELS.TASK_OUTPUT,
       (data: unknown) => {
         const payload = data as { stackId: string; data: string };
         if (payload.stackId === stackId) {

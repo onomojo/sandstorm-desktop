@@ -1,3 +1,4 @@
+import { EVENT_CHANNELS } from '../../main/ipc-channels';
 import React, { useEffect, useState, useRef, useCallback } from 'react';
 
 export const TaskOutput = React.memo(function TaskOutput({
@@ -58,7 +59,7 @@ export const TaskOutput = React.memo(function TaskOutput({
 
   // Listen for live output updates, filtered by stackId
   useEffect(() => {
-    const unsub = window.sandstorm.on('task:output', (data: unknown) => {
+    const unsub = window.sandstorm.on(EVENT_CHANNELS.TASK_OUTPUT, (data: unknown) => {
       const { stackId: eventStackId, data: chunk } = data as {
         stackId: string;
         data: string;

@@ -5,6 +5,7 @@ import { PortAllocator } from './control-plane/port-allocator';
 import { PortProxy } from './control-plane/port-proxy';
 import { TaskWatcher } from './control-plane/task-watcher';
 import { StackManager } from './control-plane/stack-manager';
+import { EVENT_CHANNELS } from './ipc-channels';
 import { DockerRuntime } from './runtime/docker';
 import { PodmanRuntime } from './runtime/podman';
 import { ContainerRuntime } from './runtime/types';
@@ -190,30 +191,30 @@ async function initializeApp(): Promise<void> {
 
   // Wire session monitor events
   sessionMonitor.on('threshold:warning', (usage) => {
-    mainWindow?.webContents.send('session:threshold', { level: 'warning', usage });
+    mainWindow?.webContents.send(EVENT_CHANNELS.SESSION_THRESHOLD, { level: 'warning', usage });
   });
   sessionMonitor.on('threshold:critical', (usage) => {
-    mainWindow?.webContents.send('session:threshold', { level: 'critical', usage });
+    mainWindow?.webContents.send(EVENT_CHANNELS.SESSION_THRESHOLD, { level: 'critical', usage });
   });
   sessionMonitor.on('threshold:limit', (usage) => {
-    mainWindow?.webContents.send('session:threshold', { level: 'limit', usage });
+    mainWindow?.webContents.send(EVENT_CHANNELS.SESSION_THRESHOLD, { level: 'limit', usage });
   });
   sessionMonitor.on('threshold:cleared', () => {
-    mainWindow?.webContents.send('session:threshold', { level: 'normal', usage: null });
+    mainWindow?.webContents.send(EVENT_CHANNELS.SESSION_THRESHOLD, { level: 'normal', usage: null });
   });
   sessionMonitor.on('halt:triggered', () => {
     const paused = stackManager.sessionPauseAllStacks();
-    mainWindow?.webContents.send('session:halted', { pausedStacks: paused });
+    mainWindow?.webContents.send(EVENT_CHANNELS.SESSION_HALTED, { pausedStacks: paused });
   });
-  sessionMonitor.on('session:reset', () => {
+  sessionMonitor.on(EVENT_CHANNELS.SESSION_RESET, () => {
     const currentSettings = registry.getSessionMonitorSettings();
     if (currentSettings.autoResumeAfterReset) {
       stackManager.sessionResumeAllStacks();
     }
-    mainWindow?.webContents.send('session:reset');
+    mainWindow?.webContents.send(EVENT_CHANNELS.SESSION_RESET);
   });
   sessionMonitor.on('state:changed', (state) => {
-    mainWindow?.webContents.send('session:state', state);
+    mainWindow?.webContents.send(EVENT_CHANNELS.SESSION_STATE, state);
   });
 
   sessionMonitor.start();
@@ -280,7 +281,7 @@ async function initializeApp(): Promise<void> {
       // Notify the renderer so the UI can show an "action running" badge
       // on the schedule in the panel. No chat turn — this is just a UI
       // hint, keyed by scheduleId, not a message in the agent session.
-      mainWindow?.webContents.send('schedule:dispatched', {
+      mainWindow?.webContents.send(EVENT_CHANNELS.SCHEDULE_DISPATCHED, {
         projectDir: request.projectDir,
         scheduleId: request.scheduleId,
         scheduleLabel: schedule.label || schedule.id,
@@ -363,37 +364,37 @@ async function initializeApp(): Promise<void> {
     registry,
     stackManager,
     agentBackend,
-    () => mainWindow?.webContents.send('stacks:updated'),
+    () => mainWindow?.webContents.send(EVENT_CHANNELS.STACKS_UPDATED),
   );
   darkFactoryOrchestrator.startPeriodicWatcher();
 
   // Listen for task events to send to renderer
-  taskWatcher.on('task:completed', ({ stackId, task }) => {
-    mainWindow?.webContents.send('task:completed', { stackId, task });
-    mainWindow?.webContents.send('stacks:updated');
+  taskWatcher.on(EVENT_CHANNELS.TASK_COMPLETED, ({ stackId, task }) => {
+    mainWindow?.webContents.send(EVENT_CHANNELS.TASK_COMPLETED, { stackId, task });
+    mainWindow?.webContents.send(EVENT_CHANNELS.STACKS_UPDATED);
     darkFactoryOrchestrator.handleTaskCompleted(stackId, task);
   });
 
-  taskWatcher.on('task:failed', ({ stackId, task }) => {
-    mainWindow?.webContents.send('task:failed', { stackId, task });
-    mainWindow?.webContents.send('stacks:updated');
+  taskWatcher.on(EVENT_CHANNELS.TASK_FAILED, ({ stackId, task }) => {
+    mainWindow?.webContents.send(EVENT_CHANNELS.TASK_FAILED, { stackId, task });
+    mainWindow?.webContents.send(EVENT_CHANNELS.STACKS_UPDATED);
   });
 
-  taskWatcher.on('task:output', ({ stackId, data }) => {
-    mainWindow?.webContents.send('task:output', { stackId, data });
+  taskWatcher.on(EVENT_CHANNELS.TASK_OUTPUT, ({ stackId, data }) => {
+    mainWindow?.webContents.send(EVENT_CHANNELS.TASK_OUTPUT, { stackId, data });
   });
 
-  taskWatcher.on('task:workflow-progress', (progress) => {
-    mainWindow?.webContents.send('task:workflow-progress', progress);
+  taskWatcher.on(EVENT_CHANNELS.TASK_WORKFLOW_PROGRESS, (progress) => {
+    mainWindow?.webContents.send(EVENT_CHANNELS.TASK_WORKFLOW_PROGRESS, progress);
   });
 
   // Forward Docker connection status to renderer
   if (dockerConnectionManager) {
     dockerConnectionManager.on('connected', () => {
-      mainWindow?.webContents.send('docker:connected');
+      mainWindow?.webContents.send(EVENT_CHANNELS.DOCKER_CONNECTED);
     });
     dockerConnectionManager.on('disconnected', () => {
-      mainWindow?.webContents.send('docker:disconnected');
+      mainWindow?.webContents.send(EVENT_CHANNELS.DOCKER_DISCONNECTED);
     });
   }
 }
@@ -410,7 +411,7 @@ app.whenReady().then(async () => {
   try {
     const cronRunning = isCronRunning();
     mainWindow.webContents.once('did-finish-load', () => {
-      mainWindow?.webContents.send('scheduler:cronHealth', { running: cronRunning });
+      mainWindow?.webContents.send(EVENT_CHANNELS.SCHEDULER_CRON_HEALTH, { running: cronRunning });
     });
   } catch {
     // Non-fatal — renderer will check lazily when panel mounts
@@ -419,7 +420,7 @@ app.whenReady().then(async () => {
   // Background startup reconciliation — runs after the window is shown so it
   // never delays window readiness. Drives stale 'running' stacks to terminal
   // states or re-attaches watchers. Fire-and-forget; cards update live via
-  // per-stack 'stacks:updated' emissions.
+  // per-stack EVENT_CHANNELS.STACKS_UPDATED emissions.
   mainWindow.webContents.once('did-finish-load', () => {
     runStartupReconciliation(
       registry,
@@ -427,7 +428,7 @@ app.whenReady().then(async () => {
       taskWatcher,
       dockerRuntime,
       podmanRuntime,
-      () => mainWindow?.webContents.send('stacks:updated')
+      () => mainWindow?.webContents.send(EVENT_CHANNELS.STACKS_UPDATED)
     ).catch((err) => {
       console.warn('[StartupReconciler] Background reconciliation error:', err);
     });

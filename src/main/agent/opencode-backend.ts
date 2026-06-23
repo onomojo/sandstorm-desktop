@@ -36,6 +36,7 @@ import type {
   Config as OpenCodeConfig,
 } from '@opencode-ai/sdk';
 import { handleToolCall } from '../claude/tools';
+import { AGENT_DONE, AGENT_ERROR, AGENT_OUTPUT, AGENT_QUEUED, AGENT_TOKEN_USAGE_EVENT, AGENT_USER_MESSAGE } from '../ipc-channels';
 import { acquireBridge, type BridgeHandle } from './bridge-server';
 import { generateOuterOpencodeConfig } from '../opencode-config';
 import { buildProviderEntry } from '../../shared/opencode-providers';
@@ -338,12 +339,12 @@ export class OpenCodeBackend implements AgentBackend {
 
     if (part.type === 'text' && delta) {
       tabSession.fullResponse += delta;
-      this.mainWindow?.webContents.send(`agent:output:${tabId}`, delta);
+      this.mainWindow?.webContents.send(AGENT_OUTPUT(tabId), delta);
     } else if (part.type === 'tool') {
       const toolPart = part as ToolPart;
       const summary = `\n[tool: ${toolPart.tool}]\n`;
       tabSession.fullResponse += summary;
-      this.mainWindow?.webContents.send(`agent:output:${tabId}`, summary);
+      this.mainWindow?.webContents.send(AGENT_OUTPUT(tabId), summary);
     } else if (part.type === 'step-finish') {
       this.accumulateTokens(tabId, part as StepFinishPart);
     }
@@ -362,7 +363,7 @@ export class OpenCodeBackend implements AgentBackend {
     }
     tabSession.fullResponse = '';
     tabSession.processing = false;
-    this.mainWindow?.webContents.send(`agent:done:${tabId}`);
+    this.mainWindow?.webContents.send(AGENT_DONE(tabId));
   }
 
   private handleSessionError(event: EventSessionError): void {
@@ -376,7 +377,7 @@ export class OpenCodeBackend implements AgentBackend {
     if (tabSession) tabSession.processing = false;
 
     const errorMsg = this.formatSessionError(event);
-    this.mainWindow?.webContents.send(`agent:error:${tabId}`, errorMsg);
+    this.mainWindow?.webContents.send(AGENT_ERROR(tabId), errorMsg);
   }
 
   private formatSessionError(event: EventSessionError): string {
@@ -398,7 +399,7 @@ export class OpenCodeBackend implements AgentBackend {
       cache_read_input_tokens: prev.cache_read_input_tokens + tokens.cache.read,
     };
     this.sessionTokens.set(tabId, next);
-    this.mainWindow?.webContents.send(`agent:token-usage:${tabId}`, next);
+    this.mainWindow?.webContents.send(AGENT_TOKEN_USAGE_EVENT(tabId), next);
   }
 
   // --- Session management ---
@@ -422,15 +423,15 @@ export class OpenCodeBackend implements AgentBackend {
     tabSession.messages.push({ role: 'user', content: message });
 
     if (tabSession.processing) {
-      this.mainWindow?.webContents.send(`agent:queued:${tabId}`);
+      this.mainWindow?.webContents.send(AGENT_QUEUED(tabId));
     }
 
     tabSession.processing = true;
-    this.mainWindow?.webContents.send(`agent:user-message:${tabId}`, message);
+    this.mainWindow?.webContents.send(AGENT_USER_MESSAGE(tabId), message);
 
     if (!this.client) {
       tabSession.processing = false;
-      this.mainWindow?.webContents.send(`agent:error:${tabId}`, 'Backend not initialized');
+      this.mainWindow?.webContents.send(AGENT_ERROR(tabId), 'Backend not initialized');
       return;
     }
     void this.sendMessageAsync(tabSession, message);
@@ -480,7 +481,7 @@ export class OpenCodeBackend implements AgentBackend {
     } catch (err) {
       tabSession.processing = false;
       const msg = err instanceof Error ? err.message : String(err);
-      this.mainWindow?.webContents.send(`agent:error:${tabId}`, msg);
+      this.mainWindow?.webContents.send(AGENT_ERROR(tabId), msg);
     }
   }
 
@@ -495,7 +496,7 @@ export class OpenCodeBackend implements AgentBackend {
     if (!tabSession || !this.client) return;
     if (tabSession.openCodeSessionId && tabSession.processing) {
       tabSession.processing = false;
-      this.mainWindow?.webContents.send(`agent:done:${tabId}`);
+      this.mainWindow?.webContents.send(AGENT_DONE(tabId));
       void this.client.session
         .abort({ path: { id: tabSession.openCodeSessionId } })
         .catch(() => {});
@@ -511,7 +512,7 @@ export class OpenCodeBackend implements AgentBackend {
     this.tabSessions.delete(tabId);
     this.sessionTokens.delete(tabId);
     // Push zero tokens so the UI counter resets immediately
-    this.mainWindow?.webContents.send(`agent:token-usage:${tabId}`, zeroSessionTokens());
+    this.mainWindow?.webContents.send(AGENT_TOKEN_USAGE_EVENT(tabId), zeroSessionTokens());
   }
 
   getSessionTokens(tabId: string): OuterClaudeSessionTokens {
