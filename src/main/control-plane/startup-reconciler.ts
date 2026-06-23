@@ -2,6 +2,7 @@ import path from 'path';
 import fs from 'fs';
 import { execFile } from 'child_process';
 import { Registry, Stack } from './registry';
+import { TaskLifecycleManager } from './task-lifecycle-manager';
 import { TaskWatcher } from './task-watcher';
 import { StackManager, sanitizeComposeName } from './stack-manager';
 import { ContainerRuntime } from '../runtime/types';
@@ -107,6 +108,8 @@ export async function runStartupReconciliation(
     workspaceExistsFn = defaultWorkspaceExists,
   } = deps;
 
+  const tlm = new TaskLifecycleManager(registry);
+
   // Repair cards stuck in pr_open after a failed PR creation (runs before stack reconciliation
   // so the board is consistent when the renderer loads).
   registry.reconcilePrOpenStuckTickets();
@@ -127,6 +130,7 @@ export async function runStartupReconciliation(
       await reconcileStack(
         stack,
         registry,
+        tlm,
         stackManager,
         taskWatcher,
         dockerRuntime,
@@ -158,6 +162,7 @@ export async function runStartupReconciliation(
 async function reconcileStack(
   stack: Stack,
   registry: Registry,
+  tlm: TaskLifecycleManager,
   stackManager: StackManager,
   taskWatcher: TaskWatcher,
   dockerRuntime: ContainerRuntime,
@@ -181,7 +186,7 @@ async function reconcileStack(
 
   if (!container) {
     if (workspaceExistsFn(stack)) {
-      await handleBranch3(stack, registry, stackManager, notifyUpdate);
+      await handleBranch3(stack, registry, tlm, stackManager, notifyUpdate);
     } else {
       await handleBranch5(stack, registry, fetchTicketStateFn, notifyUpdate);
     }
@@ -198,11 +203,11 @@ async function reconcileStack(
   }
 
   if (statusContent !== null && TERMINAL_FILE_STATUSES.has(statusContent)) {
-    await handleBranch1(stack, statusContent, container.id, runtime, registry, notifyUpdate);
+    await handleBranch1(stack, statusContent, container.id, runtime, registry, tlm, notifyUpdate);
   } else if (statusContent === 'running') {
     handleBranch2(stack.id, container.id, taskWatcher, notifyUpdate);
   } else {
-    await handleBranch4(stack, registry, stackManager, notifyUpdate);
+    await handleBranch4(stack, registry, tlm, stackManager, notifyUpdate);
   }
 }
 
@@ -212,6 +217,7 @@ async function handleBranch1(
   containerId: string,
   runtime: ContainerRuntime,
   registry: Registry,
+  tlm: TaskLifecycleManager,
   notifyUpdate: () => void
 ): Promise<void> {
   const task = registry.getRunningTask(stack.id);
@@ -223,14 +229,14 @@ async function handleBranch1(
       const r = await runtime.exec(containerId, ['cat', '/tmp/claude-stop-reason.txt']);
       if (r.stdout.trim()) stopReason = r.stdout.trim();
     } catch { /* best effort */ }
-    registry.completeTaskNeedsHuman(task.id, stopReason);
+    tlm.markNeedsHuman(task.id, stopReason);
   } else if (statusContent === 'verify_blocked_environmental') {
     let envReason = 'Verify failed repeatedly — likely an environmental issue';
     try {
       const r = await runtime.exec(containerId, ['cat', '/tmp/claude-verify-environmental.txt']);
       if (r.stdout.trim()) envReason = `Verify blocked (environmental): ${r.stdout.trim()}`;
     } catch { /* best effort */ }
-    registry.completeTaskVerifyBlockedEnvironmental(task.id, envReason);
+    tlm.markVerifyBlockedEnvironmental(task.id, envReason);
   } else {
     let exitCode: number;
     try {
@@ -240,7 +246,7 @@ async function handleBranch1(
     } catch {
       exitCode = statusContent === 'completed' ? 0 : 1;
     }
-    registry.completeTask(task.id, exitCode);
+    tlm.markCompleted(task.id, exitCode);
   }
   notifyUpdate();
 }
@@ -258,12 +264,13 @@ function handleBranch2(
 async function handleBranch3(
   stack: Stack,
   registry: Registry,
+  tlm: TaskLifecycleManager,
   stackManager: StackManager,
   notifyUpdate: () => void
 ): Promise<void> {
   // Temporarily mark as session_paused so resumeStackWithContinuation applies its
   // recreate-and-resume logic (Case A for session resume, Case B for fresh dispatch).
-  registry.updateStackStatus(stack.id, 'session_paused');
+  tlm.updateStackStatus(stack.id, 'session_paused');
   notifyUpdate();
 
   try {
@@ -272,7 +279,7 @@ async function handleBranch3(
     console.warn(`[StartupReconciler] Branch 3 resume failed for stack ${stack.id}:`, err);
     const task = registry.getRunningTask(stack.id);
     if (task) {
-      registry.completeTaskNeedsHuman(
+      tlm.markNeedsHuman(
         task.id,
         `Startup recovery failed: ${err instanceof Error ? err.message : String(err)}`
       );
@@ -284,13 +291,14 @@ async function handleBranch3(
 async function handleBranch4(
   stack: Stack,
   registry: Registry,
+  tlm: TaskLifecycleManager,
   stackManager: StackManager,
   notifyUpdate: () => void
 ): Promise<void> {
   // Interrupt the stale running task so dispatchTask creates a clean new one
   const task = registry.getRunningTask(stack.id);
   if (task) {
-    registry.interruptTask(task.id);
+    tlm.markInterrupted(task.id);
   }
 
   try {
@@ -301,12 +309,12 @@ async function handleBranch4(
     console.warn(`[StartupReconciler] Branch 4 dispatch failed for stack ${stack.id}:`, err);
     const newTask = registry.getRunningTask(stack.id);
     if (newTask) {
-      registry.completeTaskNeedsHuman(
+      tlm.markNeedsHuman(
         newTask.id,
         `Investigation dispatch failed: ${err instanceof Error ? err.message : String(err)}`
       );
     } else {
-      registry.updateStackStatus(stack.id, 'needs_human');
+      tlm.updateStackStatus(stack.id, 'needs_human');
     }
     notifyUpdate();
   }

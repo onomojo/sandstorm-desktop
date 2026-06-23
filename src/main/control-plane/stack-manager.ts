@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import os from 'os';
 import { Registry, Stack, StackHistoryRecord, StackStatus, Task, TokenUsage } from './registry';
+import { TaskLifecycleManager } from './task-lifecycle-manager';
 import { PortAllocator, ServicePort } from './port-allocator';
 import { PortProxy } from './port-proxy';
 import { TaskWatcher, WorkflowProgressData } from './task-watcher';
@@ -216,6 +217,7 @@ export class StackManager {
   private appVersion: string;
   private portProxy?: PortProxy;
   private askClarifyingInFlight = new Set<string>();
+  private tlm: TaskLifecycleManager;
 
   constructor(
     private registry: Registry,
@@ -225,6 +227,7 @@ export class StackManager {
     private podmanRuntime: ContainerRuntime,
     private cliDir: string = ''
   ) {
+    this.tlm = new TaskLifecycleManager(registry);
     // When the task watcher detects a status change, push a UI update
     this.taskWatcher.setOnStatusChange(() => this.notifyUpdate());
     this.appVersion = StackManager.resolveAppVersion();
@@ -484,7 +487,7 @@ export class StackManager {
       const buildRuntime = opts.runtime === 'podman' ? this.podmanRuntime : this.dockerRuntime;
       const needsRebuild = await this.checkImageNeedsRebuild(opts.projectDir, buildRuntime);
       if (needsRebuild) {
-        this.registry.updateStackStatus(opts.name, 'rebuilding');
+        this.tlm.updateStackStatus(opts.name, 'rebuilding');
         this.notifyUpdate();
       }
 
@@ -507,7 +510,7 @@ export class StackManager {
         build: needsRebuild,
       });
 
-      this.registry.updateStackStatus(opts.name, 'up');
+      this.tlm.updateStackStatus(opts.name, 'up');
       this.notifyUpdate();
 
       // If a task was provided, dispatch it (with one retry on failure).
@@ -524,7 +527,7 @@ export class StackManager {
             await this.dispatchTask(opts.name, opts.task, opts.model, gateOpts);
           } catch (retryErr) {
             const msg = retryErr instanceof Error ? retryErr.message : String(retryErr);
-            this.registry.updateStackStatus(opts.name, 'failed', `Task dispatch failed after retry: ${msg}`);
+            this.tlm.updateStackStatus(opts.name, 'failed', `Task dispatch failed after retry: ${msg}`);
             this.notifyUpdate();
             return;
           }
@@ -532,7 +535,7 @@ export class StackManager {
       }
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      this.registry.updateStackStatus(opts.name, 'failed', errorMessage);
+      this.tlm.updateStackStatus(opts.name, 'failed', errorMessage);
       this.notifyUpdate();
     }
   }
@@ -542,7 +545,7 @@ export class StackManager {
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
     this.taskWatcher.unwatch(stackId);
-    this.registry.updateStackStatus(stackId, 'stopped');
+    this.tlm.updateStackStatus(stackId, 'stopped');
     this.notifyUpdate();
 
     // Stop containers in background (keeps containers/volumes/images intact)
@@ -561,7 +564,7 @@ export class StackManager {
     const stack = this.registry.getStack(stackId);
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
 
-    this.registry.updateStackStatus(stackId, 'building');
+    this.tlm.updateStackStatus(stackId, 'building');
     this.notifyUpdate();
 
     // Start containers in background
@@ -582,7 +585,7 @@ export class StackManager {
         result.stderr.trim() || result.stdout.trim() || 'Failed to start stack containers before dispatch'
       );
     }
-    this.registry.updateStackStatus(stackId, 'up');
+    this.tlm.updateStackStatus(stackId, 'up');
     this.notifyUpdate();
   }
 
@@ -592,11 +595,11 @@ export class StackManager {
       if (result.exitCode !== 0) {
         throw new SandstormError(ErrorCode.COMPOSE_FAILED, result.stderr.trim() || result.stdout.trim() || 'Stack start failed');
       }
-      this.registry.updateStackStatus(stackId, 'up');
+      this.tlm.updateStackStatus(stackId, 'up');
       this.notifyUpdate();
     } catch (err) {
       const errorMessage = err instanceof Error ? err.message : String(err);
-      this.registry.updateStackStatus(stackId, 'failed', errorMessage);
+      this.tlm.updateStackStatus(stackId, 'failed', errorMessage);
       this.notifyUpdate();
     }
   }
@@ -614,7 +617,7 @@ export class StackManager {
     for (const stack of stacks) {
       if (runningStatuses.has(stack.status)) {
         this.taskWatcher.unwatch(stack.id);
-        this.registry.updateStackStatus(stack.id, 'session_paused');
+        this.tlm.updateStackStatus(stack.id, 'session_paused');
         paused.push(stack.id);
         // Stop containers in background
         this.stopInBackground(stack, stack.id).catch(() => {});
@@ -635,7 +638,7 @@ export class StackManager {
     if (!stack) throw new SandstormError(ErrorCode.STACK_NOT_FOUND, `Stack "${stackId}" not found`);
     if (stack.status !== 'session_paused') return;
 
-    this.registry.updateStackStatus(stackId, 'building');
+    this.tlm.updateStackStatus(stackId, 'building');
     this.notifyUpdate();
     this.startInBackground(stack, stackId).catch(() => {});
   }
@@ -649,7 +652,7 @@ export class StackManager {
 
     for (const stack of stacks) {
       if (stack.status === 'session_paused') {
-        this.registry.updateStackStatus(stack.id, 'building');
+        this.tlm.updateStackStatus(stack.id, 'building');
         resumed.push(stack.id);
         this.startInBackground(stack, stack.id).catch(() => {});
       }
@@ -693,13 +696,13 @@ export class StackManager {
     }
 
     // Bring containers up synchronously
-    this.registry.updateStackStatus(stackId, 'building');
+    this.tlm.updateStackStatus(stackId, 'building');
     this.notifyUpdate();
     try {
       await this.ensureStackContainersRunning(stack, stackId);
     } catch (err) {
       // Revert to session_paused on container failure so the user can retry
-      this.registry.updateStackStatus(stackId, 'session_paused');
+      this.tlm.updateStackStatus(stackId, 'session_paused');
       this.notifyUpdate();
       throw err;
     }
@@ -713,11 +716,11 @@ export class StackManager {
       const mostRecentTask = this.registry.getMostRecentTask(stackId);
       if (!mostRecentTask) {
         // Case C: no task at all — leave stack idle
-        this.registry.updateStackStatus(stackId, 'idle');
+        this.tlm.updateStackStatus(stackId, 'idle');
         this.notifyUpdate();
         return { outcome: 'idle' };
       }
-      this.registry.reopenTaskForResume(mostRecentTask.id);
+      this.tlm.markReopened(mostRecentTask.id);
       runningTask = { ...mostRecentTask, status: 'running' as const };
     }
 
@@ -726,20 +729,20 @@ export class StackManager {
       try {
         await this.dispatchContinuation(stack, stackId, runningTask);
       } catch (err) {
-        this.registry.updateStackStatus(stackId, 'session_paused');
+        this.tlm.updateStackStatus(stackId, 'session_paused');
         this.notifyUpdate();
         throw err;
       }
       return { outcome: 'resuming_with_session' };
     } else {
       // Case B: session not yet logged — interrupt and redispatch fresh
-      this.registry.interruptTask(runningTask.id);
+      this.tlm.markInterrupted(runningTask.id);
       try {
         await this.dispatchTask(stackId, runningTask.prompt, runningTask.model ?? undefined, {
           skipTicketFetch: true,
         });
       } catch (err) {
-        this.registry.updateStackStatus(stackId, 'session_paused');
+        this.tlm.updateStackStatus(stackId, 'session_paused');
         this.notifyUpdate();
         throw err;
       }
@@ -768,8 +771,8 @@ export class StackManager {
 
     await this.waitForClaudeReady(claudeContainer.id, runtime);
 
-    this.registry.setTaskResumedAt(task.id, new Date().toISOString());
-    this.registry.updateStackStatus(stackId, 'running');
+    this.tlm.markResumedAt(task.id, new Date().toISOString());
+    this.tlm.updateStackStatus(stackId, 'running');
     this.notifyUpdate();
 
     try {
@@ -779,7 +782,7 @@ export class StackManager {
         resume: task.session_id!,
       });
     } catch (err) {
-      this.registry.updateStackStatus(stackId, 'session_paused');
+      this.tlm.updateStackStatus(stackId, 'session_paused');
       this.notifyUpdate();
       const msg = err instanceof Error ? err.message : String(err);
       throw new SandstormError(ErrorCode.TASK_DISPATCH_FAILED, msg || 'Resume dispatch failed');
@@ -811,8 +814,8 @@ export class StackManager {
 
     await this.waitForClaudeReady(claudeContainer.id, runtime);
 
-    this.registry.setTaskResumedAt(task.id, new Date().toISOString());
-    this.registry.updateStackStatus(stackId, 'running');
+    this.tlm.markResumedAt(task.id, new Date().toISOString());
+    this.tlm.updateStackStatus(stackId, 'running');
     this.notifyUpdate();
 
     try {
@@ -822,7 +825,7 @@ export class StackManager {
         resume: task.session_id!,
       });
     } catch (err) {
-      this.registry.updateStackStatus(stackId, 'needs_human');
+      this.tlm.updateStackStatus(stackId, 'needs_human');
       this.notifyUpdate();
       const msg = err instanceof Error ? err.message : String(err);
       throw new SandstormError(ErrorCode.TASK_DISPATCH_FAILED, msg || 'Investigation dispatch failed');
@@ -916,7 +919,7 @@ export class StackManager {
     // Transition to session_paused so resumeStackWithContinuation can proceed.
     // The task is still 'completed'; the Q-A fallback in resumeStackWithContinuation
     // will call getMostRecentTask + reopenTaskForResume before Case A/B.
-    this.registry.updateStackStatus(stackId, 'session_paused');
+    this.tlm.updateStackStatus(stackId, 'session_paused');
     this.notifyUpdate();
 
     try {
@@ -928,9 +931,9 @@ export class StackManager {
       // if dispatchTask throws, the task is 'interrupted', not 'running'.
       const reopenedTask = this.registry.getMostRecentTask(stackId);
       if (reopenedTask && (reopenedTask.status === 'running' || reopenedTask.status === 'interrupted')) {
-        this.registry.completeTask(reopenedTask.id, 0); // also sets stack to 'completed'
+        this.tlm.markCompleted(reopenedTask.id, 0); // also sets stack to 'completed'
       } else {
-        this.registry.updateStackStatus(stackId, 'completed');
+        this.tlm.updateStackStatus(stackId, 'completed');
       }
       this.notifyUpdate();
       throw err;
@@ -982,15 +985,15 @@ export class StackManager {
     const task = this.registry.getMostRecentTask(stackId);
 
     if (containerStatus === 'running') {
-      this.registry.updateStackStatus(stackId, 'running');
-      if (task) this.registry.reopenTaskForResume(task.id);
+      this.tlm.updateStackStatus(stackId, 'running');
+      if (task) this.tlm.markReopened(task.id);
       this.taskWatcher.watch(stackId, container.id);
       this.notifyUpdate();
       return { outcome: 'reconciled', status: 'running' };
     }
 
     if (containerStatus === 'token_limited') {
-      this.registry.updateStackStatus(stackId, 'session_paused');
+      this.tlm.updateStackStatus(stackId, 'session_paused');
       this.notifyUpdate();
       return { outcome: 'reconciled', status: 'session_paused' };
     }
@@ -1022,9 +1025,9 @@ export class StackManager {
       }
 
       if (task) {
-        this.registry.completeTaskNeedsHuman(task.id, stopReason, questionsJson);
+        this.tlm.markNeedsHuman(task.id, stopReason, questionsJson);
       } else {
-        this.registry.updateStackStatus(stackId, 'needs_human');
+        this.tlm.updateStackStatus(stackId, 'needs_human');
       }
       this.notifyUpdate();
       return { outcome: 'reconciled', status: 'needs_human' };
@@ -1038,9 +1041,9 @@ export class StackManager {
       } catch { /* best effort */ }
 
       if (task) {
-        this.registry.completeTaskNeedsKey(task.id, keyReason);
+        this.tlm.markNeedsKey(task.id, keyReason);
       } else {
-        this.registry.updateStackStatus(stackId, 'needs_key');
+        this.tlm.updateStackStatus(stackId, 'needs_key');
       }
       this.notifyUpdate();
       return { outcome: 'reconciled', status: 'needs_key' };
@@ -1054,9 +1057,9 @@ export class StackManager {
       } catch { /* best effort */ }
 
       if (task) {
-        this.registry.completeTaskVerifyBlockedEnvironmental(task.id, envReason);
+        this.tlm.markVerifyBlockedEnvironmental(task.id, envReason);
       } else {
-        this.registry.updateStackStatus(stackId, 'verify_blocked_environmental');
+        this.tlm.updateStackStatus(stackId, 'verify_blocked_environmental');
       }
       this.notifyUpdate();
       return { outcome: 'reconciled', status: 'verify_blocked_environmental' };
@@ -1071,9 +1074,9 @@ export class StackManager {
       } catch { /* best effort */ }
 
       if (task) {
-        this.registry.completeTask(task.id, exitCode);
+        this.tlm.markCompleted(task.id, exitCode);
       } else {
-        this.registry.updateStackStatus(stackId, containerStatus as 'completed' | 'failed');
+        this.tlm.updateStackStatus(stackId, containerStatus as 'completed' | 'failed');
       }
       this.notifyUpdate();
       return { outcome: 'reconciled', status: containerStatus as 'completed' | 'failed' };
@@ -1081,9 +1084,9 @@ export class StackManager {
 
     // Unrecognized status — surface to user as needs_human
     if (task) {
-      this.registry.completeTaskNeedsHuman(task.id, `Unrecognized container status: ${containerStatus}`);
+      this.tlm.markNeedsHuman(task.id, `Unrecognized container status: ${containerStatus}`);
     } else {
-      this.registry.updateStackStatus(stackId, 'needs_human');
+      this.tlm.updateStackStatus(stackId, 'needs_human');
     }
     this.notifyUpdate();
     return { outcome: 'reconciled', status: 'needs_human' };
@@ -1107,12 +1110,12 @@ export class StackManager {
     const originalStatus = stack.status;
 
     // Bring containers up
-    this.registry.updateStackStatus(stackId, 'building');
+    this.tlm.updateStackStatus(stackId, 'building');
     this.notifyUpdate();
     try {
       await this.ensureStackContainersRunning(stack, stackId);
     } catch (err) {
-      this.registry.updateStackStatus(stackId, originalStatus);
+      this.tlm.updateStackStatus(stackId, originalStatus);
       this.notifyUpdate();
       throw err;
     }
@@ -1123,11 +1126,11 @@ export class StackManager {
     try {
       if (task.session_id) {
         // Case A: resume with existing Claude session — reopen task then dispatch continuation
-        this.registry.reopenTaskForResume(task.id);
+        this.tlm.markReopened(task.id);
         await this.dispatchContinuation(stack, stackId, { ...task, status: 'running' }, continuationPrompt);
       } else {
         // Case B: no session_id — close the original task and redispatch fresh with original prompt + answers
-        this.registry.interruptTask(task.id);
+        this.tlm.markInterrupted(task.id);
         const freshPrompt = `${task.prompt}\n\n---\nAdditional context from human:\n${answers}`;
         try {
           await this.dispatchTask(stackId, freshPrompt, task.model ?? undefined, {
@@ -1135,8 +1138,8 @@ export class StackManager {
           });
         } catch (err) {
           // Revert task to terminal state so it doesn't strand in interrupted
-          this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
-          this.registry.updateStackStatus(stackId, originalStatus);
+          this.tlm.markNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
+          this.tlm.updateStackStatus(stackId, originalStatus);
           this.notifyUpdate();
           throw err;
         }
@@ -1144,8 +1147,8 @@ export class StackManager {
     } catch (err) {
       if (task.session_id) {
         // Revert task to terminal state so it doesn't strand in running
-        this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
-        this.registry.updateStackStatus(stackId, originalStatus);
+        this.tlm.markNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
+        this.tlm.updateStackStatus(stackId, originalStatus);
         this.notifyUpdate();
       }
       throw err;
@@ -1180,13 +1183,13 @@ export class StackManager {
       throw new SandstormError(ErrorCode.INTERNAL_ERROR, `No task found for stack "${stackId}"`);
     }
 
-    this.registry.updateStackStatus(stackId, 'building');
+    this.tlm.updateStackStatus(stackId, 'building');
     this.notifyUpdate();
     try {
       await this.ensureStackContainersRunning(stack, stackId);
     } catch (err) {
       this.askClarifyingInFlight.delete(stackId);
-      this.registry.updateStackStatus(stackId, 'needs_human');
+      this.tlm.updateStackStatus(stackId, 'needs_human');
       this.notifyUpdate();
       throw err;
     }
@@ -1194,27 +1197,27 @@ export class StackManager {
     try {
       if (task.session_id) {
         // Case A: resume in-container session with fixed prompt to trigger STOP_AND_ASK
-        this.registry.reopenTaskForResume(task.id);
+        this.tlm.markReopened(task.id);
         await this.dispatchContinuation(stack, stackId, { ...task, status: 'running' }, ASK_CLARIFYING_QUESTIONS_PROMPT);
       } else {
         // Case B: no session_id — re-dispatch fresh with original prompt
         // The fixed clarifying-questions prompt does not apply; the original prompt is re-run.
-        this.registry.interruptTask(task.id);
+        this.tlm.markInterrupted(task.id);
         try {
           await this.dispatchTask(stackId, task.prompt, task.model ?? undefined, {
             skipTicketFetch: true,
           });
         } catch (err) {
-          this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
-          this.registry.updateStackStatus(stackId, 'needs_human');
+          this.tlm.markNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
+          this.tlm.updateStackStatus(stackId, 'needs_human');
           this.notifyUpdate();
           throw err;
         }
       }
     } catch (err) {
       if (task.session_id) {
-        this.registry.completeTaskNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
-        this.registry.updateStackStatus(stackId, 'needs_human');
+        this.tlm.markNeedsHuman(task.id, 'Resume dispatch failed', task.needs_human_questions);
+        this.tlm.updateStackStatus(stackId, 'needs_human');
         this.notifyUpdate();
       }
       throw err;
@@ -1244,7 +1247,7 @@ export class StackManager {
       } catch {
         // Best effort — container may already be gone
       }
-      this.registry.interruptTask(runningTask.id);
+      this.tlm.markInterrupted(runningTask.id);
     }
 
     // Archive to history before deleting
@@ -1426,7 +1429,7 @@ export class StackManager {
       }
     }
 
-    const task = this.registry.createTask(stackId, prompt, model);
+    const task = this.tlm.createTask(stackId, prompt, model);
 
     const runtime = this.getRuntimeForStack(stack);
 
@@ -1479,7 +1482,7 @@ export class StackManager {
     } catch (err) {
       // Task was created but dispatch failed — mark it as failed so the
       // stack doesn't stay stuck in 'running' status forever.
-      this.registry.completeTask(task.id, 1);
+      this.tlm.markCompleted(task.id, 1);
       this.notifyUpdate();
       throw err;
     }
@@ -1532,21 +1535,13 @@ export class StackManager {
       throw new SandstormError(ErrorCode.COMPOSE_FAILED, result.stderr.trim() || result.stdout.trim() || 'Push failed');
     }
 
-    this.registry.updateStackStatus(stackId, 'pushed');
+    this.tlm.updateStackStatus(stackId, 'pushed');
     this.notifyUpdate();
     return { stdout: result.stdout, stderr: result.stderr };
   }
 
   setPullRequest(stackId: string, prUrl: string, prNumber: number): void {
-    const stack = this.registry.getStack(stackId);
-    if (!stack) throw new Error(`Stack "${stackId}" not found`);
-
-    this.registry.setPullRequest(stackId, prUrl, prNumber);
-
-    if (stack.ticket) {
-      this.registry.advanceTicketToPrOpenIfInStack(stack.ticket, stack.project_dir);
-    }
-
+    this.tlm.markPrCreated(stackId, prUrl, prNumber);
     this.notifyUpdate();
   }
 
@@ -2502,13 +2497,13 @@ export class StackManager {
     // Set guard as within-call race lock before dispatch
     this.registry.setSelfhealContinueUsed(stackId, 1);
 
-    this.registry.updateStackStatus(stackId, 'building');
+    this.tlm.updateStackStatus(stackId, 'building');
     this.notifyUpdate();
     try {
       await this.ensureStackContainersRunning(stack, stackId);
     } catch (err) {
       this.registry.setSelfhealContinueUsed(stackId, 0);
-      this.registry.updateStackStatus(stackId, 'failed');
+      this.tlm.updateStackStatus(stackId, 'failed');
       this.notifyUpdate();
       throw err;
     }
@@ -2516,7 +2511,7 @@ export class StackManager {
     try {
       if (task.session_id) {
         // Case A: resume with existing Claude session — reopen task, reset iterations, dispatch continuation
-        this.registry.reopenTaskForResume(task.id);
+        this.tlm.markReopened(task.id);
         this.registry.setTaskIterations(task.id, 0, task.verify_retries);
         const continuationPrompt =
           'Continue the prior work on this task. The review loop count has been reset — you have fresh review iterations to work with. Resume from where you left off.';
@@ -2533,11 +2528,11 @@ export class StackManager {
     } catch (err) {
       if (task.session_id) {
         // Revert reopened task to terminal state so it doesn't strand in running
-        this.registry.completeTask(task.id, 1);
+        this.tlm.markCompleted(task.id, 1);
       }
       // Reset guard so the stack is not permanently blocked
       this.registry.setSelfhealContinueUsed(stackId, 0);
-      this.registry.updateStackStatus(stackId, 'failed');
+      this.tlm.updateStackStatus(stackId, 'failed');
       this.notifyUpdate();
       throw err;
     }
