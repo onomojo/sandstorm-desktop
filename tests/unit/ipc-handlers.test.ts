@@ -353,6 +353,7 @@ vi.mock('../../src/main/control-plane/pr-creator', () => ({
 
 vi.mock('../../src/main/claude/tools', () => ({
   handleToolCall: vi.fn(),
+  makeContractGateDeps: vi.fn(() => ({ generateContract: vi.fn(), storeContract: vi.fn() })),
   spawnSpecCheck: (...args: unknown[]) => mockSpawnSpecCheck(...args),
   spawnSpecRefine: (...args: unknown[]) => mockSpawnSpecRefine(...args),
   validateProjectDir: vi.fn().mockReturnValue(null),

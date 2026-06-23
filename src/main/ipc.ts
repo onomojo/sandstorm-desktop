@@ -1485,7 +1485,9 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
         emitRefinementUpdate(done);
 
         // Best-effort: post FAIL report as a ticket comment so it's visible on GitHub.
-        if (!passed && !rawError && cappedReport) {
+        // Skip when the gate itself passed but the contract step failed — that's
+        // not a spec FAIL and the report text is the PASS report, not gaps.
+        if (!passed && !rawError && !contractError && cappedReport) {
           postComment(ticketId, projectDir, `${GATE_FAIL_REPORT_MARKER}\n\n${cappedReport}`).catch(() => {});
         }
       })

@@ -169,7 +169,7 @@ describe('ModelsPane', () => {
       expect(toggle.getAttribute('aria-checked')).toBe('false');
     });
 
-    it('toggle reveals 7 touchpoint rows in TOUCHPOINTS order', async () => {
+    it('toggle reveals all touchpoint rows in TOUCHPOINTS order', async () => {
       const ctx = makeCtx(makeRouting());
       await renderPane(ctx);
 
@@ -178,7 +178,7 @@ describe('ModelsPane', () => {
       });
 
       const rows = screen.getAllByTestId(/^touchpoint-row-/);
-      expect(rows).toHaveLength(7);
+      expect(rows).toHaveLength(TOUCHPOINTS.length);
       expect(rows.map((r) => r.getAttribute('data-testid'))).toEqual(
         TOUCHPOINTS.map((t) => `touchpoint-row-${t}`)
       );
