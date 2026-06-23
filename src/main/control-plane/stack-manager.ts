@@ -9,7 +9,8 @@ import { PortProxy } from './port-proxy';
 import { TaskWatcher, WorkflowProgressData } from './task-watcher';
 import { ContainerRuntime, Container, ContainerStats } from '../runtime/types';
 import { SandstormError, ErrorCode } from '../errors';
-import { fetchRawBodyWithConfig, fetchTicketWithConfig, updateTicketWithConfig } from './ticket-config';
+import { fetchRawBodyWithConfig, fetchTicketWithConfig, updateTicketWithConfig, fetchContractCommentWithConfig } from './ticket-config';
+import { appendContractSection } from './contract-dispatch';
 import { referencesTicket } from './ticket-fetcher';
 import { resolveTicketReferences, renderResolvedReferences } from './ticket-references';
 import { workspacePathFor } from './pr-creator';
@@ -1411,6 +1412,18 @@ export class StackManager {
     const referencesSection = renderResolvedReferences(references);
     if (referencesSection) {
       prompt = `${prompt}\n\n---\n\n${referencesSection}`;
+    }
+
+    // Attach the machine-generated execution contract (stored as a ticket
+    // comment by the spec gate) so the inner executor has it alongside the spec.
+    // Guarded like the ticket fetch: skipped on re-dispatch, where the stored
+    // prompt already carries the contract.
+    if (stack.ticket && !opts?.skipTicketFetch) {
+      const ticketConfig = this.registry.getProjectTicketConfig(stack.project_dir);
+      if (ticketConfig) {
+        const contractJson = await fetchContractCommentWithConfig(stack.ticket, ticketConfig, stack.project_dir);
+        prompt = appendContractSection(prompt, contractJson);
+      }
     }
 
     const task = this.registry.createTask(stackId, prompt, model);

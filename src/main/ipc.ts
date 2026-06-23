@@ -61,6 +61,7 @@ import {
   fetchTicketForRenderer,
   runSpecCheck,
   runSpecRefine,
+  finalizeSpecGatePass,
   extractQuestions,
   extractGateSummary,
   shortBodyHash,
@@ -89,7 +90,7 @@ import type { ProjectTicketConfig } from './control-plane/registry';
 import { getAvailableModels } from './control-plane/routing';
 import type { RoutingAssignment, PresetId } from './control-plane/routing';
 import type { EphemeralStreamEvent } from './agent/types';
-import { handleToolCall, spawnSpecCheck, spawnSpecRefine } from './claude/tools';
+import { handleToolCall, spawnSpecCheck, spawnSpecRefine, makeContractGateDeps } from './claude/tools';
 import { listTicketsWithConfig } from './control-plane/ticket-lister';
 import { listTicketComments, postComment } from './control-plane/ticket-comments';
 import { getLatestUserAnswers, ANSWER_COMMENT_MARKER, GATE_FAIL_REPORT_MARKER } from './scheduler/refine-to-comments';
@@ -1324,6 +1325,7 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
     (ticketId, projectDir, userAnswers) =>
       handleToolCall('spec_refine', { ticketId, projectDir, userAnswers }) as Promise<SpecGateReport>,
     (projectDir) => registry.getProjectTicketConfig(projectDir),
+    makeContractGateDeps(),
   );
 
   // In-memory map of active refinement sessions (id → session + cancel handle).
@@ -1433,28 +1435,49 @@ export function registerIpcHandlers(mainWindow?: BrowserWindow): void {
 
         // Convert the raw SpecGateReport to the renderer-facing SpecGateResult.
         const url = await specDeps.readTicketUrl(ticketId);
-        const passed = !!rawReport.passed;
+        let passed = !!rawReport.passed;
         const reportText = (rawReport as unknown as SpecGateReport).report || '';
         const rawError = (rawReport as unknown as SpecGateReport & { error?: string }).error;
 
+        // Atomic post-pass step: generate + store the contract, then mark
+        // spec-ready. If it fails, downgrade to NOT passed so the ticket stays
+        // in Refining and the existing Retry re-attempts (block-until-contract).
+        let contractError: string | undefined;
         if (passed && phase === 'check') {
-          // Mark spec-ready on GitHub (best-effort, same as the sync path).
           const body = await specDeps.fetchTicket(ticketId, projectDir);
-          if (body) await specDeps.markSpecReady(ticketId, shortBodyHash(body));
+          if (body) {
+            const fin = await finalizeSpecGatePass(ticketId, projectDir, body, shortBodyHash(body), specDeps);
+            if (!fin.ok) {
+              passed = false;
+              contractError = fin.error;
+            }
+          } else {
+            passed = false;
+            contractError = 'Could not fetch ticket body for contract generation';
+          }
         }
 
         const cappedReport = capReportText(reportText);
 
         const result: SpecGateResult = rawError
           ? { passed: false, questions: [], gateSummary: '', ticketUrl: url || null, cached: false, error: rawError }
-          : {
-              passed,
-              questions: passed ? [] : extractQuestions(reportText),
-              gateSummary: extractGateSummary(reportText),
-              ticketUrl: url || null,
-              cached: false,
-              reportText: passed ? null : (cappedReport || null),
-            };
+          : contractError
+            ? {
+                passed: false,
+                questions: [],
+                gateSummary: 'Spec passed; contract generation failed',
+                ticketUrl: url || null,
+                cached: false,
+                contractError,
+              }
+            : {
+                passed,
+                questions: passed ? [] : extractQuestions(reportText),
+                gateSummary: extractGateSummary(reportText),
+                ticketUrl: url || null,
+                cached: false,
+                reportText: passed ? null : (cappedReport || null),
+              };
 
         const done: RefinementSession = { ...session, status: 'ready', result };
         activeRefinements.set(id, { session: done, cancel: null });

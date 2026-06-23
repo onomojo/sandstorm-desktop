@@ -937,6 +937,8 @@ export interface SpecGateResult {
   error?: string;
   /** Full evaluator report text, capped at 64KB. Present on FAIL; null/absent on PASS or error. */
   reportText?: string | null;
+  /** Set when the spec passed but contract generation/storage failed (ticket stays in Refining). */
+  contractError?: string;
 }
 
 export type RefinementStatus = 'running' | 'ready' | 'errored' | 'interrupted';

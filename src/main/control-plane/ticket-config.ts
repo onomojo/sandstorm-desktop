@@ -3,6 +3,7 @@ import * as https from 'https';
 import * as http from 'http';
 import { URL } from 'url';
 import type { ProjectTicketConfig } from './registry';
+import { CONTRACT_MARKER, parseContractComment } from './contract-generator';
 
 export type { ProjectTicketConfig };
 
@@ -104,6 +105,76 @@ export async function githubUpdateTicket(ticketId: string, body: string, cwd: st
     const msg = err.stderr?.trim() || err.message;
     throw new Error(`gh issue edit failed: ${msg}`);
   });
+}
+
+/**
+ * Upsert the contract comment on a GitHub issue. Idempotent: any existing
+ * contract comment (identified by the marker) is deleted and replaced, so
+ * re-generation never piles up duplicate comments. `execFile` passes the body
+ * as a single argv entry with no shell, so arbitrary JSON content is safe.
+ * Throws on failure so the atomic gate step can fail closed.
+ */
+export async function githubUpsertContractComment(
+  ticketId: string,
+  commentBody: string,
+  cwd: string,
+): Promise<void> {
+  const { stdout: nwo } = await execFileAsync(
+    'gh',
+    ['repo', 'view', '--json', 'nameWithOwner', '-q', '.nameWithOwner'],
+    { cwd, timeout: 30000 },
+  );
+  const repo = nwo.trim();
+  if (!repo) throw new Error('Could not resolve repository for contract comment');
+
+  // Remove any pre-existing contract comments so we never accumulate duplicates.
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      ['api', '--paginate', `repos/${repo}/issues/${ticketId}/comments`],
+      { cwd, timeout: 30000, maxBuffer: 8 * 1024 * 1024 },
+    );
+    const comments = JSON.parse(stdout) as { id: number; body: string }[];
+    for (const c of comments) {
+      if ((c.body || '').includes(CONTRACT_MARKER)) {
+        await execFileAsync(
+          'gh',
+          ['api', `repos/${repo}/issues/comments/${c.id}`, '-X', 'DELETE'],
+          { cwd, timeout: 30000 },
+        ).catch(() => {});
+      }
+    }
+  } catch {
+    // Listing failed — fall through and post a fresh comment anyway.
+  }
+
+  await execFileAsync(
+    'gh',
+    ['issue', 'comment', ticketId, '--body', commentBody],
+    { cwd, timeout: 30000, maxBuffer: 2 * 1024 * 1024 },
+  ).catch((err: Error & { stderr?: string }) => {
+    const msg = err.stderr?.trim() || err.message;
+    throw new Error(`gh issue comment failed: ${msg}`);
+  });
+}
+
+/** Read the parsed contract JSON from a GitHub issue's contract comment, or null. */
+export async function githubFetchContractComment(ticketId: string, cwd: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'gh',
+      ['issue', 'view', ticketId, '--json', 'comments'],
+      { cwd, timeout: 30000, maxBuffer: 8 * 1024 * 1024 },
+    );
+    const data = JSON.parse(stdout) as { comments: { body: string }[] };
+    for (const c of data.comments ?? []) {
+      const parsed = parseContractComment(c.body ?? '');
+      if (parsed) return parsed.json;
+    }
+    return null;
+  } catch {
+    return null;
+  }
 }
 
 type FilterConfig = Pick<
@@ -590,6 +661,35 @@ export async function closeTicketWithConfig(
     return githubCloseTicket(ticketId, cwd);
   }
   return jiraCloseTicket(ticketId, config);
+}
+
+/**
+ * Store the contract comment on a ticket. GitHub-only for now; other providers
+ * no-op gracefully (the contract still travels via the dispatch prompt path,
+ * which falls back to whatever storage the provider supports).
+ */
+export async function upsertContractCommentWithConfig(
+  ticketId: string,
+  commentBody: string,
+  config: ProjectTicketConfig | null,
+  cwd: string,
+): Promise<void> {
+  if (config?.provider === 'github') {
+    return githubUpsertContractComment(ticketId, commentBody, cwd);
+  }
+  // Non-GitHub providers: no contract-comment storage yet.
+}
+
+/** Read the stored contract JSON for a ticket, or null. GitHub-only for now. */
+export async function fetchContractCommentWithConfig(
+  ticketId: string,
+  config: ProjectTicketConfig | null,
+  cwd: string,
+): Promise<string | null> {
+  if (config?.provider === 'github') {
+    return githubFetchContractComment(ticketId, cwd);
+  }
+  return null;
 }
 
 /**
