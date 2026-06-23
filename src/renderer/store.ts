@@ -11,6 +11,7 @@ import type {
   SessionEntry,
   DateRange,
 } from '@main/telemetry/types';
+import type { EventChannel } from '../main/ipc-channels';
 
 export interface ChatMessage {
   role: 'user' | 'assistant';
@@ -910,7 +911,7 @@ declare global {
         byTicket: (range?: DateRange) => Promise<ByTicketEntry[]>;
         refresh: () => Promise<{ ok: true }>;
       };
-      on: (channel: string, callback: (...args: unknown[]) => void) => () => void;
+      on: (channel: EventChannel, callback: (...args: unknown[]) => void) => () => void;
     };
   }
 }

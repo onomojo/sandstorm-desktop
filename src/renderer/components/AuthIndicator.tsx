@@ -1,3 +1,4 @@
+import { EVENT_CHANNELS } from '../../main/ipc-channels';
 import React, { useEffect, useState, useCallback } from 'react';
 
 interface AuthStatus {
@@ -26,7 +27,7 @@ export function AuthIndicator() {
     const interval = setInterval(checkStatus, 60_000);
 
     // Listen for auth completion events
-    const unsub = window.sandstorm.on('auth:completed', () => {
+    const unsub = window.sandstorm.on(EVENT_CHANNELS.AUTH_COMPLETED, () => {
       setLoginInProgress(false);
       checkStatus();
     });

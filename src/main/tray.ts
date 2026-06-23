@@ -1,6 +1,7 @@
 import { Tray, Menu, BrowserWindow, Notification, nativeImage, app } from 'electron';
 import path from 'path';
 import { registry } from './index';
+import { EVENT_CHANNELS } from './ipc-channels';
 
 let tray: Tray | null = null;
 
@@ -42,7 +43,7 @@ export function createTray(mainWindow: BrowserWindow): void {
         click: () => {
           mainWindow.show();
           mainWindow.focus();
-          mainWindow.webContents.send('navigate:stack', s.id);
+          mainWindow.webContents.send(EVENT_CHANNELS.NAVIGATE_STACK, s.id);
         },
       };
     });

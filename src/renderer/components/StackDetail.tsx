@@ -1,3 +1,4 @@
+import { EVENT_CHANNELS } from '../../main/ipc-channels';
 import React, { useState, useEffect, useCallback } from 'react';
 import { useAppStore, Task, TaskTokenStep, StackMetrics, WorkflowProgress } from '../store';
 import { ServiceList } from './ServiceList';
@@ -78,7 +79,7 @@ export function StackDetail({
       .catch(() => {});
 
     // Listen for live updates (only relevant while running)
-    const unsubscribe = window.sandstorm.on('task:workflow-progress', (data: unknown) => {
+    const unsubscribe = window.sandstorm.on(EVENT_CHANNELS.TASK_WORKFLOW_PROGRESS, (data: unknown) => {
       const progress = data as WorkflowProgress;
       if (progress && progress.stackId === stackId) {
         setWorkflowProgress(progress);
@@ -103,8 +104,8 @@ export function StackDetail({
       }
     };
 
-    const unsubComplete = window.sandstorm.on('task:completed', refetchProgress);
-    const unsubFailed = window.sandstorm.on('task:failed', refetchProgress);
+    const unsubComplete = window.sandstorm.on(EVENT_CHANNELS.TASK_COMPLETED, refetchProgress);
+    const unsubFailed = window.sandstorm.on(EVENT_CHANNELS.TASK_FAILED, refetchProgress);
 
     return () => {
       unsubComplete();

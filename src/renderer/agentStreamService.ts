@@ -12,6 +12,7 @@
  */
 
 import { useAppStore, OuterClaudeSessionTokens } from './store';
+import { AGENT_DONE, AGENT_ERROR, AGENT_OUTPUT, AGENT_QUEUED, AGENT_TOKEN_USAGE_EVENT, AGENT_USER_MESSAGE } from '../main/ipc-channels';
 
 const registeredTabs = new Set<string>();
 
@@ -19,11 +20,11 @@ export function registerAgentStreamListeners(tabId: string): void {
   if (registeredTabs.has(tabId)) return;
   registeredTabs.add(tabId);
 
-  window.sandstorm.on(`agent:queued:${tabId}`, () => {
+  window.sandstorm.on(AGENT_QUEUED(tabId), () => {
     useAppStore.getState().updateAgentSession(tabId, { isQueued: true });
   });
 
-  window.sandstorm.on(`agent:output:${tabId}`, (data: unknown) => {
+  window.sandstorm.on(AGENT_OUTPUT(tabId), (data: unknown) => {
     const current = useAppStore.getState().agentSessions[tabId];
     useAppStore.getState().updateAgentSession(tabId, {
       isQueued: false,
@@ -31,7 +32,7 @@ export function registerAgentStreamListeners(tabId: string): void {
     });
   });
 
-  window.sandstorm.on(`agent:done:${tabId}`, () => {
+  window.sandstorm.on(AGENT_DONE(tabId), () => {
     useAppStore.getState().updateAgentSession(tabId, {
       isQueued: false,
       isLoading: false,
@@ -50,7 +51,7 @@ export function registerAgentStreamListeners(tabId: string): void {
     });
   });
 
-  window.sandstorm.on(`agent:error:${tabId}`, (error: unknown) => {
+  window.sandstorm.on(AGENT_ERROR(tabId), (error: unknown) => {
     const current = useAppStore.getState().agentSessions[tabId];
     const partial = current?.streamingContent ?? '';
     const errorMsg = (partial ? partial + '\n\n' : '') + 'Error: ' + (error as string);
@@ -65,11 +66,11 @@ export function registerAgentStreamListeners(tabId: string): void {
     });
   });
 
-  window.sandstorm.on(`agent:token-usage:${tabId}`, (tokens: unknown) => {
+  window.sandstorm.on(AGENT_TOKEN_USAGE_EVENT(tabId), (tokens: unknown) => {
     useAppStore.getState().setOuterClaudeTokens(tabId, tokens as OuterClaudeSessionTokens);
   });
 
-  window.sandstorm.on(`agent:user-message:${tabId}`, (message: unknown) => {
+  window.sandstorm.on(AGENT_USER_MESSAGE(tabId), (message: unknown) => {
     const current = useAppStore.getState().agentSessions[tabId];
     const msgs = current?.messages ?? [];
     const last = msgs[msgs.length - 1];
