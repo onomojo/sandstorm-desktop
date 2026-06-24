@@ -119,6 +119,7 @@ vi.mock('../../src/main/index', () => ({
     forcePoll: vi.fn(),
   },
   cliDir: '/tmp/sandstorm-cli',
+  darkFactoryOrchestrator: null,
 }));
 
 // Mock tools so spawnSpecCheck is controllable — the key seam under test.
