@@ -84,6 +84,12 @@ describe('ipc-channels registry', () => {
       ...Object.values(EVENT_CHANNELS),
     ];
 
+    const ipcDomainFiles = fs.existsSync(path.join(root, 'src/main/ipc'))
+      ? fs.readdirSync(path.join(root, 'src/main/ipc'))
+          .filter((f) => f.endsWith('.ts'))
+          .map((f) => path.join(root, 'src/main/ipc', f))
+      : [];
+
     const filesToCheck = [
       path.join(root, 'src/main/ipc.ts'),
       path.join(root, 'src/preload/index.ts'),
@@ -91,6 +97,7 @@ describe('ipc-channels registry', () => {
       path.join(root, 'src/main/tray.ts'),
       path.join(root, 'src/main/agent/claude-backend.ts'),
       path.join(root, 'src/main/agent/opencode-backend.ts'),
+      ...ipcDomainFiles,
     ];
 
     for (const file of filesToCheck) {
