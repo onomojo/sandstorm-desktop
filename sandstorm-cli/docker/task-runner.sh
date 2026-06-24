@@ -31,10 +31,20 @@ log_loop() {
 }
 
 # Source per-phase model routing helper (defines model_args_for_phase).
-# Tries the installed path first, falls back to the repo source for dev.
+# Tries the installed path first, falls back to the repo source for dev,
+# then falls back to a path relative to task-runner.sh itself so B3
+# harnesses work on a bare host without the repo mounted at /app.
+# When task-runner.sh is eval'd by the bash test harness, ${BASH_SOURCE[0]}
+# points to the harness script, not task-runner.sh — but the harness exports
+# $TASK_RUNNER, so we use that as the authoritative self-reference.
 _phase_helper="/usr/bin/phase-model-helper.sh"
 if [ ! -f "$_phase_helper" ]; then
   _phase_helper="/app/sandstorm-cli/docker/phase-model-helper.sh"
+fi
+if [ ! -f "$_phase_helper" ]; then
+  _self="${TASK_RUNNER:-${BASH_SOURCE[0]}}"
+  _phase_helper="$(cd "$(dirname "$_self")" && pwd)/phase-model-helper.sh"
+  unset _self
 fi
 # shellcheck source=/dev/null
 source "$_phase_helper"

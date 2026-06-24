@@ -395,7 +395,7 @@ else
       HAS_TYPECHECK=$(python3 -c "import json; d=json.load(open('$PROJECT_ROOT/package.json')); print('yes' if 'typecheck' in d.get('scripts',{}) else 'no')" 2>/dev/null || echo "no")
       HAS_TSCONFIG=$([ -f "$PROJECT_ROOT/tsconfig.json" ] && echo "yes" || echo "no")
 
-      if [ "$HAS_TEST" = "yes" ]; then echo "npm test"; fi
+      if [ "$HAS_TEST" = "yes" ]; then echo "SANDSTORM_VERIFY=1 npm test"; fi
       if [ "$HAS_TYPECHECK" = "yes" ]; then
         echo "npm run typecheck"
       elif [ "$HAS_TSCONFIG" = "yes" ]; then
