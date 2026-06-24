@@ -66,11 +66,16 @@ vi.mock('../../src/main/control-plane/ticket-references', () => ({
   renderResolvedReferences: vi.fn().mockReturnValue(''),
 }));
 
+vi.mock('../../src/main/control-plane/git-freshness', () => ({
+  ensureFreshAgainstMain: vi.fn().mockResolvedValue({ mutated: false }),
+}));
+
 import { stackManager, agentBackend, registry } from '../../src/main/index';
 import { fetchTicketWithConfig, updateTicketWithConfig } from '../../src/main/control-plane/ticket-config';
 import { resolveTicketReferences, renderResolvedReferences } from '../../src/main/control-plane/ticket-references';
 import { createSchedule, listSchedules, updateSchedule, deleteSchedule } from '../../src/main/scheduler';
 import { syncAllProjectsCrontab } from '../../src/main/scheduler/scheduler-manager';
+import { ensureFreshAgainstMain } from '../../src/main/control-plane/git-freshness';
 
 const mockGetProviderConfig = vi.mocked(registry.getProjectTicketConfig);
 
@@ -243,6 +248,59 @@ describe('MCP tools', () => {
       expect(prompt).toContain('Zero Unresolved');
       expect(prompt).toContain('Dependency Contracts');
       expect(prompt).toContain('Questions Requiring User Answers');
+    });
+
+    it('prepends staleness warning to report when ensureFreshAgainstMain returns a warning', async () => {
+      const WARNING = '[Staleness warning] Project dir is on `feat/some-branch@aaa0000`, behind `origin/main` — citations may be stale; refresh before trusting a FAIL.';
+      vi.mocked(ensureFreshAgainstMain).mockResolvedValue({ mutated: false, warning: WARNING });
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Has citations\nBody');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |',
+      );
+
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/proj',
+      }) as { passed: boolean; report: string };
+
+      expect(result.passed).toBe(true);
+      expect(result.report).toMatch(/^\[Staleness warning\]/);
+      expect(result.report).toContain(WARNING);
+      expect(result.report).toContain('## Spec Quality Gate: PASS');
+    });
+
+    it('PASS/FAIL parse is unaffected by a prepended warning', async () => {
+      const WARNING = '[Staleness warning] fetch failed/offline — results may be stale.';
+      vi.mocked(ensureFreshAgainstMain).mockResolvedValue({ mutated: false, warning: WARNING });
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Has citations\nBody');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: FAIL\n\n### Gaps\n- [ ] Missing detail',
+      );
+
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/proj',
+      }) as { passed: boolean; report: string };
+
+      expect(result.passed).toBe(false);
+      expect(result.report).toContain(WARNING);
+    });
+
+    it('no warning prepended when ensureFreshAgainstMain returns clean result', async () => {
+      vi.mocked(ensureFreshAgainstMain).mockResolvedValue({ mutated: true });
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Up to date\nBody');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |',
+      );
+
+      const result = await handleToolCall('spec_check', {
+        ticketId: '42',
+        projectDir: '/proj',
+      }) as { passed: boolean; report: string };
+
+      expect(result.passed).toBe(true);
+      expect(result.report).not.toContain('Staleness warning');
+      expect(result.report).toMatch(/^## Spec Quality Gate/);
     });
   });
 
@@ -692,6 +750,42 @@ describe('MCP tools', () => {
       expect(prompt).toContain('Requires human input');
       expect(prompt).toContain('Zero Unresolved Assumptions');
       expect(prompt).toContain('Dependency Contracts');
+    });
+
+    it('spec_refine initial: prepends staleness warning to report when ensureFreshAgainstMain warns', async () => {
+      const WARNING = '[Staleness warning] Project dir is on `main@deadbeef`, behind `origin/main`.';
+      vi.mocked(ensureFreshAgainstMain).mockResolvedValue({ mutated: false, warning: WARNING });
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Needs refine\nBody');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Spec Quality Gate: FAIL\n\n### Questions Requiring User Answers\n1. What?',
+      );
+
+      const result = await handleToolCall('spec_refine', {
+        ticketId: 'T-42',
+        projectDir: '/proj',
+      }) as { passed: boolean; report: string };
+
+      expect(result.passed).toBe(false);
+      expect(result.report).toContain(WARNING);
+    });
+
+    it('spec_refine answer: prepends staleness warning to report when ensureFreshAgainstMain warns', async () => {
+      const WARNING = '[Staleness warning] fetch failed/offline — results may be stale.';
+      vi.mocked(ensureFreshAgainstMain).mockResolvedValue({ mutated: false, warning: WARNING });
+      vi.mocked(fetchTicketWithConfig).mockResolvedValue('# Issue: Needs refine\nBody');
+      vi.mocked(agentBackend.runEphemeralAgent).mockResolvedValue(
+        '## Updated Ticket Body\n\n# Issue: Updated\n\n## Spec Quality Gate: PASS\n\n### Results\n| C | R |\n|---|---|\n| X | PASS |',
+      );
+      vi.mocked(updateTicketWithConfig).mockResolvedValue(undefined);
+
+      const result = await handleToolCall('spec_refine', {
+        ticketId: 'T-42',
+        projectDir: '/proj',
+        userAnswers: 'some answers',
+      }) as { passed: boolean; report: string };
+
+      expect(result.passed).toBe(true);
+      expect(result.report).toContain(WARNING);
     });
 
     describe('ticket body cache (#370)', () => {
