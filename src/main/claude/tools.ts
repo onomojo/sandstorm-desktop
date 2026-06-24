@@ -19,6 +19,7 @@ import type { ProjectTicketConfig } from '../control-plane/registry';
 import { getDefaultSpecQualityGate } from '../spec-quality-gate';
 import { showNotification } from '../tray';
 import { resolveTicketReferences, renderResolvedReferences } from '../control-plane/ticket-references';
+import { ensureFreshAgainstMain } from '../control-plane/git-freshness';
 import {
   createSchedule,
   listSchedules,
@@ -419,13 +420,16 @@ async function handleSpecCheck(
     return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
   }
 
+  const freshness = await ensureFreshAgainstMain(projectDir);
+
   const references = await resolveTicketReferences(ctx.ticketBody);
   const referencesSection = renderResolvedReferences(references);
   const prompt = buildSpecCheckPrompt(ctx.gate, ctx.ticketBody, referencesSection || undefined, ctx.epicContext);
   const resolvedSpecCheckModel = descriptor.backend === 'opencode'
     ? `${descriptor.provider}/${descriptor.model}`
     : descriptor.model;
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, resolvedSpecCheckModel, 'refine');
+  const rawResult = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'spec' }, resolvedSpecCheckModel, 'refine');
+  const result = freshness.warning ? `${freshness.warning}\n\n${rawResult}` : rawResult;
   const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
 
   return {
@@ -677,15 +681,19 @@ async function handleSpecRefine(
     return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
   }
 
+  const freshness = await ensureFreshAgainstMain(projectDir);
+
   if (!userAnswers) {
     const prompt = buildSpecRefineInitialPrompt(ctx.gate, ctx.ticketBody, ctx.epicContext);
-    const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, undefined, 'refine');
+    const rawResult = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, undefined, 'refine');
+    const result = freshness.warning ? `${freshness.warning}\n\n${rawResult}` : rawResult;
     const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
     return { passed, report: result };
   }
 
   const prompt = buildSpecRefineAnswerPrompt(ctx.gate, ctx.ticketBody, userAnswers, ctx.epicContext);
-  const result = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, undefined, 'refine');
+  const rawResult = await agentBackend.runEphemeralAgent(prompt, projectDir, SCHEDULED_REFINE_TIMEOUT_MS, { ticketId, stage: 'refine' }, undefined, 'refine');
+  const result = freshness.warning ? `${freshness.warning}\n\n${rawResult}` : rawResult;
   return applySpecRefineResult(ticketId, projectDir, result, true);
 }
 
@@ -716,6 +724,9 @@ export function spawnSpecCheck(
       return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
     }
 
+    const freshness = await ensureFreshAgainstMain(projectDir);
+    if (cancelled) throw new Error('Cancelled');
+
     const references = await resolveTicketReferences(res.ctx.ticketBody);
     const referencesSection = renderResolvedReferences(references);
     const prompt = buildSpecCheckPrompt(res.ctx.gate, res.ctx.ticketBody, referencesSection || undefined, res.ctx.epicContext);
@@ -726,7 +737,8 @@ export function spawnSpecCheck(
     innerCancel = epCancel;
     if (cancelled) { epCancel(); throw new Error('Cancelled'); }
 
-    const result = await ep;
+    const rawResult = await ep;
+    const result = freshness.warning ? `${freshness.warning}\n\n${rawResult}` : rawResult;
     const passed = /## Spec Quality Gate:\s*PASS/i.test(result);
     return { passed, report: result };
   })();
@@ -800,6 +812,9 @@ export function spawnSpecRefine(
       return { status: 'needs_key', backend: descriptor.backend, provider: descriptor.provider };
     }
 
+    const freshness = await ensureFreshAgainstMain(projectDir);
+    if (cancelled) throw new Error('Cancelled');
+
     const key = refineSessionKey(projectDir, ticketId);
 
     if (userAnswers) {
@@ -813,7 +828,8 @@ export function spawnSpecRefine(
         activeDispose = () => disposeRefineSession(key);
         if (cancelled) { disposeRefineSession(key); throw new Error('Cancelled'); }
         try {
-          const result = await pooled.handle.sendFollowUp(answerPrompt);
+          const rawResult = await pooled.handle.sendFollowUp(answerPrompt);
+          const result = freshness.warning ? `${freshness.warning}\n\n${rawResult}` : rawResult;
           return applySpecRefineResult(ticketId, projectDir, result, true);
         } finally {
           disposeRefineSession(key);
@@ -827,7 +843,8 @@ export function spawnSpecRefine(
       );
       activeDispose = epCancel;
       if (cancelled) { epCancel(); throw new Error('Cancelled'); }
-      const result = await ep;
+      const rawResult = await ep;
+      const result = freshness.warning ? `${freshness.warning}\n\n${rawResult}` : rawResult;
       return applySpecRefineResult(ticketId, projectDir, result, true);
     }
 
@@ -843,9 +860,9 @@ export function spawnSpecRefine(
     };
     if (cancelled) { handle.dispose(); throw new Error('Cancelled'); }
 
-    let result: string;
+    let rawInitialResult: string;
     try {
-      result = await handle.initialResult;
+      rawInitialResult = await handle.initialResult;
     } catch (err) {
       // Initial pass failed — make sure nothing is held.
       try { handle.dispose(); } catch { /* noop */ }
@@ -853,6 +870,8 @@ export function spawnSpecRefine(
     }
 
     if (cancelled) { handle.dispose(); throw new Error('Cancelled'); }
+
+    const result = freshness.warning ? `${freshness.warning}\n\n${rawInitialResult}` : rawInitialResult;
 
     // Pool the session so the after-answers pass can reuse it. If the gate
     // already passed without questions, dispose immediately — no follow-up.
